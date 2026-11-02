@@ -218,3 +218,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# VS Code
+.vscode/
+
+# Local evaluation and recipe data
+data/
+
+# Private planning documents
+docs/private/
+
+# Private local work
+private/
