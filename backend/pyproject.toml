@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minemydinner"
+version = "0.1.0"
+description = "MineMyDinner: your AI dinner agent"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi==0.138.0",
+    "uvicorn==0.52.4",
+    "sqlalchemy==2.0.52",
+    "alembic==1.20.1",
+    "psycopg[binary]==3.3.6",
+    "pgvector==0.5.0",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.14.2",
+    "pyyaml==6.0.3",
+    "httpx==0.28.1",
+    "python-multipart==0.0.32",
+    "trafilatura==2.3.1",
+    "langchain==1.4.2",
+    "langchain-google-genai==4.4.2",
+    "langchain-openai==1.4.1",
+    "langchain-deepseek==1.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "respx==0.23.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["minemydinner*"]
+
+[tool.setuptools.package-data]
+"minemydinner.extraction" = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

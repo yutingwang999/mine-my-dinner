@@ -230,3 +230,7 @@ docs/private/
 
 # Private local work
 private/
+
+# Frontend dependencies and build output
+node_modules/
+.next/

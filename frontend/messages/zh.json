@@ -1,0 +1,11 @@
+{
+  "app": {
+    "name": "MineMyDinner",
+    "tagline": "从你收藏的菜谱和冰箱里，挖出今晚的晚饭。"
+  },
+  "language": {
+    "label": "语言",
+    "zh": "中文",
+    "en": "English"
+  }
+}

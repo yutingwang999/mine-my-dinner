@@ -1,0 +1,11 @@
+{
+  "app": {
+    "name": "MineMyDinner",
+    "tagline": "Dig tonight's dinner out of your saved recipes and your fridge."
+  },
+  "language": {
+    "label": "Language",
+    "zh": "中文",
+    "en": "English"
+  }
+}

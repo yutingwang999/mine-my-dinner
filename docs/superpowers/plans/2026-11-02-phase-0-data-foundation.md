@@ -6,7 +6,7 @@
 
 **Architecture:** A FastAPI backend and a Next.js frontend live in one repository, with PostgreSQL + pgvector in Docker. Every model call goes through one `LLMClient`, which handles task-based model selection, failover, hooks, the monthly cap, and `llm_calls`. Extraction results stay in the browser until the user confirms, and only then are recipes written.
 
-**Tech Stack:** Python 3.11, FastAPI, SQLAlchemy 2 (sync), Alembic, psycopg 3, pgvector, Pydantic 2, LangChain `init_chat_model`, trafilatura, pytest, respx; Next.js 16, next-intl 4, Vitest, Testing Library; Docker Compose; GitHub Actions; gitleaks.
+**Tech Stack:** Python 3.13, FastAPI, SQLAlchemy 2 (sync), Alembic, psycopg 3, pgvector, Pydantic 2, LangChain `init_chat_model`, trafilatura, pytest, respx; Next.js 16, next-intl 4, Vitest, Testing Library; Docker Compose; GitHub Actions.
 
 **Spec:** `docs/design.md`. Read it with this plan. Task numbers match T0.1-T0.9 in its Section 11.
 
@@ -15,6 +15,7 @@
 - **Git:** the user performs every Git operation that changes the repository or a remote. Each "User commit" step gives the exact commands, then stops until the user confirms. Read-only Git commands may run directly. This overrides any skill step.
 - **Python:** `$PY` in this plan means the value of `python.defaultInterpreterPath` in `.vscode/settings.json`, read each time. Never copy that path into a file.
 - **Packages:** do not install Python packages. A "User gate" step asks the user to run the install. If another package is needed, stop and tell the user which one and why. npm packages may be installed.
+- **Secrets:** never read, print, create, edit, or delete `.env`, and never print secret values. The user manages it. Code gets its configuration from environment variables. Tests never load `.env`. Running the app, scripts, and database queries is allowed.
 - **Language:** every repository file is in English. Chinese is allowed only in UI translations, dictionary names and aliases, and recipe text and its expected results in tests and prompt examples.
 - **Data:** no evaluation data or real recipe data enters Git. It stays in the local database or `data/`. Test recipes are fictional and hand-written.
 - **Single user:** no accounts, login, or `user_id`. Bind the backend and the database port to `127.0.0.1`.
@@ -24,7 +25,7 @@
 - **Storage:** store structured data, the step summary, and the link, never images or source text. `extraction_logs` is the only exception: it is private, local, capped, never shown in the UI.
 - **Embeddings:** `gemini-embedding-001` at 768 dimensions, with no failover. Failed calls are retried. A failed call never loses a recipe.
 - **Models:** Gemini primary with OpenAI fallback for extraction, screenshots, and allergen suggestions. DeepSeek primary with OpenAI fallback for planning. Verify model IDs and prices in official documentation, and record the date in the config.
-- **Tests:** tests never call a real model or the network. Real calls happen only in `minemydinner.llm.smoke`, which the user runs.
+- **Tests:** tests never call a real model or the network. Real calls happen only in `minemydinner.llm.smoke`, the real app, and the evaluation flow.
 
 ## Review Focus
 
@@ -39,7 +40,7 @@ These inputs have no line in the spec but are likely to bite. Each has a test in
 ## File Map
 
 ```
-docker-compose.yml, docker/init-test-db.sql, .env.example, .githooks/pre-commit, .github/workflows/ci.yml
+docker-compose.yml, docker/init-test-db.sql, .env.example, .github/workflows/ci.yml
 backend/
   pyproject.toml, alembic.ini, migrations/
   config/models.yaml
@@ -66,7 +67,7 @@ frontend/
 ### Task 1 (T0.1): Repository Skeleton
 
 **Files:**
-- Create: `docker-compose.yml`, `docker/init-test-db.sql`, `.env.example`, `.githooks/pre-commit`, `.github/workflows/ci.yml`
+- Create: `docker-compose.yml`, `docker/init-test-db.sql`, `.env.example`, `.github/workflows/ci.yml`
 - Create: `backend/pyproject.toml`, `backend/minemydinner/{__init__,settings,db,main}.py`, `backend/tests/conftest.py`, `backend/tests/test_skeleton.py`
 - Create: `frontend/` (Next.js app with next-intl)
 - Modify: `.gitignore`
@@ -86,13 +87,12 @@ git switch -c feat/phase-0-data-foundation
 
 - [ ] **Step 2: Write `backend/pyproject.toml`, then the user installs**
 
-Name `minemydinner`, `requires-python = ">=3.11,<3.12"`. Dependencies: `fastapi>=0.128`, `uvicorn>=0.40`, `sqlalchemy>=2.0,<2.2`, `alembic>=1.18`, `psycopg[binary]>=3.3`, `pgvector>=0.4`, `pydantic>=2.12`, `pydantic-settings>=2.12`, `pyyaml>=6.0`, `httpx>=0.28`, `python-multipart>=0.0.22`, `trafilatura>=2.3`, `langchain>=1.4`, `langchain-google-genai>=4.4`, `langchain-openai>=1.7`, `langchain-deepseek>=1.1`. Extra `dev`: `pytest>=9`, `respx>=0.23`. Pytest `testpaths = ["tests"]`. Setuptools finds packages with `include = ["minemydinner*"]` and ships `extraction/prompts/*.md`.
+Name `minemydinner`, `requires-python = ">=3.13,<3.14"`. Dependencies: `fastapi>=0.128`, `uvicorn>=0.40`, `sqlalchemy>=2.0,<2.2`, `alembic>=1.18`, `psycopg[binary]>=3.3`, `pgvector>=0.4`, `pydantic>=2.12`, `pydantic-settings>=2.12`, `pyyaml>=6.0`, `httpx>=0.28`, `python-multipart>=0.0.22`, `trafilatura>=2.3`, `langchain>=1.4`, `langchain-google-genai>=4.4`, `langchain-openai>=1.4`, `langchain-deepseek>=1.1`. Extra `dev`: `pytest>=9`, `respx>=0.23`. Pytest `testpaths = ["tests"]` and `pythonpath = ["."]`, so local runs from `backend/` need no install of the project itself. Setuptools finds packages with `include = ["minemydinner*"]` and ships `extraction/prompts/*.md`.
 
-Tell the user that these are not installed yet: `langchain`, `langchain-google-genai`, `langchain-openai`, `langchain-deepseek`, `trafilatura`, `respx`, and the `psycopg` binary extra. They are needed for model calls, web text extraction, HTTP mocking, and the database driver. Also ask them to install gitleaks, which is needed for the secret scan, and stop until they confirm:
+Tell the user the project needs a dedicated environment, because the original one is shared with other projects and the install would upgrade its `openai` package. They create it and point `python.defaultInterpreterPath` at it. Stop until they confirm:
 
 ```bash
 "$PY" -m pip install -e "backend[dev]"
-winget install Gitleaks.Gitleaks
 ```
 
 - [ ] **Step 3: Write the failing tests in `backend/tests/test_skeleton.py`**
@@ -120,16 +120,15 @@ Expected: FAIL (no app or fixtures).
 
 - [ ] **Step 5: Implement the backend skeleton and infrastructure**
 
-- `docker-compose.yml`: service `db`, image `pgvector/pgvector:pg16`, `POSTGRES_USER=postgres`, `POSTGRES_DB=minemydinner`, port `127.0.0.1:5433:5432`, a named volume, and `docker/init-test-db.sql` mounted to create `minemydinner_test` and the `vector` extension in both databases.
+- `docker-compose.yml`: service `db`, image `pgvector/pgvector:pg16`, `container_name: minemydinner-db`, `POSTGRES_USER=postgres`, a local-only `POSTGRES_PASSWORD=postgres`, `POSTGRES_DB=minemydinner`, port `127.0.0.1:15433:5432`, a named volume, and `docker/init-test-db.sql` mounted to create `minemydinner_test` and the `vector` extension in both databases.
 - `.env.example`: `DATABASE_URL`, `TEST_DATABASE_URL`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` (empty), `LLM_MONTHLY_CAP_USD=20`, `EXTRACTION_LOG_MAX_ROWS=500`. `$20` is a starting value; the user can change it.
 - `.gitignore`: append `node_modules/` and `.next/`, with an English comment.
-- `.githooks/pre-commit`: fail with an install message if `gitleaks` is missing, and otherwise run `gitleaks git --staged --no-banner`, exiting non-zero on a finding.
-- `.github/workflows/ci.yml`: on every push, one job with a `pgvector/pgvector:pg16` service, Python 3.11, `pip install -e "backend[dev]"`, `TEST_DATABASE_URL` pointing at the service, and `pytest`; one job with Node 22, `npm ci`, `npm run lint`, `npm test`, `npm run build`. CI receives no API keys and no evaluation data.
+- `settings.py`: defaults point at the local Docker database, so tests need no `.env`. The test fixtures build `Settings(_env_file=None)`.
+- `.github/workflows/ci.yml`: on pull requests to `main`, one job with a `pgvector/pgvector:pg16` service, Python 3.13, `pip install -e "backend[dev]"`, `TEST_DATABASE_URL` pointing at the service, and `pytest`; one job with Node 22, `npm ci`, `npm run lint`, `npm test`, `npm run build`. CI receives no API keys and no evaluation data.
 
-- [ ] **Step 6: User gate: enable the hook and start the database**
+- [ ] **Step 6: User gate: create `.env` and start the database**
 
 ```bash
-git config core.hooksPath .githooks
 cp .env.example .env
 docker compose up -d db
 ```
@@ -157,8 +156,8 @@ Expected: all pass.
 - [ ] **Step 10: User commit**
 
 ```bash
-git add .gitignore .env.example .githooks .github docker docker-compose.yml backend frontend
-git commit -m "chore: add repository skeleton with database, CI, and secret scan"
+git add .gitignore .env.example .github docker docker-compose.yml backend frontend docs CLAUDE.md
+git commit -m "chore: add repository skeleton with database and CI"
 ```
 
 ---
@@ -417,11 +416,11 @@ Expected: PASS.
 
 - [ ] **Step 5: Write `llm/smoke.py`**
 
-`python -m minemydinner.llm.smoke` makes one small call to each configured model and one embedding, then prints the provider, success, latency, cost, and vector length, and exits non-zero on any failure. Tests do not run it.
+`python -m minemydinner.llm.smoke` makes one small call to each configured model and one embedding, then prints the provider, success, latency, cost, and vector length, and exits non-zero on any failure. It prints no key values. Tests do not run it.
 
-- [ ] **Step 6: User gate: real call check**
+- [ ] **Step 6: Real call check**
 
-Ask the user to put API keys in `.env`, set a budget alert with each provider (design Section 3), confirm that the small cost is acceptable, and run the command below. Expected: every line succeeds and the vector length is 768.
+User gate first: ask the user to put API keys in `.env`, set a budget alert with each provider (design Section 3), and confirm that the small cost is acceptable. Then run the command below. Expected: every line succeeds and the vector length is 768.
 
 ```bash
 cd backend && "$PY" -m minemydinner.llm.smoke
@@ -1156,8 +1155,8 @@ Ask the user to import through the app, including both Chinese and English recip
 - [ ] **Step 2: Check the counts**
 
 ```bash
-docker compose exec db psql -U postgres -d minemydinner -c "SELECT lang, count(*), count(embedding) AS embedded FROM recipes GROUP BY lang"
-docker compose exec db psql -U postgres -d minemydinner -c "SELECT count(*) FROM extraction_logs"
+docker exec minemydinner-db psql -U postgres -d minemydinner -c "SELECT lang, count(*), count(embedding) AS embedded FROM recipes GROUP BY lang"
+docker exec minemydinner-db psql -U postgres -d minemydinner -c "SELECT count(*) FROM extraction_logs"
 ```
 
 Expected: 30-50 recipes in total, both `zh` and `en` present, and `embedded` equal to `count`. Call `POST /api/recipes/embeddings/retry` if any are pending.
