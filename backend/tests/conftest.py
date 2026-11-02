@@ -2,6 +2,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session
@@ -20,6 +22,9 @@ def test_settings() -> Settings:
 
 @pytest.fixture(scope="session")
 def engine(test_settings: Settings) -> Iterator[Engine]:
+    config = Config(REPO_ROOT / "backend" / "alembic.ini")
+    config.set_main_option("sqlalchemy.url", test_settings.test_database_url)
+    command.upgrade(config, "head")
     test_engine = create_engine(test_settings.test_database_url)
     yield test_engine
     test_engine.dispose()

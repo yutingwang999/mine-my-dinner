@@ -1,0 +1,17 @@
+[
+{"name_zh":"炒锅","name_en":"wok","aliases_zh":["铁锅"],"aliases_en":["frying wok"]},
+{"name_zh":"平底锅","name_en":"frying pan","aliases_zh":["不粘锅","煎锅"],"aliases_en":["skillet","nonstick pan"]},
+{"name_zh":"汤锅","name_en":"soup pot","aliases_zh":["煮锅"],"aliases_en":["stock pot","pot"]},
+{"name_zh":"砂锅","name_en":"clay pot","aliases_zh":["煲"],"aliases_en":["casserole"]},
+{"name_zh":"蒸锅","name_en":"steamer","aliases_zh":["蒸笼"],"aliases_en":["steamer pot"]},
+{"name_zh":"电饭煲","name_en":"rice cooker","aliases_zh":["电饭锅"]},
+{"name_zh":"高压锅","name_en":"pressure cooker","aliases_zh":["压力锅","电压力锅"]},
+{"name_zh":"烤箱","name_en":"oven"},
+{"name_zh":"微波炉","name_en":"microwave","aliases_en":["microwave oven"]},
+{"name_zh":"空气炸锅","name_en":"air fryer"},
+{"name_zh":"破壁机","name_en":"high-speed blender","aliases_zh":["料理机","搅拌机"],"aliases_en":["blender"]},
+{"name_zh":"电磁炉","name_en":"induction cooker"},
+{"name_zh":"烤架","name_en":"grill","aliases_zh":["烧烤架"]},
+{"name_zh":"案板","name_en":"cutting board","aliases_zh":["砧板"]},
+{"name_zh":"菜刀","name_en":"kitchen knife","aliases_zh":["刀"],"aliases_en":["knife"]}
+]
