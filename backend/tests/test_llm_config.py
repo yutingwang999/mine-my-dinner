@@ -1,0 +1,116 @@
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+import yaml
+
+from minemydinner.llm.config import ConfigError, LLMConfig, load_llm_config
+from minemydinner.settings import Settings
+from tests.fakes import write_config
+
+REPO_CONFIG = Path(__file__).resolve().parents[1] / "config" / "models.yaml"
+
+
+@pytest.fixture
+def tmp_config(tmp_path):
+    return lambda **changes: write_config(tmp_path / "models.yaml", **changes)
+
+
+def provider_of(config: LLMConfig, task: str, slot: str) -> str:
+    return config.models[getattr(config.tasks[task], slot)].provider
+
+
+def test_rejects_model_without_required_capability(tmp_config):
+    with pytest.raises(ConfigError, match="strict_json"):
+        load_llm_config(tmp_config(primary="deepseek", requires=["strict_json"]))
+
+
+def test_rejects_fallback_without_required_capability(tmp_config):
+    with pytest.raises(ConfigError, match="tool_calling"):
+        load_llm_config(tmp_config(fallback="gemini", task="planning", requires=["tool_calling"]))
+
+
+def test_rejects_model_without_price(tmp_config):
+    with pytest.raises(ConfigError):
+        load_llm_config(tmp_config(drop_price="gemini"))
+
+
+def test_rejects_task_naming_an_unknown_model(tmp_config):
+    with pytest.raises(ConfigError, match="missing"):
+        load_llm_config(tmp_config(primary="missing"))
+
+
+def test_rejects_missing_file(tmp_path):
+    with pytest.raises(ConfigError):
+        load_llm_config(tmp_path / "absent.yaml")
+
+
+def test_override_switches_model_id_and_its_catalog_price(tmp_config):
+    config = load_llm_config(tmp_config(), model_overrides={"gemini": "gemini-alt"})
+    assert config.models["gemini"].model == "gemini-alt"
+    assert config.models["gemini"].input_usd_per_mtok == Decimal("3.0")
+
+
+def test_empty_override_keeps_the_default(tmp_config):
+    config = load_llm_config(tmp_config(), model_overrides={"gemini": ""})
+    assert config.models["gemini"].model == "gemini-test"
+
+
+def test_rejects_override_missing_from_catalog(tmp_config):
+    with pytest.raises(ConfigError, match="gemini-9-unknown"):
+        load_llm_config(tmp_config(), model_overrides={"gemini": "gemini-9-unknown"})
+
+
+def test_rejects_override_without_required_capability(tmp_config):
+    with pytest.raises(ConfigError, match="strict_json"):
+        load_llm_config(tmp_config(), model_overrides={"gemini": "deepseek-test"})
+
+
+def test_rejects_override_for_unknown_slot(tmp_config):
+    with pytest.raises(ConfigError, match="mistral"):
+        load_llm_config(tmp_config(), model_overrides={"mistral": "gemini-test"})
+
+
+def test_settings_read_model_overrides_from_environment(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+    overrides = Settings(_env_file=None).model_overrides()
+    assert overrides["deepseek"] == "deepseek-v4-pro"
+    assert set(overrides) == {"gemini", "openai", "deepseek", "gemini_embedding"}
+
+
+def test_every_repository_model_choice_is_valid():
+    catalog = yaml.safe_load(REPO_CONFIG.read_text(encoding="utf-8"))["catalog"]
+    for model_id in catalog:
+        provider = catalog[model_id]["provider"]
+        slot = {"google_genai": "gemini", "openai": "openai", "deepseek": "deepseek"}[provider]
+        if "embeddings" in catalog[model_id]["capabilities"]:
+            slot = "gemini_embedding"
+        load_llm_config(REPO_CONFIG, model_overrides={slot: model_id})
+
+
+def test_embeddings_cannot_have_a_fallback(tmp_config):
+    with pytest.raises(ConfigError, match="fallback"):
+        load_llm_config(tmp_config(task="embeddings", fallback="openai"))
+
+
+def test_repository_config_matches_design():
+    config = load_llm_config(REPO_CONFIG)
+    assert provider_of(config, "extraction", "primary") == "google_genai"
+    assert provider_of(config, "extraction", "fallback") == "openai"
+    assert provider_of(config, "planning", "primary") == "deepseek"
+    assert provider_of(config, "planning", "fallback") == "openai"
+    assert config.tasks["embeddings"].fallback is None
+    assert config.models[config.tasks["embeddings"].primary].model == "gemini-embedding-001"
+
+
+def test_repository_config_lists_every_task_and_only_planning_is_essential():
+    config = load_llm_config(REPO_CONFIG)
+    assert set(config.tasks) == {
+        "extraction",
+        "image_understanding",
+        "allergen_suggestions",
+        "planning",
+        "embeddings",
+        "smoke",
+    }
+    assert {name for name, task in config.tasks.items() if task.essential} == {"planning"}
