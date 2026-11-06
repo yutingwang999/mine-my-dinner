@@ -1,0 +1,153 @@
+from typing import Literal, Self
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from minemydinner.constants import DISH_TYPES, LANGUAGES, SOURCE_TYPES, TIME_SOURCES
+from minemydinner.imports.service import DraftIngredient, Provenance
+from minemydinner.llm.client import LLMClient
+from minemydinner.models import (
+    Cookware,
+    ExtractionLog,
+    Ingredient,
+    Recipe,
+    RecipeCookware,
+    RecipeIngredient,
+)
+from minemydinner.recipes.embedding import try_embed_recipe
+
+
+class InvalidRecipe(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+class RecipeLineWrite(DraftIngredient):
+    @field_validator("raw", "name")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def no_number_without_amount(self) -> Self:
+        if self.amount_type in ("vague", "missing") and (self.amount is not None or self.unit):
+            raise ValueError(f"a {self.amount_type} amount has no number or unit")
+        return self
+
+
+class RecipeWrite(BaseModel):
+    """The recipe the user reviewed. The client sets time_source to user on a time edit."""
+
+    lang: Literal[*LANGUAGES]
+    title: str
+    dish_type: Literal[*DISH_TYPES]
+    time_min: int | None = Field(default=None, gt=0)
+    time_source: Literal[*TIME_SOURCES] | None = None
+    servings: int | None = Field(default=None, gt=0)
+    tags: list[str] = []
+    steps_summary: str | None = None
+    ingredients: list[RecipeLineWrite] = Field(min_length=1)
+    cookware_ids: list[int] = []
+    source_type: Literal[*SOURCE_TYPES]
+    source_url: str | None = None
+    provenance: Provenance | None = None
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def time_source_needs_time(self) -> Self:
+        if self.time_source is not None and self.time_min is None:
+            raise ValueError("time_source needs time_min")
+        return self
+
+
+def _check_references(session: Session, data: RecipeWrite) -> None:
+    ingredient_ids = {line.ingredient_id for line in data.ingredients} - {None}
+    if ingredient_ids:
+        found = session.scalars(select(Ingredient.id).where(Ingredient.id.in_(ingredient_ids)))
+        if set(found) != ingredient_ids:
+            raise InvalidRecipe("unknown_ingredient")
+    cookware_ids = set(data.cookware_ids)
+    if cookware_ids:
+        found = session.scalars(select(Cookware.id).where(Cookware.id.in_(cookware_ids)))
+        if set(found) != cookware_ids:
+            raise InvalidRecipe("unknown_cookware")
+
+
+def _apply(recipe: Recipe, data: RecipeWrite) -> None:
+    recipe.lang = data.lang
+    recipe.title = data.title
+    recipe.dish_type = data.dish_type
+    recipe.time_min = data.time_min
+    recipe.time_source = data.time_source
+    recipe.servings = data.servings
+    recipe.tags = data.tags
+    recipe.steps_summary = data.steps_summary
+    recipe.source_type = data.source_type
+    recipe.source_url = data.source_url
+    recipe.ingredients = [
+        RecipeIngredient(**line.model_dump()) for line in data.ingredients
+    ]
+    recipe.cookware = [
+        RecipeCookware(cookware_id=cookware_id) for cookware_id in dict.fromkeys(data.cookware_ids)
+    ]
+
+
+def _write_log(session: Session, data: RecipeWrite, max_log_rows: int) -> None:
+    """Keep the model output next to the user's correction, for evaluation."""
+    if data.provenance is None:
+        return
+    if session.scalar(select(func.count()).select_from(ExtractionLog)) >= max_log_rows:
+        return
+    session.add(
+        ExtractionLog(
+            input_text=data.provenance.input_text,
+            model_output=data.provenance.model_output,
+            user_corrected=data.model_dump(mode="json", exclude={"provenance"}),
+            model_name=data.provenance.model_name,
+            prompt_version=data.provenance.prompt_version,
+        )
+    )
+
+
+def create_recipe(
+    session: Session, client: LLMClient, data: RecipeWrite, max_log_rows: int
+) -> Recipe:
+    """Commit the recipe before embedding it, so an embedding failure cannot lose it."""
+    _check_references(session, data)
+    recipe = Recipe()
+    _apply(recipe, data)
+    session.add(recipe)
+    _write_log(session, data, max_log_rows)
+    session.commit()
+    try_embed_recipe(session, client, recipe)
+    return recipe
+
+
+def update_recipe(session: Session, client: LLMClient, recipe_id: int, data: RecipeWrite) -> Recipe:
+    recipe = session.get(Recipe, recipe_id)
+    if recipe is None:
+        raise InvalidRecipe("not_found")
+    _check_references(session, data)
+    _apply(recipe, data)
+    recipe.embedding = None
+    session.commit()
+    try_embed_recipe(session, client, recipe)
+    return recipe
+
+
+def delete_recipe(session: Session, recipe_id: int) -> None:
+    recipe = session.get(Recipe, recipe_id)
+    if recipe is None:
+        raise InvalidRecipe("not_found")
+    session.delete(recipe)
+    session.commit()

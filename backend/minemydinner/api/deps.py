@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -12,19 +13,29 @@ from minemydinner.settings import get_settings
 class ApiError(Exception):
     """An error the UI can explain. `suggest_paste` asks the user to paste the text."""
 
-    def __init__(self, status_code: int, code: str, suggest_paste: bool = False) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        suggest_paste: bool = False,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
         self.suggest_paste = suggest_paste
+        self.extra = extra or {}
 
 
-def _response(status_code: int, code: str, suggest_paste: bool = False) -> JSONResponse:
-    return JSONResponse({"code": code, "suggest_paste": suggest_paste}, status_code=status_code)
+def _response(
+    status_code: int, code: str, suggest_paste: bool = False, extra: dict[str, Any] | None = None
+) -> JSONResponse:
+    body = {"code": code, "suggest_paste": suggest_paste, **(extra or {})}
+    return JSONResponse(body, status_code=status_code)
 
 
 async def handle_api_error(_: Request, error: ApiError) -> JSONResponse:
-    return _response(error.status_code, error.code, error.suggest_paste)
+    return _response(error.status_code, error.code, error.suggest_paste, error.extra)
 
 
 async def handle_monthly_cap(_: Request, __: MonthlyCapExceeded) -> JSONResponse:

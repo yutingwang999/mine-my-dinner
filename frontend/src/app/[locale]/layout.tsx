@@ -5,7 +5,9 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { MainNav } from "@/components/MainNav";
 import { routing } from "@/i18n/routing";
+import { DraftsProvider } from "@/lib/drafts";
 
 import "../globals.css";
 
@@ -31,10 +33,14 @@ export default async function LocaleLayout({ children, params }: Props) {
     <html lang={locale}>
       <body>
         <NextIntlClientProvider>
-          <header style={{ padding: "1rem" }}>
-            <LanguageSwitcher />
-          </header>
-          <main style={{ padding: "1rem" }}>{children}</main>
+          {/* Drafts live here, so moving between import and review keeps them. */}
+          <DraftsProvider>
+            <header style={{ padding: "1rem" }}>
+              <MainNav />
+              <LanguageSwitcher />
+            </header>
+            <main style={{ padding: "1rem" }}>{children}</main>
+          </DraftsProvider>
         </NextIntlClientProvider>
       </body>
     </html>
