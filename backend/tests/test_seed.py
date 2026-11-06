@@ -132,6 +132,13 @@ def test_cookware_alias(seeded):
     assert wok.source == "seed"
 
 
+def test_cookware_seed_has_no_basic_utensils():
+    # Every kitchen has these, so H3 checking them would only add noise.
+    names = {entry["name_zh"] for entry in json.loads((SEED_DIR / "cookware.json").read_text("utf-8"))}
+    assert not names & {"案板", "菜刀", "勺子", "筷子", "锅铲", "碗"}
+    assert {"炒锅", "烤箱", "蒸锅"} <= names
+
+
 def test_reseeding_keeps_user_data(seeded):
     user_entry = Ingredient(name_zh="秘制酱", category="other", stock_mode="level", source="user")
     seeded.add(user_entry)

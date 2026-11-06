@@ -11,7 +11,5 @@
 {"name_zh":"空气炸锅","name_en":"air fryer"},
 {"name_zh":"破壁机","name_en":"high-speed blender","aliases_zh":["料理机","搅拌机"],"aliases_en":["blender"]},
 {"name_zh":"电磁炉","name_en":"induction cooker"},
-{"name_zh":"烤架","name_en":"grill","aliases_zh":["烧烤架"]},
-{"name_zh":"案板","name_en":"cutting board","aliases_zh":["砧板"]},
-{"name_zh":"菜刀","name_en":"kitchen knife","aliases_zh":["刀"],"aliases_en":["knife"]}
+{"name_zh":"烤架","name_en":"grill","aliases_zh":["烧烤架"]}
 ]

@@ -104,6 +104,16 @@ def test_images_require_at_least_one_image(fake_llm):
         extract_from_images(fake_llm, [])
 
 
+def test_prompt_leaves_out_basic_utensils_and_names_the_kind_of_pot():
+    from minemydinner.extraction.extractor import load_prompt
+
+    prompt = load_prompt()
+    for utensil in ("chopsticks", "spatulas", "knives", "cutting boards"):
+        assert utensil in prompt
+    assert "must not list basic utensils" in prompt
+    assert '"锅"' in prompt and "leave it out" in prompt
+
+
 def test_prompt_states_the_design_rules():
     from minemydinner.extraction.extractor import load_prompt
 

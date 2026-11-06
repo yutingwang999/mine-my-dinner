@@ -30,7 +30,7 @@ Write every field in the source's language, and set `lang` to `zh` or `en`.
 - `time_min` and `time_source`: when the source states the total cooking time, give it in minutes with `stated`. When it does not, give your estimate with `estimated`. You must not mark an estimate as `stated`. When you cannot estimate, both are null.
 - `servings`: the number of servings the source states, or null.
 - `steps_summary`: a short paraphrase of the steps in one to three sentences. You must not copy the source steps.
-- `cookware`: the cookware the steps need, named as in the source, such as "炒锅" or "oven".
+- `cookware`: cookware the steps need that not every kitchen has, such as pots, pans, appliances, steamers, baking trays, and molds, named as in the source. You must not list basic utensils that every kitchen has: spoons, chopsticks, spatulas, ladles, bowls, plates, knives, or cutting boards. When the source only says "锅", name the specific kind the steps imply, such as "炒锅" for stir-frying or "汤锅" for boiling. When the kind is unclear, leave it out.
 
 ## Example (Chinese)
 
