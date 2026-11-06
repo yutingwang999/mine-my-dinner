@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from minemydinner.api import imports
+from minemydinner.api.deps import ERROR_HANDLERS
 from minemydinner.db import configure_engine
 from minemydinner.settings import get_settings
 
@@ -14,7 +16,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     engine.dispose()
 
 
-app = FastAPI(title="MineMyDinner", lifespan=lifespan)
+app = FastAPI(title="MineMyDinner", lifespan=lifespan, exception_handlers=ERROR_HANDLERS)
+app.include_router(imports.router)
 
 
 @app.get("/api/health")
