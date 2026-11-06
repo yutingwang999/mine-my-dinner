@@ -8,7 +8,7 @@ import type { RecipeDraft } from "@/lib/api";
 import { DraftsProvider, useDrafts } from "@/lib/drafts";
 
 type Handler = (body: unknown, init: RequestInit) => unknown;
-export type Call = { method: string; path: string; body: unknown };
+export type Call = { method: string; path: string; url: string; body: unknown };
 
 /** JSON response helper for route handlers. */
 export function reply(status: number, body: unknown): Response {
@@ -30,7 +30,7 @@ export function mockFetch(routes: Record<string, Handler>): Call[] {
       const method = init.method ?? "GET";
       const path = input.split("?")[0];
       const body = typeof init.body === "string" ? JSON.parse(init.body) : init.body;
-      calls.push({ method, path, body });
+      calls.push({ method, path, url: input, body });
       const handler = routes[`${method} ${path}`];
       if (!handler) {
         return reply(404, { code: "unknown" });

@@ -12,7 +12,11 @@
     "label": "主导航",
     "home": "首页",
     "import": "导入",
-    "review": "审核"
+    "review": "审核",
+    "library": "菜谱库",
+    "inventory": "库存",
+    "people": "用餐者",
+    "dictionary": "词典"
   },
   "import": {
     "title": "导入菜谱",
@@ -198,5 +202,92 @@
     "soy": "大豆",
     "wheat": "小麦",
     "sesame": "芝麻"
+  },
+  "common": {
+    "delete": "删除",
+    "cancel": "取消",
+    "save": "保存",
+    "add": "添加",
+    "edit": "编辑",
+    "confirmDelete": "删除{name}？",
+    "yesDelete": "确认删除",
+    "loading": "正在加载…",
+    "remove": "移除",
+    "none": "暂无。"
+  },
+  "library": {
+    "title": "菜谱库",
+    "search": "搜索菜名、标签或食材",
+    "allTypes": "全部类别",
+    "dishTypeFilter": "菜品类别",
+    "empty": "没有找到菜谱。",
+    "source": "来源",
+    "previous": "上一页",
+    "next": "下一页",
+    "pageOf": "第 {page} 页，共 {pages} 页",
+    "deleteNotice": "已保存的计划会保留菜名。这道菜的评分和笔记会被删除，它的变体会保留。",
+    "editTitle": "编辑{title}",
+    "noEmbedding": "暂时不能按语义搜索，会自动重试。"
+  },
+  "inventory": {
+    "title": "库存",
+    "add": "加入库存",
+    "count": "数量",
+    "level": "余量",
+    "grams": "克数（可选）",
+    "expiresOn": "到期日（可选）",
+    "availabilityHint": "有记录就表示有。用完时删除即可。",
+    "sortByName": "按名称排序",
+    "sortByExpiry": "按到期日排序",
+    "alwaysInStock": "常备",
+    "alwaysInStockHint": "规划时默认有，不记录数量。",
+    "cookwareOwned": "我有的厨具",
+    "addCookware": "添加厨具",
+    "addAlwaysInStock": "添加常备食材",
+    "expires": "{date} 到期"
+  },
+  "level": {
+    "plenty": "充足",
+    "low": "少量",
+    "none": "没有"
+  },
+  "people": {
+    "title": "用餐者",
+    "me": "我",
+    "addFriend": "添加朋友",
+    "displayName": "称呼或昵称",
+    "friendHint": "请用昵称。调用模型前，已保存朋友的称呼会被替换成代号。",
+    "rename": "改名",
+    "rules": "规则",
+    "addRule": "添加规则",
+    "ruleType": "规则类型",
+    "target": "针对",
+    "targetAllergen": "固定列表里的过敏原",
+    "targetIngredient": "具体的食材",
+    "targetText": "文字描述",
+    "allergen": "过敏原",
+    "text": "描述",
+    "deleteFriendNotice": "他的规则也会一起删除。已保存的计划会保留其中的菜。",
+    "noRules": "没有规则。"
+  },
+  "ruleType": {
+    "allergy": "过敏",
+    "dietary restriction": "饮食限制",
+    "dislike": "不喜欢"
+  },
+  "dictionary": {
+    "title": "词典",
+    "unresolved": "过敏原未知的食材",
+    "unresolvedHint": "在你确认之前，只要这一餐有人过敏，含这些食材的菜就不会被选上。",
+    "dishCount": "{count} 道菜",
+    "unmatchedName": "{name}（词典里没有）",
+    "resolve": "确认过敏原",
+    "saveAllergens": "保存过敏原",
+    "allResolved": "所有食材的过敏原都已知。",
+    "userIngredients": "我的食材词条",
+    "userCookware": "我的厨具词条",
+    "allergensUnknown": "过敏原未知",
+    "allergensNone": "不含过敏原",
+    "seedNotice": "内置词条经过人工审核，不能在这里修改。"
   }
 }

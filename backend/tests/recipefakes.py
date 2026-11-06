@@ -19,8 +19,14 @@ class FakeLLMClient:
         self.error = error
         self.embed_error = embed_error
         self.embedded: list[str] = []
+        self.call_count = 0
+
+    @property
+    def embed_count(self) -> int:
+        return len(self.embedded)
 
     def invoke_structured(self, task, messages, schema):
+        self.call_count += 1
         if self.error is not None:
             raise self.error
         return StructuredResult(schema.model_validate(self.payload), "gemini", False)

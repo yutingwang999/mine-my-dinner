@@ -53,6 +53,12 @@ ERROR_HANDLERS = {
 }
 
 
+def contains_pattern(q: str) -> str:
+    """An ILIKE pattern matching q anywhere, with %, _, and backslash taken literally."""
+    escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 @lru_cache
 def get_llm_client() -> LLMClient:
     settings = get_settings()

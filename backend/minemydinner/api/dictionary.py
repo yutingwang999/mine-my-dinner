@@ -1,20 +1,34 @@
-from typing import Annotated
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from minemydinner.api.deps import ApiError, get_llm_client
+from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
+from minemydinner.constants import ALLERGENS, DICTIONARY_SOURCES
 from minemydinner.db import get_session
 from minemydinner.dictionary.service import (
     CookwareWrite,
+    DictionaryPatch,
+    EntryInUse,
+    EntryNotFound,
     HierarchyError,
+    IngredientPatch,
     IngredientWrite,
+    ReadOnlyEntry,
     TermConflict,
     create_user_cookware,
     create_user_ingredient,
+    delete_user_cookware,
+    delete_user_ingredient,
     link_unmatched_lines,
+    resolve_allergens,
+    unresolved_allergens,
+    update_user_cookware,
+    update_user_ingredient,
 )
 from minemydinner.extraction.allergen_suggest import suggest_allergens
 from minemydinner.llm.client import LLMClient
@@ -25,6 +39,8 @@ router = APIRouter(prefix="/api")
 SessionDep = Annotated[Session, Depends(get_session)]
 ClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 SEARCH_LIMIT = 20
+# Listing one source is for the dictionary page, which shows every entry.
+SOURCE_LIMIT = 500
 
 
 class IngredientOut(BaseModel):
@@ -42,7 +58,7 @@ class IngredientOut(BaseModel):
     source: str
 
 
-class CreatedIngredient(IngredientOut):
+class LinkedIngredient(IngredientOut):
     linked_lines: int
 
 
@@ -69,11 +85,48 @@ class SuggestionOut(BaseModel):
     suggested: list[str] | None
 
 
-def _search(session: Session, table: type, q: str | None) -> list:
-    query = select(table).order_by(table.id).limit(SEARCH_LIMIT)
+class UnresolvedEntryOut(BaseModel):
+    id: int
+    name: str
+    dish_count: int
+
+
+class UnresolvedNameOut(BaseModel):
+    name: str
+    dish_count: int
+
+
+class UnresolvedOut(BaseModel):
+    entries: list[UnresolvedEntryOut]
+    unmatched: list[UnresolvedNameOut]
+
+
+class ResolveIn(BaseModel):
+    """`allergens` has no default: the user must confirm a list or an empty list."""
+
+    name: str | None = None
+    ingredient_id: int | None = None
+    allergens: list[Literal[*ALLERGENS]]
+
+    @model_validator(mode="after")
+    def one_target(self) -> Self:
+        has_name = self.name is not None and bool(self.name.strip())
+        if has_name == (self.ingredient_id is not None):
+            raise ValueError("give either a name or an ingredient_id")
+        return self
+
+
+Source = Literal[*DICTIONARY_SOURCES]
+
+
+def _search(session: Session, table: type, q: str | None, source: str | None) -> list:
+    query = select(table).order_by(table.id)
+    if source is not None:
+        query = query.where(table.source == source).limit(SOURCE_LIMIT)
+    else:
+        query = query.limit(SEARCH_LIMIT)
     if q and q.strip():
-        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
+        pattern = contains_pattern(q)
         query = query.where(
             or_(
                 table.name_zh.ilike(pattern),
@@ -85,47 +138,120 @@ def _search(session: Session, table: type, q: str | None) -> list:
     return list(session.scalars(query))
 
 
-def _conflict(error: TermConflict) -> ApiError:
-    return ApiError(409, "term_conflict", extra={"term": error.term, "owner_id": error.owner_id})
+@contextmanager
+def _dictionary_errors() -> Iterator[None]:
+    """Translate dictionary service errors into API errors."""
+    try:
+        yield
+    except TermConflict as error:
+        extra = {"term": error.term, "owner_id": error.owner_id}
+        raise ApiError(409, "term_conflict", extra=extra) from error
+    except HierarchyError as error:
+        raise ApiError(422, "invalid_parent") from error
+    except ReadOnlyEntry as error:
+        raise ApiError(403, "seed_read_only") from error
+    except EntryNotFound as error:
+        raise ApiError(404, "not_found") from error
+    except EntryInUse as error:
+        raise ApiError(409, error.reason) from error
+
+
+def _linked(entry: Ingredient, linked: int) -> LinkedIngredient:
+    return LinkedIngredient(**IngredientOut.model_validate(entry).model_dump(), linked_lines=linked)
+
+
+def _committed[T](session: Session, action: Callable[[], T]) -> T:
+    with _dictionary_errors():
+        result = action()
+    session.commit()
+    return result
 
 
 @router.get("/ingredients")
-def search_ingredients(session: SessionDep, q: str | None = None) -> list[IngredientOut]:
-    return [IngredientOut.model_validate(row) for row in _search(session, Ingredient, q)]
+def search_ingredients(
+    session: SessionDep, q: str | None = None, source: Source | None = None
+) -> list[IngredientOut]:
+    return [IngredientOut.model_validate(row) for row in _search(session, Ingredient, q, source)]
 
 
 @router.post("/ingredients", status_code=201)
-def create_ingredient(data: IngredientWrite, session: SessionDep) -> CreatedIngredient:
-    try:
+def create_ingredient(data: IngredientWrite, session: SessionDep) -> LinkedIngredient:
+    def create() -> LinkedIngredient:
         entry = create_user_ingredient(session, data)
-    except TermConflict as error:
-        raise _conflict(error) from error
-    except HierarchyError as error:
-        raise ApiError(422, "invalid_parent") from error
-    linked = link_unmatched_lines(session, entry)
-    session.commit()
-    created = IngredientOut.model_validate(entry).model_dump()
-    return CreatedIngredient(**created, linked_lines=linked)
+        return _linked(entry, link_unmatched_lines(session, entry))
+
+    return _committed(session, create)
+
+
+@router.patch("/ingredients/{entry_id}")
+def patch_ingredient(
+    entry_id: int, patch: IngredientPatch, session: SessionDep
+) -> LinkedIngredient:
+    def change() -> LinkedIngredient:
+        entry = update_user_ingredient(session, entry_id, patch)
+        # A new name or alias may now match lines that were unmatched.
+        return _linked(entry, link_unmatched_lines(session, entry))
+
+    return _committed(session, change)
+
+
+@router.delete("/ingredients/{entry_id}", status_code=204)
+def delete_ingredient(entry_id: int, session: SessionDep) -> Response:
+    _committed(session, lambda: delete_user_ingredient(session, entry_id))
+    return Response(status_code=204)
 
 
 @router.get("/cookware")
-def search_cookware(session: SessionDep, q: str | None = None) -> list[CookwareOut]:
-    return [CookwareOut.model_validate(row) for row in _search(session, Cookware, q)]
+def search_cookware(
+    session: SessionDep, q: str | None = None, source: Source | None = None
+) -> list[CookwareOut]:
+    return [CookwareOut.model_validate(row) for row in _search(session, Cookware, q, source)]
 
 
 @router.post("/cookware", status_code=201)
 def create_cookware(data: CookwareIn, session: SessionDep) -> CookwareOut:
     """A new entry only records that a dish needs it; `owned` adds it to the user's kitchen."""
-    try:
+
+    def create() -> CookwareOut:
         entry = create_user_cookware(session, CookwareWrite(**data.model_dump(exclude={"owned"})))
-    except TermConflict as error:
-        raise _conflict(error) from error
-    if data.owned:
-        session.add(CookwareOwned(cookware_id=entry.id))
-    session.commit()
-    return CookwareOut.model_validate(entry)
+        if data.owned:
+            session.add(CookwareOwned(cookware_id=entry.id))
+        return CookwareOut.model_validate(entry)
+
+    return _committed(session, create)
+
+
+@router.patch("/cookware/{entry_id}")
+def patch_cookware(entry_id: int, patch: DictionaryPatch, session: SessionDep) -> CookwareOut:
+    return _committed(
+        session, lambda: CookwareOut.model_validate(update_user_cookware(session, entry_id, patch))
+    )
+
+
+@router.delete("/cookware/{entry_id}", status_code=204)
+def delete_cookware(entry_id: int, session: SessionDep) -> Response:
+    _committed(session, lambda: delete_user_cookware(session, entry_id))
+    return Response(status_code=204)
 
 
 @router.post("/allergen-suggestions")
 def allergen_suggestions(body: SuggestionIn, client: ClientDep) -> SuggestionOut:
     return SuggestionOut(suggested=suggest_allergens(client, body.name))
+
+
+@router.get("/allergens/unresolved")
+def list_unresolved(session: SessionDep) -> UnresolvedOut:
+    entries, names = unresolved_allergens(session)
+    return UnresolvedOut(
+        entries=[UnresolvedEntryOut(**vars(entry)) for entry in entries],
+        unmatched=[UnresolvedNameOut(**vars(name)) for name in names],
+    )
+
+
+@router.post("/allergens/resolve")
+def resolve(body: ResolveIn, session: SessionDep) -> LinkedIngredient:
+    def apply() -> LinkedIngredient:
+        entry, linked = resolve_allergens(session, body.name, body.ingredient_id, body.allergens)
+        return _linked(entry, linked)
+
+    return _committed(session, apply)

@@ -12,7 +12,11 @@
     "label": "Main",
     "home": "Home",
     "import": "Import",
-    "review": "Review"
+    "review": "Review",
+    "library": "Library",
+    "inventory": "Inventory",
+    "people": "People",
+    "dictionary": "Dictionary"
   },
   "import": {
     "title": "Import recipes",
@@ -198,5 +202,92 @@
     "soy": "Soy",
     "wheat": "Wheat",
     "sesame": "Sesame"
+  },
+  "common": {
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "save": "Save",
+    "add": "Add",
+    "edit": "Edit",
+    "confirmDelete": "Delete {name}?",
+    "yesDelete": "Yes, delete",
+    "loading": "Loading…",
+    "remove": "Remove",
+    "none": "None yet."
+  },
+  "library": {
+    "title": "Recipe library",
+    "search": "Search title, tags, or ingredients",
+    "allTypes": "All dish types",
+    "dishTypeFilter": "Dish type",
+    "empty": "No recipes found.",
+    "source": "Source",
+    "previous": "Previous",
+    "next": "Next",
+    "pageOf": "Page {page} of {pages}",
+    "deleteNotice": "Saved plans keep the dish name. Its ratings and notes are deleted, and its variants stay.",
+    "editTitle": "Edit {title}",
+    "noEmbedding": "Not yet searchable by meaning; it is retried automatically."
+  },
+  "inventory": {
+    "title": "Inventory",
+    "add": "Add to inventory",
+    "count": "Count",
+    "level": "Level",
+    "grams": "Grams (optional)",
+    "expiresOn": "Expires on (optional)",
+    "availabilityHint": "Having an entry means it is available. Delete it when it runs out.",
+    "sortByName": "Sort by name",
+    "sortByExpiry": "Sort by expiry",
+    "alwaysInStock": "Always in stock",
+    "alwaysInStockHint": "Assumed available when planning, without tracking.",
+    "cookwareOwned": "Cookware I own",
+    "addCookware": "Add cookware",
+    "addAlwaysInStock": "Add an always-in-stock item",
+    "expires": "expires {date}"
+  },
+  "level": {
+    "plenty": "Plenty",
+    "low": "Low",
+    "none": "None"
+  },
+  "people": {
+    "title": "People",
+    "me": "Me",
+    "addFriend": "Add a friend",
+    "displayName": "Name or nickname",
+    "friendHint": "Use a nickname. Before model calls, saved friends' names are replaced with codes.",
+    "rename": "Rename",
+    "rules": "Rules",
+    "addRule": "Add rule",
+    "ruleType": "Rule type",
+    "target": "Applies to",
+    "targetAllergen": "An allergen from the list",
+    "targetIngredient": "A specific ingredient",
+    "targetText": "Free text",
+    "allergen": "Allergen",
+    "text": "Description",
+    "deleteFriendNotice": "Their rules are deleted too. Saved plans keep their dishes.",
+    "noRules": "No rules."
+  },
+  "ruleType": {
+    "allergy": "Allergy",
+    "dietary restriction": "Dietary restriction",
+    "dislike": "Dislike"
+  },
+  "dictionary": {
+    "title": "Dictionary",
+    "unresolved": "Ingredients with unknown allergens",
+    "unresolvedHint": "Dishes with these ingredients are not chosen for a meal where anyone has an allergy, until you confirm.",
+    "dishCount": "{count, plural, one {# dish} other {# dishes}}",
+    "unmatchedName": "{name} (not in the dictionary)",
+    "resolve": "Confirm allergens",
+    "saveAllergens": "Save allergens",
+    "allResolved": "Every ingredient's allergens are known.",
+    "userIngredients": "My ingredient entries",
+    "userCookware": "My cookware entries",
+    "allergensUnknown": "allergens unknown",
+    "allergensNone": "no allergens",
+    "seedNotice": "Built-in entries were reviewed by a person and cannot be changed here."
   }
 }

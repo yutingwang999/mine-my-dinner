@@ -10,21 +10,24 @@ import {
   api,
   DISH_TYPES,
   type DishType,
+  type EditableRecipe,
   type Lang,
   LANGUAGES,
-  type RecipeDraft,
   type RecipeWrite,
 } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 
 type Props = {
-  draft: RecipeDraft;
+  /** A draft to review, or a saved recipe to edit. */
+  draft: EditableRecipe;
   onSaved: () => void;
+  /** Saves a new recipe unless given another action, such as an update. */
+  save?: (data: RecipeWrite) => Promise<unknown>;
 };
 
 let nextKey = 0;
 
-function toLine(line: RecipeDraft["ingredients"][number]): ReviewLine {
+function toLine(line: EditableRecipe["ingredients"][number]): ReviewLine {
   return { ...line, key: nextKey++, skipped: false, linkedName: null };
 }
 
@@ -51,7 +54,7 @@ function useAllergyCheck(lines: ReviewLine[]): AllergyCheck | null {
   return result;
 }
 
-export function ReviewForm({ draft, onSaved }: Props) {
+export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }: Props) {
   const t = useTranslations("review");
   const tLang = useTranslations("lang");
   const tDish = useTranslations("dishType");
@@ -121,7 +124,7 @@ export function ReviewForm({ draft, onSaved }: Props) {
     setSaving(true);
     setError(null);
     try {
-      await api.saveRecipe(buildWrite());
+      await saveRecipe(buildWrite());
       onSaved();
     } catch (caught) {
       setError(caught);

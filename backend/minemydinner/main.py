@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from minemydinner.api import dictionary, imports, recipes
+from minemydinner.api import diners, dictionary, imports, inventory, recipes
 from minemydinner.api.deps import ERROR_HANDLERS, get_llm_client
 from minemydinner.db import SessionFactory, configure_engine
 from minemydinner.recipes.embedding import retry_pending_embeddings
@@ -36,6 +36,8 @@ app = FastAPI(title="MineMyDinner", lifespan=lifespan, exception_handlers=ERROR_
 app.include_router(imports.router)
 app.include_router(recipes.router)
 app.include_router(dictionary.router)
+app.include_router(inventory.router)
+app.include_router(diners.router)
 
 
 @app.get("/api/health")

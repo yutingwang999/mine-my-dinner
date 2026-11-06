@@ -1,24 +1,35 @@
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
-from minemydinner.api.deps import ApiError, get_llm_client
+from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
+from minemydinner.constants import DISH_TYPES
 from minemydinner.db import get_session
+from minemydinner.imports.service import DraftCookware, DraftIngredient
 from minemydinner.llm.client import LLMClient
-from minemydinner.models import Diner
+from minemydinner.models import Cookware, Diner, Ingredient, Recipe, RecipeIngredient
 from minemydinner.recipes.allergy import (
     LineRef,
     find_allergy_conflicts,
     find_unknown_allergen_lines,
 )
 from minemydinner.recipes.embedding import retry_pending_embeddings
-from minemydinner.recipes.service import InvalidRecipe, RecipeWrite, create_recipe
+from minemydinner.recipes.service import (
+    InvalidRecipe,
+    RecipeWrite,
+    create_recipe,
+    delete_recipe,
+    update_recipe,
+)
 from minemydinner.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/recipes")
+
+PAGE_SIZE = 20
 
 SessionDep = Annotated[Session, Depends(get_session)]
 ClientDep = Annotated[LLMClient, Depends(get_llm_client)]
@@ -52,6 +63,151 @@ class AllergyCheckOut(BaseModel):
 
 class RetryOut(BaseModel):
     embedded: int
+
+
+class RecipeOut(BaseModel):
+    id: int
+    lang: str
+    title: str
+    dish_type: str
+    time_min: int | None
+    time_source: str | None
+    servings: int | None
+    tags: list[str]
+    steps_summary: str | None
+    ingredients: list[DraftIngredient]
+    # Named in the recipe's language, so the review form can show them.
+    cookware: list[DraftCookware]
+    cookware_ids: list[int]
+    source_type: str
+    source_url: str | None
+    embedded: bool
+    created_at: datetime
+
+
+class RecipePage(BaseModel):
+    items: list[RecipeOut]
+    total: int
+    page: int
+
+
+def _cookware_name(cookware: Cookware, lang: str) -> str:
+    preferred = cookware.name_zh if lang == "zh" else cookware.name_en
+    return preferred or cookware.name_zh or cookware.name_en or ""
+
+
+def _recipe_out(recipe: Recipe) -> RecipeOut:
+    return RecipeOut(
+        id=recipe.id,
+        lang=recipe.lang,
+        title=recipe.title,
+        dish_type=recipe.dish_type,
+        time_min=recipe.time_min,
+        time_source=recipe.time_source,
+        servings=recipe.servings,
+        tags=recipe.tags,
+        steps_summary=recipe.steps_summary,
+        ingredients=[
+            DraftIngredient(
+                raw=line.raw,
+                name=line.name,
+                amount=line.amount,
+                unit=line.unit,
+                amount_type=line.amount_type,
+                role=line.role,
+                optional=line.optional,
+                ingredient_id=line.ingredient_id,
+            )
+            for line in recipe.ingredients
+        ],
+        cookware=[
+            DraftCookware(
+                name=_cookware_name(item.cookware, recipe.lang), cookware_id=item.cookware_id
+            )
+            for item in recipe.cookware
+        ],
+        cookware_ids=[item.cookware_id for item in recipe.cookware],
+        source_type=recipe.source_type,
+        source_url=recipe.source_url,
+        embedded=recipe.embedding is not None,
+        created_at=recipe.created_at,
+    )
+
+
+def _not_found(error: InvalidRecipe) -> ApiError:
+    return ApiError(404 if error.code == "not_found" else 422, error.code)
+
+
+@router.get("")
+def list_recipes(
+    session: SessionDep,
+    q: str | None = None,
+    dish_type: Literal[*DISH_TYPES] | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+) -> RecipePage:
+    """Text search on title, tags, and ingredient names, with no model call."""
+    query = select(Recipe)
+    if q and q.strip():
+        pattern = contains_pattern(q)
+        line_matches = (
+            select(RecipeIngredient.id)
+            .outerjoin(Ingredient, RecipeIngredient.ingredient_id == Ingredient.id)
+            .where(
+                RecipeIngredient.recipe_id == Recipe.id,
+                or_(
+                    RecipeIngredient.name.ilike(pattern),
+                    # Dictionary names let "egg" find a recipe whose line says "鸡蛋".
+                    Ingredient.name_zh.ilike(pattern),
+                    Ingredient.name_en.ilike(pattern),
+                ),
+            )
+        )
+        query = query.where(
+            or_(
+                Recipe.title.ilike(pattern),
+                func.array_to_string(Recipe.tags, "\n").ilike(pattern),
+                exists(line_matches),
+            )
+        )
+    if dish_type is not None:
+        query = query.where(Recipe.dish_type == dish_type)
+    total = session.scalar(select(func.count()).select_from(query.subquery()))
+    rows = session.scalars(
+        query.order_by(Recipe.created_at.desc(), Recipe.id.desc())
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+    )
+    return RecipePage(items=[_recipe_out(row) for row in rows], total=total, page=page)
+
+
+@router.get("/{recipe_id}")
+def get_recipe(recipe_id: int, session: SessionDep) -> RecipeOut:
+    recipe = session.get(Recipe, recipe_id)
+    if recipe is None:
+        raise ApiError(404, "not_found")
+    return _recipe_out(recipe)
+
+
+@router.put("/{recipe_id}")
+def put_recipe(
+    recipe_id: int, data: RecipeWrite, session: SessionDep, client: ClientDep
+) -> RecipeOut:
+    """An edit replaces the lines and recomputes the embedding. Edits write no
+    extraction log, so the log keeps only corrections of model output."""
+    try:
+        recipe = update_recipe(session, client, recipe_id, data)
+    except InvalidRecipe as error:
+        raise _not_found(error) from error
+    return _recipe_out(recipe)
+
+
+@router.delete("/{recipe_id}", status_code=204)
+def remove_recipe(recipe_id: int, session: SessionDep) -> Response:
+    try:
+        delete_recipe(session, recipe_id)
+    except InvalidRecipe as error:
+        raise _not_found(error) from error
+    return Response(status_code=204)
 
 
 @router.post("", status_code=201)
