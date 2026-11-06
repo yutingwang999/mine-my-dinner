@@ -71,7 +71,8 @@ describe("people", () => {
   it("asks before deleting a friend and says their rules are deleted too", async () => {
     setup();
     const friend = within(await screen.findByTestId("diner-2"));
-    expect(await friend.findByText(/Egg/)).toBeInTheDocument();
+    // Exact text, because the add-rule form also lists "Egg" as an option.
+    expect(await friend.findByText("Allergy: Egg")).toBeInTheDocument();
     await userEvent.click(friend.getByRole("button", { name: "Delete" }));
     expect(friend.getByText("Delete 小李?")).toBeInTheDocument();
     expect(friend.getByText(/Their rules are deleted too/)).toBeInTheDocument();
