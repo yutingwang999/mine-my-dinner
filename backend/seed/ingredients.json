@@ -182,7 +182,7 @@
 {"name_zh":"冰糖","name_en":"rock sugar","category":"seasoning","stock_mode":"availability","allergens":[]},
 {"name_zh":"红糖","name_en":"brown sugar","category":"seasoning","stock_mode":"availability","allergens":[]},
 {"name_zh":"蜂蜜","name_en":"honey","category":"seasoning","stock_mode":"availability","allergens":[]},
-{"name_zh":"水","name_en":"water","aliases_zh":["清水","开水","热水","冷水"],"category":"seasoning","stock_mode":"availability","allergens":[]},
+{"name_zh":"水","name_en":"water","aliases_zh":["清水","开水","热水","冷水","温水","凉水","凉白开","冰水"],"category":"seasoning","stock_mode":"availability","allergens":[]},
 {"name_zh":"食用油","name_en":"cooking oil","aliases_zh":["油","植物油","色拉油"],"aliases_en":["vegetable oil","oil"],"category":"seasoning","stock_mode":"availability","allergens":[]},
 {"name_zh":"花生油","name_en":"peanut oil","parent":"食用油","category":"seasoning","stock_mode":"availability","allergens":["peanut"]},
 {"name_zh":"大豆油","name_en":"soybean oil","parent":"食用油","aliases_zh":["豆油"],"category":"seasoning","stock_mode":"availability","allergens":["soy"]},

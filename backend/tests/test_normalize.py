@@ -40,6 +40,11 @@ def test_matches_names_and_aliases(session_seeded, name, expected):
     assert match_ingredient(session_seeded, name).name_zh == expected
 
 
+@pytest.mark.parametrize("name", ["温水", "凉水", "凉白开", "冰水"])
+def test_water_at_any_temperature_is_water(session_seeded, name):
+    assert match_ingredient(session_seeded, name).name_zh == "水"
+
+
 @pytest.mark.parametrize("name", ["秘制酱", "葱 花", "葱花儿", "", "   "])
 def test_unknown_name_is_not_guessed(session_seeded, name):
     assert match_ingredient(session_seeded, name) is None
