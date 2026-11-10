@@ -19,6 +19,7 @@ Write every field in the source's language, and set `lang` to `zh` or `en`.
 
 ## Dish
 
+- `title`: the dish name only. Remove numbering, bullets, and symbols such as "1.1.2." or "■", and a trailing index such as the "1" in "炸鸡块1". Keep words that tell versions apart, such as "（日式）". When the source has no title, write a short name for the dish in the source's language.
 - `dish_type`:
   - `meat dish`: any dish with meat or seafood.
   - `vegetable dish`: other dishes, including egg and tofu dishes.

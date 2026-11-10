@@ -114,6 +114,14 @@ def test_prompt_leaves_out_basic_utensils_and_names_the_kind_of_pot():
     assert '"锅"' in prompt and "leave it out" in prompt
 
 
+def test_prompt_cleans_numbered_titles_and_names_untitled_recipes():
+    from minemydinner.extraction.extractor import load_prompt
+
+    prompt = load_prompt()
+    assert "`title`" in prompt and "numbering" in prompt and "■" in prompt
+    assert "no title" in prompt
+
+
 def test_prompt_states_the_design_rules():
     from minemydinner.extraction.extractor import load_prompt
 

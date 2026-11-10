@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import delete
 
 from minemydinner.evaluation import run as run_module
 from minemydinner.evaluation.export import export_logs
@@ -30,6 +31,9 @@ def logs_with_and_without_correction(session):
 
 @pytest.fixture
 def llm_calls_rows(session):
+    # Real-app checks may leave rows in the test database; this transaction hides them.
+    session.execute(delete(LlmCall))
+
     def call(task, success, cost, latency, model="gemini-test"):
         return LlmCall(
             task=task,
