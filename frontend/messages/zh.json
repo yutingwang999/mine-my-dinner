@@ -116,7 +116,8 @@
     "screenshotsKept": "截图会在保存菜谱时一起保存，之后可以在菜谱库里查看。",
     "imagesFailed": "菜谱已保存，但截图没有存上：{error}",
     "retryImages": "重新上传截图",
-    "skipImages": "不保存截图，继续"
+    "skipImages": "不保存截图，继续",
+    "fixAmounts": "请先改好上面标出的数量，再保存。"
   },
   "line": {
     "raw": "原文",
@@ -145,7 +146,13 @@
     "addedByYou": "（手动添加）",
     "nameConflict": "名称“{name}”是词典里的“{entry}”，但这一行关联的是“{linked}”。",
     "relinkTo": "改为关联{entry}",
-    "keepLink": "保持关联{linked}"
+    "keepLink": "保持关联{linked}",
+    "mismatchExact": "克和毫升是精确数量。",
+    "mismatchCount": "个和根是计数。",
+    "mismatchSpoon": "勺是家用量具。",
+    "mismatchNoUnit": "有数字但没有单位的，是碗、把这类家用量具。请选一个单位，或者改数量类型。",
+    "fixType": "改为{type}",
+    "zeroAmount": "数量必须大于 0。"
   },
   "entry": {
     "nameZh": "中文名",

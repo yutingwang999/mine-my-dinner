@@ -578,6 +578,45 @@ describe("review", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  const EGGS = { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, ingredient_id: 1 } as const;
+
+  it("sets the amount type from the unit, and clears a unit that no longer fits", async () => {
+    setup({}, [draft({ ingredients: [EGGS] })]);
+    const eggs = within(row("鸡蛋"));
+    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Unit" }), "teaspoon");
+    expect(eggs.getByRole("combobox", { name: "Amount type" })).toHaveValue("spoon");
+    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Amount type" }), "exact");
+    expect(eggs.getByRole("combobox", { name: "Unit" })).toHaveValue("");
+  });
+
+  it("warns about a unit and type that do not match, blocks save, and offers the fix", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, raw: "生抽4勺", name: "生抽", amount: 4, unit: "spoon" }] })]);
+    const soy = within(row("生抽"));
+    expect(soy.getByText("A spoon measure is a household measure.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    expect(screen.getByText("Fix the amounts marked above before saving.")).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/recipes")).toHaveLength(0);
+    await userEvent.click(soy.getByRole("button", { name: "Change to Household measure" }));
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: 4, unit: "spoon", amount_type: "spoon" });
+  });
+
+  it("does not save an amount of zero", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: 0 }] })]);
+    expect(within(row("鸡蛋")).getByText("The amount must be more than 0.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    expect(callsTo(calls, "POST", "/api/recipes")).toHaveLength(0);
+  });
+
+  it("does not let the mouse wheel change an amount", async () => {
+    setup({}, [draft({ ingredients: [EGGS] })]);
+    const amount = within(row("鸡蛋")).getByRole("spinbutton", { name: "Amount" });
+    amount.focus();
+    fireEvent.wheel(amount);
+    expect(amount).not.toHaveFocus();
+  });
+
   it("clears amount and unit when the amount type becomes vague", async () => {
     setup({}, [
       draft({

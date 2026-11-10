@@ -23,6 +23,7 @@ import {
   type Unit,
   UNITS,
 } from "@/lib/api";
+import { amountProblem, typeForUnit } from "@/lib/amounts";
 import { useErrorText } from "@/lib/errors";
 
 export type ReviewLine = IngredientLine & {
@@ -189,13 +190,16 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
   function setAmountType(amountType: AmountType) {
     // A vague or missing amount never carries a number.
     const clears = amountType === "vague" || amountType === "missing";
+    // A unit that belongs to another type is cleared, so the user picks a fitting one.
+    const unitFits = line.unit !== null && typeForUnit(line.unit) === amountType;
     update({
       amount_type: amountType,
-      ...(clears ? { amount: null, unit: null } : {}),
+      ...(clears ? { amount: null, unit: null } : unitFits ? {} : { unit: null }),
     });
   }
 
   const noNumber = line.amount_type === "vague" || line.amount_type === "missing";
+  const problem = amountProblem(line);
   const state =
     line.ingredient_id !== null ? "matched" : line.skipped ? "skipped" : "unmatched";
 
@@ -222,6 +226,8 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
             step="any"
             min="0"
             disabled={noNumber}
+            // A wheel turn over a focused number field would change the amount unseen.
+            onWheel={(event) => event.currentTarget.blur()}
             value={line.amount ?? ""}
             onChange={(event) =>
               update({ amount: event.target.value === "" ? null : Number(event.target.value) })
@@ -233,7 +239,10 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
           <select
             disabled={noNumber}
             value={line.unit ?? ""}
-            onChange={(event) => update({ unit: (event.target.value || null) as Unit | null })}
+            onChange={(event) => {
+              const unit = (event.target.value || null) as Unit | null;
+              update({ unit, amount_type: typeForUnit(unit) });
+            }}
           >
             <option value="">{tUnit("none")}</option>
             {UNITS.map((value) => (
@@ -279,6 +288,22 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
         </button>
       </div>
 
+      {problem && (
+        <p className="notice notice-warning">
+          {problem.kind === "zero" ? (
+            t("zeroAmount")
+          ) : (
+            <>
+              {line.unit === null
+                ? t("mismatchNoUnit")
+                : t(problem.expected === "exact" ? "mismatchExact" : problem.expected === "count" ? "mismatchCount" : "mismatchSpoon")}{" "}
+              <button type="button" onClick={() => update({ amount_type: problem.expected })}>
+                {t("fixType", { type: tAmount(problem.expected) })}
+              </button>
+            </>
+          )}
+        </p>
+      )}
       <div className="line-status">
         {line.ingredient_id !== null ? (
           <>

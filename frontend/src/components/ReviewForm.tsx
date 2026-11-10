@@ -20,6 +20,7 @@ import {
   type RecipeWrite,
   type TimeSource,
 } from "@/lib/api";
+import { amountProblem } from "@/lib/amounts";
 import { useErrorText } from "@/lib/errors";
 
 type Props = {
@@ -132,6 +133,7 @@ export function ReviewForm({
     error: unknown;
   } | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [amountsBlocked, setAmountsBlocked] = useState(false);
   // A ref, not state, so a second click in the same frame is also ignored.
   const savingRef = useRef(false);
   const allergyCheck = useAllergyCheck(lines);
@@ -198,8 +200,13 @@ export function ReviewForm({
     }
   }
 
+  const hasAmountProblem = lines.some((line) => amountProblem(line) !== null);
+
   async function save() {
     if (savingRef.current) return;
+    // The server would reject these lines with no clear message, so stop here.
+    setAmountsBlocked(hasAmountProblem);
+    if (hasAmountProblem) return;
     savingRef.current = true;
     setSaving(true);
     setError(null);
@@ -447,6 +454,11 @@ export function ReviewForm({
       )}
       <p>{t("checkYourself")}</p>
 
+      {amountsBlocked && hasAmountProblem && (
+        <p role="alert" className="notice notice-warning">
+          {t("fixAmounts")}
+        </p>
+      )}
       {error !== null && (
         <p role="alert" className="notice notice-warning">
           {t("saveFailed", { error: errorText(error) })}

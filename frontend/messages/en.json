@@ -116,7 +116,8 @@
     "screenshotsKept": "The screenshots are saved with the recipe and can be viewed in the library.",
     "imagesFailed": "The recipe is saved, but its screenshots are not: {error}",
     "retryImages": "Retry the screenshots",
-    "skipImages": "Continue without them"
+    "skipImages": "Continue without them",
+    "fixAmounts": "Fix the amounts marked above before saving."
   },
   "line": {
     "raw": "Source wording",
@@ -145,7 +146,13 @@
     "addedByYou": "(added by you)",
     "nameConflict": "The name “{name}” is the dictionary entry “{entry}”, but this line is linked to “{linked}”.",
     "relinkTo": "Link to {entry}",
-    "keepLink": "Keep {linked}"
+    "keepLink": "Keep {linked}",
+    "mismatchExact": "Grams and milliliters are exact amounts.",
+    "mismatchCount": "Pieces and stalks are counts.",
+    "mismatchSpoon": "A spoon measure is a household measure.",
+    "mismatchNoUnit": "A number with no unit is a household measure, such as a bowl or a handful. Pick a unit, or change the type.",
+    "fixType": "Change to {type}",
+    "zeroAmount": "The amount must be more than 0."
   },
   "entry": {
     "nameZh": "Chinese name",

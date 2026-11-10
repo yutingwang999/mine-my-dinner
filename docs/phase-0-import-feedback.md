@@ -26,6 +26,7 @@ Issues found while importing real recipes in Task 9 (T0.8). The first list was f
 20. **Notice wording:** ten notices rewritten for clarity and tone, without assuming a friend's gender.
 21. **Full method kept:** each recipe keeps its pasted text, batch part, or screenshots, per the storage principle in design 4.2, and the library shows it on request.
 22. **Supplies and spoon sizes:** consumables such as plastic wrap and foil are a separate supplies list, shown as a reminder and never checked. Units gain tablespoon and teaspoon; a spoon whose size is not stated stays a spoon. A bowl, cup, handful, or pinch keeps its number with no unit. Amount accuracy now also counts household measures. The prompt changed before any evaluation log existed, so the version stays `extract_v1`.
+23. **Unit and amount type agree:** choosing a unit sets the amount type (grams and milliliters are exact, pieces and stalks are counts, spoons and a number with no unit are household measures). A line whose unit and type disagree, or whose amount is 0, is marked with a one-click fix, and save waits until it is fixed. The server rejects such lines too, so the evaluation set cannot hold them. A mouse wheel no longer changes an amount. Two saved lines with the wrong type and one salt amount turned to 0 were corrected in the recipe and its evaluation record.
 
 ## Still open
 
@@ -38,6 +39,7 @@ Issues found while importing real recipes in Task 9 (T0.8). The first list was f
 | Cookware entries have no edit form | They can only be deleted | Add an edit form; the API exists |
 | Links without `http://` or `https://` are not recognized | `www.` links and app short links must be entered as the source by hand | Widen the link pattern |
 | Web pages with under 200 characters of main text are rejected | A short Chinese recipe page can be refused | Lower the floor for Chinese pages |
+| A recipe cannot say "pick one of these", such as yogurt or chocolate spread, plus any one fruit | Each choice must be marked optional, so planning treats the dish as needing only its required lines, such as toast alone. A generic line such as "fruit" matches no dictionary entry | Add choice groups to ingredient lines (one of a group is required), and have the prompt list the specific ingredients the source suggests |
 | Titles can lose words that tell versions apart | "(version 2)" was removed as numbering | Add an example to the prompt |
 | "A or B" ingredients come out as one line | 酸奶（巧克力榛果酱） did not match the dictionary | Teach the prompt to split alternatives into optional lines |
 | Added lines count as lines the model missed | Evaluation blames the model for ingredients the source never had | Ask, when adding, whether the source has the ingredient |

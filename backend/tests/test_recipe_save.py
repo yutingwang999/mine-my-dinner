@@ -111,6 +111,36 @@ def test_household_measure_may_keep_a_number_without_a_unit(
     assert (line.amount, line.unit) == (1, None)
 
 
+@pytest.mark.parametrize(
+    ("amount", "unit", "amount_type"),
+    [
+        (4, "spoon", "count"),
+        (1, "teaspoon", "exact"),
+        (200, "g", "spoon"),
+        (2, "piece", "exact"),
+        (1, None, "count"),
+        (0, "teaspoon", "spoon"),
+    ],
+)
+def test_amount_type_must_match_the_unit(
+    client, session, seeded, fake_llm, recipe_write, amount, unit, amount_type
+):
+    recipe_write["ingredients"][0] |= {"amount": amount, "unit": unit, "amount_type": amount_type}
+    assert client.post("/api/recipes", json=recipe_write).status_code == 422
+    assert count(session, Recipe) == 0
+
+
+@pytest.mark.parametrize(
+    ("amount", "unit", "amount_type"),
+    [(200, "g", "exact"), (100, "ml", "exact"), (2, "stalk", "count"), (1, None, "spoon")],
+)
+def test_matching_amount_type_and_unit_are_saved(
+    client, session, seeded, fake_llm, recipe_write, amount, unit, amount_type
+):
+    recipe_write["ingredients"][0] |= {"amount": amount, "unit": unit, "amount_type": amount_type}
+    assert saved(client, session, recipe_write).ingredients[0].amount_type == amount_type
+
+
 def test_user_time_source_is_kept(client, session, seeded, fake_llm, recipe_write):
     recipe = saved(client, session, {**recipe_write, "time_min": 25, "time_source": "user"})
     assert (recipe.time_min, recipe.time_source) == (25, "user")

@@ -5,7 +5,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from minemydinner.constants import DISH_TYPES, LANGUAGES, SOURCE_TYPES, TIME_SOURCES
+from minemydinner.constants import (
+    DISH_TYPES,
+    LANGUAGES,
+    SOURCE_TYPES,
+    TIME_SOURCES,
+    UNIT_AMOUNT_TYPES,
+)
 from minemydinner.imports.service import DraftIngredient, Provenance
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import (
@@ -41,6 +47,17 @@ class RecipeLineWrite(DraftIngredient):
     def no_number_without_amount(self) -> Self:
         if self.amount_type in ("vague", "missing") and (self.amount is not None or self.unit):
             raise ValueError(f"a {self.amount_type} amount has no number or unit")
+        return self
+
+    @model_validator(mode="after")
+    def amount_type_matches_unit(self) -> Self:
+        # The model's raw output is not checked; only what the user saves.
+        if self.amount is None:
+            return self
+        if self.amount <= 0:
+            raise ValueError("an amount must be more than 0")
+        if self.amount_type != UNIT_AMOUNT_TYPES[self.unit]:
+            raise ValueError(f"unit {self.unit} needs amount type {UNIT_AMOUNT_TYPES[self.unit]}")
         return self
 
 
