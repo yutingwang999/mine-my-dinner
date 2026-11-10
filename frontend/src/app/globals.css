@@ -581,3 +581,11 @@ button.danger:hover:not(:disabled) {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+
+/* Supplies sit in the form like the other sections, without a fieldset border. */
+fieldset.supplies {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}

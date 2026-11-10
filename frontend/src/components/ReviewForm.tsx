@@ -102,6 +102,7 @@ export function ReviewForm({
   const tDish = useTranslations("dishType");
   const tSource = useTranslations("timeSource");
   const tAllergen = useTranslations("allergen");
+  const tLine = useTranslations("line");
   const locale = useLocale();
   const errorText = useErrorText();
 
@@ -120,6 +121,9 @@ export function ReviewForm({
   const [cookware, setCookware] = useState<ReviewCookware[]>(() =>
     draft.cookware.map((item) => ({ ...item, key: nextKey++, skipped: false, linkedName: null })),
   );
+  // Drafts queued before supplies existed have none.
+  const [supplies, setSupplies] = useState<string[]>(() => draft.supplies ?? []);
+  const [newSupply, setNewSupply] = useState("");
   const [addingLine, setAddingLine] = useState(false);
   const [addingCookware, setAddingCookware] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -176,6 +180,7 @@ export function ReviewForm({
         ingredient_id: line.ingredient_id,
       })),
       cookware_ids: [...new Set(cookwareIds)],
+      supplies,
       source_type: draft.source_type,
       source_url: sourceUrl.trim() || null,
       provenance: draft.provenance,
@@ -235,6 +240,14 @@ export function ReviewForm({
     );
     setLines((current) => [...current, { ...line, linkedName, added: true }]);
     setAddingLine(false);
+  }
+
+  function addSupply() {
+    const name = newSupply.trim();
+    if (name && !supplies.includes(name)) {
+      setSupplies((current) => [...current, name]);
+    }
+    setNewSupply("");
   }
 
   const conflicts = allergyCheck?.conflicts ?? [];
@@ -375,6 +388,42 @@ export function ReviewForm({
           {t("addCookware")}
         </button>
       )}
+
+      <fieldset className="supplies" aria-labelledby="supplies-heading">
+        <h2 id="supplies-heading">{t("supplies")}</h2>
+        <p className="hint">{t("suppliesHint")}</p>
+        <ul className="line-list">
+          {supplies.map((name) => (
+            <li key={name} className="actions">
+              <span>{name}</span>
+              <button
+                type="button"
+                aria-label={t("removeSupply", { name })}
+                onClick={() => setSupplies((current) => current.filter((item) => item !== name))}
+              >
+                {tLine("remove")}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <span className="actions">
+          <input
+            aria-label={t("addSupply")}
+            value={newSupply}
+            onChange={(event) => setNewSupply(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter adds the supply instead of submitting the form.
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addSupply();
+              }
+            }}
+          />
+          <button type="button" onClick={addSupply} disabled={!newSupply.trim()}>
+            {t("addSupply")}
+          </button>
+        </span>
+      </fieldset>
 
       {conflicts.length > 0 && (
         <div role="alert" className="notice notice-warning">

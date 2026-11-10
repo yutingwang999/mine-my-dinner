@@ -103,7 +103,10 @@ export function RecipeLibrary() {
                   {t("source")}
                 </a>
               )}
-              {!recipe.embedded && <small className="hint">{t("noEmbedding")}</small>}
+              {recipe.supplies.length > 0 && (
+                <small className="hint">{t("supplies", { names: recipe.supplies.join(", ") })}</small>
+              )}
+              {!recipe.embedded &&<small className="hint">{t("noEmbedding")}</small>}
             </span>
             <span className="actions">
               {(recipe.source_text || recipe.images.length > 0) && (

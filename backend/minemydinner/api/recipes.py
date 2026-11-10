@@ -101,6 +101,7 @@ class RecipeOut(BaseModel):
     time_source: str | None
     servings: int | None
     tags: list[str]
+    supplies: list[str]
     steps_summary: str | None
     ingredients: list[DraftLine]
     # Named in the recipe's language, so the review form can show them.
@@ -135,6 +136,7 @@ def _recipe_out(recipe: Recipe) -> RecipeOut:
         time_source=recipe.time_source,
         servings=recipe.servings,
         tags=recipe.tags,
+        supplies=recipe.supplies,
         steps_summary=recipe.steps_summary,
         ingredients=[
             DraftLine.of(

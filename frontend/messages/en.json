@@ -93,6 +93,10 @@
     "sourceUrl": "Source link",
     "ingredients": "Ingredients",
     "cookware": "Cookware",
+    "supplies": "Supplies",
+    "suppliesHint": "Things that get used up, such as plastic wrap or foil. A reminder only; they never affect suggestions.",
+    "addSupply": "Add a supply",
+    "removeSupply": "Remove {name}",
     "addLine": "Add ingredient",
     "save": "Save recipe",
     "saving": "Saving…",
@@ -191,6 +195,8 @@
     "ml": "ml",
     "piece": "piece",
     "stalk": "stalk",
+    "tablespoon": "tbsp",
+    "teaspoon": "tsp",
     "spoon": "spoon"
   },
   "amountType": {
@@ -262,6 +268,7 @@
     "noEmbedding": "Not yet searchable by meaning; it is retried automatically.",
     "showSource": "Show the full method",
     "hideSource": "Hide the full method",
+    "supplies": "Have ready: {names}",
     "screenshotAlt": "Screenshot {number}"
   },
   "inventory": {

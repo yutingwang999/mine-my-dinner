@@ -75,6 +75,12 @@ describe("library", () => {
     expect(item.getByRole("img", { name: "Screenshot 1" })).toHaveAttribute("src", `/api/images/${image}`);
   });
 
+  it("lists the supplies to have ready", async () => {
+    setup([saved({ supplies: ["保鲜膜", "锡纸"] })]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    expect(item.getByText("Have ready: 保鲜膜, 锡纸")).toBeInTheDocument();
+  });
+
   it("offers no full method when nothing was kept", async () => {
     setup([saved({ source_url: null })]);
     const item = within(await screen.findByTestId("recipe-1"));

@@ -27,3 +27,5 @@ class ExtractedRecipe(BaseModel):
     steps_summary: str | None
     ingredients: list[ExtractedIngredient]
     cookware: list[str]
+    # Consumables such as plastic wrap or foil: a reminder, never checked when planning.
+    supplies: list[str] = []

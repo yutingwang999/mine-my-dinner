@@ -93,6 +93,10 @@
     "sourceUrl": "来源链接",
     "ingredients": "食材",
     "cookware": "厨具",
+    "supplies": "耗材",
+    "suppliesHint": "保鲜膜、锡纸这类用掉就没有的东西，只作提醒，不影响推荐。",
+    "addSupply": "添加耗材",
+    "removeSupply": "删除{name}",
     "addLine": "添加食材",
     "save": "保存菜谱",
     "saving": "正在保存…",
@@ -191,6 +195,8 @@
     "ml": "毫升",
     "piece": "个",
     "stalk": "根",
+    "tablespoon": "大勺",
+    "teaspoon": "小勺",
     "spoon": "勺"
   },
   "amountType": {
@@ -262,6 +268,7 @@
     "noEmbedding": "暂时不能按语义搜索，会自动重试。",
     "showSource": "查看完整做法",
     "hideSource": "收起完整做法",
+    "supplies": "需要准备：{names}",
     "screenshotAlt": "截图 {number}"
   },
   "inventory": {

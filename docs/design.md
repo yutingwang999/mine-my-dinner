@@ -167,8 +167,8 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 | `name` | Ingredient name as the source states it, without the amount ("葱花", "土豆") |
 | `ingredient_id` | The normalized dictionary entry (葱花 → 葱, 生抽 → 生抽, never 生抽 → 酱油); empty when unmatched (see 5.5) |
 | `amount` | Number; may be empty |
-| `unit` | Grams, milliliters, pieces, stalks, spoons, or empty |
-| `amount_type` | `exact` (precise weight or volume) / `count` (number of items) / `spoon` (household measures such as spoonfuls or handfuls) / `vague` (such as "a little" or "to taste") / `missing` (name only) |
+| `unit` | Grams, milliliters, pieces, stalks, tablespoons, teaspoons, spoons (size not stated), or empty. A spoon whose size the source does not state stays a spoon. A household measure with no unit in this list, such as a bowl, cup, handful, or pinch, keeps its number with an empty unit, and the source wording names the measure |
+| `amount_type` | `exact` (precise weight or volume) / `count` (number of items) / `spoon` (household measures such as spoonfuls, bowls, cups, or handfuls) / `vague` (such as "a little" or "to taste") / `missing` (name only) |
 | `role` | Main ingredient / secondary ingredient / seasoning |
 | `optional` | Whether the dish can be made without it; H1 does not require optional ingredients |
 
@@ -193,7 +193,7 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 |---|---|---|
 | `ingredients` (ingredient dictionary) | `name_zh`, `name_en` (normalized names), `aliases_zh[]`, `aliases_en[]`, `category` (vegetable / fruit / mushroom / meat / seafood / egg and dairy / soy product / staple food / nut / seasoning / other), `stock_mode` (availability / count / level), `allergens[]` (values from the fixed list in 5.5; empty = confirmed none, null = unknown), `parent_id` (nullable; see "Ingredient hierarchy" below), `source` (`seed` = reviewed seed data / `user` = created by the user) | Normalization, inventory precision, and allergy checks depend on this table. Chinese and English recipes normalize to the same `ingredient_id`, and the UI displays the name in the current language. For example, "海米" is tagged crustaceans and "蚝油" is tagged shellfish |
 | `cookware` (cookware dictionary) | `name_zh`, `name_en`, `aliases_zh[]`, `aliases_en[]`, `source` (`seed` / `user`) | Normalizes "炒锅" and "wok" to one `cookware_id` |
-| `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `source_text` (the pasted text or batch part; null for web and screenshot imports), `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores structured information, the step summary, the link, and the source the user provided (see the storage principle in 4.2) |
+| `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `source_text` (the pasted text or batch part; null for web and screenshot imports), `supplies[]` (consumables the method uses, such as plastic wrap, foil, baking paper, or skewers: shown as a reminder and never checked when planning), `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores structured information, the step summary, the link, and the source the user provided (see the storage principle in 4.2) |
 | `recipe_images` | `recipe_id`, `file_name` (content hash plus extension), `mime_type`, `size_bytes`, `position` | Screenshots kept as the full method. The files live in `backend/data/images/`, which `.gitignore` excludes. A file is deleted once no recipe and no extraction log refers to it |
 | `recipe_ingredients` | `recipe_id`, `raw`, `name`, `ingredient_id` (nullable), `amount`, `unit`, `amount_type`, `role` (main / secondary / seasoning), `optional` | See 5.1. See 5.5 for handling an empty `ingredient_id` |
 | `recipe_cookware` | `recipe_id`, `cookware_id` | Availability only |
@@ -415,7 +415,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 |---|---|
 | H1 | Fridge-only mode: each dish's main and secondary ingredients (except `optional`) must be in inventory and not at level "none", with matches following the ingredient hierarchy in 5.3. Seasonings are checked for availability only. Items in `always_in_stock` are assumed available. Unrecognized ingredients count as "not in inventory" (see 5.5) |
 | H2 | No allergens or restricted ingredients of this meal's diners. Allergy rules on a listed allergen are checked through the dictionary's `allergens[]`; rules on a specific ingredient and dietary restrictions are checked through `ingredient_id`, normalized names, and aliases. All checks include the ingredient hierarchy in 5.3. Variants are checked too. Unrecognized ingredients follow 5.5 |
-| H3 | The user has all required cookware |
+| H3 | The user has all required cookware. Supplies such as plastic wrap or foil are not checked |
 | H4 | The composition matches the requested number of dishes and soups (`meat dish` and `vegetable dish` count as dishes, and `soup` as soups) |
 | H5 | No duplicates; each `recipe_id` must exist in the user's recipe library |
 | H6 | When the user gives a time limit: a dish whose duration source is `stated` or `user` must not exceed it |
@@ -502,7 +502,7 @@ Import confirmation shows the duration and its source. A changed duration become
 
 | Target | Metrics |
 |---|---|
-| Ingredient extraction | Ingredient name F1 (primary metric); amount accuracy (only for samples whose source gives a precise amount); amount type accuracy (whether vague amounts are `vague` and absent amounts are `missing`); **fabrication rate** (the share of outputs with a number where the source has no amount); valid JSON rate |
+| Ingredient extraction | Ingredient name F1 (primary metric); amount accuracy (only for lines whose source gives a number: weights, volumes, counts, and household measures, with the number and unit both right); amount type accuracy (whether vague amounts are `vague` and absent amounts are `missing`); **fabrication rate** (the share of outputs with a number where the source has no amount); valid JSON rate |
 | Planning | Constraint satisfaction rate (hard constraints); preference adherence rate (LLM as judge); average number of retries |
 | Cost and performance | Cost per item, latency, vLLM throughput |
 | Video approaches (Phase 3) | F1, cost, and latency comparison across approaches |

@@ -76,6 +76,19 @@ def test_amount_accuracy_uses_only_precise_gold():
     assert report.overall.amount_accuracy == 1.0 and report.overall.amount_counted == 1
 
 
+def test_amount_accuracy_counts_household_measures():
+    report = summarize(
+        [
+            item(
+                gold=[line("生抽", 4, "spoon", "spoon"), line("盐", 1, "teaspoon", "spoon")],
+                predicted=[line("生抽", 4, "spoon", "spoon"), line("盐", 1, "tablespoon", "spoon")],
+            )
+        ]
+    )
+    # Both lines state a number; the salt's spoon size is wrong.
+    assert report.overall.amount_counted == 2 and report.overall.amount_accuracy == 0.5
+
+
 def test_amount_accuracy_needs_equal_amount_and_unit():
     report = summarize(
         [

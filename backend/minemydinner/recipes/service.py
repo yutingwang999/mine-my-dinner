@@ -54,12 +54,18 @@ class RecipeWrite(BaseModel):
     time_source: Literal[*TIME_SOURCES] | None = None
     servings: int | None = Field(default=None, gt=0)
     tags: list[str] = []
+    supplies: list[str] = []
     steps_summary: str | None = None
     ingredients: list[RecipeLineWrite] = Field(min_length=1)
     cookware_ids: list[int] = []
     source_type: Literal[*SOURCE_TYPES]
     source_url: str | None = None
     provenance: Provenance | None = None
+
+    @field_validator("supplies")
+    @classmethod
+    def clean_supplies(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
     @field_validator("title")
     @classmethod
@@ -96,6 +102,7 @@ def _apply(recipe: Recipe, data: RecipeWrite) -> None:
     recipe.time_source = data.time_source
     recipe.servings = data.servings
     recipe.tags = data.tags
+    recipe.supplies = data.supplies
     recipe.steps_summary = data.steps_summary
     recipe.source_type = data.source_type
     recipe.source_url = data.source_url

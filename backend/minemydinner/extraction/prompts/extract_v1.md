@@ -9,10 +9,12 @@ Write every field in the source's language, and set `lang` to `zh` or `en`.
 - `amount_type`:
   - `exact`: a precise weight or volume, such as "200克" or "1/2 cup".
   - `count`: a number of items, such as "2个土豆" or "two eggs".
-  - `spoon`: a household measure, such as "1勺" or "a handful".
+  - `spoon`: a household measure, such as "1勺", "2 tbsp", "一碗", "a handful", or "一撮".
   - `vague`: an amount without a number, such as "少量", "适量", or "a little".
   - `missing`: the line is only the name, such as "芹菜".
-- `unit`: one of `g`, `ml`, `piece`, `stalk`, `spoon`, or null. When the source states a number in another weight or volume unit, convert it: 1斤 = 500 g, 1两 = 50 g, 1 lb = 454 g, 1 oz = 28 g, 1 cup = 240 ml. Keep `raw` unchanged.
+- `unit`: one of `g`, `ml`, `piece`, `stalk`, `tablespoon`, `teaspoon`, `spoon`, or null. When the source states a number in another weight or volume unit, convert it: 1斤 = 500 g, 1两 = 50 g, 1 lb = 454 g, 1 oz = 28 g, and a measuring cup in an English recipe, 1 cup = 240 ml. Keep `raw` unchanged.
+- Spoons: "大勺", "汤匙", and "tbsp" are `tablespoon`; "小勺", "茶匙", and "tsp" are `teaspoon`. When the spoon's size is not stated, such as "1勺" or "a spoonful", the unit is `spoon`. You must not guess the size.
+- Other household measures, such as a bowl ("碗"), a cup ("杯") in a Chinese recipe, a handful ("把"), or a pinch ("撮"): keep the number in `amount`, set `unit` to null, and set `amount_type` to `spoon`.
 - You must not fold a specific kind into a broader one. Keep "生抽" as "生抽", never "酱油", and keep "五花肉" as "五花肉", never "猪肉".
 - `role`: `main` for the ingredients the dish is built on, `secondary` for supporting ingredients, and `seasoning` for sauces, spices, oil, and salt.
 - `optional`: true only when the source says the ingredient can be left out.
@@ -32,6 +34,7 @@ Write every field in the source's language, and set `lang` to `zh` or `en`.
 - `servings`: the number of servings the source states, or null.
 - `steps_summary`: a short paraphrase of the steps in one to three sentences. You must not copy the source steps.
 - `cookware`: cookware the steps need that not every kitchen has, such as pots, pans, appliances, steamers, baking trays, and molds, named as in the source. You must not list basic utensils that every kitchen has: spoons, chopsticks, spatulas, ladles, bowls, plates, knives, or cutting boards. When the source only says "锅", name the specific kind the steps imply, such as "炒锅" for stir-frying or "汤锅" for boiling. When the kind is unclear, leave it out.
+- `supplies`: consumables the steps use up, such as plastic wrap ("保鲜膜"), foil ("锡纸"), baking paper ("烘焙纸"), kitchen paper, skewers, and toothpicks, named as in the source. They go in `supplies`, never in `cookware` or `ingredients`. When there are none, give an empty list.
 
 ## Example (Chinese)
 
@@ -53,7 +56,7 @@ Output:
   {"raw": "老抽半勺", "name": "老抽", "amount": 0.5, "unit": "spoon", "amount_type": "spoon", "role": "seasoning", "optional": false},
   {"raw": "白糖少许", "name": "白糖", "amount": null, "unit": null, "amount_type": "vague", "role": "seasoning", "optional": false},
   {"raw": "食用油适量", "name": "食用油", "amount": null, "unit": null, "amount_type": "vague", "role": "seasoning", "optional": false}
-], "cookware": ["炒锅", "汤锅"]}
+], "cookware": ["炒锅", "汤锅"], "supplies": []}
 ```
 
 ## Example (English)
@@ -72,8 +75,8 @@ Output:
 {"lang": "en", "title": "Garlic Butter Shrimp", "dish_type": "meat dish", "time_min": 15, "time_source": "estimated", "servings": null, "tags": [], "steps_summary": "Fry garlic in melted butter, cook the shrimp until pink, and top with parsley.", "ingredients": [
   {"raw": "1 lb shrimp", "name": "shrimp", "amount": 454, "unit": "g", "amount_type": "exact", "role": "main", "optional": false},
   {"raw": "3 cloves garlic", "name": "garlic", "amount": 3, "unit": "piece", "amount_type": "count", "role": "secondary", "optional": false},
-  {"raw": "2 tbsp butter", "name": "butter", "amount": 2, "unit": "spoon", "amount_type": "spoon", "role": "seasoning", "optional": false},
+  {"raw": "2 tbsp butter", "name": "butter", "amount": 2, "unit": "tablespoon", "amount_type": "spoon", "role": "seasoning", "optional": false},
   {"raw": "parsley", "name": "parsley", "amount": null, "unit": null, "amount_type": "missing", "role": "secondary", "optional": false},
   {"raw": "salt to taste", "name": "salt", "amount": null, "unit": null, "amount_type": "vague", "role": "seasoning", "optional": false}
-], "cookware": ["frying pan"]}
+], "cookware": ["frying pan"], "supplies": []}
 ```

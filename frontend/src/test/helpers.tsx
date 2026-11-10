@@ -101,6 +101,7 @@ export function draft(fields: Partial<RecipeDraft> = {}): RecipeDraft {
       { name: "炒锅", cookware_id: 3 },
       { name: "神奇锅", cookware_id: null },
     ],
+    supplies: [],
     source_type: "text",
     source_url: null,
     provenance: {

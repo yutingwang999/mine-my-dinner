@@ -24,8 +24,8 @@ Issues found while importing real recipes in Task 9 (T0.8). The first list was f
 18. **Source text during review:** shown beside the form; screenshot drafts say the image is not kept.
 19. **Rights notice:** the import page asks the user to import only content they may use.
 20. **Notice wording:** ten notices rewritten for clarity and tone, without assuming a friend's gender.
-
-In progress: keeping the full method for each recipe (pasted text, batch part, or screenshots), per the storage principle in design 4.2.
+21. **Full method kept:** each recipe keeps its pasted text, batch part, or screenshots, per the storage principle in design 4.2, and the library shows it on request.
+22. **Supplies and spoon sizes:** consumables such as plastic wrap and foil are a separate supplies list, shown as a reminder and never checked. Units gain tablespoon and teaspoon; a spoon whose size is not stated stays a spoon. A bowl, cup, handful, or pinch keeps its number with no unit. Amount accuracy now also counts household measures. The prompt changed before any evaluation log existed, so the version stays `extract_v1`.
 
 ## Still open
 

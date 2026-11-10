@@ -9,7 +9,16 @@ export const DISH_TYPES = [
   "dessert",
   "other",
 ] as const;
-export const UNITS = ["g", "ml", "piece", "stalk", "spoon"] as const;
+// "spoon" is a spoon whose size the source does not state.
+export const UNITS = [
+  "g",
+  "ml",
+  "piece",
+  "stalk",
+  "tablespoon",
+  "teaspoon",
+  "spoon",
+] as const;
 export const AMOUNT_TYPES = ["exact", "count", "spoon", "vague", "missing"] as const;
 export const ROLES = ["main", "secondary", "seasoning"] as const;
 export const CATEGORIES = [
@@ -80,6 +89,8 @@ type RecipeFields = {
   tags: string[];
   steps_summary: string | null;
   ingredients: IngredientLine[];
+  /** Consumables such as plastic wrap: a reminder, never checked when planning. */
+  supplies: string[];
   source_type: string;
   source_url: string | null;
 };

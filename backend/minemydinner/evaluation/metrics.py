@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from minemydinner.extraction.schemas import ExtractedRecipe
 
-PRECISE_AMOUNT_TYPES = ("exact", "count")
+# Lines whose source gives a number: weights, volumes, counts, and household measures.
+STATED_AMOUNT_TYPES = ("exact", "count", "spoon")
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ def score_item(gold: dict[str, Any], predicted: dict[str, Any]) -> ItemCounts:
         counts.true_positives += 1
         counts.type_counted += 1
         counts.type_correct += gold_line.get("amount_type") == predicted_line.get("amount_type")
-        if gold_line.get("amount_type") in PRECISE_AMOUNT_TYPES:
+        if gold_line.get("amount_type") in STATED_AMOUNT_TYPES:
             counts.amount_counted += 1
             counts.amount_correct += _same_amount(
                 gold_line.get("amount"), predicted_line.get("amount")

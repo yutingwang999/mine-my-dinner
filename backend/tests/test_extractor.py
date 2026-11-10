@@ -122,6 +122,21 @@ def test_prompt_cleans_numbered_titles_and_names_untitled_recipes():
     assert "no title" in prompt
 
 
+def test_prompt_separates_supplies_and_spoon_sizes():
+    from minemydinner.extraction.extractor import load_prompt
+
+    prompt = load_prompt()
+    for rule in ("`supplies`", "plastic wrap", "`tablespoon`", "`teaspoon`", "bowl"):
+        assert rule in prompt
+    assert "size is not stated" in prompt
+
+
+def test_extracted_recipes_default_to_no_supplies():
+    from minemydinner.extraction.schemas import ExtractedRecipe
+
+    assert ExtractedRecipe.model_validate(INVENTED_AMOUNT).supplies == []
+
+
 def test_prompt_states_the_design_rules():
     from minemydinner.extraction.extractor import load_prompt
 

@@ -90,6 +90,27 @@ def test_vague_line_cannot_carry_an_amount(client, session, seeded, fake_llm, re
     assert client.post("/api/recipes", json=recipe_write).status_code == 422
 
 
+def test_supplies_are_saved_cleaned(client, session, seeded, fake_llm, recipe_write):
+    body = {**recipe_write, "supplies": [" 保鲜膜 ", "锡纸", "", "保鲜膜"]}
+    recipe = saved(client, session, body)
+    assert recipe.supplies == ["保鲜膜", "锡纸"]
+    assert client.get(f"/api/recipes/{recipe.id}").json()["supplies"] == ["保鲜膜", "锡纸"]
+
+
+@pytest.mark.parametrize("unit", ["tablespoon", "teaspoon", "spoon"])
+def test_spoon_sizes_are_valid_units(client, session, seeded, fake_llm, recipe_write, unit):
+    recipe_write["ingredients"][0] |= {"amount": 1, "unit": unit, "amount_type": "spoon"}
+    assert saved(client, session, recipe_write).ingredients[0].unit == unit
+
+
+def test_household_measure_may_keep_a_number_without_a_unit(
+    client, session, seeded, fake_llm, recipe_write
+):
+    recipe_write["ingredients"][0] |= {"raw": "一碗水", "amount": 1, "unit": None, "amount_type": "spoon"}
+    line = saved(client, session, recipe_write).ingredients[0]
+    assert (line.amount, line.unit) == (1, None)
+
+
 def test_user_time_source_is_kept(client, session, seeded, fake_llm, recipe_write):
     recipe = saved(client, session, {**recipe_write, "time_min": 25, "time_source": "user"})
     assert (recipe.time_min, recipe.time_source) == (25, "user")

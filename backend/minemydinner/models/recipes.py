@@ -110,6 +110,10 @@ class Recipe(Base):
     time_source: Mapped[str | None] = mapped_column(Text)
     servings: Mapped[int | None] = mapped_column(Integer)
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, nullable=False)
+    # Consumables such as plastic wrap or foil: a reminder, never checked when planning.
+    supplies: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default="{}", nullable=False
+    )
     steps_summary: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text)

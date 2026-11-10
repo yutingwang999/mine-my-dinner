@@ -476,6 +476,23 @@ describe("review", () => {
     expect(lastBody("/api/recipes").cookware_ids).toEqual([3, 60]);
   });
 
+  it("keeps supplies apart from cookware and lets the user edit them", async () => {
+    setup({}, [draft({ supplies: ["保鲜膜", "牙签"] })]);
+    const supplies = within(screen.getByRole("group", { name: "Supplies" }));
+    await userEvent.click(supplies.getByRole("button", { name: "Remove 牙签" }));
+    await userEvent.type(supplies.getByRole("textbox", { name: "Add a supply" }), "锡纸{Enter}");
+    expect(supplies.getByText("锡纸")).toBeInTheDocument();
+    await save();
+    expect(lastBody("/api/recipes")).toMatchObject({ supplies: ["保鲜膜", "锡纸"], cookware_ids: [3] });
+  });
+
+  it("offers tablespoon and teaspoon units", () => {
+    setup();
+    const unit = within(row("葱花")).getByRole("combobox", { name: "Unit" });
+    expect(within(unit).getByRole("option", { name: "tbsp" })).toBeInTheDocument();
+    expect(within(unit).getByRole("option", { name: "tsp" })).toBeInTheDocument();
+  });
+
   it("drops skipped cookware from the save request", async () => {
     setup();
     await userEvent.click(within(row("炒锅")).getByRole("button", { name: "Not needed" }));
