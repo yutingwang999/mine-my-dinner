@@ -100,7 +100,10 @@ export function ImportForm() {
 
   return (
     <div className="import-grid">
-      <p className="notice notice-info wide">{t("modelNotice")}</p>
+      <div className="notice notice-info wide">
+        <p>{t("rightsNotice")}</p>
+        <p>{t("modelNotice")}</p>
+      </div>
 
       <form
         className="card wide"

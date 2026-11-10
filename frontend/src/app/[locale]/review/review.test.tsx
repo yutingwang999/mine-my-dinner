@@ -57,6 +57,19 @@ describe("review", () => {
     expect(within(row("葱花")).getByText("Linked to scallion")).toBeInTheDocument();
   });
 
+  it("shows the pasted source text beside the form", () => {
+    setup({}, [draft({ provenance: { ...draft().provenance, input_text: "葱花蛋：鸡蛋两个，少量葱花" } })]);
+    const source = screen.getByRole("region", { name: "Source text" });
+    expect(within(source).getByText("葱花蛋：鸡蛋两个，少量葱花")).toBeInTheDocument();
+  });
+
+  it("says a screenshot import has no source text", () => {
+    setup({}, [draft({ source_type: "screenshot", provenance: { ...draft().provenance, input_text: "[screenshot]" } })]);
+    const source = screen.getByRole("region", { name: "Source text" });
+    expect(within(source).getByText(/Screenshots are not kept/)).toBeInTheDocument();
+    expect(within(source).queryByText("[screenshot]")).toBeNull();
+  });
+
   it("marks an unmatched ingredient and offers link, create, and skip", () => {
     setup();
     const unmatched = within(row("秘制酱"));

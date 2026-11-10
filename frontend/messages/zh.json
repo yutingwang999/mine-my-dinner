@@ -37,7 +37,8 @@
     "reviewDrafts": "现在审核",
     "modelNotice": "你导入的文字、网页内容和截图会发送给第三方 AI 模型来识别菜谱，请不要包含个人信息。",
     "textHint": "一次一道菜。多道菜请用下方的文本文件导入，用单独一行 --- 分隔。",
-    "urlHint": "一次只能导入一个网页，多个网页请逐个导入。"
+    "urlHint": "一次只能导入一个网页，多个网页请逐个导入。",
+    "rightsNotice": "请只导入你有权使用的内容，例如自己写的菜谱、自己的笔记，或允许个人使用的内容。"
   },
   "errors": {
     "monthly_cap": "本月模型费用已达上限。可以调高 LLM_MONTHLY_CAP_USD，或下个月再试。",
@@ -105,7 +106,9 @@
     "newCookware": "新建厨具“{name}”",
     "newIngredient": "新食材“{name}”",
     "discardQuestion": "放弃这份草稿？已经付费的提取结果会丢失，要找回只能重新提取。",
-    "discardConfirm": "确认放弃"
+    "discardConfirm": "确认放弃",
+    "sourceText": "原文",
+    "screenshotNoText": "截图导入不保存原文，请对照你手里的截图审核。"
   },
   "line": {
     "raw": "原文",

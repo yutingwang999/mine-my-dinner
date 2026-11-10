@@ -37,7 +37,8 @@
     "reviewDrafts": "Review now",
     "modelNotice": "Text, page content, and screenshots you import are sent to a third-party AI model to read the recipe. Leave out personal information.",
     "textHint": "One recipe at a time. For several recipes, use the text file below and put a line of --- between them.",
-    "urlHint": "One web page at a time. Import several pages one by one."
+    "urlHint": "One web page at a time. Import several pages one by one.",
+    "rightsNotice": "Import only content you may use, such as recipes you wrote, your own notes, or content shared for personal use."
   },
   "errors": {
     "monthly_cap": "This month's model spending cap is reached. Raise LLM_MONTHLY_CAP_USD or try next month.",
@@ -105,7 +106,9 @@
     "newCookware": "New cookware “{name}”",
     "newIngredient": "New ingredient “{name}”",
     "discardQuestion": "Discard this draft? Its paid extraction is lost, and getting it back needs a new extraction.",
-    "discardConfirm": "Yes, discard"
+    "discardConfirm": "Yes, discard",
+    "sourceText": "Source text",
+    "screenshotNoText": "Screenshots are not kept, so check this draft against your own screenshot."
   },
   "line": {
     "raw": "Source wording",

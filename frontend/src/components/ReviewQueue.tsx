@@ -32,20 +32,30 @@ export function ReviewQueue() {
       <p className="notice notice-info">
         <strong>{t("position", { current: 1, total: drafts.length })}</strong> {t("unsavedNotice")}
       </p>
-      <ReviewForm
-        key={finished}
-        draft={drafts[0]}
-        onSaved={next}
-        actions={
-          <ConfirmDelete
-            name={drafts[0].title}
-            label={t("discard")}
-            question={t("discardQuestion")}
-            confirmLabel={t("discardConfirm")}
-            onDelete={async () => next()}
-          />
-        }
-      />
+      <div className="review-layout">
+        <section className="card source-panel" aria-label={t("sourceText")}>
+          <h2>{t("sourceText")}</h2>
+          {drafts[0].source_type === "screenshot" ? (
+            <p className="hint">{t("screenshotNoText")}</p>
+          ) : (
+            <pre className="source-text">{drafts[0].provenance.input_text}</pre>
+          )}
+        </section>
+        <ReviewForm
+          key={finished}
+          draft={drafts[0]}
+          onSaved={next}
+          actions={
+            <ConfirmDelete
+              name={drafts[0].title}
+              label={t("discard")}
+              question={t("discardQuestion")}
+              confirmLabel={t("discardConfirm")}
+              onDelete={async () => next()}
+            />
+          }
+        />
+      </div>
     </section>
   );
 }

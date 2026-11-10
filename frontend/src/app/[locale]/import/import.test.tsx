@@ -149,6 +149,11 @@ describe("import", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
   });
 
+  it("asks the user to import only content they may use", () => {
+    renderWithProviders(<ImportForm />);
+    expect(screen.getByText(/Import only content you may use/)).toBeInTheDocument();
+  });
+
   it("tells the user that imports reach a model provider", () => {
     renderWithProviders(<ImportForm />);
     expect(screen.getByText(/sent to a third-party AI model/)).toBeInTheDocument();
