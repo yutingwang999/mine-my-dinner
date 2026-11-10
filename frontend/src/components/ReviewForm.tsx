@@ -1,19 +1,22 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 
 import { CookwareReviewRow, type ReviewCookware } from "@/components/CookwareReviewRow";
+import { DictionarySearch } from "@/components/DictionarySearch";
 import { IngredientReviewRow, type ReviewLine } from "@/components/IngredientReviewRow";
 import {
   type AllergyCheck,
   api,
+  entryName,
   DISH_TYPES,
   type DishType,
   type EditableRecipe,
   type Lang,
   LANGUAGES,
   type RecipeWrite,
+  type TimeSource,
 } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 
@@ -60,12 +63,14 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
   const tDish = useTranslations("dishType");
   const tSource = useTranslations("timeSource");
   const tAllergen = useTranslations("allergen");
+  const locale = useLocale();
   const errorText = useErrorText();
 
   const [title, setTitle] = useState(draft.title);
   const [lang, setLang] = useState<Lang>(draft.lang);
   const [dishType, setDishType] = useState<DishType>(draft.dish_type);
   const [time, setTime] = useState(draft.time_min?.toString() ?? "");
+  const [sourceChoice, setSourceChoice] = useState<TimeSource | null>(null);
   const [servings, setServings] = useState(draft.servings?.toString() ?? "");
   const [tags, setTags] = useState(draft.tags.join(", "));
   const [summary, setSummary] = useState(draft.steps_summary ?? "");
@@ -74,6 +79,8 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
   const [cookware, setCookware] = useState<ReviewCookware[]>(() =>
     draft.cookware.map((item) => ({ ...item, key: nextKey++, skipped: false, linkedName: null })),
   );
+  const [addingLine, setAddingLine] = useState(false);
+  const [addingCookware, setAddingCookware] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
   // A ref, not state, so a second click in the same frame is also ignored.
@@ -81,9 +88,20 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
   const allergyCheck = useAllergyCheck(lines);
 
   const timeMin = parseNumber(time);
-  // A changed time is the user's; an unchanged one keeps the extraction's source.
+  const timeChanged = timeMin !== draft.time_min;
+  // "estimated" describes only the model's own number, so it goes once the time changes.
+  const sourceOptions: TimeSource[] =
+    !timeChanged && draft.time_source === "estimated"
+      ? ["stated", "user", "estimated"]
+      : ["stated", "user"];
+  // A changed time is the user's by default; the user can say the source states it.
+  const defaultSource = timeChanged ? "user" : draft.time_source;
   const timeSource =
-    timeMin === null ? null : timeMin === draft.time_min ? draft.time_source : "user";
+    timeMin === null
+      ? null
+      : sourceChoice !== null && sourceOptions.includes(sourceChoice)
+        ? sourceChoice
+        : defaultSource;
 
   function buildWrite(): RecipeWrite {
     const cookwareIds = cookware
@@ -133,20 +151,27 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
     }
   }
 
-  function addLine() {
-    setLines((current) => [
-      ...current,
-      toLine({
-        raw: "",
-        name: "",
-        amount: null,
-        unit: null,
-        amount_type: "missing",
-        role: "secondary",
-        optional: false,
-        ingredient_id: null,
-      }),
-    ]);
+  function addCookware(
+    item: Pick<ReviewCookware, "name" | "cookware_id" | "linkedName" | "startCreating">,
+  ) {
+    setCookware((current) => [...current, { ...item, key: nextKey++, skipped: false }]);
+    setAddingCookware(false);
+  }
+
+  /** A line the user adds has no source wording, so its name stands in for `raw`. */
+  function addLine(name: string, ingredientId: number | null) {
+    const line = toLine({
+      raw: name,
+      name,
+      amount: null,
+      unit: null,
+      amount_type: "missing",
+      role: "secondary",
+      optional: false,
+      ingredient_id: ingredientId,
+    });
+    setLines((current) => [...current, { ...line, linkedName: ingredientId ? name : null }]);
+    setAddingLine(false);
   }
 
   const conflicts = allergyCheck?.conflicts ?? [];
@@ -154,16 +179,17 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
 
   return (
     <form
+      className="review-form"
       onSubmit={(event) => {
         event.preventDefault();
         void save();
       }}
     >
-      <label>
+      <label className="field">
         {t("recipeTitle")}
         <input value={title} onChange={(event) => setTitle(event.target.value)} />
       </label>
-      <label>
+      <label className="field">
         {t("lang")}
         <select value={lang} onChange={(event) => setLang(event.target.value as Lang)}>
           {LANGUAGES.map((value) => (
@@ -173,7 +199,7 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
           ))}
         </select>
       </label>
-      <label>
+      <label className="field">
         {t("dishType")}
         <select value={dishType} onChange={(event) => setDishType(event.target.value as DishType)}>
           {DISH_TYPES.map((value) => (
@@ -183,12 +209,27 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
           ))}
         </select>
       </label>
-      <label>
+      <label className="field">
         {t("timeMin")}
         <input type="number" min="1" value={time} onChange={(event) => setTime(event.target.value)} />
       </label>
-      {timeSource && <span>{t("timeSource", { source: tSource(timeSource) })}</span>}
-      <label>
+      {timeMin !== null && (
+        <label className="field">
+          {t("timeSource")}
+          <select
+            value={timeSource ?? ""}
+            onChange={(event) => setSourceChoice(event.target.value as TimeSource)}
+          >
+            {timeSource === null && <option value="" />}
+            {sourceOptions.map((value) => (
+              <option key={value} value={value}>
+                {tSource(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label className="field">
         {t("servings")}
         <input
           type="number"
@@ -197,21 +238,21 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
           onChange={(event) => setServings(event.target.value)}
         />
       </label>
-      <label>
+      <label className="field">
         {t("tags")}
         <input value={tags} onChange={(event) => setTags(event.target.value)} />
       </label>
-      <label>
+      <label className="field">
         {t("stepsSummary")}
-        <textarea value={summary} onChange={(event) => setSummary(event.target.value)} />
+        <textarea rows={4} value={summary} onChange={(event) => setSummary(event.target.value)} />
       </label>
-      <label>
+      <label className="field">
         {t("sourceUrl")}
         <input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} />
       </label>
 
       <h2>{t("ingredients")}</h2>
-      <ul>
+      <ul className="line-list">
         {lines.map((line, index) => (
           <IngredientReviewRow
             key={line.key}
@@ -224,12 +265,23 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
           />
         ))}
       </ul>
-      <button type="button" onClick={addLine}>
-        {t("addLine")}
-      </button>
+      {addingLine ? (
+        <DictionarySearch
+          search={api.searchIngredients}
+          // Named in the recipe's language, like the extracted lines around it.
+          onChoose={(entry) => addLine(entryName(entry, lang), entry.id)}
+          onAddUnlisted={(name) => addLine(name, null)}
+          unlistedLabel={(name) => t("newIngredient", { name })}
+          onCancel={() => setAddingLine(false)}
+        />
+      ) : (
+        <button type="button" onClick={() => setAddingLine(true)}>
+          {t("addLine")}
+        </button>
+      )}
 
       <h2>{t("cookware")}</h2>
-      <ul>
+      <ul className="line-list">
         {cookware.map((item, index) => (
           <CookwareReviewRow
             key={item.key}
@@ -241,9 +293,27 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
           />
         ))}
       </ul>
+      {addingCookware ? (
+        <DictionarySearch
+          search={api.searchCookware}
+          onChoose={(entry) => {
+            const name = entryName(entry, locale);
+            addCookware({ name, cookware_id: entry.id, linkedName: name });
+          }}
+          onAddUnlisted={(name) =>
+            addCookware({ name, cookware_id: null, linkedName: null, startCreating: true })
+          }
+          unlistedLabel={(name) => t("newCookware", { name })}
+          onCancel={() => setAddingCookware(false)}
+        />
+      ) : (
+        <button type="button" onClick={() => setAddingCookware(true)}>
+          {t("addCookware")}
+        </button>
+      )}
 
       {conflicts.length > 0 && (
-        <div role="alert">
+        <div role="alert" className="notice notice-warning">
           <p>{t("allergyWarning")}</p>
           <ul>
             {conflicts.map((conflict, index) => (
@@ -259,13 +329,19 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
           </ul>
         </div>
       )}
-      {unknown.length > 0 && <p>{t("unknownAllergens", { names: unknown.join(", ") })}</p>}
+      {unknown.length > 0 && (
+        <p className="notice notice-info">{t("unknownAllergens", { names: unknown.join(", ") })}</p>
+      )}
       <p>{t("checkYourself")}</p>
 
       <button type="submit" disabled={saving}>
         {saving ? t("saving") : t("save")}
       </button>
-      {error !== null && <p role="alert">{t("saveFailed", { error: errorText(error) })}</p>}
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {t("saveFailed", { error: errorText(error) })}
+        </p>
+      )}
     </form>
   );
 }

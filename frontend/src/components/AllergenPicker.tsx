@@ -6,6 +6,22 @@ import { useEffect, useState } from "react";
 import { type Allergen, ALLERGENS, api } from "@/lib/api";
 
 type Status = "loading" | "suggested" | "none" | "unavailable";
+
+type Suggestion = Awaited<ReturnType<typeof api.suggestAllergens>>;
+
+// Requests still waiting, so the same name asked twice at once costs one model call.
+// Development mode runs every effect twice, which would otherwise double each request.
+const pending = new Map<string, Promise<Suggestion>>();
+
+function suggestOnce(name: string): Promise<Suggestion> {
+  let request = pending.get(name);
+  if (request === undefined) {
+    request = api.suggestAllergens(name).finally(() => pending.delete(name));
+    pending.set(name, request);
+  }
+  return request;
+}
+
 type Confirmed = "list" | "none" | null;
 
 type Props = {
@@ -27,8 +43,7 @@ export function AllergenPicker({ name, onChange }: Props) {
 
   useEffect(() => {
     let active = true;
-    api
-      .suggestAllergens(name)
+    suggestOnce(name)
       .then(({ suggested }) => {
         if (!active) return;
         if (suggested === null) {
@@ -59,7 +74,7 @@ export function AllergenPicker({ name, onChange }: Props) {
   }
 
   return (
-    <fieldset>
+    <fieldset className="allergen-picker">
       <legend>{t("title")}</legend>
       <p>
         {status === "loading" && t("loading")}

@@ -13,6 +13,8 @@ export type ReviewCookware = {
   cookware_id: number | null;
   skipped: boolean;
   linkedName: string | null;
+  /** Opens the create form at once, for cookware the user just added by name. */
+  startCreating?: boolean;
 };
 
 type Props = {
@@ -30,7 +32,9 @@ export function CookwareReviewRow({ item, lang, onChange }: Props) {
   const tEntry = useTranslations("entry");
   const errorText = useErrorText();
   const locale = useLocale();
-  const [mode, setMode] = useState<"idle" | "link" | "create">("idle");
+  const [mode, setMode] = useState<"idle" | "link" | "create">(
+    item.startCreating ? "create" : "idle",
+  );
   const [nameZh, setNameZh] = useState(lang === "zh" ? item.name : "");
   const [nameEn, setNameEn] = useState(lang === "en" ? item.name : "");
   const [owned, setOwned] = useState(false);
@@ -62,37 +66,44 @@ export function CookwareReviewRow({ item, lang, onChange }: Props) {
   const ownerId =
     error instanceof ApiError && error.code === "term_conflict" ? Number(error.body.owner_id) : null;
 
+  const state = item.skipped ? "skipped" : item.cookware_id === null ? "unmatched" : "matched";
+
   return (
-    <li data-testid={`row-${item.name}`} style={{ marginBottom: "0.5rem" }}>
-      <strong>{item.name}</strong>{" "}
-      {item.skipped ? (
-        <>
-          {t("skipped")}{" "}
-          <button type="button" onClick={() => onChange({ ...item, skipped: false })}>
-            {t("undoSkip")}
-          </button>
-        </>
-      ) : item.cookware_id !== null ? (
-        <>
-          {t("matched", { name: item.linkedName ?? item.name })}{" "}
-          <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
-            {t("skip")}
-          </button>
-        </>
-      ) : (
-        <>
-          {t("unmatched")}{" "}
-          <button type="button" onClick={() => setMode("link")}>
-            {t("linkExisting")}
-          </button>
-          <button type="button" onClick={() => setMode("create")}>
-            {t("createEntry")}
-          </button>
-          <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
-            {t("skip")}
-          </button>
-        </>
-      )}
+    <li
+      data-testid={`row-${item.name}`}
+      className={`line ${state}`}
+    >
+      <div className="line-status">
+        <strong>{item.name}</strong>
+        {item.skipped ? (
+          <>
+            {t("notNeededDone")}{" "}
+            <button type="button" onClick={() => onChange({ ...item, skipped: false })}>
+              {t("undoSkip")}
+            </button>
+          </>
+        ) : item.cookware_id !== null ? (
+          <>
+            {t("matched", { name: item.linkedName ?? item.name })}{" "}
+            <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
+              {t("notNeeded")}
+            </button>
+          </>
+        ) : (
+          <>
+            <strong>{t("unmatched")}</strong>
+            <button type="button" onClick={() => setMode("link")}>
+              {t("linkExisting")}
+            </button>
+            <button type="button" onClick={() => setMode("create")}>
+              {t("createEntry")}
+            </button>
+            <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
+              {t("notNeeded")}
+            </button>
+          </>
+        )}
+      </div>
       {mode === "link" && item.cookware_id === null && (
         <DictionarySearch
           search={api.searchCookware}
@@ -101,7 +112,7 @@ export function CookwareReviewRow({ item, lang, onChange }: Props) {
         />
       )}
       {mode === "create" && item.cookware_id === null && (
-        <div>
+        <div className="line-panel">
           <label>
             {tEntry("nameZh")}
             <input value={nameZh} onChange={(event) => setNameZh(event.target.value)} />

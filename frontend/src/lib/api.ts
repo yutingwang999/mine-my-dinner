@@ -117,6 +117,8 @@ export type IngredientCreate = {
   allergens: Allergen[] | null;
 };
 
+export type IngredientUpdate = IngredientCreate & { aliases_zh: string[]; aliases_en: string[] };
+
 export type CookwareCreate = { name_zh: string | null; name_en: string | null; owned: boolean };
 
 export const STOCK_LEVELS = ["plenty", "low", "none"] as const;
@@ -307,6 +309,10 @@ export const api = {
   deleteRule: (id: number) => remove(`/api/rules/${id}`),
 
   listUserIngredients: () => get<IngredientEntry[]>("/api/ingredients?source=user"),
+  listAllIngredients: () => get<IngredientEntry[]>("/api/ingredients?limit=500"),
+  listAllCookware: () => get<DictionaryEntry[]>("/api/cookware?limit=500"),
+  updateIngredient: (id: number, data: IngredientUpdate) =>
+    sendJson<IngredientEntry>("PATCH", `/api/ingredients/${id}`, data),
   deleteIngredient: (id: number) => remove(`/api/ingredients/${id}`),
   listUserCookware: () => get<DictionaryEntry[]>("/api/cookware?source=user"),
   deleteCookware: (id: number) => remove(`/api/cookware/${id}`),

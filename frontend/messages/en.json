@@ -61,7 +61,14 @@
     "unknown_ingredient": "An ingredient link is not valid. Link it again.",
     "unknown_cookware": "A cookware link is not valid. Link it again.",
     "network": "The server could not be reached.",
-    "unknown": "Something went wrong."
+    "unknown": "Something went wrong.",
+    "in_inventory": "This ingredient is in your inventory. Remove it from inventory first, then change how it is recorded.",
+    "has_children": "Other entries list this one as their parent, so it cannot be deleted.",
+    "used_by_rule": "A dietary rule uses this entry, so it cannot be deleted. Remove the rule first.",
+    "seed_read_only": "Built-in entries cannot be changed.",
+    "not_found": "It no longer exists. Reload the page.",
+    "invalid_for_stock_mode": "These amounts do not fit how this ingredient is recorded.",
+    "self_diner": "Your own record cannot be deleted."
   },
   "review": {
     "title": "Review recipe",
@@ -73,7 +80,7 @@
     "lang": "Original language",
     "dishType": "Dish type",
     "timeMin": "Time (minutes)",
-    "timeSource": "Time source: {source}",
+    "timeSource": "Time source",
     "servings": "Servings",
     "tags": "Tags (comma-separated)",
     "stepsSummary": "Step summary",
@@ -89,7 +96,10 @@
     "allergenConflict": "{name} contains {allergen}, which you are allergic to.",
     "ruleConflict": "{name} matches one of your allergy rules.",
     "unknownAllergens": "Allergens unknown for: {names}",
-    "checkYourself": "The dictionary and extraction can be wrong. Check the actual ingredients for allergens yourself."
+    "checkYourself": "The dictionary and extraction can be wrong. Check the actual ingredients for allergens yourself.",
+    "addCookware": "Add cookware",
+    "newCookware": "New cookware “{name}”",
+    "newIngredient": "New ingredient “{name}”"
   },
   "line": {
     "raw": "Source wording",
@@ -102,16 +112,19 @@
     "remove": "Remove",
     "matched": "Linked to {name}",
     "unmatched": "Not in the dictionary",
-    "skipped": "Skipped: saved without a dictionary link",
+    "skipped": "Not linked: this line is saved, but its allergens count as unknown.",
     "linkExisting": "Link to existing",
     "createEntry": "Create entry",
-    "skip": "Skip",
-    "undoSkip": "Undo skip",
+    "skip": "Leave unlinked",
+    "undoSkip": "Undo",
     "unlink": "Change link",
     "search": "Search the dictionary",
     "noResults": "No matches",
     "choose": "Choose",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "notNeeded": "Not needed",
+    "notNeededDone": "Not needed: not saved, and planning does not check this cookware.",
+    "undoUnlink": "Undo change"
   },
   "entry": {
     "nameZh": "Chinese name",
@@ -121,7 +134,9 @@
     "create": "Create and link",
     "creating": "Creating…",
     "linkToOwner": "Link to that entry",
-    "owned": "I own this cookware"
+    "owned": "I own this cookware",
+    "aliasesZh": "Chinese aliases (comma-separated)",
+    "aliasesEn": "English aliases (comma-separated)"
   },
   "allergens": {
     "title": "Allergens",
@@ -213,7 +228,10 @@
     "yesDelete": "Yes, delete",
     "loading": "Loading…",
     "remove": "Remove",
-    "none": "None yet."
+    "none": "None yet.",
+    "previous": "Previous",
+    "next": "Next",
+    "pageOf": "Page {page} of {pages}"
   },
   "library": {
     "title": "Recipe library",
@@ -222,9 +240,6 @@
     "dishTypeFilter": "Dish type",
     "empty": "No recipes found.",
     "source": "Source",
-    "previous": "Previous",
-    "next": "Next",
-    "pageOf": "Page {page} of {pages}",
     "deleteNotice": "Saved plans keep the dish name. Its ratings and notes are deleted, and its variants stay.",
     "editTitle": "Edit {title}",
     "noEmbedding": "Not yet searchable by meaning; it is retried automatically."
@@ -288,6 +303,20 @@
     "userCookware": "My cookware entries",
     "allergensUnknown": "allergens unknown",
     "allergensNone": "no allergens",
-    "seedNotice": "Built-in entries were reviewed by a person and cannot be changed here."
+    "seedNotice": "Built-in entries were reviewed by a person and cannot be changed here.",
+    "allergensUnknownOption": "Unknown",
+    "allergensNoneOption": "No allergens",
+    "allergensContainsOption": "Contains",
+    "allergensLabel": "Allergens",
+    "allIngredients": "All ingredients",
+    "allCookware": "All cookware",
+    "filterText": "Search names and aliases",
+    "allCategories": "All categories",
+    "builtIn": "Built-in",
+    "mine": "Mine",
+    "aliasesList": "Aliases: {list}",
+    "parentName": "Parent: {name}",
+    "shownCount": "{shown} of {total} entries",
+    "browseHint": "Built-in entries are read-only. Your own entries can be edited above."
   }
 }

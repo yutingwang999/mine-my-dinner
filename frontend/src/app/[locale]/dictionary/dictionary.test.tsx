@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DictionaryManager } from "@/components/DictionaryManager";
-import { type Call, callsTo, mockFetch, renderWithProviders } from "@/test/helpers";
+import { type Call, callsTo, mockFetch, renderWithProviders, reply } from "@/test/helpers";
 
 vi.mock("@/i18n/navigation", () => ({
   Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
@@ -71,6 +71,67 @@ describe("dictionary", () => {
         allergens: ["soy"],
       }),
     );
+  });
+
+  it("edits a user entry's category and allergens", async () => {
+    setup();
+    const own = within(await screen.findByTestId("user-ingredient-9"));
+    await userEvent.click(own.getByRole("button", { name: "Edit" }));
+    await userEvent.selectOptions(own.getByRole("combobox", { name: "Category" }), "vegetable");
+    await userEvent.click(own.getByRole("radio", { name: "No allergens" }));
+    await userEvent.click(own.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo(calls, "PATCH", "/api/ingredients/9")).toHaveLength(1));
+    expect(callsTo(calls, "PATCH", "/api/ingredients/9")[0].body).toEqual({
+      name_zh: "外婆辣酱",
+      name_en: null,
+      aliases_zh: [],
+      aliases_en: [],
+      category: "vegetable",
+      stock_mode: "level",
+      allergens: [],
+    });
+  });
+
+  it("keeps allergens unknown unless the user chooses otherwise", async () => {
+    setup();
+    const own = within(await screen.findByTestId("user-ingredient-9"));
+    await userEvent.click(own.getByRole("button", { name: "Edit" }));
+    expect(own.getByRole("radio", { name: "Unknown" })).toBeChecked();
+    await userEvent.click(own.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(callsTo(calls, "PATCH", "/api/ingredients/9")[0].body).toMatchObject({ allergens: null }),
+    );
+  });
+
+  it("sends the chosen allergens", async () => {
+    setup();
+    const own = within(await screen.findByTestId("user-ingredient-9"));
+    await userEvent.click(own.getByRole("button", { name: "Edit" }));
+    await userEvent.click(own.getByRole("radio", { name: "Contains" }));
+    await userEvent.click(own.getByRole("checkbox", { name: "Sesame" }));
+    await userEvent.click(own.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(callsTo(calls, "PATCH", "/api/ingredients/9")[0].body).toMatchObject({
+        allergens: ["sesame"],
+      }),
+    );
+  });
+
+  it("explains why an edit was refused", async () => {
+    calls = mockFetch({
+      "GET /api/allergens/unresolved": () => ({ entries: [], unmatched: [] }),
+      "GET /api/ingredients": () => [
+        { id: 9, name_zh: "外婆辣酱", name_en: null, aliases_zh: [], aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null, parent_id: null },
+      ],
+      "GET /api/cookware": () => [],
+      "PATCH /api/ingredients/9": () => reply(409, { code: "in_inventory" }),
+    });
+    renderWithProviders(<DictionaryManager />);
+    const own = within(await screen.findByTestId("user-ingredient-9"));
+    await userEvent.click(own.getByRole("button", { name: "Edit" }));
+    await userEvent.selectOptions(own.getByRole("combobox", { name: "Stock mode" }), "count");
+    await userEvent.click(own.getByRole("button", { name: "Save" }));
+    expect(await own.findByText(/remove it from inventory first/i)).toBeInTheDocument();
   });
 
   it("lists the user's own entries and marks unknown allergens", async () => {

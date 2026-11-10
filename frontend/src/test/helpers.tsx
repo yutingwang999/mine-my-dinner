@@ -7,7 +7,7 @@ import en from "../../messages/en.json";
 import type { RecipeDraft } from "@/lib/api";
 import { DraftsProvider, useDrafts } from "@/lib/drafts";
 
-type Handler = (body: unknown, init: RequestInit) => unknown;
+type Handler = (body: unknown, init: RequestInit, url: string) => unknown;
 export type Call = { method: string; path: string; url: string; body: unknown };
 
 /** JSON response helper for route handlers. */
@@ -35,7 +35,7 @@ export function mockFetch(routes: Record<string, Handler>): Call[] {
       if (!handler) {
         return reply(404, { code: "unknown" });
       }
-      const result = await handler(body, init);
+      const result = await handler(body, init, input);
       return result instanceof Response ? result : reply(200, result);
     }),
   );

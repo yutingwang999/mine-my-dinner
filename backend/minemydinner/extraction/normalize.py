@@ -20,15 +20,19 @@ def find_term_owner[T: (Ingredient, Cookware)](
     term = term.strip().lower()
     if not term:
         return None
-    query = select(table).where(
-        or_(
-            func.lower(table.name_zh) == term,
-            func.lower(table.name_en) == term,
-            _alias_matches(table.aliases_zh, term),
-            _alias_matches(table.aliases_en, term),
-        )
-    )
+    query = select(table).where(names_equal(table, term))
     return session.scalars(query.order_by(table.id)).first()
+
+
+def names_equal(table: type, term: str):
+    """True where a name or alias equals the term, which must already be trimmed and
+    lowercased."""
+    return or_(
+        func.lower(table.name_zh) == term,
+        func.lower(table.name_en) == term,
+        _alias_matches(table.aliases_zh, term),
+        _alias_matches(table.aliases_en, term),
+    )
 
 
 def match_ingredient(session: Session, name: str) -> Ingredient | None:

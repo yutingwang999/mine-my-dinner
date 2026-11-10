@@ -2,13 +2,13 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, model_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
-from minemydinner.constants import ALLERGENS, DICTIONARY_SOURCES
+from minemydinner.constants import ALLERGENS, CATEGORIES, DICTIONARY_SOURCES
 from minemydinner.db import get_session
 from minemydinner.dictionary.service import (
     CookwareWrite,
@@ -31,6 +31,7 @@ from minemydinner.dictionary.service import (
     update_user_ingredient,
 )
 from minemydinner.extraction.allergen_suggest import suggest_allergens
+from minemydinner.extraction.normalize import names_equal
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import Cookware, CookwareOwned, Ingredient
 
@@ -117,14 +118,26 @@ class ResolveIn(BaseModel):
 
 
 Source = Literal[*DICTIONARY_SOURCES]
+# Browsing the whole dictionary asks for up to this many rows.
+Limit = Annotated[int | None, Query(ge=1, le=SOURCE_LIMIT)]
 
 
-def _search(session: Session, table: type, q: str | None, source: str | None) -> list:
-    query = select(table).order_by(table.id)
+def _search(
+    session: Session,
+    table: type,
+    q: str | None,
+    source: str | None,
+    limit: int | None,
+    category: str | None = None,
+) -> list:
+    query = select(table)
     if source is not None:
-        query = query.where(table.source == source).limit(SOURCE_LIMIT)
-    else:
-        query = query.limit(SEARCH_LIMIT)
+        query = query.where(table.source == source)
+    if category is not None:
+        query = query.where(table.category == category)
+    if limit is None:
+        limit = SOURCE_LIMIT if source is not None else SEARCH_LIMIT
+    query = query.limit(limit)
     if q and q.strip():
         pattern = contains_pattern(q)
         query = query.where(
@@ -135,7 +148,9 @@ def _search(session: Session, table: type, q: str | None, source: str | None) ->
                 func.array_to_string(table.aliases_en, "\n").ilike(pattern),
             )
         )
-    return list(session.scalars(query))
+        # The entry the text names exactly comes first, so the limit never hides it.
+        query = query.order_by(case((names_equal(table, q.strip().lower()), 0), else_=1))
+    return list(session.scalars(query.order_by(table.id)))
 
 
 @contextmanager
@@ -169,9 +184,14 @@ def _committed[T](session: Session, action: Callable[[], T]) -> T:
 
 @router.get("/ingredients")
 def search_ingredients(
-    session: SessionDep, q: str | None = None, source: Source | None = None
+    session: SessionDep,
+    q: str | None = None,
+    source: Source | None = None,
+    category: Literal[*CATEGORIES] | None = None,
+    limit: Limit = None,
 ) -> list[IngredientOut]:
-    return [IngredientOut.model_validate(row) for row in _search(session, Ingredient, q, source)]
+    rows = _search(session, Ingredient, q, source, limit, category)
+    return [IngredientOut.model_validate(row) for row in rows]
 
 
 @router.post("/ingredients", status_code=201)
@@ -203,9 +223,9 @@ def delete_ingredient(entry_id: int, session: SessionDep) -> Response:
 
 @router.get("/cookware")
 def search_cookware(
-    session: SessionDep, q: str | None = None, source: Source | None = None
+    session: SessionDep, q: str | None = None, source: Source | None = None, limit: Limit = None
 ) -> list[CookwareOut]:
-    return [CookwareOut.model_validate(row) for row in _search(session, Cookware, q, source)]
+    return [CookwareOut.model_validate(row) for row in _search(session, Cookware, q, source, limit)]
 
 
 @router.post("/cookware", status_code=201)

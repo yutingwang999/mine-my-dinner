@@ -56,7 +56,7 @@ describe("review", () => {
     setup();
     const unmatched = within(row("秘制酱"));
     expect(unmatched.getByText("Not in the dictionary")).toBeInTheDocument();
-    for (const action of ["Link to existing", "Create entry", "Skip"]) {
+    for (const action of ["Link to existing", "Create entry", "Leave unlinked"]) {
       expect(unmatched.getByRole("button", { name: action })).toBeInTheDocument();
     }
     expect(within(row("葱花")).queryByRole("button", { name: "Create entry" })).toBeNull();
@@ -130,6 +130,80 @@ describe("review", () => {
     expect(lastBody("/api/recipes")).toMatchObject({ time_min: 10, time_source: "stated" });
   });
 
+  it("lets the user say a corrected time is stated in the source", async () => {
+    setup();
+    const time = screen.getByRole("spinbutton", { name: "Time (minutes)" });
+    await userEvent.clear(time);
+    await userEvent.type(time, "25");
+    const source = screen.getByRole("combobox", { name: "Time source" });
+    expect(source).toHaveValue("user");
+    await userEvent.selectOptions(source, "stated");
+    await save();
+    expect(lastBody("/api/recipes")).toMatchObject({ time_min: 25, time_source: "stated" });
+  });
+
+  it("lets the user correct the source of an unchanged estimated time", async () => {
+    setup({}, [draft({ time_min: 20, time_source: "estimated" })]);
+    const source = screen.getByRole("combobox", { name: "Time source" });
+    expect(source).toHaveValue("estimated");
+    await userEvent.selectOptions(source, "stated");
+    await save();
+    expect(lastBody("/api/recipes")).toMatchObject({ time_min: 20, time_source: "stated" });
+  });
+
+  it("offers estimated only while the model's time is unchanged", async () => {
+    setup({}, [draft({ time_min: 20, time_source: "estimated" })]);
+    const options = () =>
+      within(screen.getByRole("combobox", { name: "Time source" }))
+        .getAllByRole("option")
+        .map((option) => (option as HTMLOptionElement).value);
+    expect(options()).toEqual(["stated", "user", "estimated"]);
+    await userEvent.type(screen.getByRole("spinbutton", { name: "Time (minutes)" }), "5");
+    expect(options()).toEqual(["stated", "user"]);
+  });
+
+  it("shows no time source choice without a time", () => {
+    setup({}, [draft({ time_min: null, time_source: null })]);
+    expect(screen.queryByRole("combobox", { name: "Time source" })).toBeNull();
+  });
+
+  it("undoes a change of link", async () => {
+    setup();
+    const linked = within(row("葱花"));
+    await userEvent.click(linked.getByRole("button", { name: "Change link" }));
+    expect(linked.getByText("Not in the dictionary")).toBeInTheDocument();
+    await userEvent.click(linked.getByRole("button", { name: "Undo change" }));
+    expect(linked.getByText("Linked to 葱花")).toBeInTheDocument();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { ingredient_id: number | null }[];
+    expect(lines[0].ingredient_id).toBe(1);
+  });
+
+  it("stops offering undo once the line is linked elsewhere or left unlinked", async () => {
+    setup();
+    const linked = within(row("葱花"));
+    await userEvent.click(linked.getByRole("button", { name: "Change link" }));
+    await userEvent.click(linked.getByRole("button", { name: "Leave unlinked" }));
+    expect(linked.queryByRole("button", { name: "Undo change" })).toBeNull();
+  });
+
+  it("explains what leaving an ingredient unlinked means", async () => {
+    setup();
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Leave unlinked" }));
+    expect(within(row("秘制酱")).getByText(/its allergens count as unknown/)).toBeInTheDocument();
+  });
+
+  it("explains what marking cookware not needed means", async () => {
+    setup();
+    await userEvent.click(within(row("炒锅")).getByRole("button", { name: "Not needed" }));
+    expect(within(row("炒锅")).getByText(/planning does not check/)).toBeInTheDocument();
+  });
+
+  it("gives the step summary room for several lines", () => {
+    setup();
+    expect(screen.getByRole("textbox", { name: "Step summary" })).toHaveAttribute("rows", "4");
+  });
+
   it("clears time_source when the time is removed", async () => {
     setup();
     await userEvent.clear(screen.getByRole("spinbutton", { name: "Time (minutes)" }));
@@ -154,9 +228,90 @@ describe("review", () => {
     expect(lastBody("/api/recipes").cookware_ids).toEqual([3, 60]);
   });
 
+  it("adds an ingredient from the dictionary, already linked and named in the recipe's language", async () => {
+    setup({
+      "GET /api/ingredients": () => [
+        { id: 12, name_zh: "土豆", name_en: "potato", aliases_zh: [], aliases_en: [], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "potato");
+    await userEvent.click(await screen.findByRole("button", { name: "Choose potato" }));
+    expect(within(row("土豆")).getByText("Linked to 土豆")).toBeInTheDocument();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[2]).toMatchObject({ raw: "土豆", name: "土豆", ingredient_id: 12 });
+  });
+
+  it("adds an ingredient that is not in the dictionary as an unlinked line", async () => {
+    setup({ "GET /api/ingredients": () => [] });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "秘方粉");
+    await userEvent.click(await screen.findByRole("button", { name: "New ingredient “秘方粉”" }));
+    expect(within(row("秘方粉")).getByText("Not in the dictionary")).toBeInTheDocument();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[2]).toMatchObject({ raw: "秘方粉", name: "秘方粉", ingredient_id: null });
+  });
+
+  it("offers no new entry when the dictionary already has that exact name", async () => {
+    const corn = { id: 20, name_zh: "玉米", name_en: "corn", aliases_zh: ["苞米"], aliases_en: [], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null };
+    setup({ "GET /api/ingredients": () => [corn] });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    const search = screen.getByRole("searchbox", { name: "Search the dictionary" });
+    for (const exact of ["玉米", " CORN ", "苞米"]) {
+      await userEvent.clear(search);
+      await userEvent.type(search, exact);
+      await screen.findByRole("button", { name: "Choose corn" });
+      expect(screen.queryByRole("button", { name: /New ingredient/ })).toBeNull();
+    }
+    await userEvent.clear(search);
+    await userEvent.type(search, "玉米粒");
+    expect(await screen.findByRole("button", { name: "New ingredient “玉米粒”" })).toBeInTheDocument();
+  });
+
+  it("waits for search results before offering a new entry", async () => {
+    let finish: (value: Response) => void = () => {};
+    setup({ "GET /api/ingredients": () => new Promise<Response>((resolve) => (finish = resolve)) });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "玉");
+    expect(screen.queryByRole("button", { name: /New ingredient/ })).toBeNull();
+    await act(async () => finish(reply(200, [])));
+    expect(await screen.findByRole("button", { name: "New ingredient “玉”" })).toBeInTheDocument();
+  });
+
+  it("adds cookware from the dictionary", async () => {
+    setup({
+      "GET /api/cookware": () => [
+        { id: 8, name_zh: "烤箱", name_en: "oven", aliases_zh: [], aliases_en: [], source: "seed" },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Add cookware" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "oven");
+    await userEvent.click(await screen.findByRole("button", { name: "Choose oven" }));
+    expect(within(row("oven")).getByText("Linked to oven")).toBeInTheDocument();
+    await save();
+    expect(lastBody("/api/recipes").cookware_ids).toEqual([3, 8]);
+  });
+
+  it("creates an entry for cookware that is not in the dictionary", async () => {
+    setup({ "GET /api/cookware": () => [] });
+    await userEvent.click(screen.getByRole("button", { name: "Add cookware" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "面包机");
+    await userEvent.click(await screen.findByRole("button", { name: "New cookware “面包机”" }));
+    const added = within(row("面包机"));
+    // The create form opens at once, so the cookware is not left unsaved by mistake.
+    expect(added.getByRole("checkbox", { name: "I own this cookware" })).toBeInTheDocument();
+    await userEvent.click(added.getByRole("button", { name: "Create and link" }));
+    await waitFor(() => expect(lastBody("/api/cookware")).toMatchObject({ name_zh: "面包机" }));
+    await added.findByText(/Linked to/);
+    await save();
+    expect(lastBody("/api/recipes").cookware_ids).toEqual([3, 60]);
+  });
+
   it("drops skipped cookware from the save request", async () => {
     setup();
-    await userEvent.click(within(row("炒锅")).getByRole("button", { name: "Skip" }));
+    await userEvent.click(within(row("炒锅")).getByRole("button", { name: "Not needed" }));
     await save();
     expect(lastBody("/api/recipes").cookware_ids).toEqual([]);
   });

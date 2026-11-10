@@ -61,7 +61,14 @@
     "unknown_ingredient": "有食材的关联无效，请重新关联。",
     "unknown_cookware": "有厨具的关联无效，请重新关联。",
     "network": "无法连接服务器。",
-    "unknown": "出错了。"
+    "unknown": "出错了。",
+    "in_inventory": "这个食材在你的库存里。请先从库存移除，再修改记录方式。",
+    "has_children": "有其他词条以它为上级，不能删除。",
+    "used_by_rule": "有饮食规则用到了这个词条，不能删除。请先删除那条规则。",
+    "seed_read_only": "内置词条不能修改。",
+    "not_found": "它已经不存在了，请刷新页面。",
+    "invalid_for_stock_mode": "这些数量不符合这个食材的记录方式。",
+    "self_diner": "不能删除你自己的记录。"
   },
   "review": {
     "title": "审核菜谱",
@@ -73,7 +80,7 @@
     "lang": "原文语言",
     "dishType": "菜品类别",
     "timeMin": "用时（分钟）",
-    "timeSource": "用时来源：{source}",
+    "timeSource": "用时来源",
     "servings": "份数",
     "tags": "标签（用逗号分隔）",
     "stepsSummary": "步骤摘要",
@@ -89,7 +96,10 @@
     "allergenConflict": "{name}含有{allergen}，你对它过敏。",
     "ruleConflict": "{name}符合你的一条过敏规则。",
     "unknownAllergens": "这些食材的过敏原未知：{names}",
-    "checkYourself": "词典和提取结果都可能出错，请自己检查实际食材中的过敏原。"
+    "checkYourself": "词典和提取结果都可能出错，请自己检查实际食材中的过敏原。",
+    "addCookware": "添加厨具",
+    "newCookware": "新建厨具“{name}”",
+    "newIngredient": "新食材“{name}”"
   },
   "line": {
     "raw": "原文",
@@ -102,16 +112,19 @@
     "remove": "删除",
     "matched": "已关联到{name}",
     "unmatched": "词典里没有",
-    "skipped": "已跳过：保存时不关联词条",
+    "skipped": "未关联：这一行会保存，但过敏原算“未知”。",
     "linkExisting": "关联已有词条",
     "createEntry": "新建词条",
-    "skip": "跳过",
-    "undoSkip": "取消跳过",
+    "skip": "暂不关联",
+    "undoSkip": "撤销",
     "unlink": "更改关联",
     "search": "在词典里搜索",
     "noResults": "没有匹配的词条",
     "choose": "选择",
-    "cancel": "取消"
+    "cancel": "取消",
+    "notNeeded": "不需要",
+    "notNeededDone": "不需要：不保存，规划时不检查这件厨具。",
+    "undoUnlink": "撤销更改"
   },
   "entry": {
     "nameZh": "中文名",
@@ -121,7 +134,9 @@
     "create": "新建并关联",
     "creating": "正在新建…",
     "linkToOwner": "关联到那个词条",
-    "owned": "我有这件厨具"
+    "owned": "我有这件厨具",
+    "aliasesZh": "中文别名（用逗号分隔）",
+    "aliasesEn": "英文别名（用逗号分隔）"
   },
   "allergens": {
     "title": "过敏原",
@@ -213,7 +228,10 @@
     "yesDelete": "确认删除",
     "loading": "正在加载…",
     "remove": "移除",
-    "none": "暂无。"
+    "none": "暂无。",
+    "previous": "上一页",
+    "next": "下一页",
+    "pageOf": "第 {page} 页，共 {pages} 页"
   },
   "library": {
     "title": "菜谱库",
@@ -222,9 +240,6 @@
     "dishTypeFilter": "菜品类别",
     "empty": "没有找到菜谱。",
     "source": "来源",
-    "previous": "上一页",
-    "next": "下一页",
-    "pageOf": "第 {page} 页，共 {pages} 页",
     "deleteNotice": "已保存的计划会保留菜名。这道菜的评分和笔记会被删除，它的变体会保留。",
     "editTitle": "编辑{title}",
     "noEmbedding": "暂时不能按语义搜索，会自动重试。"
@@ -288,6 +303,20 @@
     "userCookware": "我的厨具词条",
     "allergensUnknown": "过敏原未知",
     "allergensNone": "不含过敏原",
-    "seedNotice": "内置词条经过人工审核，不能在这里修改。"
+    "seedNotice": "内置词条经过人工审核，不能在这里修改。",
+    "allergensUnknownOption": "未知",
+    "allergensNoneOption": "不含过敏原",
+    "allergensContainsOption": "含有",
+    "allergensLabel": "过敏原",
+    "allIngredients": "全部食材",
+    "allCookware": "全部厨具",
+    "filterText": "搜索名称或别名",
+    "allCategories": "全部类别",
+    "builtIn": "内置",
+    "mine": "我创建的",
+    "aliasesList": "别名：{list}",
+    "parentName": "上级：{name}",
+    "shownCount": "共 {total} 个，显示 {shown} 个",
+    "browseHint": "内置词条只能查看。你创建的词条可以在上方编辑。"
   }
 }

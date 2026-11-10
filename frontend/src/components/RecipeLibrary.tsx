@@ -4,6 +4,7 @@ import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { ConfirmDelete } from "@/components/ConfirmDelete";
+import { Pager } from "@/components/Pager";
 import { ReviewForm } from "@/components/ReviewForm";
 import { api, DISH_TYPES, type SavedRecipe } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
@@ -103,17 +104,7 @@ export function RecipeLibrary() {
           </li>
         ))}
       </ul>
-      {pages > 1 && (
-        <nav>
-          <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            {t("previous")}
-          </button>
-          <span>{t("pageOf", { page, pages })}</span>
-          <button type="button" disabled={page >= pages} onClick={() => setPage(page + 1)}>
-            {t("next")}
-          </button>
-        </nav>
-      )}
+      <Pager page={page} pages={pages} onPage={setPage} />
     </section>
   );
 }

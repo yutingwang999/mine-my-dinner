@@ -87,15 +87,15 @@ function CreateIngredient({
 
   return (
     <div>
-      <label>
+      <label className="mini-field">
         {t("nameZh")}
         <input value={nameZh} onChange={(event) => setNameZh(event.target.value)} />
       </label>
-      <label>
+      <label className="mini-field">
         {t("nameEn")}
         <input value={nameEn} onChange={(event) => setNameEn(event.target.value)} />
       </label>
-      <label>
+      <label className="mini-field">
         {t("category")}
         <select value={category} onChange={(event) => setCategory(event.target.value as Category)}>
           {CATEGORIES.map((value) => (
@@ -105,7 +105,7 @@ function CreateIngredient({
           ))}
         </select>
       </label>
-      <label>
+      <label className="mini-field">
         {t("stockMode")}
         <select
           value={stockMode}
@@ -142,6 +142,8 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
   const tRole = useTranslations("role");
   const locale = useLocale();
   const [mode, setMode] = useState<Mode>("idle");
+  // The link before "Change link", so the change can be undone.
+  const [previous, setPrevious] = useState<{ id: number; name: string } | null>(null);
 
   function update(fields: Partial<ReviewLine>) {
     onChange({ ...line, ...fields });
@@ -149,6 +151,7 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
 
   function link(id: number, name: string) {
     update({ ingredient_id: id, linkedName: name, skipped: false });
+    setPrevious(null);
     setMode("idle");
   }
 
@@ -162,84 +165,95 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
   }
 
   const noNumber = line.amount_type === "vague" || line.amount_type === "missing";
+  const state =
+    line.ingredient_id !== null ? "matched" : line.skipped ? "skipped" : "unmatched";
 
   return (
-    <li data-testid={`row-${line.name}`} style={{ marginBottom: "0.75rem" }}>
-      <div>
+    <li data-testid={`row-${line.name}`} className={`line ${state}`}>
+      <div className="line-raw">
         {t("raw")}: {line.raw}
       </div>
-      <label>
-        {t("name")}
-        <input value={line.name} onChange={(event) => update({ name: event.target.value })} />
-      </label>
-      <label>
-        {t("amount")}
-        <input
-          type="number"
-          step="any"
-          min="0"
-          disabled={noNumber}
-          value={line.amount ?? ""}
-          onChange={(event) =>
-            update({ amount: event.target.value === "" ? null : Number(event.target.value) })
-          }
-        />
-      </label>
-      <label>
-        {t("unit")}
-        <select
-          disabled={noNumber}
-          value={line.unit ?? ""}
-          onChange={(event) => update({ unit: (event.target.value || null) as Unit | null })}
-        >
-          <option value="">{tUnit("none")}</option>
-          {UNITS.map((value) => (
-            <option key={value} value={value}>
-              {tUnit(value)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        {t("amountType")}
-        <select
-          value={line.amount_type}
-          onChange={(event) => setAmountType(event.target.value as AmountType)}
-        >
-          {AMOUNT_TYPES.map((value) => (
-            <option key={value} value={value}>
-              {tAmount(value)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        {t("role")}
-        <select value={line.role} onChange={(event) => update({ role: event.target.value as Role })}>
-          {ROLES.map((value) => (
-            <option key={value} value={value}>
-              {tRole(value)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          checked={line.optional}
-          onChange={(event) => update({ optional: event.target.checked })}
-        />
-        {t("optional")}
-      </label>
-      <button type="button" onClick={onRemove}>
-        {t("remove")}
-      </button>
+      <div className="line-fields">
+        <label className="mini-field">
+          {t("name")}
+          <input value={line.name} onChange={(event) => update({ name: event.target.value })} />
+        </label>
+        <label className="mini-field">
+          {t("amount")}
+          <input
+            type="number"
+            step="any"
+            min="0"
+            disabled={noNumber}
+            value={line.amount ?? ""}
+            onChange={(event) =>
+              update({ amount: event.target.value === "" ? null : Number(event.target.value) })
+            }
+          />
+        </label>
+        <label className="mini-field">
+          {t("unit")}
+          <select
+            disabled={noNumber}
+            value={line.unit ?? ""}
+            onChange={(event) => update({ unit: (event.target.value || null) as Unit | null })}
+          >
+            <option value="">{tUnit("none")}</option>
+            {UNITS.map((value) => (
+              <option key={value} value={value}>
+                {tUnit(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mini-field">
+          {t("amountType")}
+          <select
+            value={line.amount_type}
+            onChange={(event) => setAmountType(event.target.value as AmountType)}
+          >
+            {AMOUNT_TYPES.map((value) => (
+              <option key={value} value={value}>
+                {tAmount(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mini-field">
+          {t("role")}
+          <select value={line.role} onChange={(event) => update({ role: event.target.value as Role })}>
+            {ROLES.map((value) => (
+              <option key={value} value={value}>
+                {tRole(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mini-field inline">
+          <input
+            type="checkbox"
+            checked={line.optional}
+            onChange={(event) => update({ optional: event.target.checked })}
+          />
+          {t("optional")}
+        </label>
+        <button type="button" onClick={onRemove}>
+          {t("remove")}
+        </button>
+      </div>
 
-      <div>
+      <div className="line-status">
         {line.ingredient_id !== null ? (
           <>
             {t("matched", { name: line.linkedName ?? line.name })}{" "}
-            <button type="button" onClick={() => update({ ingredient_id: null, linkedName: null })}>
+            <button
+              type="button"
+              onClick={() => {
+                const name = line.linkedName ?? line.name;
+                setPrevious({ id: line.ingredient_id as number, name });
+                update({ ingredient_id: null, linkedName: null });
+              }}
+            >
               {t("unlink")}
             </button>
           </>
@@ -252,33 +266,48 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
           </>
         ) : (
           <>
-            {t("unmatched")}{" "}
+            <strong>{t("unmatched")}</strong>
+            {previous && (
+              <button type="button" onClick={() => link(previous.id, previous.name)}>
+                {t("undoUnlink")}
+              </button>
+            )}
             <button type="button" onClick={() => setMode("link")}>
               {t("linkExisting")}
             </button>
             <button type="button" onClick={() => setMode("create")}>
               {t("createEntry")}
             </button>
-            <button type="button" onClick={() => update({ skipped: true })}>
+            <button
+              type="button"
+              onClick={() => {
+                setPrevious(null);
+                update({ skipped: true });
+              }}
+            >
               {t("skip")}
             </button>
           </>
         )}
       </div>
       {mode === "link" && line.ingredient_id === null && (
-        <DictionarySearch
-          search={api.searchIngredients}
-          onChoose={(entry) => link(entry.id, entryName(entry, locale))}
-          onCancel={() => setMode("idle")}
-        />
+        <div className="line-panel">
+          <DictionarySearch
+            search={api.searchIngredients}
+            onChoose={(entry) => link(entry.id, entryName(entry, locale))}
+            onCancel={() => setMode("idle")}
+          />
+        </div>
       )}
       {mode === "create" && line.ingredient_id === null && (
-        <CreateIngredient
-          line={line}
-          lang={lang}
-          onCreated={link}
-          onCancel={() => setMode("idle")}
-        />
+        <div className="line-panel">
+          <CreateIngredient
+            line={line}
+            lang={lang}
+            onCreated={link}
+            onCancel={() => setMode("idle")}
+          />
+        </div>
       )}
     </li>
   );

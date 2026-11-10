@@ -432,7 +432,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 | `estimated` | Not in the source; estimated by the model at import | Can be selected with an S7 warning; dishes with known durations are preferred when otherwise equal |
 | Empty | No estimate is available | Can be selected with an S7 warning and ranks lower |
 
-Import confirmation shows the estimated duration, and it becomes `user` if the user changes it. A later "cooked this meal" feature could let the user record actual time.
+Import confirmation shows the duration and its source. A changed duration becomes `user` by default, and the user can mark it `stated` when the source gives it, which also corrects an extraction that mislabeled a stated time. `estimated` is offered only while the model's own number is unchanged. A later "cooked this meal" feature could let the user record actual time.
 
 **Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written back to `current_plan`, so the next conversation turn sees it. The user can also add, remove, and change items when confirming the shopping list.
 

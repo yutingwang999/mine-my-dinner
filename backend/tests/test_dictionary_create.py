@@ -8,7 +8,7 @@ from minemydinner.dictionary.service import (
 )
 from minemydinner.extraction.allergen_suggest import suggest_allergens
 from minemydinner.llm.client import AllModelsFailed, MonthlyCapExceeded
-from minemydinner.models import CookwareOwned, Recipe, RecipeIngredient
+from minemydinner.models import CookwareOwned, Ingredient, Recipe, RecipeIngredient
 from tests.recipefakes import *  # noqa: F403
 from tests.recipefakes import FakeLLMClient, by_zh, use_llm
 
@@ -105,6 +105,51 @@ def test_create_route_links_matching_lines(client, session, seeded, recipe_with_
     assert entry["linked_lines"] == 1
     session.refresh(recipe.ingredients[0])
     assert recipe.ingredients[0].ingredient_id == entry["id"]
+
+
+def search_names(client, q) -> list[str]:
+    return [item["name_zh"] for item in client.get("/api/ingredients", params={"q": q}).json()]
+
+
+def test_search_ranks_an_exact_alias_before_partial_matches(client, seeded):
+    # 食用油 has the alias "油"; 油麦菜 and others only contain it.
+    assert search_names(client, "油")[0] == "食用油"
+    assert search_names(client, " OIL ")[0] == "食用油"
+
+
+def test_search_keeps_the_exact_name_when_partial_matches_pass_the_limit(client, session, seeded):
+    for index in range(25):
+        entry = Ingredient(
+            name_zh=f"甲料{index:02d}", category="other", stock_mode="level", source="user"
+        )
+        session.add(entry)
+    # Created last, so it has the highest id.
+    session.add(Ingredient(name_zh="甲料", category="other", stock_mode="level", source="user"))
+    session.flush()
+    names = search_names(client, "甲料")
+    assert len(names) == 20 and names[0] == "甲料"
+
+
+def test_browse_returns_every_entry_when_asked(client, seeded):
+    everything = client.get("/api/ingredients", params={"limit": 500}).json()
+    assert len(everything) > 200
+    assert {"seed"} <= {item["source"] for item in everything}
+    assert len(client.get("/api/ingredients").json()) == 20
+
+
+def test_browse_filters_by_category(client, seeded):
+    seasonings = client.get("/api/ingredients", params={"limit": 500, "category": "seasoning"}).json()
+    assert seasonings and {item["category"] for item in seasonings} == {"seasoning"}
+    assert client.get("/api/ingredients", params={"category": "rocks"}).status_code == 422
+
+
+def test_limit_is_bounded(client, seeded):
+    assert client.get("/api/ingredients", params={"limit": 501}).status_code == 422
+    assert client.get("/api/cookware", params={"limit": 0}).status_code == 422
+
+
+def test_browse_cookware(client, seeded):
+    assert len(client.get("/api/cookware", params={"limit": 500}).json()) >= 13
 
 
 def test_search_ingredients_by_name_or_alias(client, seeded):

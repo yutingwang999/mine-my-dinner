@@ -5,6 +5,8 @@ import { useState } from "react";
 
 import { AllergenPicker } from "@/components/AllergenPicker";
 import { ConfirmDelete } from "@/components/ConfirmDelete";
+import { DictionaryBrowser } from "@/components/DictionaryBrowser";
+import { EditIngredient } from "@/components/EditIngredient";
 import { type Allergen, api, entryName, type IngredientEntry } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 import { useLoad } from "@/lib/useLoad";
@@ -77,7 +79,11 @@ export function DictionaryManager() {
   const t = useTranslations("dictionary");
   const tAllergen = useTranslations("allergen");
   const tCommon = useTranslations("common");
+  const tCategory = useTranslations("category");
   const locale = useLocale();
+  const [editingId, setEditingId] = useState<number | null>(null);
+  // Bumped after any change, so the full list below shows it too.
+  const [refreshKey, setRefreshKey] = useState(0);
   const unresolved = useLoad(api.listUnresolved, []);
   const ingredients = useLoad(api.listUserIngredients, []);
   const cookware = useLoad(api.listUserCookware, []);
@@ -85,6 +91,7 @@ export function DictionaryManager() {
   function reloadAll() {
     unresolved.reload();
     ingredients.reload();
+    setRefreshKey((key) => key + 1);
   }
 
   const nothingUnresolved =
@@ -131,7 +138,13 @@ export function DictionaryManager() {
         <ul>
           {ingredients.data?.map((entry) => (
             <li key={entry.id} data-testid={`user-ingredient-${entry.id}`}>
-              {entryName(entry, locale)} · {allergenSummary(entry, t, tAllergen)}{" "}
+              {entryName(entry, locale)} · {tCategory(entry.category)} ·{" "}
+              {allergenSummary(entry, t, tAllergen)}{" "}
+              {editingId !== entry.id && (
+                <button type="button" onClick={() => setEditingId(entry.id)}>
+                  {tCommon("edit")}
+                </button>
+              )}
               <ConfirmDelete
                 name={entryName(entry, locale)}
                 onDelete={async () => {
@@ -139,6 +152,16 @@ export function DictionaryManager() {
                   reloadAll();
                 }}
               />
+              {editingId === entry.id && (
+                <EditIngredient
+                  entry={entry}
+                  onSaved={() => {
+                    setEditingId(null);
+                    reloadAll();
+                  }}
+                  onCancel={() => setEditingId(null)}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -156,12 +179,14 @@ export function DictionaryManager() {
                 onDelete={async () => {
                   await api.deleteCookware(entry.id);
                   cookware.reload();
+                  setRefreshKey((key) => key + 1);
                 }}
               />
             </li>
           ))}
         </ul>
       </section>
+      <DictionaryBrowser refreshKey={refreshKey} />
     </div>
   );
 }
