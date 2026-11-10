@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 
+import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { ReviewForm } from "@/components/ReviewForm";
 import { Link } from "@/i18n/navigation";
 import { useDrafts } from "@/lib/drafts";
@@ -28,12 +29,23 @@ export function ReviewQueue() {
 
   return (
     <section>
-      <p>{t("unsavedNotice")}</p>
-      <p>{t("position", { current: 1, total: drafts.length })}</p>
-      <ReviewForm key={finished} draft={drafts[0]} onSaved={next} />
-      <button type="button" onClick={next}>
-        {t("discard")}
-      </button>
+      <p className="notice notice-info">
+        <strong>{t("position", { current: 1, total: drafts.length })}</strong> {t("unsavedNotice")}
+      </p>
+      <ReviewForm
+        key={finished}
+        draft={drafts[0]}
+        onSaved={next}
+        actions={
+          <ConfirmDelete
+            name={drafts[0].title}
+            label={t("discard")}
+            question={t("discardQuestion")}
+            confirmLabel={t("discardConfirm")}
+            onDelete={async () => next()}
+          />
+        }
+      />
     </section>
   );
 }

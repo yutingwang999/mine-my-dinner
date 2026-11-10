@@ -58,6 +58,9 @@ export type IngredientLine = {
   role: Role;
   optional: boolean;
   ingredient_id: number | null;
+  /** The linked entry's own names, for display only; the server does not read them. */
+  linked_name_zh?: string | null;
+  linked_name_en?: string | null;
 };
 
 export type Provenance = {
@@ -94,6 +97,8 @@ export type RecipeWrite = RecipeFields & {
 export type BatchItem = { index: number; draft: RecipeDraft | null; error: string | null };
 
 export type DictionaryEntry = {
+  /** How many recipes use the entry; sent by the dictionary list routes. */
+  dish_count?: number;
   id: number;
   name_zh: string | null;
   name_en: string | null;

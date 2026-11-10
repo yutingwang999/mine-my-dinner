@@ -1,10 +1,10 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AllergenPicker } from "@/components/AllergenPicker";
-import { DictionarySearch } from "@/components/DictionarySearch";
+import { DictionarySearch, namesEntry } from "@/components/DictionarySearch";
 import {
   type Allergen,
   AMOUNT_TYPES,
@@ -29,6 +29,8 @@ export type ReviewLine = IngredientLine & {
   key: number;
   skipped: boolean;
   linkedName: string | null;
+  /** Added on the review page, so it has no source wording of its own. */
+  added: boolean;
 };
 
 type Props = {
@@ -144,6 +146,35 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
   const [mode, setMode] = useState<Mode>("idle");
   // The link before "Change link", so the change can be undone.
   const [previous, setPrevious] = useState<{ id: number; name: string } | null>(null);
+  // After the user renames a linked line, the dictionary entry that new name is, if any.
+  const [nameEdited, setNameEdited] = useState(false);
+  const [named, setNamed] = useState<{ name: string; id: number; entry: string } | null>(null);
+  const [kept, setKept] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!nameEdited || line.ingredient_id === null || !line.name.trim()) return;
+    const name = line.name;
+    const timer = setTimeout(() => {
+      api
+        .searchIngredients(name)
+        .then((entries) => {
+          const exact = entries.find((entry) => namesEntry(entry, name));
+          setNamed(exact ? { name, id: exact.id, entry: entryName(exact, locale) } : null);
+        })
+        .catch(() => {});
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [nameEdited, line.name, line.ingredient_id, locale]);
+
+  // A new name that is another entry most likely means the link is now wrong.
+  const conflict =
+    named !== null &&
+    named.name === line.name &&
+    line.ingredient_id !== null &&
+    named.id !== line.ingredient_id &&
+    kept !== line.name
+      ? named
+      : null;
 
   function update(fields: Partial<ReviewLine>) {
     onChange({ ...line, ...fields });
@@ -171,12 +202,18 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
   return (
     <li data-testid={`row-${line.name}`} className={`line ${state}`}>
       <div className="line-raw">
-        {t("raw")}: {line.raw}
+        {t("raw")}: {line.added ? t("addedByYou") : line.raw}
       </div>
       <div className="line-fields">
         <label className="mini-field">
           {t("name")}
-          <input value={line.name} onChange={(event) => update({ name: event.target.value })} />
+          <input
+            value={line.name}
+            onChange={(event) => {
+              setNameEdited(true);
+              update({ name: event.target.value });
+            }}
+          />
         </label>
         <label className="mini-field">
           {t("amount")}
@@ -290,6 +327,23 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
           </>
         )}
       </div>
+      {conflict && (
+        <div className="notice notice-warning actions">
+          <span>
+            {t("nameConflict", {
+              name: line.name,
+              entry: conflict.entry,
+              linked: line.linkedName ?? line.name,
+            })}
+          </span>
+          <button type="button" onClick={() => link(conflict.id, conflict.entry)}>
+            {t("relinkTo", { entry: conflict.entry })}
+          </button>
+          <button type="button" onClick={() => setKept(line.name)}>
+            {t("keepLink", { linked: line.linkedName ?? line.name })}
+          </button>
+        </div>
+      )}
       {mode === "link" && line.ingredient_id === null && (
         <div className="line-panel">
           <DictionarySearch

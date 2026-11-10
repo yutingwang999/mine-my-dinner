@@ -23,7 +23,7 @@ describe("import", () => {
   it("queues the draft and opens review when text import succeeds", async () => {
     mockFetch({ "POST /api/imports/text": () => draft() });
     renderWithProviders(<ImportForm />);
-    await userEvent.type(screen.getByRole("textbox", { name: /Paste recipe text/ }), "葱花蛋");
+    await userEvent.type(screen.getByRole("textbox", { name: /Paste one recipe/ }), "葱花蛋");
     await userEvent.click(screen.getByRole("button", { name: "Extract" }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/review"));
     expect(screen.getByTestId("queue")).toHaveTextContent("葱花蛋");
@@ -32,7 +32,7 @@ describe("import", () => {
   it("keeps the pasted text and shows a message when import fails", async () => {
     mockFetch({ "POST /api/imports/text": () => reply(503, { code: "models_unavailable" }) });
     renderWithProviders(<ImportForm />);
-    const box = screen.getByRole("textbox", { name: /Paste recipe text/ });
+    const box = screen.getByRole("textbox", { name: /Paste one recipe/ });
     await userEvent.type(box, "葱花蛋的做法");
     await userEvent.click(screen.getByRole("button", { name: "Extract" }));
     expect(await screen.findByText(/No model is available/)).toBeInTheDocument();
@@ -84,8 +84,73 @@ describe("import", () => {
     expect(body.getAll("images")).toHaveLength(1);
   });
 
+  it("says the paste box and link box take one recipe each", () => {
+    renderWithProviders(<ImportForm />);
+    expect(screen.getByText(/One recipe at a time/)).toBeInTheDocument();
+    expect(screen.getByText(/One web page at a time/)).toBeInTheDocument();
+  });
+
+  it("stops several links in the link box before calling the server", async () => {
+    const calls = mockFetch({});
+    renderWithProviders(<ImportForm />);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Web page link" }),
+      "https://a.example/1 https://b.example/2",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Import page" }));
+    expect(await screen.findByText(/Import one link at a time/)).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stops a paste that is only several links", async () => {
+    const calls = mockFetch({});
+    renderWithProviders(<ImportForm />);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Paste one recipe/ }),
+      "https://a.example/1\nhttps://b.example/2",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Extract" }));
+    expect(await screen.findByText(/Import one link at a time/)).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stops a paste with a --- separator line and points to the file import", async () => {
+    const calls = mockFetch({});
+    renderWithProviders(<ImportForm />);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Paste one recipe/ }),
+      "番茄炒蛋\n鸡蛋\n  ---  \n土豆丝\n土豆",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Extract" }));
+    expect(await screen.findByText(/Paste one recipe at a time/)).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each([
+    ["a separator before the recipe", "---\n番茄炒蛋\n鸡蛋"],
+    ["a separator after the recipe", "番茄炒蛋\n鸡蛋\n---\n"],
+    ["separators around the recipe", "---\n\n番茄炒蛋\n---"],
+  ])("still sends one recipe with %s", async (_case, pasted) => {
+    const calls = mockFetch({ "POST /api/imports/text": () => draft() });
+    renderWithProviders(<ImportForm />);
+    await userEvent.type(screen.getByRole("textbox", { name: /Paste one recipe/ }), pasted);
+    await userEvent.click(screen.getByRole("button", { name: "Extract" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+  });
+
+  it("still sends text that mentions one link", async () => {
+    const calls = mockFetch({ "POST /api/imports/text": () => draft() });
+    renderWithProviders(<ImportForm />);
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Paste one recipe/ }),
+      "番茄炒蛋，来自 https://a.example/1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Extract" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+  });
+
   it("tells the user that imports reach a model provider", () => {
     renderWithProviders(<ImportForm />);
-    expect(screen.getByText(/sent to a model provider/)).toBeInTheDocument();
+    expect(screen.getByText(/sent to a third-party AI model/)).toBeInTheDocument();
   });
 });

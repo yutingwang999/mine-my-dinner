@@ -75,7 +75,7 @@ describe("people", () => {
     expect(await friend.findByText("Allergy: Egg")).toBeInTheDocument();
     await userEvent.click(friend.getByRole("button", { name: "Delete" }));
     expect(friend.getByText("Delete 小李?")).toBeInTheDocument();
-    expect(friend.getByText(/Their rules are deleted too/)).toBeInTheDocument();
+    expect(friend.getByText(/dietary rules are deleted too/)).toBeInTheDocument();
     expect(callsTo(calls, "DELETE", "/api/diners/2")).toHaveLength(0);
     await userEvent.click(friend.getByRole("button", { name: "Yes, delete" }));
     await waitFor(() => expect(callsTo(calls, "DELETE", "/api/diners/2")).toHaveLength(1));

@@ -134,6 +134,36 @@ describe("dictionary", () => {
     expect(await own.findByText(/remove it from inventory first/i)).toBeInTheDocument();
   });
 
+  it("warns which dishes a delete affects", async () => {
+    calls = mockFetch({
+      "GET /api/allergens/unresolved": () => ({ entries: [], unmatched: [] }),
+      "GET /api/ingredients": (_body, _init, url) =>
+        url.includes("source=user")
+          ? [
+              { id: 9, name_zh: "紫薯", name_en: null, aliases_zh: [], aliases_en: [], source: "user", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null, dish_count: 3 },
+              { id: 10, name_zh: "秘酱", name_en: null, aliases_zh: [], aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: [], parent_id: null, dish_count: 0 },
+            ]
+          : [],
+      "GET /api/cookware": (_body, _init, url) =>
+        url.includes("source=user")
+          ? [{ id: 60, name_zh: "面包机", name_en: null, aliases_zh: [], aliases_en: [], source: "user", dish_count: 2 }]
+          : [],
+    });
+    renderWithProviders(<DictionaryManager />);
+    const used = within(await screen.findByTestId("user-ingredient-9"));
+    expect(used.getByText(/3 dishes/)).toBeInTheDocument();
+    await userEvent.click(used.getByRole("button", { name: "Delete" }));
+    expect(used.getByText(/3 dishes use it\. After deleting, those lines become unlinked/)).toBeInTheDocument();
+
+    const unused = within(screen.getByTestId("user-ingredient-10"));
+    await userEvent.click(unused.getByRole("button", { name: "Delete" }));
+    expect(unused.queryByText(/use it/)).toBeNull();
+
+    const cookware = within(screen.getByTestId("user-cookware-60"));
+    await userEvent.click(cookware.getByRole("button", { name: "Delete" }));
+    expect(cookware.getByText(/2 dishes need it/)).toBeInTheDocument();
+  });
+
   it("lists the user's own entries and marks unknown allergens", async () => {
     setup();
     const own = within(await screen.findByTestId("user-ingredient-9"));

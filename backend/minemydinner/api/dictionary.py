@@ -4,7 +4,7 @@ from typing import Annotated, Literal, Self
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, model_validator
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
@@ -33,7 +33,13 @@ from minemydinner.dictionary.service import (
 from minemydinner.extraction.allergen_suggest import suggest_allergens
 from minemydinner.extraction.normalize import names_equal
 from minemydinner.llm.client import LLMClient
-from minemydinner.models import Cookware, CookwareOwned, Ingredient
+from minemydinner.models import (
+    Cookware,
+    CookwareOwned,
+    Ingredient,
+    RecipeCookware,
+    RecipeIngredient,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -57,6 +63,8 @@ class IngredientOut(BaseModel):
     allergens: list[str] | None
     parent_id: int | None
     source: str
+    # How many recipes use the entry, so a delete can say what it affects.
+    dish_count: int = 0
 
 
 class LinkedIngredient(IngredientOut):
@@ -72,6 +80,7 @@ class CookwareOut(BaseModel):
     aliases_zh: list[str]
     aliases_en: list[str]
     source: str
+    dish_count: int = 0
 
 
 class CookwareIn(CookwareWrite):
@@ -153,6 +162,48 @@ def _search(
     return list(session.scalars(query.order_by(table.id)))
 
 
+def _dish_counts(session: Session, entry_column, recipe_column, ids: list[int]) -> dict[int, int]:
+    """How many distinct recipes use each entry."""
+    if not ids:
+        return {}
+    query = (
+        select(entry_column, func.count(distinct(recipe_column)))
+        .where(entry_column.in_(ids))
+        .group_by(entry_column)
+    )
+    return dict(session.execute(query).all())
+
+
+def _ingredient_outs(session: Session, entries: list[Ingredient]) -> list[IngredientOut]:
+    counts = _dish_counts(
+        session,
+        RecipeIngredient.ingredient_id,
+        RecipeIngredient.recipe_id,
+        [entry.id for entry in entries],
+    )
+    return [
+        IngredientOut.model_validate(entry).model_copy(
+            update={"dish_count": counts.get(entry.id, 0)}
+        )
+        for entry in entries
+    ]
+
+
+def _cookware_outs(session: Session, entries: list[Cookware]) -> list[CookwareOut]:
+    counts = _dish_counts(
+        session,
+        RecipeCookware.cookware_id,
+        RecipeCookware.recipe_id,
+        [entry.id for entry in entries],
+    )
+    return [
+        CookwareOut.model_validate(entry).model_copy(
+            update={"dish_count": counts.get(entry.id, 0)}
+        )
+        for entry in entries
+    ]
+
+
 @contextmanager
 def _dictionary_errors() -> Iterator[None]:
     """Translate dictionary service errors into API errors."""
@@ -171,8 +222,9 @@ def _dictionary_errors() -> Iterator[None]:
         raise ApiError(409, error.reason) from error
 
 
-def _linked(entry: Ingredient, linked: int) -> LinkedIngredient:
-    return LinkedIngredient(**IngredientOut.model_validate(entry).model_dump(), linked_lines=linked)
+def _linked(session: Session, entry: Ingredient, linked: int) -> LinkedIngredient:
+    [out] = _ingredient_outs(session, [entry])
+    return LinkedIngredient(**out.model_dump(), linked_lines=linked)
 
 
 def _committed[T](session: Session, action: Callable[[], T]) -> T:
@@ -191,14 +243,14 @@ def search_ingredients(
     limit: Limit = None,
 ) -> list[IngredientOut]:
     rows = _search(session, Ingredient, q, source, limit, category)
-    return [IngredientOut.model_validate(row) for row in rows]
+    return _ingredient_outs(session, rows)
 
 
 @router.post("/ingredients", status_code=201)
 def create_ingredient(data: IngredientWrite, session: SessionDep) -> LinkedIngredient:
     def create() -> LinkedIngredient:
         entry = create_user_ingredient(session, data)
-        return _linked(entry, link_unmatched_lines(session, entry))
+        return _linked(session, entry, link_unmatched_lines(session, entry))
 
     return _committed(session, create)
 
@@ -210,7 +262,7 @@ def patch_ingredient(
     def change() -> LinkedIngredient:
         entry = update_user_ingredient(session, entry_id, patch)
         # A new name or alias may now match lines that were unmatched.
-        return _linked(entry, link_unmatched_lines(session, entry))
+        return _linked(session, entry, link_unmatched_lines(session, entry))
 
     return _committed(session, change)
 
@@ -225,7 +277,7 @@ def delete_ingredient(entry_id: int, session: SessionDep) -> Response:
 def search_cookware(
     session: SessionDep, q: str | None = None, source: Source | None = None, limit: Limit = None
 ) -> list[CookwareOut]:
-    return [CookwareOut.model_validate(row) for row in _search(session, Cookware, q, source, limit)]
+    return _cookware_outs(session, _search(session, Cookware, q, source, limit))
 
 
 @router.post("/cookware", status_code=201)
@@ -236,7 +288,8 @@ def create_cookware(data: CookwareIn, session: SessionDep) -> CookwareOut:
         entry = create_user_cookware(session, CookwareWrite(**data.model_dump(exclude={"owned"})))
         if data.owned:
             session.add(CookwareOwned(cookware_id=entry.id))
-        return CookwareOut.model_validate(entry)
+        session.flush()
+        return _cookware_outs(session, [entry])[0]
 
     return _committed(session, create)
 
@@ -244,7 +297,8 @@ def create_cookware(data: CookwareIn, session: SessionDep) -> CookwareOut:
 @router.patch("/cookware/{entry_id}")
 def patch_cookware(entry_id: int, patch: DictionaryPatch, session: SessionDep) -> CookwareOut:
     return _committed(
-        session, lambda: CookwareOut.model_validate(update_user_cookware(session, entry_id, patch))
+        session,
+        lambda: _cookware_outs(session, [update_user_cookware(session, entry_id, patch)])[0],
     )
 
 
@@ -272,6 +326,6 @@ def list_unresolved(session: SessionDep) -> UnresolvedOut:
 def resolve(body: ResolveIn, session: SessionDep) -> LinkedIngredient:
     def apply() -> LinkedIngredient:
         entry, linked = resolve_allergens(session, body.name, body.ingredient_id, body.allergens)
-        return _linked(entry, linked)
+        return _linked(session, entry, linked)
 
     return _committed(session, apply)

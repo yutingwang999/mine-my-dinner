@@ -35,11 +35,11 @@ export default async function LocaleLayout({ children, params }: Props) {
         <NextIntlClientProvider>
           {/* Drafts live here, so moving between import and review keeps them. */}
           <DraftsProvider>
-            <header style={{ padding: "1rem" }}>
+            <header className="site-header">
               <MainNav />
               <LanguageSwitcher />
             </header>
-            <main style={{ padding: "1rem" }}>{children}</main>
+            <main className="site-main">{children}</main>
           </DraftsProvider>
         </NextIntlClientProvider>
       </body>

@@ -65,8 +65,8 @@ function AddRule({ dinerId, onAdded }: { dinerId: number; onAdded: () => void })
   }
 
   return (
-    <div>
-      <label>
+    <div className="line-fields">
+      <label className="mini-field">
         {t("ruleType")}
         <select value={ruleType} onChange={(event) => setRuleType(event.target.value as RuleType)}>
           {RULE_TYPES.map((value) => (
@@ -76,7 +76,7 @@ function AddRule({ dinerId, onAdded }: { dinerId: number; onAdded: () => void })
           ))}
         </select>
       </label>
-      <label>
+      <label className="mini-field">
         {t("target")}
         <select value={current} onChange={(event) => setTarget(event.target.value as Target)}>
           {targets.map((value) => (
@@ -87,7 +87,7 @@ function AddRule({ dinerId, onAdded }: { dinerId: number; onAdded: () => void })
         </select>
       </label>
       {current === "allergen" && (
-        <label>
+        <label className="mini-field">
           {t("allergen")}
           <select value={allergen} onChange={(event) => setAllergen(event.target.value as Allergen)}>
             {ALLERGENS.map((value) => (
@@ -114,7 +114,7 @@ function AddRule({ dinerId, onAdded }: { dinerId: number; onAdded: () => void })
           />
         ))}
       {current === "text" && (
-        <label>
+        <label className="mini-field">
           {t("text")}
           <input value={text} onChange={(event) => setText(event.target.value)} />
         </label>
@@ -122,7 +122,11 @@ function AddRule({ dinerId, onAdded }: { dinerId: number; onAdded: () => void })
       <button type="button" onClick={add}>
         {t("addRule")}
       </button>
-      {error !== null && <p role="alert">{errorText(error)}</p>}
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
     </div>
   );
 }
@@ -176,46 +180,50 @@ function DinerCard({ diner, onChanged }: { diner: Diner; onChanged: () => void }
   const label = diner.is_self ? `${t("me")} (${diner.display_name})` : diner.display_name;
 
   return (
-    <li data-testid={`diner-${diner.id}`} style={{ marginBottom: "1rem" }}>
-      {renaming ? (
-        <span>
-          <input aria-label={t("displayName")} value={name} onChange={(event) => setName(event.target.value)} />
-          <button
-            type="button"
-            onClick={async () => {
-              if (await run(() => api.renameDiner(diner.id, name))) {
-                setRenaming(false);
-                onChanged();
-              }
-            }}
-          >
-            {tCommon("save")}
+    <li data-testid={`diner-${diner.id}`} className="card">
+      <div className="actions">
+        {renaming ? (
+          <span className="actions">
+            <input aria-label={t("displayName")} value={name} onChange={(event) => setName(event.target.value)} />
+            <button
+              type="button"
+              onClick={async () => {
+                if (await run(() => api.renameDiner(diner.id, name))) {
+                  setRenaming(false);
+                  onChanged();
+                }
+              }}
+            >
+              {tCommon("save")}
+            </button>
+          </span>
+        ) : (
+          <strong>{label}</strong>
+        )}{" "}
+        {!renaming && (
+          <button type="button" onClick={() => setRenaming(true)}>
+            {t("rename")}
           </button>
-        </span>
-      ) : (
-        <strong>{label}</strong>
-      )}{" "}
-      {!renaming && (
-        <button type="button" onClick={() => setRenaming(true)}>
-          {t("rename")}
-        </button>
-      )}
-      {!diner.is_self && (
-        <ConfirmDelete
-          name={diner.display_name}
-          notice={t("deleteFriendNotice")}
-          onDelete={async () => {
-            await api.deleteDiner(diner.id);
-            onChanged();
-          }}
-        />
-      )}
+        )}
+        {!diner.is_self && (
+          <ConfirmDelete
+            name={diner.display_name}
+            notice={t("deleteFriendNotice")}
+            onDelete={async () => {
+              await api.deleteDiner(diner.id);
+              onChanged();
+            }}
+          />
+        )}
+      </div>
       <h3>{t("rules")}</h3>
-      {rules.data?.length === 0 && <p>{t("noRules")}</p>}
-      <ul>
+      {rules.data?.length === 0 && <p className="hint">{t("noRules")}</p>}
+      <ul className="row-list">
         {rules.data?.map((rule) => (
           <li key={rule.id}>
-            <RuleText rule={rule} />{" "}
+            <span>
+              <RuleText rule={rule} />
+            </span>
             <button
               type="button"
               onClick={async () => {
@@ -228,7 +236,11 @@ function DinerCard({ diner, onChanged }: { diner: Diner; onChanged: () => void }
         ))}
       </ul>
       <AddRule dinerId={diner.id} onAdded={rules.reload} />
-      {error !== null && <p role="alert">{errorText(error)}</p>}
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
     </li>
   );
 }
@@ -253,21 +265,29 @@ export function PeopleManager() {
 
   return (
     <div>
-      <ul>
+      <ul className="card-list">
         {data?.map((diner) => (
           <DinerCard key={diner.id} diner={diner} onChanged={reload} />
         ))}
       </ul>
-      <h2>{t("addFriend")}</h2>
-      <p>{t("friendHint")}</p>
-      <label>
-        {t("displayName")}
-        <input value={name} onChange={(event) => setName(event.target.value)} />
-      </label>
-      <button type="button" onClick={addFriend}>
-        {t("addFriend")}
-      </button>
-      {error !== null && <p role="alert">{errorText(error)}</p>}
+      <section className="card">
+        <h2>{t("addFriend")}</h2>
+        <p className="hint">{t("friendHint")}</p>
+        <div className="line-fields">
+          <label className="mini-field">
+            {t("displayName")}
+            <input value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <button type="button" onClick={addFriend}>
+            {t("addFriend")}
+          </button>
+        </div>
+        {error !== null && (
+          <p role="alert" className="notice notice-warning">
+            {errorText(error)}
+          </p>
+        )}
+      </section>
     </div>
   );
 }

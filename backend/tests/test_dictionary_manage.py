@@ -83,6 +83,29 @@ def entry_with_child(session, seeded):
     return parent
 
 
+def test_entries_report_how_many_dishes_use_them(client, session, seeded):
+    entry = user_entry(session, "秘制酱", allergens=[])
+    dish(session, "甲", [("秘制酱", entry.id)])
+    dish(session, "乙", [("秘制酱", entry.id), ("秘制酱", entry.id)])
+    listed = {item["name_zh"]: item for item in client.get("/api/ingredients?source=user").json()}
+    assert listed["秘制酱"]["dish_count"] == 2
+    browsed = {item["id"]: item for item in client.get("/api/ingredients?limit=500").json()}
+    assert browsed[entry.id]["dish_count"] == 2
+    assert browsed[id_of(session, "葱")]["dish_count"] == 0
+
+
+def test_cookware_reports_how_many_dishes_need_it(client, session, seeded):
+    from minemydinner.models import RecipeCookware
+
+    created = post_cookware(client, name_zh="面包机", owned=False).json()
+    assert created["dish_count"] == 0
+    recipe = dish(session, "甲", [("葱", id_of(session, "葱"))])
+    recipe.cookware = [RecipeCookware(cookware_id=created["id"])]
+    session.flush()
+    listed = client.get("/api/cookware?source=user").json()
+    assert listed[0]["dish_count"] == 1
+
+
 def test_seed_entries_are_read_only(client, seeded):
     葱 = id_of(seeded, "葱")
     assert client.patch(f"/api/ingredients/{葱}", json={"allergens": []}).status_code == 403

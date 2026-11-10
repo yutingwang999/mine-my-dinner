@@ -68,17 +68,17 @@ function AddInventory({ onAdded }: { onAdded: () => void }) {
     <div>
       <DictionarySearch search={api.searchIngredients} onChoose={setEntry} onCancel={() => setEntry(null)} />
       {entry !== null && (
-        <div>
+        <div className="line-fields">
           <strong>{entryName(entry, locale)}</strong>
           {entry.stock_mode === "count" && (
-            <label>
+            <label className="mini-field">
               {t("count")}
               <input type="number" min="0" value={count} onChange={(event) => setCount(event.target.value)} />
             </label>
           )}
           {entry.stock_mode === "level" && (
             <>
-              <label>
+              <label className="mini-field">
                 {t("level")}
                 <select value={level} onChange={(event) => setLevel(event.target.value as StockLevel)}>
                   {STOCK_LEVELS.map((value) => (
@@ -88,21 +88,25 @@ function AddInventory({ onAdded }: { onAdded: () => void }) {
                   ))}
                 </select>
               </label>
-              <label>
+              <label className="mini-field">
                 {t("grams")}
                 <input type="number" min="0" value={grams} onChange={(event) => setGrams(event.target.value)} />
               </label>
             </>
           )}
-          {entry.stock_mode === "availability" && <p>{t("availabilityHint")}</p>}
-          <label>
+          {entry.stock_mode === "availability" && <p className="hint">{t("availabilityHint")}</p>}
+          <label className="mini-field">
             {t("expiresOn")}
             <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
           </label>
           <button type="button" onClick={add}>
             {t("add")}
           </button>
-          {error !== null && <p role="alert">{errorText(error)}</p>}
+          {error !== null && (
+            <p role="alert" className="notice notice-warning">
+              {errorText(error)}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -144,14 +148,14 @@ function RefList({
   }
 
   return (
-    <section>
+    <section className="card">
       <h2>{title}</h2>
-      {hint && <p>{hint}</p>}
-      {data?.length === 0 && <p>{tCommon("none")}</p>}
-      <ul>
+      {hint && <p className="hint">{hint}</p>}
+      {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
+      <ul className="row-list">
         {data?.map((item) => (
           <li key={item.id} data-testid={`${testId}-${item.id}`}>
-            {entryName(asEntry(item), locale)}{" "}
+            <span>{entryName(asEntry(item), locale)}</span>
             <button type="button" onClick={() => run(() => remove(item.id))}>
               {tCommon("remove")}
             </button>
@@ -165,11 +169,17 @@ function RefList({
           onCancel={() => setAdding(false)}
         />
       ) : (
-        <button type="button" onClick={() => setAdding(true)}>
-          {tCommon("add")}
-        </button>
+        <div className="actions">
+          <button type="button" onClick={() => setAdding(true)}>
+            {tCommon("add")}
+          </button>
+        </div>
       )}
-      {error !== null && <p role="alert">{errorText(error)}</p>}
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
     </section>
   );
 }
@@ -194,16 +204,24 @@ export function InventoryManager() {
 
   return (
     <div>
-      <section>
-        <h2>{t("title")}</h2>
-        <button type="button" onClick={() => setSort(sort === "name" ? "expiry" : "name")}>
-          {sort === "name" ? t("sortByExpiry") : t("sortByName")}
-        </button>
-        <ul>
+      <section className="card">
+        <div className="actions">
+          <h2>{t("title")}</h2>
+          <button type="button" onClick={() => setSort(sort === "name" ? "expiry" : "name")}>
+            {sort === "name" ? t("sortByExpiry") : t("sortByName")}
+          </button>
+        </div>
+        {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
+        <ul className="row-list">
           {data?.map((row) => (
             <li key={row.ingredient_id} data-testid={`inventory-${row.ingredient_id}`}>
-              {entryName(asEntry(row), locale)} {amount(row)}
-              {row.expires_on && <span> · {t("expires", { date: row.expires_on })}</span>}{" "}
+              <span className="row-main">
+                <strong>{entryName(asEntry(row), locale)}</strong>
+                <span className="hint">
+                  {amount(row)}
+                  {row.expires_on && ` · ${t("expires", { date: row.expires_on })}`}
+                </span>
+              </span>
               <button
                 type="button"
                 onClick={async () => {
@@ -220,7 +238,11 @@ export function InventoryManager() {
             </li>
           ))}
         </ul>
-        {error !== null && <p role="alert">{errorText(error)}</p>}
+        {error !== null && (
+          <p role="alert" className="notice notice-warning">
+            {errorText(error)}
+          </p>
+        )}
         <AddInventory onAdded={reload} />
       </section>
       <RefList

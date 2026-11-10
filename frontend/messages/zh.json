@@ -20,7 +20,7 @@
   },
   "import": {
     "title": "导入菜谱",
-    "textLabel": "粘贴菜谱文字或链接",
+    "textLabel": "粘贴一道菜的文字，或一个网页链接",
     "textSubmit": "提取",
     "urlLabel": "网页链接",
     "urlSubmit": "导入网页",
@@ -35,7 +35,9 @@
     "batchItemFailed": "第 {number} 道：{error}",
     "batchQueued": "{count, plural, =0 {没有提取出菜谱。} other {# 道菜已可以审核。}}",
     "reviewDrafts": "现在审核",
-    "modelNotice": "导入的内容会发送给模型服务商进行提取。"
+    "modelNotice": "你导入的文字、网页内容和截图会发送给第三方 AI 模型来识别菜谱，请不要包含个人信息。",
+    "textHint": "一次一道菜。多道菜请用下方的文本文件导入，用单独一行 --- 分隔。",
+    "urlHint": "一次只能导入一个网页，多个网页请逐个导入。"
   },
   "errors": {
     "monthly_cap": "本月模型费用已达上限。可以调高 LLM_MONTHLY_CAP_USD，或下个月再试。",
@@ -68,7 +70,9 @@
     "seed_read_only": "内置词条不能修改。",
     "not_found": "它已经不存在了，请刷新页面。",
     "invalid_for_stock_mode": "这些数量不符合这个食材的记录方式。",
-    "self_diner": "不能删除你自己的记录。"
+    "self_diner": "不能删除你自己的记录。",
+    "several_links": "一次只能导入一个链接，请逐个导入。",
+    "several_recipes": "一次只能粘贴一道菜。多道菜请用文本文件导入，用单独一行 --- 分隔。"
   },
   "review": {
     "title": "审核菜谱",
@@ -96,10 +100,12 @@
     "allergenConflict": "{name}含有{allergen}，你对它过敏。",
     "ruleConflict": "{name}符合你的一条过敏规则。",
     "unknownAllergens": "这些食材的过敏原未知：{names}",
-    "checkYourself": "词典和提取结果都可能出错，请自己检查实际食材中的过敏原。",
+    "checkYourself": "过敏原信息来自词典和自动识别，可能不准确。请以实际食材和包装上的配料表为准。",
     "addCookware": "添加厨具",
     "newCookware": "新建厨具“{name}”",
-    "newIngredient": "新食材“{name}”"
+    "newIngredient": "新食材“{name}”",
+    "discardQuestion": "放弃这份草稿？已经付费的提取结果会丢失，要找回只能重新提取。",
+    "discardConfirm": "确认放弃"
   },
   "line": {
     "raw": "原文",
@@ -124,7 +130,11 @@
     "cancel": "取消",
     "notNeeded": "不需要",
     "notNeededDone": "不需要：不保存，规划时不检查这件厨具。",
-    "undoUnlink": "撤销更改"
+    "undoUnlink": "撤销更改",
+    "addedByYou": "（手动添加）",
+    "nameConflict": "名称“{name}”是词典里的“{entry}”，但这一行关联的是“{linked}”。",
+    "relinkTo": "改为关联{entry}",
+    "keepLink": "保持关联{linked}"
   },
   "entry": {
     "nameZh": "中文名",
@@ -240,7 +250,7 @@
     "dishTypeFilter": "菜品类别",
     "empty": "没有找到菜谱。",
     "source": "来源",
-    "deleteNotice": "已保存的计划会保留菜名。这道菜的评分和笔记会被删除，它的变体会保留。",
+    "deleteNotice": "已保存的菜单里仍会显示这道菜的名字；它的评分和笔记会被删除，由它改出的菜谱会保留。",
     "editTitle": "编辑{title}",
     "noEmbedding": "暂时不能按语义搜索，会自动重试。"
   },
@@ -251,11 +261,11 @@
     "level": "余量",
     "grams": "克数（可选）",
     "expiresOn": "到期日（可选）",
-    "availabilityHint": "有记录就表示有。用完时删除即可。",
+    "availabilityHint": "记录在这里就表示家里有，用完时删掉即可。",
     "sortByName": "按名称排序",
     "sortByExpiry": "按到期日排序",
     "alwaysInStock": "常备",
-    "alwaysInStockHint": "规划时默认有，不记录数量。",
+    "alwaysInStockHint": "规划时默认家里一直有，不用记录数量。",
     "cookwareOwned": "我有的厨具",
     "addCookware": "添加厨具",
     "addAlwaysInStock": "添加常备食材",
@@ -271,7 +281,7 @@
     "me": "我",
     "addFriend": "添加朋友",
     "displayName": "称呼或昵称",
-    "friendHint": "请用昵称。调用模型前，已保存朋友的称呼会被替换成代号。",
+    "friendHint": "用昵称就可以，不必写全名。规划菜单时，朋友的称呼会先换成“用餐者 1”这样的代号，再发送给 AI 模型。",
     "rename": "改名",
     "rules": "规则",
     "addRule": "添加规则",
@@ -282,7 +292,7 @@
     "targetText": "文字描述",
     "allergen": "过敏原",
     "text": "描述",
-    "deleteFriendNotice": "他的规则也会一起删除。已保存的计划会保留其中的菜。",
+    "deleteFriendNotice": "这位朋友的饮食规则也会一起删除，已保存的菜单不受影响。",
     "noRules": "没有规则。"
   },
   "ruleType": {
@@ -293,7 +303,7 @@
   "dictionary": {
     "title": "词典",
     "unresolved": "过敏原未知的食材",
-    "unresolvedHint": "在你确认之前，只要这一餐有人过敏，含这些食材的菜就不会被选上。",
+    "unresolvedHint": "这些食材的过敏原还不确定。确认之前，只要一起吃饭的人里有人过敏，含这些食材的菜就不会被推荐。",
     "dishCount": "{count} 道菜",
     "unmatchedName": "{name}（词典里没有）",
     "resolve": "确认过敏原",
@@ -303,7 +313,7 @@
     "userCookware": "我的厨具词条",
     "allergensUnknown": "过敏原未知",
     "allergensNone": "不含过敏原",
-    "seedNotice": "内置词条经过人工审核，不能在这里修改。",
+    "seedNotice": "这里是你自己创建的食材，可以编辑或删除。系统自带的食材在下方“全部食材”里，不能修改。",
     "allergensUnknownOption": "未知",
     "allergensNoneOption": "不含过敏原",
     "allergensContainsOption": "含有",
@@ -317,6 +327,8 @@
     "aliasesList": "别名：{list}",
     "parentName": "上级：{name}",
     "shownCount": "共 {total} 个，显示 {shown} 个",
-    "browseHint": "内置词条只能查看。你创建的词条可以在上方编辑。"
+    "browseHint": "系统自带和你创建的全部食材，可以按名称、别名或类别查找。要修改你创建的食材，请到上方“我的食材词条”。",
+    "deleteIngredientNotice": "有 {count} 道菜用到它。删除后，这些菜里的这一行会变成未关联，过敏原算“未知”。",
+    "deleteCookwareNotice": "有 {count} 道菜需要它。删除后，这些菜不再记录需要这件厨具。"
   }
 }

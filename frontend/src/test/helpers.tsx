@@ -82,6 +82,9 @@ export function draft(fields: Partial<RecipeDraft> = {}): RecipeDraft {
         role: "secondary",
         optional: false,
         ingredient_id: 1,
+        // 葱花 is an alias of the entry 葱, so the names differ on purpose.
+        linked_name_zh: "葱",
+        linked_name_en: "scallion",
       },
       {
         raw: "秘制酱",

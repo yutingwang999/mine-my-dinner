@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
 from minemydinner.constants import DISH_TYPES
 from minemydinner.db import get_session
-from minemydinner.imports.service import DraftCookware, DraftIngredient
+from minemydinner.extraction.schemas import ExtractedIngredient
+from minemydinner.imports.service import DraftCookware, DraftLine
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import Cookware, Diner, Ingredient, Recipe, RecipeIngredient
 from minemydinner.recipes.allergy import (
@@ -75,7 +76,7 @@ class RecipeOut(BaseModel):
     servings: int | None
     tags: list[str]
     steps_summary: str | None
-    ingredients: list[DraftIngredient]
+    ingredients: list[DraftLine]
     # Named in the recipe's language, so the review form can show them.
     cookware: list[DraftCookware]
     cookware_ids: list[int]
@@ -108,15 +109,8 @@ def _recipe_out(recipe: Recipe) -> RecipeOut:
         tags=recipe.tags,
         steps_summary=recipe.steps_summary,
         ingredients=[
-            DraftIngredient(
-                raw=line.raw,
-                name=line.name,
-                amount=line.amount,
-                unit=line.unit,
-                amount_type=line.amount_type,
-                role=line.role,
-                optional=line.optional,
-                ingredient_id=line.ingredient_id,
+            DraftLine.of(
+                ExtractedIngredient.model_validate(line, from_attributes=True), line.ingredient
             )
             for line in recipe.ingredients
         ],

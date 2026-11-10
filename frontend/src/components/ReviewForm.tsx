@@ -1,14 +1,15 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { CookwareReviewRow, type ReviewCookware } from "@/components/CookwareReviewRow";
-import { DictionarySearch } from "@/components/DictionarySearch";
+import { DictionarySearch, namesEntry } from "@/components/DictionarySearch";
 import { IngredientReviewRow, type ReviewLine } from "@/components/IngredientReviewRow";
 import {
   type AllergyCheck,
   api,
+  type DictionaryEntry,
   entryName,
   DISH_TYPES,
   type DishType,
@@ -26,12 +27,44 @@ type Props = {
   onSaved: () => void;
   /** Saves a new recipe unless given another action, such as an update. */
   save?: (data: RecipeWrite) => Promise<unknown>;
+  /** More buttons beside Save, such as discarding the draft or cancelling an edit. */
+  actions?: ReactNode;
 };
 
 let nextKey = 0;
 
-function toLine(line: EditableRecipe["ingredients"][number]): ReviewLine {
-  return { ...line, key: nextKey++, skipped: false, linkedName: null };
+function toLine(line: EditableRecipe["ingredients"][number], locale: string): ReviewLine {
+  // The entry's own name, such as 葱 for a line written 葱花, in the page's language.
+  const entryNames = [
+    locale === "zh" ? line.linked_name_zh : line.linked_name_en,
+    line.linked_name_zh,
+    line.linked_name_en,
+    line.name,
+  ];
+  const linkedName =
+    line.ingredient_id !== null ? (entryNames.find((name) => !!name) ?? null) : null;
+  return { ...line, key: nextKey++, skipped: false, linkedName, added: false };
+}
+
+/**
+ * The name for a line added from a dictionary search. The user's own wording wins,
+ * including an alias such as 土豆丝; text in the other language, or a fragment typed
+ * while searching, becomes the entry's name in the recipe's language.
+ */
+function addedLineName(entry: DictionaryEntry, typed: string, lang: Lang): string {
+  const text = typed.trim();
+  const term = text.toLowerCase();
+  const sameLanguage =
+    lang === "zh" ? [entry.name_zh, ...entry.aliases_zh] : [entry.name_en, ...entry.aliases_en];
+  if (sameLanguage.some((name) => name?.trim().toLowerCase() === term)) {
+    return text;
+  }
+  const allNames = [entry.name_zh, entry.name_en, ...entry.aliases_zh, ...entry.aliases_en];
+  const isFragment = allNames.some((name) => name?.toLowerCase().includes(term));
+  if (namesEntry(entry, text) || isFragment) {
+    return entryName(entry, lang);
+  }
+  return text;
 }
 
 function parseNumber(value: string): number | null {
@@ -57,7 +90,12 @@ function useAllergyCheck(lines: ReviewLine[]): AllergyCheck | null {
   return result;
 }
 
-export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }: Props) {
+export function ReviewForm({
+  draft,
+  onSaved,
+  save: saveRecipe = api.saveRecipe,
+  actions,
+}: Props) {
   const t = useTranslations("review");
   const tLang = useTranslations("lang");
   const tDish = useTranslations("dishType");
@@ -75,7 +113,9 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
   const [tags, setTags] = useState(draft.tags.join(", "));
   const [summary, setSummary] = useState(draft.steps_summary ?? "");
   const [sourceUrl, setSourceUrl] = useState(draft.source_url ?? "");
-  const [lines, setLines] = useState<ReviewLine[]>(() => draft.ingredients.map(toLine));
+  const [lines, setLines] = useState<ReviewLine[]>(() =>
+    draft.ingredients.map((line) => toLine(line, locale)),
+  );
   const [cookware, setCookware] = useState<ReviewCookware[]>(() =>
     draft.cookware.map((item) => ({ ...item, key: nextKey++, skipped: false, linkedName: null })),
   );
@@ -120,7 +160,8 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
         .filter(Boolean),
       steps_summary: summary.trim() || null,
       ingredients: lines.map((line) => ({
-        raw: line.raw,
+        // An added line has no source wording, so its name stands in for it.
+        raw: line.added ? line.name : line.raw,
         name: line.name,
         amount: line.amount,
         unit: line.unit,
@@ -158,19 +199,21 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
     setAddingCookware(false);
   }
 
-  /** A line the user adds has no source wording, so its name stands in for `raw`. */
-  function addLine(name: string, ingredientId: number | null) {
-    const line = toLine({
-      raw: name,
-      name,
-      amount: null,
-      unit: null,
-      amount_type: "missing",
-      role: "secondary",
-      optional: false,
-      ingredient_id: ingredientId,
-    });
-    setLines((current) => [...current, { ...line, linkedName: ingredientId ? name : null }]);
+  function addLine(name: string, ingredientId: number | null, linkedName: string | null) {
+    const line = toLine(
+      {
+        raw: name,
+        name,
+        amount: null,
+        unit: null,
+        amount_type: "missing",
+        role: "secondary",
+        optional: false,
+        ingredient_id: ingredientId,
+      },
+      locale,
+    );
+    setLines((current) => [...current, { ...line, linkedName, added: true }]);
     setAddingLine(false);
   }
 
@@ -268,9 +311,10 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
       {addingLine ? (
         <DictionarySearch
           search={api.searchIngredients}
-          // Named in the recipe's language, like the extracted lines around it.
-          onChoose={(entry) => addLine(entryName(entry, lang), entry.id)}
-          onAddUnlisted={(name) => addLine(name, null)}
+          onChoose={(entry, typed) =>
+            addLine(addedLineName(entry, typed, lang), entry.id, entryName(entry, locale))
+          }
+          onAddUnlisted={(name) => addLine(name, null, null)}
           unlistedLabel={(name) => t("newIngredient", { name })}
           onCancel={() => setAddingLine(false)}
         />
@@ -334,14 +378,17 @@ export function ReviewForm({ draft, onSaved, save: saveRecipe = api.saveRecipe }
       )}
       <p>{t("checkYourself")}</p>
 
-      <button type="submit" disabled={saving}>
-        {saving ? t("saving") : t("save")}
-      </button>
       {error !== null && (
         <p role="alert" className="notice notice-warning">
           {t("saveFailed", { error: errorText(error) })}
         </p>
       )}
+      <div className="form-actions">
+        <button type="submit" disabled={saving}>
+          {saving ? t("saving") : t("save")}
+        </button>
+        {actions}
+      </div>
     </form>
   );
 }

@@ -68,7 +68,7 @@ describe("library", () => {
     const item = within(await screen.findByTestId("recipe-1"));
     await userEvent.click(item.getByRole("button", { name: "Delete" }));
     expect(item.getByText("Delete 番茄炒蛋?")).toBeInTheDocument();
-    expect(item.getByText(/Saved plans keep the dish name/)).toBeInTheDocument();
+    expect(item.getByText(/Saved menus still show this dish's name/)).toBeInTheDocument();
     expect(callsTo(calls, "DELETE", "/api/recipes/1")).toHaveLength(0);
     await userEvent.click(item.getByRole("button", { name: "Yes, delete" }));
     await waitFor(() => expect(callsTo(calls, "DELETE", "/api/recipes/1")).toHaveLength(1));

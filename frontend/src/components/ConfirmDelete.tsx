@@ -10,10 +10,21 @@ type Props = {
   /** What else the delete changes, shown before the user confirms. */
   notice?: string;
   onDelete: () => Promise<unknown>;
+  /** Wording for actions other than deleting, such as discarding a draft. */
+  label?: string;
+  question?: string;
+  confirmLabel?: string;
 };
 
 /** A delete button that asks inline first, without a browser dialog. */
-export function ConfirmDelete({ name, notice, onDelete }: Props) {
+export function ConfirmDelete({
+  name,
+  notice,
+  onDelete,
+  label,
+  question,
+  confirmLabel,
+}: Props) {
   const t = useTranslations("common");
   const errorText = useErrorText();
   const [asking, setAsking] = useState(false);
@@ -36,15 +47,15 @@ export function ConfirmDelete({ name, notice, onDelete }: Props) {
   if (!asking) {
     return (
       <button type="button" onClick={() => setAsking(true)}>
-        {t("delete")}
+        {label ?? t("delete")}
       </button>
     );
   }
   return (
-    <span role="group">
-      <span>{t("confirmDelete", { name })}</span> {notice && <span>{notice}</span>}{" "}
-      <button type="button" disabled={busy} onClick={confirm}>
-        {t("yesDelete")}
+    <span role="group" className="confirm-box">
+      <span>{question ?? t("confirmDelete", { name })}</span> {notice && <span>{notice}</span>}{" "}
+      <button type="button" className="danger" disabled={busy} onClick={confirm}>
+        {confirmLabel ?? t("yesDelete")}
       </button>
       <button type="button" onClick={() => setAsking(false)}>
         {t("cancel")}

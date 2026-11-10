@@ -20,6 +20,7 @@ from minemydinner.extraction.schemas import ExtractedIngredient, ExtractedRecipe
 from minemydinner.imports.batch import split_batch
 from minemydinner.imports.web import WebImportError, fetch_page_text
 from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceeded
+from minemydinner.models import Ingredient
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,23 @@ class DraftIngredient(ExtractedIngredient):
     ingredient_id: int | None
 
 
+class DraftLine(DraftIngredient):
+    """A line as the review form shows it. The linked entry's own names are for display
+    only; a line's name keeps the source wording, such as 葱花 linked to 葱."""
+
+    linked_name_zh: str | None = None
+    linked_name_en: str | None = None
+
+    @classmethod
+    def of(cls, line: ExtractedIngredient, entry: Ingredient | None) -> "DraftLine":
+        return cls(
+            **line.model_dump(include=set(ExtractedIngredient.model_fields)),
+            ingredient_id=entry.id if entry else None,
+            linked_name_zh=entry.name_zh if entry else None,
+            linked_name_en=entry.name_en if entry else None,
+        )
+
+
 class DraftCookware(BaseModel):
     name: str
     cookware_id: int | None
@@ -48,7 +66,7 @@ class Provenance(BaseModel):
 
 
 class RecipeDraft(ExtractedRecipe):
-    ingredients: list[DraftIngredient]
+    ingredients: list[DraftLine]
     cookware: list[DraftCookware]
     source_type: Literal[*SOURCE_TYPES]
     source_url: str | None
@@ -83,10 +101,7 @@ def build_draft(
     recipe = result.recipe
     ingredients = []
     for line in recipe.ingredients:
-        match = match_ingredient(session, line.name)
-        ingredients.append(
-            DraftIngredient(**line.model_dump(), ingredient_id=match.id if match else None)
-        )
+        ingredients.append(DraftLine.of(line, match_ingredient(session, line.name)))
     cookware = []
     for name in recipe.cookware:
         match = match_cookware(session, name)

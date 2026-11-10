@@ -20,7 +20,7 @@
   },
   "import": {
     "title": "Import recipes",
-    "textLabel": "Paste recipe text or a link",
+    "textLabel": "Paste one recipe's text, or one web link",
     "textSubmit": "Extract",
     "urlLabel": "Web page link",
     "urlSubmit": "Import page",
@@ -35,7 +35,9 @@
     "batchItemFailed": "Dish {number}: {error}",
     "batchQueued": "{count, plural, =0 {No dishes were extracted.} one {# dish is ready for review.} other {# dishes are ready for review.}}",
     "reviewDrafts": "Review now",
-    "modelNotice": "Imported content is sent to a model provider for extraction."
+    "modelNotice": "Text, page content, and screenshots you import are sent to a third-party AI model to read the recipe. Leave out personal information.",
+    "textHint": "One recipe at a time. For several recipes, use the text file below and put a line of --- between them.",
+    "urlHint": "One web page at a time. Import several pages one by one."
   },
   "errors": {
     "monthly_cap": "This month's model spending cap is reached. Raise LLM_MONTHLY_CAP_USD or try next month.",
@@ -68,7 +70,9 @@
     "seed_read_only": "Built-in entries cannot be changed.",
     "not_found": "It no longer exists. Reload the page.",
     "invalid_for_stock_mode": "These amounts do not fit how this ingredient is recorded.",
-    "self_diner": "Your own record cannot be deleted."
+    "self_diner": "Your own record cannot be deleted.",
+    "several_links": "Import one link at a time.",
+    "several_recipes": "Paste one recipe at a time. For several recipes, use the text file import with a line of --- between them."
   },
   "review": {
     "title": "Review recipe",
@@ -96,10 +100,12 @@
     "allergenConflict": "{name} contains {allergen}, which you are allergic to.",
     "ruleConflict": "{name} matches one of your allergy rules.",
     "unknownAllergens": "Allergens unknown for: {names}",
-    "checkYourself": "The dictionary and extraction can be wrong. Check the actual ingredients for allergens yourself.",
+    "checkYourself": "Allergen information comes from the dictionary and automatic reading, and may be wrong. Go by the actual ingredients and package labels.",
     "addCookware": "Add cookware",
     "newCookware": "New cookware “{name}”",
-    "newIngredient": "New ingredient “{name}”"
+    "newIngredient": "New ingredient “{name}”",
+    "discardQuestion": "Discard this draft? Its paid extraction is lost, and getting it back needs a new extraction.",
+    "discardConfirm": "Yes, discard"
   },
   "line": {
     "raw": "Source wording",
@@ -124,7 +130,11 @@
     "cancel": "Cancel",
     "notNeeded": "Not needed",
     "notNeededDone": "Not needed: not saved, and planning does not check this cookware.",
-    "undoUnlink": "Undo change"
+    "undoUnlink": "Undo change",
+    "addedByYou": "(added by you)",
+    "nameConflict": "The name “{name}” is the dictionary entry “{entry}”, but this line is linked to “{linked}”.",
+    "relinkTo": "Link to {entry}",
+    "keepLink": "Keep {linked}"
   },
   "entry": {
     "nameZh": "Chinese name",
@@ -240,7 +250,7 @@
     "dishTypeFilter": "Dish type",
     "empty": "No recipes found.",
     "source": "Source",
-    "deleteNotice": "Saved plans keep the dish name. Its ratings and notes are deleted, and its variants stay.",
+    "deleteNotice": "Saved menus still show this dish's name. Its ratings and notes are deleted; recipes made from it are kept.",
     "editTitle": "Edit {title}",
     "noEmbedding": "Not yet searchable by meaning; it is retried automatically."
   },
@@ -251,11 +261,11 @@
     "level": "Level",
     "grams": "Grams (optional)",
     "expiresOn": "Expires on (optional)",
-    "availabilityHint": "Having an entry means it is available. Delete it when it runs out.",
+    "availabilityHint": "Being listed here means you have it. Delete it when it runs out.",
     "sortByName": "Sort by name",
     "sortByExpiry": "Sort by expiry",
     "alwaysInStock": "Always in stock",
-    "alwaysInStockHint": "Assumed available when planning, without tracking.",
+    "alwaysInStockHint": "Assumed to always be at home when planning, so no amount is needed.",
     "cookwareOwned": "Cookware I own",
     "addCookware": "Add cookware",
     "addAlwaysInStock": "Add an always-in-stock item",
@@ -271,7 +281,7 @@
     "me": "Me",
     "addFriend": "Add a friend",
     "displayName": "Name or nickname",
-    "friendHint": "Use a nickname. Before model calls, saved friends' names are replaced with codes.",
+    "friendHint": "A nickname is enough; no full name is needed. When planning meals, friends' names are replaced with codes such as “Diner 1” before anything is sent to the AI model.",
     "rename": "Rename",
     "rules": "Rules",
     "addRule": "Add rule",
@@ -282,7 +292,7 @@
     "targetText": "Free text",
     "allergen": "Allergen",
     "text": "Description",
-    "deleteFriendNotice": "Their rules are deleted too. Saved plans keep their dishes.",
+    "deleteFriendNotice": "This friend's dietary rules are deleted too. Saved menus are not affected.",
     "noRules": "No rules."
   },
   "ruleType": {
@@ -293,7 +303,7 @@
   "dictionary": {
     "title": "Dictionary",
     "unresolved": "Ingredients with unknown allergens",
-    "unresolvedHint": "Dishes with these ingredients are not chosen for a meal where anyone has an allergy, until you confirm.",
+    "unresolvedHint": "The allergens of these ingredients are not known yet. Until you confirm them, dishes with these ingredients are not suggested when anyone at the meal has an allergy.",
     "dishCount": "{count, plural, one {# dish} other {# dishes}}",
     "unmatchedName": "{name} (not in the dictionary)",
     "resolve": "Confirm allergens",
@@ -303,7 +313,7 @@
     "userCookware": "My cookware entries",
     "allergensUnknown": "allergens unknown",
     "allergensNone": "no allergens",
-    "seedNotice": "Built-in entries were reviewed by a person and cannot be changed here.",
+    "seedNotice": "Ingredients you created, which you can edit or delete. Built-in ingredients are under “All ingredients” below and cannot be changed.",
     "allergensUnknownOption": "Unknown",
     "allergensNoneOption": "No allergens",
     "allergensContainsOption": "Contains",
@@ -317,6 +327,8 @@
     "aliasesList": "Aliases: {list}",
     "parentName": "Parent: {name}",
     "shownCount": "{shown} of {total} entries",
-    "browseHint": "Built-in entries are read-only. Your own entries can be edited above."
+    "browseHint": "All ingredients, built-in and yours, searchable by name, alias, or category. To change one you created, use “My ingredient entries” above.",
+    "deleteIngredientNotice": "{count, plural, one {# dish uses it} other {# dishes use it}}. After deleting, those lines become unlinked and their allergens count as unknown.",
+    "deleteCookwareNotice": "{count, plural, one {# dish needs it} other {# dishes need it}}. After deleting, those dishes no longer record that they need it."
   }
 }

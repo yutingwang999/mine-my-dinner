@@ -52,6 +52,11 @@ afterEach(() => {
 });
 
 describe("review", () => {
+  it("shows the linked dictionary entry's own name, not the line's wording", () => {
+    setup();
+    expect(within(row("葱花")).getByText("Linked to scallion")).toBeInTheDocument();
+  });
+
   it("marks an unmatched ingredient and offers link, create, and skip", () => {
     setup();
     const unmatched = within(row("秘制酱"));
@@ -173,7 +178,7 @@ describe("review", () => {
     await userEvent.click(linked.getByRole("button", { name: "Change link" }));
     expect(linked.getByText("Not in the dictionary")).toBeInTheDocument();
     await userEvent.click(linked.getByRole("button", { name: "Undo change" }));
-    expect(linked.getByText("Linked to 葱花")).toBeInTheDocument();
+    expect(linked.getByText("Linked to scallion")).toBeInTheDocument();
     await save();
     const lines = lastBody("/api/recipes").ingredients as { ingredient_id: number | null }[];
     expect(lines[0].ingredient_id).toBe(1);
@@ -237,10 +242,109 @@ describe("review", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
     await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "potato");
     await userEvent.click(await screen.findByRole("button", { name: "Choose potato" }));
-    expect(within(row("土豆")).getByText("Linked to 土豆")).toBeInTheDocument();
+    expect(within(row("土豆")).getByText("Linked to potato")).toBeInTheDocument();
     await save();
     const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
     expect(lines[2]).toMatchObject({ raw: "土豆", name: "土豆", ingredient_id: 12 });
+  });
+
+  it("keeps the typed wording when the chosen entry has another name", async () => {
+    setup({
+      "GET /api/ingredients": () => [
+        { id: 12, name_zh: "土豆", name_en: "potato", aliases_zh: [], aliases_en: [], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "土豆丝");
+    await userEvent.click(await screen.findByRole("button", { name: "Choose potato" }));
+    expect(within(row("土豆丝")).getByText("Linked to potato")).toBeInTheDocument();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[2]).toMatchObject({ raw: "土豆丝", name: "土豆丝", ingredient_id: 12 });
+  });
+
+  it.each([
+    ["an alias in the recipe's language", "土豆丝", "土豆丝"],
+    ["the entry's name in the recipe's language", "土豆", "土豆"],
+    ["the entry's name in the other language", "potato", "土豆"],
+    ["part of the entry's name, typed while searching", "土", "土豆"],
+    ["other wording", "马铃薯丁", "马铃薯丁"],
+  ])("names an added line from %s", async (_case, typed, expected) => {
+    setup({
+      "GET /api/ingredients": () => [
+        { id: 12, name_zh: "土豆", name_en: "potato", aliases_zh: ["马铃薯", "土豆丝"], aliases_en: ["potatoes"], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), typed);
+    await userEvent.click(await screen.findByRole("button", { name: "Choose potato" }));
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[2]).toMatchObject({ name: expected, raw: expected, ingredient_id: 12 });
+  });
+
+  it("marks an added line and keeps its raw equal to its name", async () => {
+    setup({
+      "GET /api/ingredients": () => [
+        { id: 12, name_zh: "土豆", name_en: "potato", aliases_zh: [], aliases_en: [], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Add ingredient" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "potato");
+    await userEvent.click(await screen.findByRole("button", { name: "Choose potato" }));
+    const added = within(row("土豆"));
+    expect(added.getByText(/added by you/)).toBeInTheDocument();
+    const name = added.getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "土豆块");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[2]).toMatchObject({ raw: "土豆块", name: "土豆块" });
+  });
+
+  it("warns when a linked line is renamed to another dictionary entry, and relinks on request", async () => {
+    setup({
+      "GET /api/ingredients": () => [
+        { id: 20, name_zh: "玉米", name_en: "corn", aliases_zh: [], aliases_en: [], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null },
+      ],
+    });
+    const name = within(row("葱花")).getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "玉米");
+    const renamed = within(row("玉米"));
+    expect(await renamed.findByText(/is the dictionary entry “corn”/)).toBeInTheDocument();
+    await userEvent.click(renamed.getByRole("button", { name: "Link to corn" }));
+    expect(renamed.getByText("Linked to corn")).toBeInTheDocument();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { ingredient_id: number | null }[];
+    expect(lines[0].ingredient_id).toBe(20);
+  });
+
+  it("can keep the link after the warning", async () => {
+    setup({
+      "GET /api/ingredients": () => [
+        { id: 20, name_zh: "玉米", name_en: "corn", aliases_zh: [], aliases_en: [], source: "seed", category: "vegetable", stock_mode: "count", allergens: [], parent_id: null },
+      ],
+    });
+    const name = within(row("葱花")).getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "玉米");
+    const renamed = within(row("玉米"));
+    await userEvent.click(await renamed.findByRole("button", { name: "Keep scallion" }));
+    expect(renamed.queryByText(/is the dictionary entry/)).toBeNull();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { ingredient_id: number | null }[];
+    expect(lines[0].ingredient_id).toBe(1);
+  });
+
+  it("keeps the link silently when the new name is no dictionary entry", async () => {
+    setup({ "GET /api/ingredients": () => [] });
+    const name = within(row("葱花")).getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "小葱花");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(within(row("小葱花")).queryByText(/is the dictionary entry/)).toBeNull();
+    expect(within(row("小葱花")).getByText("Linked to scallion")).toBeInTheDocument();
   });
 
   it("adds an ingredient that is not in the dictionary as an unlinked line", async () => {
@@ -360,6 +464,21 @@ describe("review", () => {
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("asks before discarding a draft", async () => {
+    setup({}, [draft(), draft({ title: "土豆丝" })]);
+    await userEvent.click(screen.getByRole("button", { name: "Discard this draft" }));
+    expect(screen.getByText(/paid extraction is lost/)).toBeInTheDocument();
+    expect(screen.getByTestId("queue")).toHaveTextContent("葱花蛋|土豆丝");
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("queue")).toHaveTextContent("葱花蛋|土豆丝");
+
+    await userEvent.click(screen.getByRole("button", { name: "Discard this draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, discard" }));
+    expect(screen.getByTestId("queue")).toHaveTextContent("土豆丝");
+    expect(await screen.findByDisplayValue("土豆丝")).toBeInTheDocument();
   });
 
   it("moves to the next draft after saving in a batch", async () => {

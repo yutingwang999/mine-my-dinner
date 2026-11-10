@@ -18,7 +18,6 @@ export function LanguageSwitcher() {
           href={pathname}
           locale={target}
           aria-current={target === locale ? "true" : undefined}
-          style={{ marginRight: "0.75rem" }}
         >
           {t(target)}
         </Link>

@@ -70,79 +70,83 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
   }
 
   return (
-    <section className="dictionary-browser">
-      <h2>{t("allIngredients")}</h2>
-      <p>{t("browseHint")}</p>
-      <div className="browse-filters">
-        <input
-          type="search"
-          aria-label={t("filterText")}
-          placeholder={t("filterText")}
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-            setPage(1);
-            setCookwarePage(1);
-          }}
-        />
-        <label>
-          {tEntry("category")}
-          <select
-            value={category}
+    <>
+      <section className="card">
+        <h2>{t("allIngredients")}</h2>
+        <p className="hint">{t("browseHint")}</p>
+        <div className="browse-filters">
+          <input
+            type="search"
+            aria-label={t("filterText")}
+            placeholder={t("filterText")}
+            value={text}
             onChange={(event) => {
-              setCategory(event.target.value);
+              setText(event.target.value);
               setPage(1);
+              setCookwarePage(1);
             }}
-          >
-            <option value="">{t("allCategories")}</option>
-            {CATEGORIES.map((value) => (
-              <option key={value} value={value}>
-                {tCategory(value)}
-              </option>
-            ))}
-          </select>
-        </label>
-        {ingredients.data !== null && (
-          <span>{t("shownCount", { shown: shown.length, total: all.length })}</span>
-        )}
-      </div>
-      <Pager page={current} pages={pages} onPage={setPage} />
-      <ul className="browse-list">
-        {visible.map((entry) => {
-          const parent = entry.parent_id ? byId.get(entry.parent_id) : undefined;
-          return (
-            <li key={entry.id} data-testid={`all-ingredient-${entry.id}`}>
-              <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
-              <div className="browse-details">
-                <span>{tCategory(entry.category)}</span>
-                <span>{tStock(entry.stock_mode)}</span>
-                <span>{allergenText(entry)}</span>
-                {parent && <span>{t("parentName", { name: entryName(parent, locale) })}</span>}
-                {aliases(entry).length > 0 && (
-                  <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      <Pager page={current} pages={pages} onPage={setPage} />
+          />
+          <label>
+            {tEntry("category")}
+            <select
+              value={category}
+              onChange={(event) => {
+                setCategory(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">{t("allCategories")}</option>
+              {CATEGORIES.map((value) => (
+                <option key={value} value={value}>
+                  {tCategory(value)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {ingredients.data !== null && (
+            <span>{t("shownCount", { shown: shown.length, total: all.length })}</span>
+          )}
+        </div>
+        <Pager page={current} pages={pages} onPage={setPage} />
+        <ul className="browse-list">
+          {visible.map((entry) => {
+            const parent = entry.parent_id ? byId.get(entry.parent_id) : undefined;
+            return (
+              <li key={entry.id} data-testid={`all-ingredient-${entry.id}`}>
+                <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
+                <div className="browse-details">
+                  <span>{tCategory(entry.category)}</span>
+                  <span>{tStock(entry.stock_mode)}</span>
+                  <span>{allergenText(entry)}</span>
+                  {parent && <span>{t("parentName", { name: entryName(parent, locale) })}</span>}
+                  {aliases(entry).length > 0 && (
+                    <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        <Pager page={current} pages={pages} onPage={setPage} />
+      </section>
 
-      <h2>{t("allCookware")}</h2>
-      <Pager page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
-      <ul className="browse-list">
-        {tools.visible.map((entry) => (
-          <li key={entry.id} data-testid={`all-cookware-${entry.id}`}>
-            <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
-            {aliases(entry).length > 0 && (
-              <div className="browse-details">
-                <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-      <Pager page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
-    </section>
+      <section className="card">
+        <h2>{t("allCookware")}</h2>
+        <Pager page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
+        <ul className="browse-list">
+          {tools.visible.map((entry) => (
+            <li key={entry.id} data-testid={`all-cookware-${entry.id}`}>
+              <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
+              {aliases(entry).length > 0 && (
+                <div className="browse-details">
+                  <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+        <Pager page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
+      </section>
+    </>
   );
 }

@@ -50,19 +50,26 @@ function ResolveRow({
 
   return (
     <li data-testid={testId}>
-      <span>{label}</span> · <span>{t("dishCount", { count: dishCount })}</span>{" "}
+      <span className="row-main">
+        <strong>{label}</strong>
+        <span className="hint">{t("dishCount", { count: dishCount })}</span>
+      </span>
       {!open && (
         <button type="button" onClick={() => setOpen(true)}>
           {t("resolve")}
         </button>
       )}
       {open && (
-        <div>
+        <div className="line-panel">
           <AllergenPicker name={name} onChange={setAllergens} />
           <button type="button" disabled={allergens === null || busy} onClick={save}>
             {t("saveAllergens")}
           </button>
-          {error !== null && <p role="alert">{errorText(error)}</p>}
+          {error !== null && (
+            <p role="alert" className="notice notice-warning">
+              {errorText(error)}
+            </p>
+          )}
         </div>
       )}
     </li>
@@ -101,11 +108,11 @@ export function DictionaryManager() {
 
   return (
     <div>
-      <section>
+      <section className="card">
         <h2>{t("unresolved")}</h2>
-        <p>{t("unresolvedHint")}</p>
+        <p className="hint">{t("unresolvedHint")}</p>
         {nothingUnresolved && <p>{t("allResolved")}</p>}
-        <ul>
+        <ul className="row-list">
           {unresolved.data?.entries.map((entry) => (
             <ResolveRow
               key={`entry-${entry.id}`}
@@ -131,27 +138,39 @@ export function DictionaryManager() {
         </ul>
       </section>
 
-      <section>
+      <section className="card">
         <h2>{t("userIngredients")}</h2>
-        <p>{t("seedNotice")}</p>
-        {ingredients.data?.length === 0 && <p>{tCommon("none")}</p>}
-        <ul>
+        <p className="hint">{t("seedNotice")}</p>
+        {ingredients.data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
+        <ul className="row-list">
           {ingredients.data?.map((entry) => (
             <li key={entry.id} data-testid={`user-ingredient-${entry.id}`}>
-              {entryName(entry, locale)} · {tCategory(entry.category)} ·{" "}
-              {allergenSummary(entry, t, tAllergen)}{" "}
-              {editingId !== entry.id && (
-                <button type="button" onClick={() => setEditingId(entry.id)}>
-                  {tCommon("edit")}
-                </button>
-              )}
-              <ConfirmDelete
-                name={entryName(entry, locale)}
-                onDelete={async () => {
-                  await api.deleteIngredient(entry.id);
-                  reloadAll();
-                }}
-              />
+              <span className="row-main">
+                <strong>{entryName(entry, locale)}</strong>
+                <span className="hint">
+                  {tCategory(entry.category)} · {allergenSummary(entry, t, tAllergen)}
+                  {!!entry.dish_count && ` · ${t("dishCount", { count: entry.dish_count })}`}
+                </span>
+              </span>
+              <span className="actions">
+                {editingId !== entry.id && (
+                  <button type="button" onClick={() => setEditingId(entry.id)}>
+                    {tCommon("edit")}
+                  </button>
+                )}
+                <ConfirmDelete
+                  name={entryName(entry, locale)}
+                  notice={
+                    entry.dish_count
+                      ? t("deleteIngredientNotice", { count: entry.dish_count })
+                      : undefined
+                  }
+                  onDelete={async () => {
+                    await api.deleteIngredient(entry.id);
+                    reloadAll();
+                  }}
+                />
+              </span>
               {editingId === entry.id && (
                 <EditIngredient
                   entry={entry}
@@ -167,15 +186,25 @@ export function DictionaryManager() {
         </ul>
       </section>
 
-      <section>
+      <section className="card">
         <h2>{t("userCookware")}</h2>
-        {cookware.data?.length === 0 && <p>{tCommon("none")}</p>}
-        <ul>
+        {cookware.data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
+        <ul className="row-list">
           {cookware.data?.map((entry) => (
             <li key={entry.id} data-testid={`user-cookware-${entry.id}`}>
-              {entryName(entry, locale)}{" "}
+              <span className="row-main">
+                <strong>{entryName(entry, locale)}</strong>
+                {!!entry.dish_count && (
+                  <span className="hint">{t("dishCount", { count: entry.dish_count })}</span>
+                )}
+              </span>
               <ConfirmDelete
                 name={entryName(entry, locale)}
+                notice={
+                  entry.dish_count
+                    ? t("deleteCookwareNotice", { count: entry.dish_count })
+                    : undefined
+                }
                 onDelete={async () => {
                   await api.deleteCookware(entry.id);
                   cookware.reload();

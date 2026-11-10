@@ -5,9 +5,19 @@ import { useRef, useState } from "react";
 
 import { type DictionaryEntry, entryName } from "@/lib/api";
 
+/** The same rule as dictionary matching: a name or alias equal to the text,
+ * ignoring case and outer spaces. */
+export function namesEntry(entry: DictionaryEntry, text: string): boolean {
+  const term = text.trim().toLowerCase();
+  return [entry.name_zh, entry.name_en, ...entry.aliases_zh, ...entry.aliases_en].some(
+    (name) => !!term && name?.trim().toLowerCase() === term,
+  );
+}
+
 type Props<T extends DictionaryEntry> = {
   search: (q: string) => Promise<T[]>;
-  onChoose: (entry: T) => void;
+  /** Also gets the typed text, so a caller can keep the user's own wording. */
+  onChoose: (entry: T, typed: string) => void;
   onCancel: () => void;
   /** When given, the typed text can be added as a new entry, under this label. */
   onAddUnlisted?: (name: string) => void;
@@ -47,13 +57,8 @@ export function DictionarySearch<T extends DictionaryEntry>({
   }
 
   const results = found?.query === query ? found.entries : null;
-  // The same rule as dictionary matching: exact, ignoring case and outer spaces.
-  const term = query.trim().toLowerCase();
-  const hasExactMatch = (results ?? []).some((entry) =>
-    [entry.name_zh, entry.name_en, ...entry.aliases_zh, ...entry.aliases_en].some(
-      (name) => name?.trim().toLowerCase() === term,
-    ),
-  );
+  const term = query.trim();
+  const hasExactMatch = (results ?? []).some((entry) => namesEntry(entry, query));
 
   return (
     <div>
@@ -81,7 +86,7 @@ export function DictionarySearch<T extends DictionaryEntry>({
               <button
                 type="button"
                 aria-label={`${t("choose")} ${name}`}
-                onClick={() => onChoose(entry)}
+                onClick={() => onChoose(entry, query)}
               >
                 {name}
               </button>

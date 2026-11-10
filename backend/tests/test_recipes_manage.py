@@ -89,6 +89,14 @@ def test_pages(client, seeded):
     assert (len(first["items"]), len(second["items"]), first["total"]) == (20, 5, 25)
 
 
+def test_saved_lines_carry_the_linked_entry_names(client, library, fake_llm, seeded):
+    linked = LINE | {"name": "鸡蛋液", "ingredient_id": by_zh(seeded, "鸡蛋").id}
+    updated = put_recipe(client, library[0], ingredients=[linked, LINE])
+    assert updated["ingredients"][0]["linked_name_zh"] == "鸡蛋"
+    assert updated["ingredients"][0]["linked_name_en"] == "egg"
+    assert updated["ingredients"][1]["linked_name_zh"] is None
+
+
 def test_get_returns_lines_and_cookware(client, library):
     body = client.get(f"/api/recipes/{library[0].id}").json()
     assert [item["name"] for item in body["ingredients"]] == ["番茄", "鸡蛋"]

@@ -136,6 +136,16 @@ def test_text_returns_draft_without_writing_a_recipe(client, session, fake_extra
     assert count(session, Recipe) == 0 and count(session, ExtractionLog) == 0
 
 
+def test_draft_lines_carry_the_linked_entry_names(client, seeded, fake_extraction_with_unknown):
+    lines = {
+        line["name"]: line
+        for line in client.post("/api/imports/text", json={"text": "x"}).json()["ingredients"]
+    }
+    # 葱花 is an alias, so the entry's own names differ from the line's wording.
+    assert (lines["葱花"]["linked_name_zh"], lines["葱花"]["linked_name_en"]) == ("葱", "scallion")
+    assert (lines["秘制酱"]["linked_name_zh"], lines["秘制酱"]["linked_name_en"]) == (None, None)
+
+
 def test_draft_marks_matched_and_unmatched(client, seeded, fake_extraction_with_unknown):
     body = client.post("/api/imports/text", json={"text": "x"}).json()
     assert ids_by_name(body["ingredients"])["葱花"] is not None

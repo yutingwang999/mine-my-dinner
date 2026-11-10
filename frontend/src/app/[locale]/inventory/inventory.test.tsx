@@ -68,7 +68,7 @@ describe("inventory", () => {
     await choose("盐");
     expect(screen.queryByRole("spinbutton", { name: "Count" })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Level" })).toBeNull();
-    expect(screen.getByText(/Having an entry means it is available/)).toBeInTheDocument();
+    expect(screen.getByText(/Being listed here means you have it/)).toBeInTheDocument();
   });
 
   it("sends only the allowed field", async () => {

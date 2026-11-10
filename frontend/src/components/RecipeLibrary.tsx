@@ -37,10 +37,12 @@ export function RecipeLibrary() {
             setEditing(null);
             reload();
           }}
+          actions={
+            <button type="button" onClick={() => setEditing(null)}>
+              {tCommon("cancel")}
+            </button>
+          }
         />
-        <button type="button" onClick={() => setEditing(null)}>
-          {tCommon("cancel")}
-        </button>
       </section>
     );
   }
@@ -48,59 +50,72 @@ export function RecipeLibrary() {
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   return (
-    <section>
-      <input
-        type="search"
-        aria-label={t("search")}
-        placeholder={t("search")}
-        value={q}
-        onChange={(event) => {
-          setQ(event.target.value);
-          setPage(1);
-        }}
-      />
-      <label>
-        {t("dishTypeFilter")}
-        <select
-          value={dishType}
+    <section className="card">
+      <div className="browse-filters">
+        <input
+          type="search"
+          aria-label={t("search")}
+          placeholder={t("search")}
+          value={q}
           onChange={(event) => {
-            setDishType(event.target.value);
+            setQ(event.target.value);
             setPage(1);
           }}
-        >
-          <option value="">{t("allTypes")}</option>
-          {DISH_TYPES.map((value) => (
-            <option key={value} value={value}>
-              {tDish(value)}
-            </option>
-          ))}
-        </select>
-      </label>
-      {error !== null && <p role="alert">{errorText(error)}</p>}
+        />
+        <label>
+          {t("dishTypeFilter")}
+          <select
+            value={dishType}
+            onChange={(event) => {
+              setDishType(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">{t("allTypes")}</option>
+            {DISH_TYPES.map((value) => (
+              <option key={value} value={value}>
+                {tDish(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
       {data === null && error === null && <p>{tCommon("loading")}</p>}
-      {data?.items.length === 0 && <p>{t("empty")}</p>}
-      <ul>
+      {data?.items.length === 0 && <p className="hint">{t("empty")}</p>}
+      <ul className="row-list">
         {data?.items.map((recipe) => (
           <li key={recipe.id} data-testid={`recipe-${recipe.id}`}>
-            <strong>{recipe.title}</strong> {tDish(recipe.dish_type)}
-            {recipe.tags.length > 0 && <span> · {recipe.tags.join(", ")}</span>}{" "}
-            {recipe.source_url && (
-              <a href={recipe.source_url} target="_blank" rel="noreferrer">
-                {t("source")}
-              </a>
-            )}
-            {!recipe.embedded && <small> {t("noEmbedding")}</small>}{" "}
-            <button type="button" onClick={() => setEditing(recipe)}>
-              {tCommon("edit")}
-            </button>
-            <ConfirmDelete
-              name={recipe.title}
-              notice={t("deleteNotice")}
-              onDelete={async () => {
-                await api.deleteRecipe(recipe.id);
-                reload();
-              }}
-            />
+            <span className="row-main">
+              <strong>{recipe.title}</strong>
+              <span className="hint">
+                {tDish(recipe.dish_type)}
+                {recipe.tags.length > 0 && ` · ${recipe.tags.join(", ")}`}
+              </span>
+              {recipe.source_url && (
+                <a href={recipe.source_url} target="_blank" rel="noreferrer">
+                  {t("source")}
+                </a>
+              )}
+              {!recipe.embedded && <small className="hint">{t("noEmbedding")}</small>}
+            </span>
+            <span className="actions">
+              <button type="button" onClick={() => setEditing(recipe)}>
+                {tCommon("edit")}
+              </button>
+              <ConfirmDelete
+                name={recipe.title}
+                notice={t("deleteNotice")}
+                onDelete={async () => {
+                  await api.deleteRecipe(recipe.id);
+                  reload();
+                }}
+              />
+            </span>
           </li>
         ))}
       </ul>

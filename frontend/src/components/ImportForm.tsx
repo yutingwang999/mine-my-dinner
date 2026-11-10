@@ -10,6 +10,42 @@ import { useErrorText } from "@/lib/errors";
 
 type Source = "text" | "url" | "screenshots" | "batch";
 
+const LINK = /https?:\/\/\S+/g;
+
+function linkCount(text: string): number {
+  return text.match(LINK)?.length ?? 0;
+}
+
+/** Parts between lines of only "---", as the batch file import splits them. */
+function recipeParts(text: string): number {
+  const parts: string[] = [""];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim() === "---") {
+      parts.push("");
+    } else {
+      parts[parts.length - 1] += line;
+    }
+  }
+  return parts.filter((part) => part.trim()).length;
+}
+
+/** Stops input that would import the wrong thing, before any paid call. */
+function checkPaste(text: string): void {
+  // A stray separator before or after one recipe is fine; two recipes are not.
+  if (recipeParts(text) > 1) {
+    throw new ApiError(0, "several_recipes");
+  }
+  if (linkCount(text) > 1 && text.replace(LINK, "").trim() === "") {
+    throw new ApiError(0, "several_links");
+  }
+}
+
+function checkLink(url: string): void {
+  if (linkCount(url) > 1) {
+    throw new ApiError(0, "several_links");
+  }
+}
+
 /** Every input keeps its value after a failure, so nothing has to be retyped. */
 export function ImportForm() {
   const t = useTranslations("import");
@@ -52,7 +88,7 @@ export function ImportForm() {
     if (error?.source !== source) return null;
     const suggestPaste = error.error instanceof ApiError && error.error.suggestPaste;
     return (
-      <div role="alert">
+      <div role="alert" className="notice notice-warning">
         <p>{errorText(error.error)}</p>
         {suggestPaste && <p>{t("pasteSuggestion")}</p>}
       </div>
@@ -63,33 +99,60 @@ export function ImportForm() {
   const queued = batchItems?.filter((item) => item.draft !== null).length ?? 0;
 
   return (
-    <div>
-      <p>{t("modelNotice")}</p>
+    <div className="import-grid">
+      <p className="notice notice-info wide">{t("modelNotice")}</p>
 
-      <form onSubmit={submit("text", async () => open(await api.importText(text)))}>
-        <label>
+      <form
+        className="card wide"
+        onSubmit={submit("text", async () => {
+          checkPaste(text);
+          open(await api.importText(text));
+        })}
+      >
+        <label className="stack-field">
           {t("textLabel")}
           <textarea rows={8} value={text} onChange={(event) => setText(event.target.value)} />
         </label>
-        <button type="submit" disabled={working}>
-          {busy === "text" ? t("working") : t("textSubmit")}
-        </button>
+        <p className="hint">{t("textHint")}</p>
+        <div className="actions">
+          <button type="submit" disabled={working}>
+            {busy === "text" ? t("working") : t("textSubmit")}
+          </button>
+        </div>
         {errorFor("text")}
       </form>
 
-      <form onSubmit={submit("url", async () => open(await api.importUrl(url)))}>
-        <label>
+      <form
+        className="card"
+        onSubmit={submit("url", async () => {
+          checkLink(url);
+          open(await api.importUrl(url));
+        })}
+      >
+        <label className="stack-field">
           {t("urlLabel")}
-          <input type="text" inputMode="url" value={url} onChange={(event) => setUrl(event.target.value)} />
+          <input
+            type="text"
+            inputMode="url"
+            placeholder="https://"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+          />
         </label>
-        <button type="submit" disabled={working}>
-          {busy === "url" ? t("working") : t("urlSubmit")}
-        </button>
+        <p className="hint">{t("urlHint")}</p>
+        <div className="actions">
+          <button type="submit" disabled={working}>
+            {busy === "url" ? t("working") : t("urlSubmit")}
+          </button>
+        </div>
         {errorFor("url")}
       </form>
 
-      <form onSubmit={submit("screenshots", async () => open(await api.importScreenshots(images)))}>
-        <label>
+      <form
+        className="card"
+        onSubmit={submit("screenshots", async () => open(await api.importScreenshots(images)))}
+      >
+        <label className="stack-field">
           {t("screenshotsLabel")}
           <input
             type="file"
@@ -98,14 +161,17 @@ export function ImportForm() {
             onChange={(event) => setImages(Array.from(event.target.files ?? []))}
           />
         </label>
-        <p>{t("screenshotsHint")}</p>
-        <button type="submit" disabled={working || images.length === 0}>
-          {busy === "screenshots" ? t("working") : t("screenshotsSubmit")}
-        </button>
+        <p className="hint">{t("screenshotsHint")}</p>
+        <div className="actions">
+          <button type="submit" disabled={working || images.length === 0}>
+            {busy === "screenshots" ? t("working") : t("screenshotsSubmit")}
+          </button>
+        </div>
         {errorFor("screenshots")}
       </form>
 
       <form
+        className="card"
         onSubmit={submit("batch", async () => {
           if (batchFile === null) return;
           setBatchItems(null);
@@ -114,7 +180,7 @@ export function ImportForm() {
           setBatchItems(items);
         })}
       >
-        <label>
+        <label className="stack-field">
           {t("batchLabel")}
           <input
             type="file"
@@ -122,13 +188,15 @@ export function ImportForm() {
             onChange={(event) => setBatchFile(event.target.files?.[0] ?? null)}
           />
         </label>
-        <p>{t("batchHint")}</p>
-        <button type="submit" disabled={working || batchFile === null}>
-          {busy === "batch" ? t("working") : t("batchSubmit")}
-        </button>
+        <p className="hint">{t("batchHint")}</p>
+        <div className="actions">
+          <button type="submit" disabled={working || batchFile === null}>
+            {busy === "batch" ? t("working") : t("batchSubmit")}
+          </button>
+        </div>
         {errorFor("batch")}
         {batchItems !== null && (
-          <div>
+          <div className="batch-result">
             <ul>
               {batchItems
                 .filter((item) => item.error !== null)
