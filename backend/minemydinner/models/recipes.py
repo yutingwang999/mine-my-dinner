@@ -113,6 +113,8 @@ class Recipe(Base):
     steps_summary: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text)
+    # The pasted text or batch part, kept as the full method. See design 4.2.
+    source_text: Mapped[str | None] = mapped_column(Text)
     parent_recipe_id: Mapped[int | None] = mapped_column(
         ForeignKey("recipes.id", ondelete="SET NULL")
     )
@@ -131,6 +133,12 @@ class Recipe(Base):
     )
     cookware: Mapped[list["RecipeCookware"]] = relationship(
         back_populates="recipe", cascade="all, delete-orphan", passive_deletes=True
+    )
+    images: Mapped[list["RecipeImage"]] = relationship(
+        back_populates="recipe",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="RecipeImage.position",
     )
 
 
@@ -175,3 +183,21 @@ class RecipeCookware(Base):
 
     recipe: Mapped[Recipe] = relationship(back_populates="cookware")
     cookware: Mapped[Cookware] = relationship()
+
+
+class RecipeImage(Base):
+    """A screenshot kept as the recipe's full method. The file lives in the image folder."""
+
+    __tablename__ = "recipe_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipe_id: Mapped[int] = mapped_column(
+        ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # The content hash plus extension, so the same image is stored once.
+    file_name: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    mime_type: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    recipe: Mapped[Recipe] = relationship(back_populates="images")

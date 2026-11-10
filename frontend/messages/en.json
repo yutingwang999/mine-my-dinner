@@ -38,7 +38,8 @@
     "modelNotice": "Text, page content, and screenshots you import are sent to a third-party AI model to read the recipe. Leave out personal information.",
     "textHint": "One recipe at a time. For several recipes, use the text file below and put a line of --- between them.",
     "urlHint": "One web page at a time. Import several pages one by one.",
-    "rightsNotice": "Import only content you may use, such as recipes you wrote, your own notes, or content shared for personal use."
+    "rightsNotice": "Import only content you may use, such as recipes you wrote, your own notes, or content shared for personal use.",
+    "storageNotice": "Imported recipes and their source are kept only on this computer, for your own use."
   },
   "errors": {
     "monthly_cap": "This month's model spending cap is reached. Raise LLM_MONTHLY_CAP_USD or try next month.",
@@ -108,7 +109,10 @@
     "discardQuestion": "Discard this draft? Its paid extraction is lost, and getting it back needs a new extraction.",
     "discardConfirm": "Yes, discard",
     "sourceText": "Source text",
-    "screenshotNoText": "Screenshots are not kept, so check this draft against your own screenshot."
+    "screenshotsKept": "The screenshots are saved with the recipe and can be viewed in the library.",
+    "imagesFailed": "The recipe is saved, but its screenshots are not: {error}",
+    "retryImages": "Retry the screenshots",
+    "skipImages": "Continue without them"
   },
   "line": {
     "raw": "Source wording",
@@ -255,7 +259,10 @@
     "source": "Source",
     "deleteNotice": "Saved menus still show this dish's name. Its ratings and notes are deleted; recipes made from it are kept.",
     "editTitle": "Edit {title}",
-    "noEmbedding": "Not yet searchable by meaning; it is retried automatically."
+    "noEmbedding": "Not yet searchable by meaning; it is retried automatically.",
+    "showSource": "Show the full method",
+    "hideSource": "Hide the full method",
+    "screenshotAlt": "Screenshot {number}"
   },
   "inventory": {
     "title": "Inventory",

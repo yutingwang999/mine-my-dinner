@@ -102,6 +102,7 @@ export function ImportForm() {
     <div className="import-grid">
       <div className="notice notice-info wide">
         <p>{t("rightsNotice")}</p>
+        <p>{t("storageNotice")}</p>
         <p>{t("modelNotice")}</p>
       </div>
 
@@ -153,7 +154,10 @@ export function ImportForm() {
 
       <form
         className="card"
-        onSubmit={submit("screenshots", async () => open(await api.importScreenshots(images)))}
+        onSubmit={submit("screenshots", async () => {
+          // The images stay with the draft, and are saved only with the recipe.
+          open({ ...(await api.importScreenshots(images)), images });
+        })}
       >
         <label className="stack-field">
           {t("screenshotsLabel")}

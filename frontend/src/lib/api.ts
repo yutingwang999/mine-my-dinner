@@ -87,6 +87,8 @@ type RecipeFields = {
 export type RecipeDraft = RecipeFields & {
   cookware: { name: string; cookware_id: number | null }[];
   provenance: Provenance;
+  /** Screenshots of a screenshot import, held in the browser until the recipe is saved. */
+  images?: File[];
 };
 
 export type RecipeWrite = RecipeFields & {
@@ -138,9 +140,15 @@ export type SavedRecipe = RecipeFields & {
   id: number;
   cookware: { name: string; cookware_id: number | null }[];
   cookware_ids: number[];
+  source_text: string | null;
+  images: RecipeImage[];
   embedded: boolean;
   created_at: string;
 };
+
+export type RecipeImage = { file_name: string; mime_type: string; position: number };
+
+export type CreatedRecipe = { id: number; embedded: boolean; log_id: number | null };
 
 export type RecipePage = { items: SavedRecipe[]; total: number; page: number };
 
@@ -284,7 +292,13 @@ export const api = {
     postJson<{ suggested: Allergen[] | null }>("/api/allergen-suggestions", { name }),
   checkAllergies: (lines: { name: string; ingredient_id: number | null }[]) =>
     postJson<AllergyCheck>("/api/recipes/allergy-check", { lines }),
-  saveRecipe: (data: RecipeWrite) => postJson<{ id: number }>("/api/recipes", data),
+  saveRecipe: (data: RecipeWrite) => postJson<CreatedRecipe>("/api/recipes", data),
+  uploadRecipeImages(recipeId: number, files: File[], logId: number | null) {
+    const form = new FormData();
+    files.forEach((file) => form.append("images", file));
+    if (logId !== null) form.append("log_id", String(logId));
+    return postForm<RecipeImage[]>(`/api/recipes/${recipeId}/images`, form);
+  },
 
   listRecipes: (params: { q?: string; dish_type?: string; page?: number }) =>
     get<RecipePage>(`/api/recipes${query(params)}`),
@@ -325,6 +339,10 @@ export const api = {
   resolveAllergens: (target: { name: string } | { ingredient_id: number }, allergens: Allergen[]) =>
     postJson<IngredientEntry>("/api/allergens/resolve", { ...target, allergens }),
 };
+
+export function imageUrl(fileName: string): string {
+  return `/api/images/${fileName}`;
+}
 
 export function entryName(entry: DictionaryEntry, locale: string): string {
   const preferred = locale === "zh" ? entry.name_zh : entry.name_en;

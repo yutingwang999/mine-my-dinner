@@ -115,7 +115,16 @@ Dig tonight's dinner out of your saved recipes and your fridge.
 
 **Not used:** unofficial subtitle APIs and video download tools. The system does not bypass login or anti-scraping measures.
 
-**Storage principle:** store only refined structured data (dish name, ingredients, step summary) and the original link. Do not store videos, images, or source text. Step summaries are short paraphrases and are not publicly displayed.
+**Storage principle:** store refined structured data (dish name, ingredients, step summary), the original link, and the source the user provided, so the user can cook from the full method later:
+
+| Import | Kept as the full method |
+|---|---|
+| Web link only | The link. The page is the method, so its text is not copied |
+| Pasted text, with or without a link | The pasted text, plus the first link if there is one |
+| Batch file | That dish's part of the file |
+| Screenshots | The images, as files on the local disk |
+
+Source text and images stay on the user's own machine. They are never published, never shown in the public demo, and never committed to the repository. The import page asks the user to import only content they may use, such as recipes they wrote, their own notes, or content shared for personal use. Videos are not stored. Step summaries are short paraphrases and are not publicly displayed.
 
 ### 4.3 Tiered Extraction (Cheapest First)
 
@@ -184,7 +193,8 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 |---|---|---|
 | `ingredients` (ingredient dictionary) | `name_zh`, `name_en` (normalized names), `aliases_zh[]`, `aliases_en[]`, `category` (vegetable / fruit / mushroom / meat / seafood / egg and dairy / soy product / staple food / nut / seasoning / other), `stock_mode` (availability / count / level), `allergens[]` (values from the fixed list in 5.5; empty = confirmed none, null = unknown), `parent_id` (nullable; see "Ingredient hierarchy" below), `source` (`seed` = reviewed seed data / `user` = created by the user) | Normalization, inventory precision, and allergy checks depend on this table. Chinese and English recipes normalize to the same `ingredient_id`, and the UI displays the name in the current language. For example, "海米" is tagged crustaceans and "蚝油" is tagged shellfish |
 | `cookware` (cookware dictionary) | `name_zh`, `name_en`, `aliases_zh[]`, `aliases_en[]`, `source` (`seed` / `user`) | Normalizes "炒锅" and "wok" to one `cookware_id` |
-| `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores only structured information, the step summary, and the link, never the source text |
+| `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `source_text` (the pasted text or batch part; null for web and screenshot imports), `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores structured information, the step summary, the link, and the source the user provided (see the storage principle in 4.2) |
+| `recipe_images` | `recipe_id`, `file_name` (content hash plus extension), `mime_type`, `size_bytes`, `position` | Screenshots kept as the full method. The files live in `backend/data/images/`, which `.gitignore` excludes. A file is deleted once no recipe and no extraction log refers to it |
 | `recipe_ingredients` | `recipe_id`, `raw`, `name`, `ingredient_id` (nullable), `amount`, `unit`, `amount_type`, `role` (main / secondary / seasoning), `optional` | See 5.1. See 5.5 for handling an empty `ingredient_id` |
 | `recipe_cookware` | `recipe_id`, `cookware_id` | Availability only |
 
@@ -216,7 +226,7 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 
 Substituted recipe variants are stored in `recipes` and point to the original through `parent_recipe_id`.
 
-**Deleting a recipe:** saved plans keep the dish by name: `meal_plan_items.recipe_title` stays and `recipe_id` becomes null. The recipe's ratings and notes are deleted. Its variants stay, with `parent_recipe_id` set to null.
+**Deleting a recipe:** saved plans keep the dish by name: `meal_plan_items.recipe_title` stays and `recipe_id` becomes null. The recipe's ratings and notes are deleted, and so are its source text and screenshots, except screenshots an extraction log still refers to. Its variants stay, with `parent_recipe_id` set to null.
 
 **Planning and evaluation**
 
@@ -225,14 +235,14 @@ Substituted recipe variants are stored in `recipes` and point to the original th
 | `meal_plans` | `thread_id`, `constraints` (JSON with total headcount, selected `diner_id` values, and anonymous rules for temporary guests, never temporary guests' names), `confirmed_at`, `edits` (JSON; see "Manual plan edits" in 7.5). Holds only plans the user accepted; drafts and versions stay in the checkpointer |
 | `meal_plan_items` | `plan_id`, `recipe_id` (nullable), `recipe_title` (snapshot), `servings` |
 | `shopping_lists` | `plan_id`, `items` (JSON). Saved only after the user confirms the list |
-| `extraction_logs` | `input_text`, `model_output`, `user_corrected`, `model_name` |
+| `extraction_logs` | `input_text`, `model_output`, `user_corrected`, `model_name`, `image_files` (the saved screenshots, so screenshot samples can be rerun) |
 | `llm_calls` | `task` (extraction / planning / image understanding / embeddings, and so on), `provider`, `model`, `input_tokens`, `output_tokens`, `cost_estimate`, `latency_ms`, `success`, `fallback_used`, `created_at` |
 
 **Purpose of `llm_calls`:** it is the basis for the monthly cap, the record of whether failover occurred, and the data source for evaluation cost and latency metrics. Per-model prices live in the configuration file with the date they were last updated.
 
 The LangGraph checkpointer and Store create their own tables in the same database.
 
-**Trade-off in `extraction_logs`:** building the evaluation set requires keeping the input text, which conflicts with the "do not store source text" principle. The table is therefore used only for private evaluation. It stays local, is limited in quantity, is not displayed in the UI, and is not part of the public demo. The public demo does not write to it.
+**`extraction_logs` is separate from recipes:** it keeps the input text, or references to the saved screenshots, together with the model output and the user's correction, so the evaluation set survives when a recipe is edited or deleted. It is used only for private evaluation. It stays local, is limited in quantity, is not displayed in the UI, and is not part of the public demo. The public demo does not write to it.
 
 ### 5.4 Inventory Deduction
 
@@ -482,7 +492,7 @@ Import confirmation shows the duration and its source. A changed duration become
 
 **Conversation records:** temporary guests' information does not enter friend profiles, but what the user said stays in the checkpointer's conversation records. Saved friends' nicknames are replaced with codes before model calls, but anonymity cannot be guaranteed for temporary guests' names. The product must therefore provide conversation deletion and explain in the UI how conversations are kept and that their content may be sent to the model provider.
 
-**Public demo:** a separate deployment with its own database, which holds only hand-written or licensed sample data and none of the real instance's data. Visitors share that database. Each browser session has its own `thread_id`, so visitors cannot see each other's conversations. Visitors can plan and revise meals, but cannot change shared recipes, inventory, or dictionaries. Import can show an extraction result but does not save it. Long-term memory writes are off, friend profiles are not available, and the database is reset on a schedule.
+**Public demo:** a separate deployment with its own database, which holds only hand-written or licensed sample data and none of the real instance's data. Visitors share that database. Each browser session has its own `thread_id`, so visitors cannot see each other's conversations. Visitors can plan and revise meals, but cannot change shared recipes, inventory, or dictionaries. Import can show an extraction result but does not save it, so no source text or images are stored. Long-term memory writes are off, friend profiles are not available, and the database is reset on a schedule.
 
 **Scope:** Phase 1 supports rules and filtering for several diners. Ratings still record only the user's own scores.
 

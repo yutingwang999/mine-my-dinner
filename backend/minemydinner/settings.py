@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     gemini_embedding_model: str | None = None
     llm_monthly_cap_usd: Decimal = Decimal("20")
     extraction_log_max_rows: int = 500
+    # Saved screenshots. The data folder is git-ignored.
+    image_dir: Path = REPO_ROOT / "backend" / "data" / "images"
 
     def model_overrides(self) -> dict[str, str | None]:
         return {

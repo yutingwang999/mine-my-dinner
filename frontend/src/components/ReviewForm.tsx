@@ -13,6 +13,7 @@ import {
   entryName,
   DISH_TYPES,
   type DishType,
+  type CreatedRecipe,
   type EditableRecipe,
   type Lang,
   LANGUAGES,
@@ -122,6 +123,10 @@ export function ReviewForm({
   const [addingLine, setAddingLine] = useState(false);
   const [addingCookware, setAddingCookware] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [imagesFailed, setImagesFailed] = useState<{
+    created: CreatedRecipe;
+    error: unknown;
+  } | null>(null);
   const [error, setError] = useState<unknown>(null);
   // A ref, not state, so a second click in the same frame is also ignored.
   const savingRef = useRef(false);
@@ -177,13 +182,28 @@ export function ReviewForm({
     };
   }
 
+  /** The recipe is saved by now, so a failure here never saves it twice. */
+  async function uploadImages(created: CreatedRecipe) {
+    setImagesFailed(null);
+    try {
+      await api.uploadRecipeImages(created.id, draft.images ?? [], created.log_id);
+      onSaved();
+    } catch (caught) {
+      setImagesFailed({ created, error: caught });
+    }
+  }
+
   async function save() {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     setError(null);
     try {
-      await saveRecipe(buildWrite());
+      const created = await saveRecipe(buildWrite());
+      if (draft.images?.length) {
+        await uploadImages(created as CreatedRecipe);
+        return;
+      }
       onSaved();
     } catch (caught) {
       setError(caught);
@@ -383,9 +403,20 @@ export function ReviewForm({
           {t("saveFailed", { error: errorText(error) })}
         </p>
       )}
+      {imagesFailed !== null && (
+        <div role="alert" className="notice notice-warning actions">
+          <span>{t("imagesFailed", { error: errorText(imagesFailed.error) })}</span>
+          <button type="button" onClick={() => uploadImages(imagesFailed.created)}>
+            {t("retryImages")}
+          </button>
+          <button type="button" onClick={onSaved}>
+            {t("skipImages")}
+          </button>
+        </div>
+      )}
       <div className="form-actions">
         <button type="submit" disabled={saving}>
-          {saving ? t("saving") : t("save")}
+          {saving && imagesFailed === null ? t("saving") : t("save")}
         </button>
         {actions}
       </div>

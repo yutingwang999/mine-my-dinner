@@ -63,11 +63,61 @@ describe("review", () => {
     expect(within(source).getByText("葱花蛋：鸡蛋两个，少量葱花")).toBeInTheDocument();
   });
 
-  it("says a screenshot import has no source text", () => {
+  it("says a screenshot import keeps its images with the recipe", () => {
     setup({}, [draft({ source_type: "screenshot", provenance: { ...draft().provenance, input_text: "[screenshot]" } })]);
     const source = screen.getByRole("region", { name: "Source text" });
-    expect(within(source).getByText(/Screenshots are not kept/)).toBeInTheDocument();
+    expect(within(source).getByText(/screenshots are saved with the recipe/)).toBeInTheDocument();
     expect(within(source).queryByText("[screenshot]")).toBeNull();
+  });
+
+  it("uploads a screenshot draft's images after saving the recipe", async () => {
+    const image = new File(["x"], "a.png", { type: "image/png" });
+    setup(
+      {
+        "POST /api/recipes": () => reply(201, { id: 1, embedded: true, log_id: 7 }),
+        "POST /api/recipes/1/images": () => reply(201, []),
+      },
+      [draft({ source_type: "screenshot", images: [image] })],
+    );
+    await save();
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/recipes/1/images")).toHaveLength(1));
+    const body = callsTo(calls, "POST", "/api/recipes/1/images")[0].body as FormData;
+    expect(body.getAll("images")).toHaveLength(1);
+    expect(body.get("log_id")).toBe("7");
+    await screen.findByText("There are no drafts to review.");
+  });
+
+  it("keeps the saved recipe and offers a retry when the images fail to upload", async () => {
+    const image = new File(["x"], "a.png", { type: "image/png" });
+    let attempts = 0;
+    setup(
+      {
+        "POST /api/recipes": () => reply(201, { id: 1, embedded: true, log_id: null }),
+        "POST /api/recipes/1/images": () =>
+          ++attempts === 1 ? reply(503, { code: "unknown" }) : reply(201, []),
+      },
+      [draft({ source_type: "screenshot", images: [image] })],
+    );
+    await save();
+    expect(await screen.findByText(/The recipe is saved, but its screenshots are not/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save recipe" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Retry the screenshots" }));
+    await screen.findByText("There are no drafts to review.");
+    expect(callsTo(calls, "POST", "/api/recipes")).toHaveLength(1);
+  });
+
+  it("can continue without the screenshots after a failed upload", async () => {
+    const image = new File(["x"], "a.png", { type: "image/png" });
+    setup(
+      {
+        "POST /api/recipes": () => reply(201, { id: 1, embedded: true, log_id: null }),
+        "POST /api/recipes/1/images": () => reply(503, { code: "unknown" }),
+      },
+      [draft({ source_type: "screenshot", images: [image] })],
+    );
+    await save();
+    await userEvent.click(await screen.findByRole("button", { name: "Continue without them" }));
+    await screen.findByText("There are no drafts to review.");
   });
 
   it("marks an unmatched ingredient and offers link, create, and skip", () => {

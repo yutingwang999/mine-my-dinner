@@ -22,6 +22,8 @@ function saved(fields: Partial<SavedRecipe> = {}): SavedRecipe {
     source_url: "https://recipes.example/1",
     cookware: [{ name: "炒锅", cookware_id: 3 }],
     cookware_ids: [3],
+    source_text: null,
+    images: [],
     embedded: true,
     created_at: "2026-11-01T00:00:00Z",
     ...fields,
@@ -56,6 +58,27 @@ describe("library", () => {
     );
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Dish type" }), "soup");
     await waitFor(() => expect(calls.some((call) => call.url.includes("dish_type=soup"))).toBe(true));
+  });
+
+  it("shows the kept source text and screenshots on request", async () => {
+    const image = `${"a".repeat(64)}.png`;
+    setup([
+      saved({
+        source_text: "番茄炒蛋：番茄两个，鸡蛋三个",
+        images: [{ file_name: image, mime_type: "image/png", position: 0 }],
+      }),
+    ]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    expect(item.queryByText("番茄炒蛋：番茄两个，鸡蛋三个")).toBeNull();
+    await userEvent.click(item.getByRole("button", { name: "Show the full method" }));
+    expect(item.getByText("番茄炒蛋：番茄两个，鸡蛋三个")).toBeInTheDocument();
+    expect(item.getByRole("img", { name: "Screenshot 1" })).toHaveAttribute("src", `/api/images/${image}`);
+  });
+
+  it("offers no full method when nothing was kept", async () => {
+    setup([saved({ source_url: null })]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    expect(item.queryByRole("button", { name: "Show the full method" })).toBeNull();
   });
 
   it("shows an empty state", async () => {

@@ -35,6 +35,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="MineMyDinner", lifespan=lifespan, exception_handlers=ERROR_HANDLERS)
 app.include_router(imports.router)
 app.include_router(recipes.router)
+app.include_router(recipes.images_router)
 app.include_router(dictionary.router)
 app.include_router(inventory.router)
 app.include_router(diners.router)

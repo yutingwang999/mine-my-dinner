@@ -38,7 +38,8 @@
     "modelNotice": "你导入的文字、网页内容和截图会发送给第三方 AI 模型来识别菜谱，请不要包含个人信息。",
     "textHint": "一次一道菜。多道菜请用下方的文本文件导入，用单独一行 --- 分隔。",
     "urlHint": "一次只能导入一个网页，多个网页请逐个导入。",
-    "rightsNotice": "请只导入你有权使用的内容，例如自己写的菜谱、自己的笔记，或允许个人使用的内容。"
+    "rightsNotice": "请只导入你有权使用的内容，例如自己写的菜谱、自己的笔记，或允许个人使用的内容。",
+    "storageNotice": "导入的菜谱和原文只保存在这台电脑上，供你个人使用。"
   },
   "errors": {
     "monthly_cap": "本月模型费用已达上限。可以调高 LLM_MONTHLY_CAP_USD，或下个月再试。",
@@ -108,7 +109,10 @@
     "discardQuestion": "放弃这份草稿？已经付费的提取结果会丢失，要找回只能重新提取。",
     "discardConfirm": "确认放弃",
     "sourceText": "原文",
-    "screenshotNoText": "截图导入不保存原文，请对照你手里的截图审核。"
+    "screenshotsKept": "截图会在保存菜谱时一起保存，之后可以在菜谱库里查看。",
+    "imagesFailed": "菜谱已保存，但截图没有存上：{error}",
+    "retryImages": "重新上传截图",
+    "skipImages": "不保存截图，继续"
   },
   "line": {
     "raw": "原文",
@@ -255,7 +259,10 @@
     "source": "来源",
     "deleteNotice": "已保存的菜单里仍会显示这道菜的名字；它的评分和笔记会被删除，由它改出的菜谱会保留。",
     "editTitle": "编辑{title}",
-    "noEmbedding": "暂时不能按语义搜索，会自动重试。"
+    "noEmbedding": "暂时不能按语义搜索，会自动重试。",
+    "showSource": "查看完整做法",
+    "hideSource": "收起完整做法",
+    "screenshotAlt": "截图 {number}"
   },
   "inventory": {
     "title": "库存",

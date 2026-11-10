@@ -19,6 +19,7 @@ from minemydinner.models.recipes import (
     Ingredient,
     Recipe,
     RecipeCookware,
+    RecipeImage,
     RecipeIngredient,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "Rating",
     "Recipe",
     "RecipeCookware",
+    "RecipeImage",
     "RecipeIngredient",
     "ShoppingList",
 ]

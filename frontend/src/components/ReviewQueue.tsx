@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { ReviewForm } from "@/components/ReviewForm";
+import { ScreenshotPreview } from "@/components/ScreenshotPreview";
 import { Link } from "@/i18n/navigation";
 import { useDrafts } from "@/lib/drafts";
 
@@ -36,7 +37,10 @@ export function ReviewQueue() {
         <section className="card source-panel" aria-label={t("sourceText")}>
           <h2>{t("sourceText")}</h2>
           {drafts[0].source_type === "screenshot" ? (
-            <p className="hint">{t("screenshotNoText")}</p>
+            <>
+              <p className="hint">{t("screenshotsKept")}</p>
+              <ScreenshotPreview files={drafts[0].images ?? []} />
+            </>
           ) : (
             <pre className="source-text">{drafts[0].provenance.input_text}</pre>
           )}

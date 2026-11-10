@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -16,6 +17,10 @@ from minemydinner.models import (
     RecipeIngredient,
 )
 from minemydinner.recipes.embedding import try_embed_recipe
+from minemydinner.recipes.images import remove_unused_files
+
+
+KEPT_TEXT_SOURCES = ("text", "batch")
 
 
 class InvalidRecipe(Exception):
@@ -102,35 +107,46 @@ def _apply(recipe: Recipe, data: RecipeWrite) -> None:
     ]
 
 
-def _write_log(session: Session, data: RecipeWrite, max_log_rows: int) -> None:
+def _write_log(session: Session, data: RecipeWrite, max_log_rows: int) -> ExtractionLog | None:
     """Keep the model output next to the user's correction, for evaluation."""
     if data.provenance is None:
-        return
+        return None
     if session.scalar(select(func.count()).select_from(ExtractionLog)) >= max_log_rows:
-        return
-    session.add(
-        ExtractionLog(
-            input_text=data.provenance.input_text,
-            model_output=data.provenance.model_output,
-            user_corrected=data.model_dump(mode="json", exclude={"provenance"}),
-            model_name=data.provenance.model_name,
-            prompt_version=data.provenance.prompt_version,
-        )
+        return None
+    log = ExtractionLog(
+        input_text=data.provenance.input_text,
+        model_output=data.provenance.model_output,
+        user_corrected=data.model_dump(mode="json", exclude={"provenance"}),
+        model_name=data.provenance.model_name,
+        prompt_version=data.provenance.prompt_version,
     )
+    session.add(log)
+    return log
+
+
+def _source_text(data: RecipeWrite) -> str | None:
+    """Pasted text and batch parts are kept as the full method; a web page keeps only its
+    link, and screenshots are kept as images. See design 4.2."""
+    if data.provenance is None or data.source_type not in KEPT_TEXT_SOURCES:
+        return None
+    return data.provenance.input_text
 
 
 def create_recipe(
     session: Session, client: LLMClient, data: RecipeWrite, max_log_rows: int
-) -> Recipe:
-    """Commit the recipe before embedding it, so an embedding failure cannot lose it."""
+) -> tuple[Recipe, ExtractionLog | None]:
+    """Commit the recipe before embedding it, so an embedding failure cannot lose it.
+
+    Returns the extraction log too, so screenshots uploaded next can be added to it.
+    """
     _check_references(session, data)
-    recipe = Recipe()
+    recipe = Recipe(source_text=_source_text(data))
     _apply(recipe, data)
     session.add(recipe)
-    _write_log(session, data, max_log_rows)
+    log = _write_log(session, data, max_log_rows)
     session.commit()
     try_embed_recipe(session, client, recipe)
-    return recipe
+    return recipe, log
 
 
 def update_recipe(session: Session, client: LLMClient, recipe_id: int, data: RecipeWrite) -> Recipe:
@@ -145,9 +161,12 @@ def update_recipe(session: Session, client: LLMClient, recipe_id: int, data: Rec
     return recipe
 
 
-def delete_recipe(session: Session, recipe_id: int) -> None:
+def delete_recipe(session: Session, recipe_id: int, image_dir: Path) -> None:
+    """Delete the recipe with its source text and its screenshots no one else uses."""
     recipe = session.get(Recipe, recipe_id)
     if recipe is None:
         raise InvalidRecipe("not_found")
+    image_names = [image.file_name for image in recipe.images]
     session.delete(recipe)
     session.commit()
+    remove_unused_files(session, image_dir, image_names)

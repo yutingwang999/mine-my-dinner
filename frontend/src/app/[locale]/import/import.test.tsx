@@ -84,6 +84,11 @@ describe("import", () => {
     expect(body.getAll("images")).toHaveLength(1);
   });
 
+  it("says where imported recipes are kept", () => {
+    renderWithProviders(<ImportForm />);
+    expect(screen.getByText(/kept only on this computer/)).toBeInTheDocument();
+  });
+
   it("says the paste box and link box take one recipe each", () => {
     renderWithProviders(<ImportForm />);
     expect(screen.getByText(/One recipe at a time/)).toBeInTheDocument();

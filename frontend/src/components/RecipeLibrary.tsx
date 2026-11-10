@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { Pager } from "@/components/Pager";
 import { ReviewForm } from "@/components/ReviewForm";
-import { api, DISH_TYPES, type SavedRecipe } from "@/lib/api";
+import { api, DISH_TYPES, imageUrl, type SavedRecipe } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 import { useLoad } from "@/lib/useLoad";
 
@@ -21,6 +21,7 @@ export function RecipeLibrary() {
   const [dishType, setDishType] = useState("");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<SavedRecipe | null>(null);
+  const [openSource, setOpenSource] = useState<number | null>(null);
   const { data, error, reload } = useLoad(
     () => api.listRecipes({ q, dish_type: dishType, page }),
     [q, dishType, page],
@@ -31,7 +32,8 @@ export function RecipeLibrary() {
       <section>
         <h2>{t("editTitle", { title: editing.title })}</h2>
         <ReviewForm
-          draft={{ ...editing, provenance: null }}
+          // Saved screenshots stay on the server; an edit uploads nothing new.
+          draft={{ ...editing, provenance: null, images: undefined }}
           save={(write) => api.updateRecipe(editing.id, { ...write, provenance: null })}
           onSaved={() => {
             setEditing(null);
@@ -104,6 +106,15 @@ export function RecipeLibrary() {
               {!recipe.embedded && <small className="hint">{t("noEmbedding")}</small>}
             </span>
             <span className="actions">
+              {(recipe.source_text || recipe.images.length > 0) && (
+                <button
+                  type="button"
+                  aria-expanded={openSource === recipe.id}
+                  onClick={() => setOpenSource(openSource === recipe.id ? null : recipe.id)}
+                >
+                  {openSource === recipe.id ? t("hideSource") : t("showSource")}
+                </button>
+              )}
               <button type="button" onClick={() => setEditing(recipe)}>
                 {tCommon("edit")}
               </button>
@@ -116,6 +127,24 @@ export function RecipeLibrary() {
                 }}
               />
             </span>
+            {openSource === recipe.id && (
+              <div className="line-panel">
+                {recipe.source_text && <pre className="source-text">{recipe.source_text}</pre>}
+                {recipe.images.length > 0 && (
+                  <div className="screenshots">
+                    {recipe.images.map((image, index) => (
+                      <a key={image.file_name} href={imageUrl(image.file_name)} target="_blank" rel="noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element -- local files */}
+                        <img
+                          src={imageUrl(image.file_name)}
+                          alt={t("screenshotAlt", { number: index + 1 })}
+                        />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </li>
         ))}
       </ul>
