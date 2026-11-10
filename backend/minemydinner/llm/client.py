@@ -31,6 +31,7 @@ class AllModelsFailed(Exception):
 @dataclass(frozen=True)
 class StructuredResult[T: BaseModel]:
     parsed: T
+    # The configured name and the model ID, such as "gemini:gemini-3.5-flash-lite".
     model_name: str
     fallback_used: bool
 
@@ -94,7 +95,8 @@ class LLMClient:
                 self._log(task, model, started, usage, False, fallback_used)
                 continue
             self._log(task, model, started, usage, True, fallback_used)
-            return StructuredResult(parsed, name, fallback_used)
+            # The model ID too, so results stay distinct after a model is swapped.
+            return StructuredResult(parsed, f"{name}:{model.model}", fallback_used)
         raise AllModelsFailed(f"All models failed for task {task}") from last_error
 
     def embed(self, texts: list[str], task: str = "embeddings") -> list[list[float]]:

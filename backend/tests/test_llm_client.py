@@ -191,7 +191,8 @@ def count_calls(session_factory):
 def test_primary_success_logs_one_call(llm, session):
     result = llm.invoke_structured("extraction", MESSAGES, Schema)
     assert result.fallback_used is False
-    assert result.model_name == "gemini"
+    # Name and model ID, so logs stay distinct after GEMINI_MODEL changes.
+    assert result.model_name == "gemini:gemini-test"
     call = only_call(session)
     assert (call.task, call.success, call.fallback_used) == ("extraction", True, False)
     assert (call.provider, call.model) == ("fake_primary", "gemini-test")
@@ -202,7 +203,7 @@ def test_primary_success_logs_one_call(llm, session):
 
 def test_failure_switches_to_fallback_and_logs_both(llm_primary_fails, session):
     result = llm_primary_fails.invoke_structured("extraction", MESSAGES, Schema)
-    assert result.fallback_used is True and result.model_name == "openai"
+    assert result.fallback_used is True and result.model_name == "openai:openai-test"
     first, second = calls(session)
     assert first.success is False and first.fallback_used is False
     assert second.success is True and second.fallback_used is True
