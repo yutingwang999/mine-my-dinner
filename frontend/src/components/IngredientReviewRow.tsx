@@ -37,6 +37,18 @@ export type ReviewLine = IngredientLine & {
 type Props = {
   line: ReviewLine;
   lang: Lang;
+  /** The drag handle's accessible name, such as "拖动酸奶". */
+  dragLabel: string;
+  /** Starts dragging this line; dropping it on another line makes them a choice. */
+  onDragStart: () => void;
+  /** The drag ended anywhere, even cancelled; the form clears its drag state. */
+  onDragEnd: () => void;
+  /** A dragged line was dropped on this one. */
+  onDropLine: () => void;
+  /** True inside a choice card: the card carries the group's one optional checkbox. */
+  grouped: boolean;
+  /** Takes the line out of its choice group; null when the line is not in one. */
+  onUngroup: (() => void) | null;
   onChange: (line: ReviewLine) => void;
   onRemove: () => void;
 };
@@ -138,7 +150,18 @@ function CreateIngredient({
   );
 }
 
-export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
+export function IngredientReviewRow({
+  line,
+  lang,
+  dragLabel,
+  onDragStart,
+  onDragEnd,
+  onDropLine,
+  grouped,
+  onUngroup,
+  onChange,
+  onRemove,
+}: Props) {
   const t = useTranslations("line");
   const tUnit = useTranslations("unit");
   const tAmount = useTranslations("amountType");
@@ -204,8 +227,29 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
     line.ingredient_id !== null ? "matched" : line.skipped ? "skipped" : "unmatched";
 
   return (
-    <li data-testid={`row-${line.name}`} className={`line ${state}`}>
+    <li
+      data-testid={`row-${line.name}`}
+      className={`line ${state}`}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        // Handled here; the list background's drop (leave the choice) must not also fire.
+        event.preventDefault();
+        event.stopPropagation();
+        onDropLine();
+      }}
+    >
       <div className="line-raw">
+        <span
+          className="drag-handle"
+          role="button"
+          aria-label={dragLabel}
+          title={dragLabel}
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        >
+          ⠿ {t("drag")}
+        </span>{" "}
         {t("raw")}: {line.added ? t("addedByYou") : line.raw}
       </div>
       <div className="line-fields">
@@ -275,14 +319,21 @@ export function IngredientReviewRow({ line, lang, onChange, onRemove }: Props) {
             ))}
           </select>
         </label>
-        <label className="mini-field inline">
-          <input
-            type="checkbox"
-            checked={line.optional}
-            onChange={(event) => update({ optional: event.target.checked })}
-          />
-          {t("optional")}
-        </label>
+        {!grouped && (
+          <label className="mini-field inline">
+            <input
+              type="checkbox"
+              checked={line.optional}
+              onChange={(event) => update({ optional: event.target.checked })}
+            />
+            {t("optional")}
+          </label>
+        )}
+        {onUngroup && (
+          <button type="button" onClick={onUngroup}>
+            {t("choiceOut")}
+          </button>
+        )}
         <button type="button" onClick={onRemove}>
           {t("remove")}
         </button>

@@ -308,10 +308,11 @@ button[type="submit"] {
 }
 
 .line {
-  border: 1px solid #8884;
+  border: 1px solid var(--border);
   border-left-width: 4px;
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
+  background: var(--card);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -588,4 +589,72 @@ fieldset.supplies {
   margin: 0;
   padding: 0;
   min-width: 0;
+}
+
+/* Choice groups: interchangeable ingredients shown as one "pick one" card. */
+.line-group {
+  border: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: color-mix(in srgb, var(--accent) 6%, var(--background));
+}
+
+/* Accent tints read weaker on a dark page, so the card's wash gets a boost there. */
+@media (prefers-color-scheme: dark) {
+  .line-group {
+    background: color-mix(in srgb, var(--accent) 12%, var(--background));
+  }
+}
+
+.choice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.choice-title {
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.choice-or {
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+  list-style: none;
+}
+
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Shown while a grouped line is dragged: drop it here to leave its choice. */
+.drop-out {
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  padding: 0.75rem;
+  text-align: center;
+  color: var(--accent);
+  font-weight: 600;
+  list-style: none;
 }

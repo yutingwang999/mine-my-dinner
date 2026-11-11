@@ -81,6 +81,7 @@ export function draft(fields: Partial<RecipeDraft> = {}): RecipeDraft {
         amount_type: "vague",
         role: "secondary",
         optional: false,
+        choice_group: null,
         ingredient_id: 1,
         // 葱花 is an alias of the entry 葱, so the names differ on purpose.
         linked_name_zh: "葱",
@@ -94,6 +95,7 @@ export function draft(fields: Partial<RecipeDraft> = {}): RecipeDraft {
         amount_type: "missing",
         role: "seasoning",
         optional: false,
+        choice_group: null,
         ingredient_id: null,
       },
     ],

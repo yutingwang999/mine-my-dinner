@@ -66,6 +66,8 @@ export type IngredientLine = {
   amount_type: AmountType;
   role: Role;
   optional: boolean;
+  /** Lines sharing a value are alternatives: one of the group is required. */
+  choice_group: number | null;
   ingredient_id: number | null;
   /** The linked entry's own names, for display only; the server does not read them. */
   linked_name_zh?: string | null;

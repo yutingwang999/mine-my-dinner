@@ -634,3 +634,109 @@ describe("review", () => {
     expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "vague" });
   });
 });
+
+describe("choice groups", () => {
+  function groupedDraft() {
+    const base = draft();
+    base.ingredients = base.ingredients.map((line, i) => ({ ...line, choice_group: i < 2 ? 1 : null }));
+    return base;
+  }
+
+  const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "" };
+
+  function dragOnto(sourceName: string, targetName: string) {
+    fireEvent.dragStart(within(row(sourceName)).getByLabelText(`Drag ${sourceName}`), { dataTransfer });
+    fireEvent.dragOver(row(targetName), { dataTransfer });
+    fireEvent.drop(row(targetName), { dataTransfer });
+  }
+
+  it("dragging one line onto another makes them a choice", async () => {
+    const base = draft();
+    base.ingredients = [
+      base.ingredients[0],
+      base.ingredients[1],
+      { ...base.ingredients[1], raw: "香菜", name: "香菜" },
+    ];
+    setup({}, [base]);
+    dragOnto("香菜", "葱花");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines[0].choice_group).not.toBeNull();
+    expect(lines[2].choice_group).toBe(lines[0].choice_group);
+    expect(lines[1].choice_group).toBeNull();
+  });
+
+  it("dragging a line onto a choice card joins the group", async () => {
+    const base = groupedDraft();
+    base.ingredients.push({ ...base.ingredients[1], raw: "香菜", name: "香菜", choice_group: null });
+    setup({}, [base]);
+    dragOnto("香菜", "葱花");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([1, 1, 1]);
+  });
+
+  it("dragging a line out of the card onto the list leaves the choice", async () => {
+    const base = groupedDraft();
+    base.ingredients.push({ ...base.ingredients[1], raw: "香菜", name: "香菜", choice_group: 1 });
+    setup({}, [base]);
+    fireEvent.dragStart(within(row("香菜")).getByLabelText("Drag 香菜"), { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId("ingredient-list"), { dataTransfer });
+    fireEvent.drop(screen.getByTestId("ingredient-list"), { dataTransfer });
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([1, 1, null]);
+  });
+
+  it("dragging a grouped line shows a drop zone right below its card", async () => {
+    const base = groupedDraft();
+    base.ingredients.push({ ...base.ingredients[1], raw: "香菜", name: "香菜", choice_group: null });
+    setup({}, [base]);
+    expect(screen.queryByText("Drop here to leave the choice")).toBeNull();
+    fireEvent.dragStart(within(row("葱花")).getByLabelText("Drag 葱花"), { dataTransfer });
+    const zone = screen.getByText("Drop here to leave the choice");
+    const card = screen.getByRole("group", { name: /Pick one/ });
+    expect(card.nextElementSibling).toBe(zone);
+    fireEvent.dragOver(zone, { dataTransfer });
+    fireEvent.drop(zone, { dataTransfer });
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([null, null, null]);
+  });
+
+  it("taking one line out of a two-line choice dissolves it", async () => {
+    setup({}, [groupedDraft()]);
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Not a choice" }));
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([null, null]);
+  });
+
+  it("removing a grouped line clears its partner's group", async () => {
+    setup({}, [groupedDraft()]);
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Remove" }));
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([null]);
+  });
+
+  it("draft groups are shown as one choice card and kept on save", async () => {
+    setup({}, [groupedDraft()]);
+    const card = screen.getByRole("group", { name: /Pick one/ });
+    expect(within(card).getByTestId("row-葱花")).toBeInTheDocument();
+    expect(within(card).getByTestId("row-秘制酱")).toBeInTheDocument();
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([1, 1]);
+  });
+
+  it("the card's one checkbox makes the whole group optional", async () => {
+    setup({}, [groupedDraft()]);
+    const card = screen.getByRole("group", { name: /Pick one/ });
+    expect(within(card).getAllByRole("checkbox")).toHaveLength(1);
+    await userEvent.click(within(card).getByRole("checkbox", { name: "Whole group optional" }));
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { optional: boolean }[];
+    expect(lines.map((line) => line.optional)).toEqual([true, true]);
+  });
+});

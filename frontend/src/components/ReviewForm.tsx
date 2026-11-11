@@ -1,7 +1,7 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { CookwareReviewRow, type ReviewCookware } from "@/components/CookwareReviewRow";
 import { DictionarySearch, namesEntry } from "@/components/DictionarySearch";
@@ -73,6 +73,45 @@ function parseNumber(value: string): number | null {
   return value.trim() === "" ? null : Number(value);
 }
 
+/**
+ * A choice group needs two lines; a lone member goes back to being an ordinary line.
+ * `keep` spares the group the user just created, which waits for its second line.
+ */
+function clearOrphanGroups(lines: ReviewLine[], keep: number | null = null): ReviewLine[] {
+  const groups = lines.map((line) => line.choice_group).filter((group) => group !== null);
+  return lines.map((line) =>
+    line.choice_group !== null &&
+    line.choice_group !== keep &&
+    groups.filter((group) => group === line.choice_group).length < 2
+      ? { ...line, choice_group: null }
+      : line,
+  );
+}
+
+/** The lines as the form shows them: ordinary rows, and one card per choice group. */
+function renderItems(lines: ReviewLine[]): { group: number | null; indexes: number[] }[] {
+  const items: { group: number | null; indexes: number[] }[] = [];
+  lines.forEach((line, index) => {
+    const open = line.choice_group !== null && items.find((item) => item.group === line.choice_group);
+    if (open) {
+      open.indexes.push(index);
+    } else {
+      items.push({ group: line.choice_group, indexes: [index] });
+    }
+  });
+  return items;
+}
+
+/** Lines of one group are optional together, so a toggle reaches every member. */
+function syncGroupOptional(lines: ReviewLine[], changed: ReviewLine): ReviewLine[] {
+  if (changed.choice_group === null) {
+    return lines;
+  }
+  return lines.map((line) =>
+    line.choice_group === changed.choice_group ? { ...line, optional: changed.optional } : line,
+  );
+}
+
 function useAllergyCheck(lines: ReviewLine[]): AllergyCheck | null {
   const [result, setResult] = useState<AllergyCheck | null>(null);
   const refs = lines.map((line) => ({ name: line.name, ingredient_id: line.ingredient_id }));
@@ -134,6 +173,8 @@ export function ReviewForm({
   } | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [amountsBlocked, setAmountsBlocked] = useState(false);
+  // The line being dragged, so a drop on another line knows what to merge.
+  const [dragKey, setDragKey] = useState<number | null>(null);
   // A ref, not state, so a second click in the same frame is also ignored.
   const savingRef = useRef(false);
   const allergyCheck = useAllergyCheck(lines);
@@ -179,6 +220,7 @@ export function ReviewForm({
         amount_type: line.amount_type,
         role: line.role,
         optional: line.optional,
+        choice_group: line.choice_group,
         ingredient_id: line.ingredient_id,
       })),
       cookware_ids: [...new Set(cookwareIds)],
@@ -201,6 +243,11 @@ export function ReviewForm({
   }
 
   const hasAmountProblem = lines.some((line) => amountProblem(line) !== null);
+  // While a grouped line is dragged, a zone below its own card offers taking it out.
+  const draggedGroup =
+    dragKey !== null
+      ? (lines.find((line) => line.key === dragKey)?.choice_group ?? null)
+      : null;
 
   async function save() {
     if (savingRef.current) return;
@@ -241,12 +288,53 @@ export function ReviewForm({
         amount_type: "missing",
         role: "secondary",
         optional: false,
+        choice_group: null,
         ingredient_id: ingredientId,
       },
       locale,
     );
     setLines((current) => [...current, { ...line, linkedName, added: true }]);
     setAddingLine(false);
+  }
+
+  /** Dropping one line onto another makes them a choice, or joins the target's group. */
+  function mergeLines(sourceKey: number, targetKey: number) {
+    setLines((current) => {
+      const source = current.find((line) => line.key === sourceKey);
+      const target = current.find((line) => line.key === targetKey);
+      if (!source || !target || sourceKey === targetKey) return current;
+      if (source.choice_group !== null && source.choice_group === target.choice_group) {
+        return current;
+      }
+      const group =
+        target.choice_group ??
+        source.choice_group ??
+        Math.max(0, ...current.map((line) => line.choice_group ?? 0)) + 1;
+      const next = current.map((line) =>
+        line.key === sourceKey
+          ? { ...line, choice_group: group, optional: target.optional }
+          : line.key === targetKey
+            ? { ...line, choice_group: group }
+            : line,
+      );
+      return clearOrphanGroups(next, group);
+    });
+  }
+
+  /** The card's one checkbox: the whole group is optional together. */
+  function setGroupOptional(group: number, optional: boolean) {
+    setLines((current) =>
+      current.map((line) => (line.choice_group === group ? { ...line, optional } : line)),
+    );
+  }
+
+  /** Takes a line out of its choice; a group left with one line dissolves. */
+  function ungroupLine(key: number) {
+    setLines((current) =>
+      clearOrphanGroups(
+        current.map((line) => (line.key === key ? { ...line, choice_group: null } : line)),
+      ),
+    );
   }
 
   function addSupply() {
@@ -335,18 +423,108 @@ export function ReviewForm({
       </label>
 
       <h2>{t("ingredients")}</h2>
-      <ul className="line-list">
-        {lines.map((line, index) => (
-          <IngredientReviewRow
-            key={line.key}
-            line={line}
-            lang={lang}
-            onChange={(changed) =>
-              setLines((current) => current.map((item, i) => (i === index ? changed : item)))
-            }
-            onRemove={() => setLines((current) => current.filter((_, i) => i !== index))}
-          />
-        ))}
+      <p className="hint">{t("choiceHint")}</p>
+      <ul
+        className="line-list"
+        data-testid="ingredient-list"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          // A drop on the list background, outside any card: the line leaves its choice.
+          event.preventDefault();
+          if (dragKey !== null) ungroupLine(dragKey);
+          setDragKey(null);
+        }}
+      >
+        {renderItems(lines).map((item) => {
+          const rows = item.indexes.map((index, position) => {
+            const line = lines[index];
+            return (
+              <Fragment key={line.key}>
+                {position > 0 && (
+                  <li className="choice-or" aria-hidden="true">
+                    {t("choiceOr")}
+                  </li>
+                )}
+                <IngredientReviewRow
+                  line={line}
+                  lang={lang}
+                  dragLabel={tLine("dragLine", { name: line.name })}
+                  onDragStart={() => setDragKey(line.key)}
+                  onDragEnd={() => setDragKey(null)}
+                  onDropLine={() => {
+                    if (dragKey !== null) mergeLines(dragKey, line.key);
+                    setDragKey(null);
+                  }}
+                  grouped={line.choice_group !== null}
+                  onUngroup={line.choice_group !== null ? () => ungroupLine(line.key) : null}
+                  onChange={(changed) =>
+                    setLines((current) =>
+                      syncGroupOptional(
+                        current.map((other, i) => (i === index ? changed : other)),
+                        changed,
+                      ),
+                    )
+                  }
+                  onRemove={() =>
+                    setLines((current) => clearOrphanGroups(current.filter((_, i) => i !== index)))
+                  }
+                />
+              </Fragment>
+            );
+          });
+          if (item.group === null) {
+            return rows;
+          }
+          const groupOptional = lines[item.indexes[0]].optional;
+          return (
+            <Fragment key={`group-${item.group}`}>
+            <li
+              className="line-group"
+              role="group"
+              aria-label={t("choiceCard")}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                // A drop on the card itself, between its rows, joins the group.
+                event.preventDefault();
+                event.stopPropagation();
+                if (dragKey !== null) mergeLines(dragKey, lines[item.indexes[0]].key);
+                setDragKey(null);
+              }}
+            >
+              <div className="choice-head">
+                <p className="choice-title">
+                  {groupOptional ? t("choiceCardOptional") : t("choiceCard")}
+                </p>
+                <label className="mini-field inline">
+                  <input
+                    type="checkbox"
+                    checked={groupOptional}
+                    onChange={(event) =>
+                      setGroupOptional(item.group as number, event.target.checked)
+                    }
+                  />
+                  {t("choiceOptional")}
+                </label>
+              </div>
+              <ul className="line-list">{rows}</ul>
+            </li>
+            {draggedGroup === item.group && (
+              <li
+                className="drop-out"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (dragKey !== null) ungroupLine(dragKey);
+                  setDragKey(null);
+                }}
+              >
+                {t("dropOut")}
+              </li>
+            )}
+            </Fragment>
+          );
+        })}
       </ul>
       {addingLine ? (
         <DictionarySearch

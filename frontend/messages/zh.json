@@ -36,7 +36,7 @@
     "batchQueued": "{count, plural, =0 {没有提取出菜谱。} other {# 道菜已可以审核。}}",
     "reviewDrafts": "现在审核",
     "modelNotice": "你导入的文字、网页内容和截图会发送给第三方 AI 模型来识别菜谱，请不要包含个人信息。",
-    "textHint": "一次一道菜。多道菜请用下方的文本文件导入，用单独一行 --- 分隔。",
+    "textHint": "一次一道菜。多道菜请用下方的文本文件导入。",
     "urlHint": "一次只能导入一个网页，多个网页请逐个导入。",
     "rightsNotice": "请只导入你有权使用的内容，例如自己写的菜谱、自己的笔记，或允许个人使用的内容。",
     "storageNotice": "导入的菜谱和原文只保存在这台电脑上，供你个人使用。"
@@ -117,7 +117,13 @@
     "imagesFailed": "菜谱已保存，但截图没有存上：{error}",
     "retryImages": "重新上传截图",
     "skipImages": "不保存截图，继续",
-    "fixAmounts": "请先改好上面标出的数量，再保存。"
+    "fixAmounts": "请先改好上面标出的数量，再保存。",
+    "choiceHint": "做法允许替换的食材（如酸奶或巧克力酱）：按住“⠿ 拖动”把一行拖到另一行上，合成一张任选卡片；把卡片里的行拖到卡片外即可移出。",
+    "choiceCard": "任选其一：做这道菜需要这组里的任意一样",
+    "choiceOr": "或",
+    "choiceCardOptional": "任选其一：整组可不加；加的话选一样",
+    "choiceOptional": "整组可选",
+    "dropOut": "拖到这里移出任选"
   },
   "line": {
     "raw": "原文",
@@ -152,7 +158,10 @@
     "mismatchSpoon": "勺是家用量具。",
     "mismatchNoUnit": "有数字但没有单位的，是碗、把这类家用量具。请选一个单位，或者改数量类型。",
     "fixType": "改为{type}",
-    "zeroAmount": "数量必须大于 0。"
+    "zeroAmount": "数量必须大于 0。",
+    "dragLine": "拖动{name}",
+    "choiceOut": "移出任选",
+    "drag": "拖动"
   },
   "entry": {
     "nameZh": "中文名",

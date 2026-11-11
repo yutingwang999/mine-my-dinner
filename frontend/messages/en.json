@@ -36,7 +36,7 @@
     "batchQueued": "{count, plural, =0 {No dishes were extracted.} one {# dish is ready for review.} other {# dishes are ready for review.}}",
     "reviewDrafts": "Review now",
     "modelNotice": "Text, page content, and screenshots you import are sent to a third-party AI model to read the recipe. Leave out personal information.",
-    "textHint": "One recipe at a time. For several recipes, use the text file below and put a line of --- between them.",
+    "textHint": "One recipe at a time. For several recipes, use the text file import below.",
     "urlHint": "One web page at a time. Import several pages one by one.",
     "rightsNotice": "Import only content you may use, such as recipes you wrote, your own notes, or content shared for personal use.",
     "storageNotice": "Imported recipes and their source are kept only on this computer, for your own use."
@@ -117,7 +117,13 @@
     "imagesFailed": "The recipe is saved, but its screenshots are not: {error}",
     "retryImages": "Retry the screenshots",
     "skipImages": "Continue without them",
-    "fixAmounts": "Fix the amounts marked above before saving."
+    "fixAmounts": "Fix the amounts marked above before saving.",
+    "choiceHint": "When the method lets ingredients stand in for each other, hold “⠿ Drag” and drop one line onto another to form a pick-one card; drag a line out of the card to take it back out.",
+    "choiceCard": "Pick one: any one of these is needed",
+    "choiceOr": "or",
+    "choiceCardOptional": "Pick one: the whole group can be left out; pick one if used",
+    "choiceOptional": "Whole group optional",
+    "dropOut": "Drop here to leave the choice"
   },
   "line": {
     "raw": "Source wording",
@@ -152,7 +158,10 @@
     "mismatchSpoon": "A spoon measure is a household measure.",
     "mismatchNoUnit": "A number with no unit is a household measure, such as a bowl or a handful. Pick a unit, or change the type.",
     "fixType": "Change to {type}",
-    "zeroAmount": "The amount must be more than 0."
+    "zeroAmount": "The amount must be more than 0.",
+    "dragLine": "Drag {name}",
+    "choiceOut": "Not a choice",
+    "drag": "Drag"
   },
   "entry": {
     "nameZh": "Chinese name",
