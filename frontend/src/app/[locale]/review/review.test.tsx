@@ -732,6 +732,37 @@ describe("choice groups", () => {
     expect(lines.map((line) => line.choice_group)).toEqual([null, null, null]);
   });
 
+  it("scrolls the page while a drag hovers near the window's edge", () => {
+    setup();
+    const scrollBy = vi.fn();
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("scrollBy", scrollBy);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    try {
+      // jsdom has no DragEvent, so a MouseEvent carries the pointer position instead.
+      const dragOverAt = (clientY: number) =>
+        fireEvent(document.body, new MouseEvent("dragover", { bubbles: true, clientY }));
+      fireEvent.dragStart(within(row("葱花")).getByLabelText("Drag 葱花"), { dataTransfer });
+      dragOverAt(window.innerHeight - 1);
+      frames.shift()?.(0);
+      expect(scrollBy).toHaveBeenCalledTimes(1);
+      expect(scrollBy.mock.calls[0][1]).toBeGreaterThan(0);
+      dragOverAt(1);
+      frames.shift()?.(0);
+      expect(scrollBy).toHaveBeenCalledTimes(2);
+      expect(scrollBy.mock.calls[1][1]).toBeLessThan(0);
+      // Back in the middle of the window, the pending frame scrolls no further.
+      dragOverAt(window.innerHeight / 2);
+      while (frames.length) frames.shift()?.(0);
+      expect(scrollBy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("taking one line out of a two-line choice dissolves it", async () => {
     setup({}, [groupedDraft()]);
     await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Not a choice" }));

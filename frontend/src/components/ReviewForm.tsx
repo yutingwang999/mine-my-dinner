@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { amountProblem } from "@/lib/amounts";
 import { useErrorText } from "@/lib/errors";
+import { useDragAutoScroll } from "@/lib/useDragAutoScroll";
 
 type Props = {
   /** A draft to review, or a saved recipe to edit. */
@@ -187,6 +188,7 @@ export function ReviewForm({
   // A ref, not state, so a second click in the same frame is also ignored.
   const savingRef = useRef(false);
   const allergyCheck = useAllergyCheck(lines);
+  useDragAutoScroll(dragKey !== null);
 
   const timeMin = parseNumber(time);
   const timeChanged = timeMin !== draft.time_min;
