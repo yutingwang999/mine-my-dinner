@@ -170,6 +170,8 @@ class RecipeIngredient(Base):
     amount_type: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     optional: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Lines of one recipe sharing a value are alternatives: one of the group is required.
+    choice_group: Mapped[int | None] = mapped_column(Integer)
 
     recipe: Mapped[Recipe] = relationship(back_populates="ingredients")
     ingredient: Mapped[Ingredient | None] = relationship()

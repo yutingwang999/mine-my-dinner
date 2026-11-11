@@ -97,6 +97,19 @@ class RecipeWrite(BaseModel):
             raise ValueError("time_source needs time_min")
         return self
 
+    @model_validator(mode="after")
+    def choice_groups_are_sound(self) -> Self:
+        grouped: dict[int, list[bool]] = {}
+        for line in self.ingredients:
+            if line.choice_group is not None:
+                grouped.setdefault(line.choice_group, []).append(line.optional)
+        for members in grouped.values():
+            if len(members) < 2:
+                raise ValueError("a choice group needs at least two lines")
+            if len(set(members)) > 1:
+                raise ValueError("lines of one choice group are optional together")
+        return self
+
 
 def _check_references(session: Session, data: RecipeWrite) -> None:
     ingredient_ids = {line.ingredient_id for line in data.ingredients} - {None}

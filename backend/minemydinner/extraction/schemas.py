@@ -13,6 +13,8 @@ class ExtractedIngredient(BaseModel):
     amount_type: Literal[*AMOUNT_TYPES]
     role: Literal[*ROLES]
     optional: bool = False
+    # Lines sharing a value are alternatives ("pick one of these"); null is an ordinary line.
+    choice_group: int | None = None
 
 
 class ExtractedRecipe(BaseModel):

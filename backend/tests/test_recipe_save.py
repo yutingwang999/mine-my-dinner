@@ -149,3 +149,32 @@ def test_user_time_source_is_kept(client, session, seeded, fake_llm, recipe_writ
 def test_duplicate_cookware_is_saved_once(client, session, seeded, fake_llm, recipe_write):
     recipe_write["cookware_ids"] *= 2
     assert len(saved(client, session, recipe_write).cookware) == 1
+
+
+def test_choice_group_saves_and_rereads(client, session, seeded, fake_llm, recipe_write):
+    recipe_write["ingredients"][0]["choice_group"] = 1
+    recipe_write["ingredients"][1]["choice_group"] = 1
+    recipe = saved(client, session, recipe_write)
+    assert [line.choice_group for line in recipe.ingredients] == [1, 1]
+    lines = client.get(f"/api/recipes/{recipe.id}").json()["ingredients"]
+    assert [line["choice_group"] for line in lines] == [1, 1]
+
+
+def test_singleton_choice_group_rejected(client, session, seeded, fake_llm, recipe_write):
+    recipe_write["ingredients"][0]["choice_group"] = 1
+    assert client.post("/api/recipes", json=recipe_write).status_code == 422
+    assert count(session, Recipe) == 0
+
+
+def test_mixed_optional_in_group_rejected(client, session, seeded, fake_llm, recipe_write):
+    recipe_write["ingredients"][0]["choice_group"] = 1
+    recipe_write["ingredients"][1] |= {"choice_group": 1, "optional": True}
+    assert client.post("/api/recipes", json=recipe_write).status_code == 422
+    assert count(session, Recipe) == 0
+
+
+def test_same_group_id_in_two_recipes_is_fine(client, session, seeded, fake_llm, recipe_write):
+    recipe_write["ingredients"][0]["choice_group"] = 1
+    recipe_write["ingredients"][1]["choice_group"] = 1
+    assert client.post("/api/recipes", json=recipe_write).status_code == 201
+    assert client.post("/api/recipes", json=recipe_write).status_code == 201
