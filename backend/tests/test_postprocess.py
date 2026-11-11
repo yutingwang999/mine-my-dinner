@@ -130,3 +130,25 @@ def test_invented_amount_still_cleared_with_source():
     result = enforce_amount_rules(recipe_with([method_line("盐", 1, "teaspoon")]), source)
     assert result.ingredients[0].amount is None
     assert result.ingredients[0].amount_type == "missing"
+
+
+def test_mixed_optional_group_made_uniform():
+    lines = [
+        choice_line("酸奶", 1),
+        choice_line("巧克力榛果酱", 1).model_copy(update={"optional": True}),
+    ]
+    result = enforce_amount_rules(recipe_with(lines))
+    assert [line.optional for line in result.ingredients] == [False, False]
+
+
+def test_neighbour_amount_in_list_does_not_corroborate():
+    source = "食材：鸡蛋2个、葱花、盐"
+    result = enforce_amount_rules(recipe_with([method_line("盐", 5, "g")]), source)
+    assert result.ingredients[0].amount is None
+    assert result.ingredients[0].amount_type == "missing"
+
+
+def test_step_number_does_not_corroborate():
+    source = "食材：生抽\n做法：1.热锅 2.放入生抽炒匀"
+    result = enforce_amount_rules(recipe_with([method_line("生抽", 3, "spoon")]), source)
+    assert result.ingredients[0].amount is None

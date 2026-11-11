@@ -45,7 +45,16 @@ function toLine(line: EditableRecipe["ingredients"][number], locale: string): Re
   ];
   const linkedName =
     line.ingredient_id !== null ? (entryNames.find((name) => !!name) ?? null) : null;
-  return { ...line, key: nextKey++, skipped: false, linkedName, added: false };
+  // A draft queued before choice groups existed has no field at all; undefined would
+  // render as a one-line card, since the form compares with null.
+  return {
+    ...line,
+    choice_group: line.choice_group ?? null,
+    key: nextKey++,
+    skipped: false,
+    linkedName,
+    added: false,
+  };
 }
 
 /**
@@ -310,12 +319,11 @@ export function ReviewForm({
         target.choice_group ??
         source.choice_group ??
         Math.max(0, ...current.map((line) => line.choice_group ?? 0)) + 1;
+      // The merged group's members are optional together, following the target's value.
       const next = current.map((line) =>
-        line.key === sourceKey
+        line.key === sourceKey || line.key === targetKey || line.choice_group === group
           ? { ...line, choice_group: group, optional: target.optional }
-          : line.key === targetKey
-            ? { ...line, choice_group: group }
-            : line,
+          : line,
       );
       return clearOrphanGroups(next, group);
     });
@@ -427,11 +435,14 @@ export function ReviewForm({
       <ul
         className="line-list"
         data-testid="ingredient-list"
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={(event) => {
+          if (dragKey !== null) event.preventDefault();
+        }}
         onDrop={(event) => {
           // A drop on the list background, outside any card: the line leaves its choice.
+          if (dragKey === null) return;
           event.preventDefault();
-          if (dragKey !== null) ungroupLine(dragKey);
+          ungroupLine(dragKey);
           setDragKey(null);
         }}
       >
@@ -449,6 +460,7 @@ export function ReviewForm({
                   line={line}
                   lang={lang}
                   dragLabel={tLine("dragLine", { name: line.name })}
+                  dragging={dragKey !== null}
                   onDragStart={() => setDragKey(line.key)}
                   onDragEnd={() => setDragKey(null)}
                   onDropLine={() => {
@@ -482,12 +494,15 @@ export function ReviewForm({
               className="line-group"
               role="group"
               aria-label={t("choiceCard")}
-              onDragOver={(event) => event.preventDefault()}
+              onDragOver={(event) => {
+                if (dragKey !== null) event.preventDefault();
+              }}
               onDrop={(event) => {
                 // A drop on the card itself, between its rows, joins the group.
+                if (dragKey === null) return;
                 event.preventDefault();
                 event.stopPropagation();
-                if (dragKey !== null) mergeLines(dragKey, lines[item.indexes[0]].key);
+                mergeLines(dragKey, lines[item.indexes[0]].key);
                 setDragKey(null);
               }}
             >

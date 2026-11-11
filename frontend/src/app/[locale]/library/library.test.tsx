@@ -139,3 +139,23 @@ describe("library", () => {
     expect(screen.getByRole("button", { name: "Save recipe" })).toBeInTheDocument();
   });
 });
+
+describe("choice groups in the library", () => {
+  it("keeps choice groups when editing a saved recipe", async () => {
+    const grouped = saved();
+    grouped.ingredients = grouped.ingredients.map((line, i) => ({
+      ...line,
+      choice_group: i < 2 ? 1 : null,
+    }));
+    setup([grouped]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    await userEvent.click(item.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("group", { name: /Pick one/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    await waitFor(() => expect(callsTo(calls, "PUT", "/api/recipes/1")).toHaveLength(1));
+    const body = callsTo(calls, "PUT", "/api/recipes/1")[0].body as {
+      ingredients: { choice_group: number | null }[];
+    };
+    expect(body.ingredients.map((line) => line.choice_group)).toEqual([1, 1]);
+  });
+});

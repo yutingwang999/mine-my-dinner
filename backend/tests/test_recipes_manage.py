@@ -173,3 +173,26 @@ def test_edit_can_link_a_dictionary_entry(client, library, fake_llm, seeded):
     linked = LINE | {"ingredient_id": by_zh(seeded, "鸡蛋").id}
     updated = put_recipe(client, library[0], ingredients=[linked])
     assert updated["ingredients"][0]["ingredient_id"] == by_zh(seeded, "鸡蛋").id
+
+
+def test_edit_rejects_singleton_choice_group(client, library, fake_llm):
+    body = recipe_body(library[0], ingredients=[LINE | {"choice_group": 1}])
+    assert client.put(f"/api/recipes/{library[0].id}", json=body).status_code == 422
+
+
+def test_edit_rejects_mixed_optional_choice_group(client, library, fake_llm):
+    lines = [
+        LINE | {"choice_group": 1},
+        LINE | {"raw": "备选", "name": "备选", "choice_group": 1, "optional": True},
+    ]
+    body = recipe_body(library[0], ingredients=lines)
+    assert client.put(f"/api/recipes/{library[0].id}", json=body).status_code == 422
+
+
+def test_edit_keeps_choice_groups(client, session, library, fake_llm):
+    lines = [
+        LINE | {"choice_group": 1},
+        LINE | {"raw": "备选", "name": "备选", "choice_group": 1},
+    ]
+    updated = put_recipe(client, library[0], ingredients=lines)
+    assert [line["choice_group"] for line in updated["ingredients"]] == [1, 1]

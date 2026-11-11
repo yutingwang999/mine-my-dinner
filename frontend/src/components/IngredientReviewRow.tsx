@@ -39,6 +39,8 @@ type Props = {
   lang: Lang;
   /** The drag handle's accessible name, such as "拖动酸奶". */
   dragLabel: string;
+  /** True while any line is being dragged; only then do rows intercept drops. */
+  dragging: boolean;
   /** Starts dragging this line; dropping it on another line makes them a choice. */
   onDragStart: () => void;
   /** The drag ended anywhere, even cancelled; the form clears its drag state. */
@@ -154,6 +156,7 @@ export function IngredientReviewRow({
   line,
   lang,
   dragLabel,
+  dragging,
   onDragStart,
   onDragEnd,
   onDropLine,
@@ -230,10 +233,14 @@ export function IngredientReviewRow({
     <li
       data-testid={`row-${line.name}`}
       className={`line ${state}`}
-      onDragOver={(event) => event.preventDefault()}
+      onDragOver={(event) => {
+        if (dragging) event.preventDefault();
+      }}
       onDrop={(event) => {
-        // Handled here; the list background's drop (leave the choice) must not also fire.
+        // Only a line drag is ours; text dragged into an input keeps the browser default.
+        if (!dragging) return;
         event.preventDefault();
+        // Handled here; the list background's drop (leave the choice) must not also fire.
         event.stopPropagation();
         onDropLine();
       }}
@@ -241,11 +248,16 @@ export function IngredientReviewRow({
       <div className="line-raw">
         <span
           className="drag-handle"
-          role="button"
           aria-label={dragLabel}
           title={dragLabel}
           draggable
-          onDragStart={onDragStart}
+          onDragStart={(event) => {
+            // Firefox starts an HTML5 drag only when the event carries data; the custom
+            // type also marks this drag as ours.
+            event.dataTransfer.setData("application/x-mmd-line", String(line.key));
+            event.dataTransfer.effectAllowed = "move";
+            onDragStart();
+          }}
           onDragEnd={onDragEnd}
         >
           ⠿ {t("drag")}

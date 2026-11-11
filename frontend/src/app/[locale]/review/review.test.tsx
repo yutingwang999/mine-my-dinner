@@ -578,7 +578,7 @@ describe("review", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  const EGGS = { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, ingredient_id: 1 } as const;
+  const EGGS = { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, choice_group: null, ingredient_id: 1 } as const;
 
   it("sets the amount type from the unit, and clears a unit that no longer fits", async () => {
     setup({}, [draft({ ingredients: [EGGS] })]);
@@ -621,7 +621,7 @@ describe("review", () => {
     setup({}, [
       draft({
         ingredients: [
-          { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, ingredient_id: 1 },
+          { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, choice_group: null, ingredient_id: 1 },
         ],
       }),
     ]);
@@ -686,6 +686,34 @@ describe("choice groups", () => {
     await save();
     const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null }[];
     expect(lines.map((line) => line.choice_group)).toEqual([1, 1, null]);
+  });
+
+  it("marks a line drag in dataTransfer and drops the fake button role", () => {
+    setup();
+    const dt = { setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    const handle = within(row("葱花")).getByLabelText("Drag 葱花");
+    expect(handle).not.toHaveAttribute("role");
+    fireEvent.dragStart(handle, { dataTransfer: dt });
+    expect(dt.setData).toHaveBeenCalledWith("application/x-mmd-line", expect.any(String));
+  });
+
+  it("leaves a drop to the browser when no line is being dragged", () => {
+    setup();
+    const dt = { setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    const notCancelled = fireEvent.drop(row("葱花"), { dataTransfer: dt });
+    expect(notCancelled).toBe(true);
+  });
+
+  it("merging a grouped line with an ungrouped one keeps optional uniform", async () => {
+    const base = groupedDraft();
+    base.ingredients = base.ingredients.map((line) => ({ ...line, optional: line.choice_group !== null }));
+    base.ingredients.push({ ...base.ingredients[1], raw: "香菜", name: "香菜", choice_group: null, optional: false });
+    setup({}, [base]);
+    dragOnto("葱花", "香菜");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as { choice_group: number | null; optional: boolean }[];
+    expect(lines.map((line) => line.choice_group)).toEqual([1, 1, 1]);
+    expect(new Set(lines.map((line) => line.optional)).size).toBe(1);
   });
 
   it("dragging a grouped line shows a drop zone right below its card", async () => {
