@@ -171,6 +171,7 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 | `amount_type` | `exact` (precise weight or volume) / `count` (number of items) / `spoon` (household measures such as spoonfuls, bowls, cups, or handfuls) / `vague` (such as "a little" or "to taste") / `missing` (name only) |
 | `role` | Main ingredient / secondary ingredient / seasoning |
 | `optional` | Whether the dish can be made without it; H1 does not require optional ingredients |
+| `choice_group` | Lines of one recipe sharing a value are alternatives ("yogurt or chocolate spread"): one of the group is required when its members are not optional. Empty for an ordinary line. A group has at least two lines, and its members are optional together |
 
 **Rule:** the model must not overwrite "a little" with an estimated gram amount. When an estimate is genuinely needed, such as a shopping list hint, store it separately and label it as an estimate.
 
@@ -195,7 +196,7 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 | `cookware` (cookware dictionary) | `name_zh`, `name_en`, `aliases_zh[]`, `aliases_en[]`, `source` (`seed` / `user`) | Normalizes "炒锅" and "wok" to one `cookware_id` |
 | `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `source_text` (the pasted text or batch part; null for web and screenshot imports), `supplies[]` (consumables the method uses, such as plastic wrap, foil, baking paper, or skewers: shown as a reminder and never checked when planning), `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores structured information, the step summary, the link, and the source the user provided (see the storage principle in 4.2) |
 | `recipe_images` | `recipe_id`, `file_name` (content hash plus extension), `mime_type`, `size_bytes`, `position` | Screenshots kept as the full method. The files live in `backend/data/images/`, which `.gitignore` excludes. A file is deleted once no recipe and no extraction log refers to it |
-| `recipe_ingredients` | `recipe_id`, `raw`, `name`, `ingredient_id` (nullable), `amount`, `unit`, `amount_type`, `role` (main / secondary / seasoning), `optional` | See 5.1. See 5.5 for handling an empty `ingredient_id` |
+| `recipe_ingredients` | `recipe_id`, `raw`, `name`, `ingredient_id` (nullable), `amount`, `unit`, `amount_type`, `role` (main / secondary / seasoning), `optional`, `choice_group` (nullable) | See 5.1. See 5.5 for handling an empty `ingredient_id` |
 | `recipe_cookware` | `recipe_id`, `cookware_id` | Availability only |
 
 **Ingredient hierarchy:** normalization maps only different wordings or forms of the same ingredient and keeps the specific kind the source names. A kind of a broader ingredient is its own dictionary entry that points to the broader one through `parent_id`, such as 酱油 → 生抽 and 老抽, or 猪肉 → 五花肉. The hierarchy has one level.
