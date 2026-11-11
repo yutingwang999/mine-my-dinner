@@ -86,3 +86,47 @@ def test_input_recipe_is_not_changed():
     original = recipe_with([line])
     enforce_amount_rules(original)
     assert original.ingredients[0].amount == 5
+
+
+def choice_line(name, choice_group):
+    return ExtractedIngredient(
+        raw=name, name=name, amount=None, unit=None, amount_type="missing",
+        role="secondary", choice_group=choice_group,
+    )
+
+
+def test_singleton_group_dropped():
+    lines = [choice_line("酸奶", 1), choice_line("吐司", None)]
+    result = enforce_amount_rules(recipe_with(lines))
+    assert [line.choice_group for line in result.ingredients] == [None, None]
+
+
+def test_real_group_kept():
+    lines = [choice_line("酸奶", 1), choice_line("巧克力榛果酱", 1)]
+    result = enforce_amount_rules(recipe_with(lines))
+    assert [line.choice_group for line in result.ingredients] == [1, 1]
+
+
+def method_line(name, amount, unit):
+    return ExtractedIngredient(
+        raw=name, name=name, amount=amount, unit=unit, amount_type="spoon", role="seasoning"
+    )
+
+
+def test_method_amount_survives_when_source_states_it():
+    source = "食材：生抽\n做法：放入生抽4勺腌制半小时"
+    result = enforce_amount_rules(recipe_with([method_line("生抽", 4, "spoon")]), source)
+    assert (result.ingredients[0].amount, result.ingredients[0].unit) == (4, "spoon")
+
+
+def test_chinese_numeral_method_amount_survives():
+    source = "食材：水\n做法：加水两勺调成糊"
+    result = enforce_amount_rules(recipe_with([method_line("水", 2, "spoon")]), source)
+    assert result.ingredients[0].amount == 2
+
+
+def test_invented_amount_still_cleared_with_source():
+    source = "食材：盐\n做法：按口味加盐调味即可"
+    result = enforce_amount_rules(recipe_with([method_line("盐", 1, "teaspoon")]), source)
+    assert result.ingredients[0].amount is None
+    assert result.ingredients[0].amount_type == "missing"

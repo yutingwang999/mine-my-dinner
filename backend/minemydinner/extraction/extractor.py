@@ -33,11 +33,13 @@ def load_prompt(version: str = PROMPT_VERSION) -> str:
     return (PROMPT_DIR / f"{version}.md").read_text(encoding="utf-8")
 
 
-def _extract(client: LLMClient, task: str, message: HumanMessage) -> ExtractionResult:
+def _extract(
+    client: LLMClient, task: str, message: HumanMessage, source_text: str | None = None
+) -> ExtractionResult:
     messages: list[BaseMessage] = [SystemMessage(load_prompt()), message]
     result = client.invoke_structured(task, messages, ExtractedRecipe)
     return ExtractionResult(
-        recipe=enforce_amount_rules(result.parsed),
+        recipe=enforce_amount_rules(result.parsed, source_text),
         raw_output=result.parsed.model_dump(),
         model_name=result.model_name,
         prompt_version=PROMPT_VERSION,
@@ -45,7 +47,7 @@ def _extract(client: LLMClient, task: str, message: HumanMessage) -> ExtractionR
 
 
 def extract_from_text(client: LLMClient, text: str) -> ExtractionResult:
-    return _extract(client, "extraction", HumanMessage(f"Recipe text:\n\n{text}"))
+    return _extract(client, "extraction", HumanMessage(f"Recipe text:\n\n{text}"), text)
 
 
 def extract_from_images(client: LLMClient, images: list[ImageInput]) -> ExtractionResult:
