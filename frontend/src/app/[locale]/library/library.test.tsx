@@ -81,6 +81,14 @@ describe("library", () => {
     expect(item.getByText("Have ready: 保鲜膜, 锡纸")).toBeInTheDocument();
   });
 
+  it("marks the source as an underlined external link", async () => {
+    setup([saved()]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    const link = item.getByRole("link", { name: "Source" });
+    expect(link).toHaveClass("external-link");
+    expect(link).toHaveTextContent("↗");
+  });
+
   it("offers no full method when nothing was kept", async () => {
     setup([saved({ source_url: null })]);
     const item = within(await screen.findByTestId("recipe-1"));

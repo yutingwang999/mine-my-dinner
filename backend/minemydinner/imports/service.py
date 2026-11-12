@@ -130,6 +130,9 @@ def draft_from_url(session: Session, client: LLMClient, url: str) -> RecipeDraft
 
 
 def draft_from_text(session: Session, client: LLMClient, text: str) -> RecipeDraft:
+    # One trim at the entry point: the model, the amount rules, and the stored
+    # provenance all see the same text, without padding around the paste.
+    text = text.strip()
     url = single_url(text)
     if url is not None:
         return draft_from_url(session, client, url)

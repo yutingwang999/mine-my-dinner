@@ -73,7 +73,7 @@ describe("import", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("sends screenshots and opens review", async () => {
+  it("sends in-memory copies of the screenshots and opens review", async () => {
     const calls = mockFetch({ "POST /api/imports/screenshots": () => draft() });
     renderWithProviders(<ImportForm />);
     const image = new File(["x"], "a.png", { type: "image/png" });
@@ -81,7 +81,49 @@ describe("import", () => {
     await userEvent.click(screen.getByRole("button", { name: "Extract from screenshots" }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/review"));
     const body = calls[0].body as FormData;
-    expect(body.getAll("images")).toHaveLength(1);
+    const sent = body.getAll("images");
+    expect(sent).toHaveLength(1);
+    // A copy, so moving the original on disk cannot break the upload on save.
+    expect(sent[0]).not.toBe(image);
+    expect((sent[0] as File).name).toBe("a.png");
+  });
+
+  it("explains when a picked image can no longer be read", async () => {
+    const calls = mockFetch({});
+    renderWithProviders(<ImportForm />);
+    const moved = new File(["x"], "a.png", { type: "image/png" });
+    Object.defineProperty(moved, "arrayBuffer", {
+      value: () => Promise.reject(new DOMException("moved", "NotReadableError")),
+    });
+    await userEvent.upload(screen.getByLabelText("Screenshots of one dish"), moved);
+    await userEvent.click(screen.getByRole("button", { name: "Extract from screenshots" }));
+    expect(await screen.findByText(/can no longer be read/)).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stops more than 5 screenshots before uploading", async () => {
+    const calls = mockFetch({});
+    renderWithProviders(<ImportForm />);
+    const images = Array.from(
+      { length: 6 },
+      (_, i) => new File(["x"], `${i}.png`, { type: "image/png" }),
+    );
+    await userEvent.upload(screen.getByLabelText("Screenshots of one dish"), images);
+    await userEvent.click(screen.getByRole("button", { name: "Extract from screenshots" }));
+    expect(await screen.findByText("Choose 1 to 5 images.")).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stops an oversized screenshot before uploading", async () => {
+    const calls = mockFetch({});
+    renderWithProviders(<ImportForm />);
+    const big = new File([new ArrayBuffer(10 * 1024 * 1024 + 1)], "big.png", {
+      type: "image/png",
+    });
+    await userEvent.upload(screen.getByLabelText("Screenshots of one dish"), big);
+    await userEvent.click(screen.getByRole("button", { name: "Extract from screenshots" }));
+    expect(await screen.findByText(/larger than 10 MB/)).toBeInTheDocument();
+    expect(calls).toHaveLength(0);
   });
 
   it("says where imported recipes are kept", () => {

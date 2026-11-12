@@ -7,10 +7,15 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { api, ApiError, type BatchItem, type RecipeDraft } from "@/lib/api";
 import { useDrafts } from "@/lib/drafts";
 import { useErrorText } from "@/lib/errors";
+import { copyImages } from "@/lib/images";
 
 type Source = "text" | "url" | "screenshots" | "batch";
 
 const LINK = /https?:\/\/\S+/g;
+
+// Mirrors MAX_IMAGES and MAX_IMAGE_BYTES in backend/minemydinner/api/imports.py.
+const MAX_IMAGES = 5;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 function linkCount(text: string): number {
   return text.match(LINK)?.length ?? 0;
@@ -43,6 +48,15 @@ function checkPaste(text: string): void {
 function checkLink(url: string): void {
   if (linkCount(url) > 1) {
     throw new ApiError(0, "several_links");
+  }
+}
+
+function checkImages(files: File[]): void {
+  if (files.length > MAX_IMAGES) {
+    throw new ApiError(0, "image_count");
+  }
+  if (files.some((file) => file.size > MAX_IMAGE_BYTES)) {
+    throw new ApiError(0, "image_too_large");
   }
 }
 
@@ -155,8 +169,11 @@ export function ImportForm() {
       <form
         className="card"
         onSubmit={submit("screenshots", async () => {
-          // The images stay with the draft, and are saved only with the recipe.
-          open({ ...(await api.importScreenshots(images)), images });
+          checkImages(images);
+          // The draft keeps in-memory copies until the recipe is saved, so the
+          // picked files can be moved or deleted on disk meanwhile.
+          const copies = await copyImages(images);
+          open({ ...(await api.importScreenshots(copies)), images: copies });
         })}
       >
         <label className="stack-field">

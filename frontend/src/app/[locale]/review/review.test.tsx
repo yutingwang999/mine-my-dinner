@@ -106,6 +106,20 @@ describe("review", () => {
     expect(callsTo(calls, "POST", "/api/recipes")).toHaveLength(1);
   });
 
+  it("explains when the draft's images can no longer be read", async () => {
+    const image = new File(["x"], "a.png", { type: "image/png" });
+    Object.defineProperty(image, "arrayBuffer", {
+      value: () => Promise.reject(new DOMException("moved", "NotReadableError")),
+    });
+    setup(
+      { "POST /api/recipes": () => reply(201, { id: 1, embedded: true, log_id: null }) },
+      [draft({ source_type: "screenshot", images: [image] })],
+    );
+    await save();
+    expect(await screen.findByText(/can no longer be read/)).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/recipes/1/images")).toHaveLength(0);
+  });
+
   it("can continue without the screenshots after a failed upload", async () => {
     const image = new File(["x"], "a.png", { type: "image/png" });
     setup(
@@ -118,6 +132,15 @@ describe("review", () => {
     await save();
     await userEvent.click(await screen.findByRole("button", { name: "Continue without them" }));
     await screen.findByText("There are no drafts to review.");
+  });
+
+  it("scrolls back to the top after finishing a draft", async () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    setup({}, [draft(), draft({ title: "下一道" })]);
+    scrollTo.mockClear();
+    await save();
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 0));
+    scrollTo.mockRestore();
   });
 
   it("marks an unmatched ingredient and offers link, create, and skip", () => {

@@ -60,6 +60,12 @@ a:hover {
   text-decoration: underline;
 }
 
+/* Links to other sites inside content areas: always underlined, so they read
+   as links without hovering. Navigation links keep the bare style above. */
+.external-link {
+  text-decoration: underline;
+}
+
 /* Base layout. The reset above removes every default margin, so pages need these. */
 .site-header {
   display: flex;

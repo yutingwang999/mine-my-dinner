@@ -136,6 +136,11 @@ def test_text_returns_draft_without_writing_a_recipe(client, session, fake_extra
     assert count(session, Recipe) == 0 and count(session, ExtractionLog) == 0
 
 
+def test_pasted_text_is_trimmed_for_the_model_and_the_stored_source(client, fake_extraction):
+    body = post_text(client, fake_extraction, "\n\n  \n番茄炒蛋\n鸡蛋 番茄\n\n\n").json()
+    assert body["provenance"]["input_text"] == "番茄炒蛋\n鸡蛋 番茄"
+
+
 def test_draft_lines_carry_the_linked_entry_names(client, seeded, fake_extraction_with_unknown):
     lines = {
         line["name"]: line

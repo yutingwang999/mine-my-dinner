@@ -56,6 +56,8 @@
     "image_count": "请选择 1 到 5 张图片。",
     "unsupported_image_type": "请使用 PNG、JPEG 或 WebP 图片。",
     "file_too_large": "文件太大。",
+    "image_too_large": "有图片超过 10 MB，请压缩后再试。",
+    "images_unreadable": "读取不到图片，原文件可能已被移动或修改，请重新选择图片。",
     "empty": "文件里没有菜谱。",
     "too_many_items": "文件里超过 50 道菜。",
     "unreadable_encoding": "无法识别文件的文字编码，请另存为 UTF-8。",

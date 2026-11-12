@@ -99,8 +99,14 @@ export function RecipeLibrary() {
                 {recipe.tags.length > 0 && ` · ${recipe.tags.join(", ")}`}
               </span>
               {recipe.source_url && (
-                <a href={recipe.source_url} target="_blank" rel="noreferrer">
+                <a
+                  className="external-link"
+                  href={recipe.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {t("source")}
+                  <span aria-hidden="true"> ↗</span>
                 </a>
               )}
               {recipe.supplies.length > 0 && (

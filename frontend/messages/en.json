@@ -56,6 +56,8 @@
     "image_count": "Choose 1 to 5 images.",
     "unsupported_image_type": "Use PNG, JPEG, or WebP images.",
     "file_too_large": "The file is too large.",
+    "image_too_large": "An image is larger than 10 MB. Compress it and try again.",
+    "images_unreadable": "The images can no longer be read. The original files may have been moved or changed; choose them again.",
     "empty": "The file has no dishes.",
     "too_many_items": "The file has more than 50 dishes.",
     "unreadable_encoding": "The file's text encoding could not be read. Save it as UTF-8.",

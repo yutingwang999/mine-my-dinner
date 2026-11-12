@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { amountProblem } from "@/lib/amounts";
 import { useErrorText } from "@/lib/errors";
+import { copyImages } from "@/lib/images";
 import { useDragAutoScroll } from "@/lib/useDragAutoScroll";
 
 type Props = {
@@ -246,7 +247,9 @@ export function ReviewForm({
   async function uploadImages(created: CreatedRecipe) {
     setImagesFailed(null);
     try {
-      await api.uploadRecipeImages(created.id, draft.images ?? [], created.log_id);
+      // Reading the files first turns an unreadable file into a clear message
+      // instead of a misleading network error from a failed fetch.
+      await api.uploadRecipeImages(created.id, await copyImages(draft.images ?? []), created.log_id);
       onSaved();
     } catch (caught) {
       setImagesFailed({ created, error: caught });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { ReviewForm } from "@/components/ReviewForm";
@@ -14,6 +14,17 @@ export function ReviewQueue() {
   const { drafts, removeFirst } = useDrafts();
   // Each finished draft gets a fresh form, so no state carries over.
   const [finished, setFinished] = useState(0);
+  const sourcePanel = useRef<HTMLElement>(null);
+
+  // The save button sits at the bottom of a long form, so without this the
+  // next draft would appear scrolled to the same depth.
+  useEffect(() => {
+    if (finished === 0) return;
+    window.scrollTo(0, 0);
+    if (sourcePanel.current) {
+      sourcePanel.current.scrollTop = 0;
+    }
+  }, [finished]);
 
   if (drafts.length === 0) {
     return (
@@ -34,7 +45,7 @@ export function ReviewQueue() {
         <strong>{t("position", { current: 1, total: drafts.length })}</strong> {t("unsavedNotice")}
       </p>
       <div className="review-layout">
-        <section className="card source-panel" aria-label={t("sourceText")}>
+        <section ref={sourcePanel} className="card source-panel" aria-label={t("sourceText")}>
           <h2>{t("sourceText")}</h2>
           {drafts[0].source_type === "screenshot" ? (
             <>
