@@ -13,7 +13,12 @@ from minemydinner.models import (
     RecipeCookware,
     RecipeIngredient,
 )
-from minemydinner.planning.context import MealConstraints, PlanningContext, load_planning_context
+from minemydinner.planning.context import (
+    MealConstraints,
+    PlanningContext,
+    RuleRef,
+    load_planning_context,
+)
 from tests.recipefakes import by_zh, cookware_id
 
 
@@ -110,6 +115,12 @@ def rule(session, diner_id, rule_type, allergen=None, ingredient=None, text=None
     session.add(row)
     session.flush()
     return row
+
+
+def rule_ref(
+    rule_type, allergen=None, ingredient_id=None, text=None, diner_key="diner:1"
+) -> RuleRef:
+    return RuleRef(diner_key, rule_type, allergen, ingredient_id, text)
 
 
 def self_diner(session) -> Diner:
