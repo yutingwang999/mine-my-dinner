@@ -100,6 +100,8 @@ type RecipeFields = {
 export type RecipeDraft = RecipeFields & {
   cookware: { name: string; cookware_id: number | null }[];
   provenance: Provenance;
+  /** How many recipes the model saw in the input; absent on drafts queued before it existed. */
+  recipe_count?: number;
   /** Screenshots of a screenshot import, held in the browser until the recipe is saved. */
   images?: File[];
 };

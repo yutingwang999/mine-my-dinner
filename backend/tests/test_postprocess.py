@@ -152,3 +152,83 @@ def test_step_number_does_not_corroborate():
     source = "食材：生抽\n做法：1.热锅 2.放入生抽炒匀"
     result = enforce_amount_rules(recipe_with([method_line("生抽", 3, "spoon")]), source)
     assert result.ingredients[0].amount is None
+
+
+def counted_line(raw, name, amount):
+    return ExtractedIngredient(
+        raw=raw, name=name, amount=amount, unit="piece", amount_type="count", role="main"
+    )
+
+
+def test_english_word_amount_in_method_survives():
+    line = counted_line("eggs", "eggs", 2)
+    out = enforce_amount_rules(recipe_with([line]), "Whisk two eggs with the milk.")
+    assert out.ingredients[0].amount == 2
+
+
+def test_english_half_and_twelve_in_method_survive():
+    source = "Slice half an onion. Add twelve shrimp."
+    onion = enforce_amount_rules(recipe_with([counted_line("onion", "onion", 0.5)]), source)
+    shrimp = enforce_amount_rules(recipe_with([counted_line("shrimp", "shrimp", 12)]), source)
+    assert onion.ingredients[0].amount == 0.5 and shrimp.ingredients[0].amount == 12
+
+
+def test_raw_not_in_source_does_not_vouch_for_amount():
+    line = ExtractedIngredient(
+        raw="盐 5g", name="盐", amount=5, unit="g", amount_type="exact", role="seasoning"
+    )
+    out = enforce_amount_rules(recipe_with([line]), "盐适量，翻炒均匀。")
+    assert out.ingredients[0].amount is None and out.ingredients[0].amount_type == "vague"
+
+
+def test_raw_in_source_still_vouches():
+    line = ExtractedIngredient(
+        raw="盐 5g", name="盐", amount=5, unit="g", amount_type="exact", role="seasoning"
+    )
+    out = enforce_amount_rules(recipe_with([line]), "食材：盐  5G\n做法：翻炒均匀。")
+    assert out.ingredients[0].amount == 5
+
+
+def test_screenshot_import_keeps_strict_guard():
+    line = ExtractedIngredient(
+        raw="盐 5g", name="盐", amount=5, unit="g", amount_type="exact", role="seasoning"
+    )
+    out = enforce_amount_rules(recipe_with([line]), None)
+    assert out.ingredients[0].amount == 5
+
+
+@pytest.mark.parametrize(
+    ("source", "name", "amount"),
+    [
+        ("Drizzle honey over salt", "salt", 1),
+        ("Cook often, add salt", "salt", 10),
+        ("Add the weight of salt", "salt", 8),
+        ("half a dozen eggs", "eggs", 12),
+        ("Check the network for salt", "salt", 2),
+        ("Add salt for the sixth time", "salt", 6),
+    ],
+)
+def test_english_number_inside_another_word_does_not_corroborate(source, name, amount):
+    out = enforce_amount_rules(recipe_with([counted_line(name, name, amount)]), source)
+    assert out.ingredients[0].amount is None
+
+
+def test_english_word_cut_by_the_window_edge_does_not_corroborate():
+    # "one" ends exactly at the window edge but is part of "alone"; "two" is whole.
+    source = "alone    salt"
+    out = enforce_amount_rules(recipe_with([counted_line("salt", "salt", 1)]), source)
+    assert out.ingredients[0].amount is None
+
+
+@pytest.mark.parametrize(
+    ("source", "name", "amount", "kept"),
+    [
+        ("Add salt 1.5g", "salt", 1.5, True),
+        ("Add 1.5g salt", "salt", 1.5, True),
+        ("加盐0.5勺", "盐", 0.5, True),
+        ("Add salt 135", "salt", 1.5, False),
+    ],
+)
+def test_decimal_amounts_match_as_plain_text(source, name, amount, kept):
+    out = enforce_amount_rules(recipe_with([counted_line(name, name, amount)]), source)
+    assert (out.ingredients[0].amount == amount) is kept

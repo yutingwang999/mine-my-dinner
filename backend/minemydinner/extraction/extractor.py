@@ -9,7 +9,7 @@ from minemydinner.extraction.postprocess import enforce_amount_rules
 from minemydinner.extraction.schemas import ExtractedRecipe
 from minemydinner.llm.client import LLMClient
 
-PROMPT_VERSION = "extract_v1"
+PROMPT_VERSION = "extract_v2"
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 IMAGE_INSTRUCTION = "Extract the recipe shown in these images."
 

@@ -104,6 +104,7 @@
     "addLine": "Add ingredient",
     "save": "Save recipe",
     "saving": "Saving…",
+    "severalRecipes": "This text seems to hold {count} recipes; only the first was read. Split them with a line of --- and import again.",
     "saveFailed": "Saving failed: {error} Your edits are kept.",
     "discard": "Discard this draft",
     "allergyWarning": "Allergy warning. The recipe can still be saved.",

@@ -132,9 +132,19 @@ def test_text_returns_draft_without_writing_a_recipe(client, session, fake_extra
     body = response.json()
     assert body["source_type"] == "text" and body["source_url"] is None
     assert body["provenance"]["input_text"] == "番茄炒蛋"
-    assert body["provenance"]["prompt_version"] == "extract_v1"
+    assert body["provenance"]["prompt_version"] == "extract_v2"
     assert body["provenance"]["model_output"]["title"] == "葱花蛋"
     assert count(session, Recipe) == 0 and count(session, ExtractionLog) == 0
+
+
+def test_draft_carries_recipe_count(client):
+    use_llm(FakeLLM(payload=PAYLOAD | {"recipe_count": 2}))
+    response = client.post("/api/imports/text", json={"text": "番茄炒蛋"})
+    assert response.json()["recipe_count"] == 2
+
+
+def test_draft_recipe_count_defaults_to_one(client, fake_extraction):
+    assert client.post("/api/imports/text", json={"text": "番茄炒蛋"}).json()["recipe_count"] == 1
 
 
 def test_pasted_text_is_trimmed_for_the_model_and_the_stored_source(client, fake_extraction):
