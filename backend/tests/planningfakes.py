@@ -3,6 +3,9 @@ from datetime import date
 
 from sqlalchemy import delete, select
 
+from minemydinner.constants import EMBEDDING_DIMENSION
+from minemydinner.llm.client import AllModelsFailed, MonthlyCapExceeded
+
 from minemydinner.models import (
     AlwaysInStock,
     CookwareOwned,
@@ -135,3 +138,42 @@ def self_diner(session) -> Diner:
 
 def ctx_for(session, *diner_ids, **kwargs) -> PlanningContext:
     return load_planning_context(session, MealConstraints(diner_ids=tuple(diner_ids), **kwargs))
+
+
+def unit_vector(position: int) -> list[float]:
+    """A vector with a single 1.0 at `position`, for ranking by cosine distance."""
+    vector = [0.0] * EMBEDDING_DIMENSION
+    vector[position] = 1.0
+    return vector
+
+
+def blend_vector(position: int, other: int, weight: float) -> list[float]:
+    """Mostly `position`, with `weight` of `other` mixed in."""
+    vector = unit_vector(position)
+    vector[other] = weight
+    return vector
+
+
+class FakeEmbedClient:
+    """Stands in for LLMClient in search tests. No network, no model."""
+
+    def __init__(self, vector: list[float] | None = None, error: Exception | None = None):
+        self.vector = vector if vector is not None else unit_vector(0)
+        self.error = error
+        self.embedded: list[str] = []
+        self.tasks: list[str] = []
+
+    def embed(self, texts, task="embeddings"):
+        if self.error is not None:
+            raise self.error
+        self.embedded.extend(texts)
+        self.tasks.append(task)
+        return [list(self.vector) for _ in texts]
+
+
+def over_cap_client() -> FakeEmbedClient:
+    return FakeEmbedClient(error=MonthlyCapExceeded("over"))
+
+
+def all_failed_client() -> FakeEmbedClient:
+    return FakeEmbedClient(error=AllModelsFailed("down"))

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import exists, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
 from minemydinner.constants import DISH_TYPES
@@ -20,6 +20,7 @@ from minemydinner.models import (
     ExtractionLog,
     Ingredient,
     Recipe,
+    RecipeCookware,
     RecipeIngredient,
 )
 from minemydinner.recipes.allergy import (
@@ -202,7 +203,12 @@ def list_recipes(
         query = query.where(Recipe.dish_type == dish_type)
     total = session.scalar(select(func.count()).select_from(query.subquery()))
     rows = session.scalars(
-        query.order_by(Recipe.created_at.desc(), Recipe.id.desc())
+        query.options(
+            selectinload(Recipe.ingredients).selectinload(RecipeIngredient.ingredient),
+            selectinload(Recipe.cookware).selectinload(RecipeCookware.cookware),
+            selectinload(Recipe.images),
+        )
+        .order_by(Recipe.created_at.desc(), Recipe.id.desc())
         .offset((page - 1) * PAGE_SIZE)
         .limit(PAGE_SIZE)
     )

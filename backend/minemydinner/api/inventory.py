@@ -12,6 +12,7 @@ from minemydinner.api.deps import ApiError
 from minemydinner.constants import STOCK_LEVELS
 from minemydinner.db import get_session
 from minemydinner.models import AlwaysInStock, Cookware, CookwareOwned, Ingredient, Inventory
+from minemydinner.planning.inventory import _fits_stock_mode
 
 router = APIRouter(prefix="/api")
 
@@ -42,17 +43,6 @@ class EntryRef(BaseModel):
     id: int
     name_zh: str | None
     name_en: str | None
-
-
-def _fits_stock_mode(stock_mode: str, data: InventoryIn) -> bool:
-    """`availability` has no quantity, `count` needs a count, and `level` needs a level
-    with optional grams. Grams never stand alone."""
-    has = (data.count is not None, data.level is not None, data.grams is not None)
-    if stock_mode == "availability":
-        return has == (False, False, False)
-    if stock_mode == "count":
-        return has == (True, False, False)
-    return has[0] is False and has[1] is True
 
 
 def _inventory_out(row: Inventory) -> InventoryOut:

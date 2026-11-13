@@ -196,3 +196,28 @@ def test_edit_keeps_choice_groups(client, session, library, fake_llm):
     ]
     updated = put_recipe(client, library[0], ingredients=lines)
     assert [line["choice_group"] for line in updated["ingredients"]] == [1, 1]
+
+
+def _count_list_queries(client, session, count_queries, recipes: int) -> int:
+    from minemydinner.models import RecipeImage
+    from tests.planningfakes import L, make_recipe as make_linked
+
+    for i in range(recipes):
+        recipe = make_linked(session, f"菜{i}", lines=[L("葱"), L("土豆")], cookware=["炒锅"])
+        recipe.images.append(
+            RecipeImage(file_name=f"{i}.png", mime_type="image/png", size_bytes=1, position=0)
+        )
+    session.flush()
+    session.expire_all()
+    with count_queries() as counter:
+        assert client.get("/api/recipes").status_code == 200
+    return counter.count
+
+
+def test_list_recipes_query_count_is_constant(client, session, seeded, count_queries):
+    few = _count_list_queries(client, session, count_queries, 2)
+    for recipe in session.scalars(select(Recipe)).all():
+        session.delete(recipe)
+    session.flush()
+    many = _count_list_queries(client, session, count_queries, 5)
+    assert few == many <= 8
