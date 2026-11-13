@@ -6,7 +6,9 @@
   "language": {
     "label": "Language",
     "zh": "中文",
-    "en": "English"
+    "en": "English",
+    "switchWarning": "Switching the language will lose {count, plural, one {# unsaved draft} other {# unsaved drafts}}, including their paid extractions.",
+    "switchAnyway": "Switch anyway"
   },
   "nav": {
     "label": "Main",

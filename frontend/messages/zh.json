@@ -6,7 +6,9 @@
   "language": {
     "label": "语言",
     "zh": "中文",
-    "en": "English"
+    "en": "English",
+    "switchWarning": "切换语言将丢失 {count} 份未保存的草稿，其中已付费的提取结果无法找回。",
+    "switchAnyway": "仍要切换"
   },
   "nav": {
     "label": "主导航",
