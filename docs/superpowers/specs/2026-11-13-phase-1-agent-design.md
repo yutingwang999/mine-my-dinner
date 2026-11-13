@@ -190,6 +190,11 @@ Deferred minors from the final Phase 0 review that change extraction results, so
 - Include `image_files` in the evaluation export so screenshot samples can be rerun.
 - Duplicated ingredients across list, method, and formula lines: tracked by the metrics; revisited in `extract_v2` or with a stronger model.
 - The gate's baseline records the evaluation set's hash and the prompt versions (`extract_v2`, `plan_v1` or later).
+- Amount-guard candidates, decided only after the gate exists so their effect is measured (found while building `extract_v2`; `extraction/postprocess.py`):
+  - The method-text check (`_source_states_amount`) knows only single Chinese numerals for 0.5 and 1-10. Compound numbers (十二, 二十), half compounds (一个半, 两个半), and colloquial forms (俩, 仨) are not recognized, so a method-stated amount written that way is cleared to `vague` (safe direction; the user restores it in review).
+  - The list-line check (`states_an_amount(raw)`) asks only whether `raw` contains a number, not whether it is the model's number: raw "鸡蛋2个" with amount 3 is kept. This is misreading rather than fabrication, but amount accuracy would catch it.
+  - Digits and decimals in the method check match as substrings, so "2" is found inside "12" and "1.5" inside "11.5".
+  - Run the extraction evaluation before and after any change here and keep it only if fabrication does not rise and amount accuracy does not fall.
 
 ## 9. Publication checklist (T1.11)
 
