@@ -3,6 +3,8 @@
 import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
+import { useErrorText } from "@/lib/errors";
+
 import { Pager } from "@/components/Pager";
 import { api, CATEGORIES, type DictionaryEntry, entryName, type IngredientEntry } from "@/lib/api";
 import { useLoad } from "@/lib/useLoad";
@@ -20,8 +22,13 @@ function bothNames(entry: DictionaryEntry): string {
   return [entry.name_zh, entry.name_en].filter(Boolean).join(" / ");
 }
 
+function personalAliases(entry: DictionaryEntry): string[] {
+  const own = entry as Partial<IngredientEntry>;
+  return [...(own.user_aliases_zh ?? []), ...(own.user_aliases_en ?? [])];
+}
+
 function aliases(entry: DictionaryEntry): string[] {
-  return [...entry.aliases_zh, ...entry.aliases_en];
+  return [...entry.aliases_zh, ...entry.aliases_en, ...personalAliases(entry)];
 }
 
 function matches(entry: DictionaryEntry, text: string): boolean {
@@ -32,9 +39,86 @@ function matches(entry: DictionaryEntry, text: string): boolean {
   );
 }
 
+function splitAliases(text: string): string[] {
+  return text
+    .split(/[,，]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/** A small form for the user's own wordings of a built-in ingredient. */
+function PersonalAliasEditor({
+  entry,
+  onSaved,
+}: {
+  entry: IngredientEntry;
+  onSaved: (entry: IngredientEntry) => void;
+}) {
+  const t = useTranslations("dictionary");
+  const errorText = useErrorText();
+  const [open, setOpen] = useState(false);
+  const [zh, setZh] = useState("");
+  const [en, setEn] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  function start() {
+    setZh(entry.user_aliases_zh.join(", "));
+    setEn(entry.user_aliases_en.join(", "));
+    setError(null);
+    setOpen(true);
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved(await api.setPersonalAliases(entry.id, splitAliases(zh), splitAliases(en)));
+      setOpen(false);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" onClick={start}>
+        {t("personalAliases")}
+      </button>
+    );
+  }
+  return (
+    <div className="line-panel">
+      <p className="hint">{t("personalAliasesHint")}</p>
+      <label>
+        {t("personalAliasesZh")}
+        <input value={zh} onChange={(event) => setZh(event.target.value)} />
+      </label>
+      <label>
+        {t("personalAliasesEn")}
+        <input value={en} onChange={(event) => setEn(event.target.value)} />
+      </label>
+      <button type="button" disabled={busy} onClick={save}>
+        {t("savePersonalAliases")}
+      </button>
+      <button type="button" disabled={busy} onClick={() => setOpen(false)}>
+        {t("cancelPersonalAliases")}
+      </button>
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /**
  * Every dictionary entry, built-in and the user's own, so the user can see which
- * names and aliases will match and what each entry records. Read-only.
+ * names and aliases will match and what each entry records. Entries are read-only,
+ * except that a built-in ingredient can take the user's own aliases.
  */
 export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
   const t = useTranslations("dictionary");
@@ -47,10 +131,12 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
   const [category, setCategory] = useState("");
   const [page, setPage] = useState(1);
   const [cookwarePage, setCookwarePage] = useState(1);
+  // Entries saved with personal aliases, shown in place of the loaded copy.
+  const [saved, setSaved] = useState<Map<number, IngredientEntry>>(new Map());
   const ingredients = useLoad(api.listAllIngredients, [refreshKey]);
   const cookware = useLoad(api.listAllCookware, [refreshKey]);
 
-  const all = ingredients.data ?? [];
+  const all = (ingredients.data ?? []).map((entry) => saved.get(entry.id) ?? entry);
   const byId = new Map(all.map((entry) => [entry.id, entry]));
   const shown = all.filter(
     (entry) => matches(entry, text) && (!category || entry.category === category),
@@ -119,10 +205,21 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
                   <span>{tStock(entry.stock_mode)}</span>
                   <span>{allergenText(entry)}</span>
                   {parent && <span>{t("parentName", { name: entryName(parent, locale) })}</span>}
-                  {aliases(entry).length > 0 && (
-                    <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
+                  {[...entry.aliases_zh, ...entry.aliases_en].length > 0 && (
+                    <span>
+                      {t("aliasesList", { list: [...entry.aliases_zh, ...entry.aliases_en].join(", ") })}
+                    </span>
+                  )}
+                  {personalAliases(entry).length > 0 && (
+                    <span>{t("personalAliasesList", { list: personalAliases(entry).join(", ") })}</span>
                   )}
                 </div>
+                {entry.source === "seed" && (
+                  <PersonalAliasEditor
+                    entry={entry}
+                    onSaved={(updated) => setSaved((previous) => new Map(previous).set(updated.id, updated))}
+                  />
+                )}
               </li>
             );
           })}

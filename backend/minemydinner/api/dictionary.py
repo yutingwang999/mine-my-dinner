@@ -26,6 +26,7 @@ from minemydinner.dictionary.service import (
     delete_user_ingredient,
     link_unmatched_lines,
     resolve_allergens,
+    set_personal_aliases,
     unresolved_allergens,
     update_user_cookware,
     update_user_ingredient,
@@ -58,6 +59,8 @@ class IngredientOut(BaseModel):
     name_en: str | None
     aliases_zh: list[str]
     aliases_en: list[str]
+    user_aliases_zh: list[str]
+    user_aliases_en: list[str]
     category: str
     stock_mode: str
     allergens: list[str] | None
@@ -85,6 +88,11 @@ class CookwareOut(BaseModel):
 
 class CookwareIn(CookwareWrite):
     owned: bool
+
+
+class PersonalAliasesIn(BaseModel):
+    aliases_zh: list[str] = []
+    aliases_en: list[str] = []
 
 
 class SuggestionIn(BaseModel):
@@ -149,12 +157,14 @@ def _search(
     query = query.limit(limit)
     if q and q.strip():
         pattern = contains_pattern(q)
+        alias_columns = [table.aliases_zh, table.aliases_en]
+        if table is Ingredient:
+            alias_columns += [table.user_aliases_zh, table.user_aliases_en]
         query = query.where(
             or_(
                 table.name_zh.ilike(pattern),
                 table.name_en.ilike(pattern),
-                func.array_to_string(table.aliases_zh, "\n").ilike(pattern),
-                func.array_to_string(table.aliases_en, "\n").ilike(pattern),
+                *(func.array_to_string(column, "\n").ilike(pattern) for column in alias_columns),
             )
         )
         # The entry the text names exactly comes first, so the limit never hides it.
@@ -263,6 +273,23 @@ def patch_ingredient(
         entry = update_user_ingredient(session, entry_id, patch)
         # A new name or alias may now match lines that were unmatched.
         return _linked(session, entry, link_unmatched_lines(session, entry))
+
+    return _committed(session, change)
+
+
+@router.put("/ingredients/{entry_id}/personal-aliases")
+def put_personal_aliases(
+    entry_id: int, body: PersonalAliasesIn, session: SessionDep
+) -> LinkedIngredient:
+    def change() -> LinkedIngredient:
+        try:
+            entry, linked = set_personal_aliases(
+                session, entry_id, body.aliases_zh, body.aliases_en
+            )
+        except ReadOnlyEntry as error:
+            # User-created entries edit their own aliases instead.
+            raise ApiError(422, "not_seed") from error
+        return _linked(session, entry, linked)
 
     return _committed(session, change)
 

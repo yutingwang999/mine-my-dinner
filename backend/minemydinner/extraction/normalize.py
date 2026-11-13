@@ -27,12 +27,31 @@ def find_term_owner[T: (Ingredient, Cookware)](
 def names_equal(table: type, term: str):
     """True where a name or alias equals the term, which must already be trimmed and
     lowercased."""
-    return or_(
+    clauses = [
         func.lower(table.name_zh) == term,
         func.lower(table.name_en) == term,
         _alias_matches(table.aliases_zh, term),
         _alias_matches(table.aliases_en, term),
-    )
+    ]
+    if table is Ingredient:  # cookware has no personal aliases
+        clauses += [
+            _alias_matches(table.user_aliases_zh, term),
+            _alias_matches(table.user_aliases_en, term),
+        ]
+    return or_(*clauses)
+
+
+def all_terms(entry: Ingredient) -> list[str]:
+    """Every non-empty name, alias and personal alias of the entry."""
+    terms = [
+        entry.name_zh,
+        entry.name_en,
+        *entry.aliases_zh,
+        *entry.aliases_en,
+        *entry.user_aliases_zh,
+        *entry.user_aliases_en,
+    ]
+    return [term for term in terms if term]
 
 
 def match_ingredient(session: Session, name: str) -> Ingredient | None:

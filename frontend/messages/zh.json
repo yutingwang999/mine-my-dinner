@@ -365,6 +365,13 @@
     "parentName": "上级：{name}",
     "shownCount": "共 {total} 个，显示 {shown} 个",
     "browseHint": "系统自带和你创建的全部食材，可以按名称、别名或类别查找。要修改你创建的食材，请到上方“我的食材词条”。",
+    "personalAliases": "我的别名",
+    "personalAliasesZh": "中文别名（用逗号分隔）",
+    "personalAliasesEn": "英文别名（用逗号分隔）",
+    "savePersonalAliases": "保存别名",
+    "cancelPersonalAliases": "取消",
+    "personalAliasesHint": "你自己对这种食材的叫法。已经用这些叫法导入的食材行也会被关联。",
+    "personalAliasesList": "我的别名：{list}",
     "deleteIngredientNotice": "有 {count} 道菜用到它。删除后，这些菜里的这一行会变成未关联，过敏原算“未知”。",
     "deleteCookwareNotice": "有 {count} 道菜需要它。删除后，这些菜不再记录需要这件厨具。"
   }

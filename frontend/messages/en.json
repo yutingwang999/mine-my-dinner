@@ -365,6 +365,13 @@
     "parentName": "Parent: {name}",
     "shownCount": "{shown} of {total} entries",
     "browseHint": "All ingredients, built-in and yours, searchable by name, alias, or category. To change one you created, use “My ingredient entries” above.",
+    "personalAliases": "My aliases",
+    "personalAliasesZh": "Chinese aliases (comma-separated)",
+    "personalAliasesEn": "English aliases (comma-separated)",
+    "savePersonalAliases": "Save aliases",
+    "cancelPersonalAliases": "Cancel",
+    "personalAliasesHint": "Your own wordings for this ingredient. Lines already imported with these words are linked too.",
+    "personalAliasesList": "My aliases: {list}",
     "deleteIngredientNotice": "{count, plural, one {# dish uses it} other {# dishes use it}}. After deleting, those lines become unlinked and their allergens count as unknown.",
     "deleteCookwareNotice": "{count, plural, one {# dish needs it} other {# dishes need it}}. After deleting, those dishes no longer record that they need it."
   }
