@@ -25,6 +25,8 @@ class CatalogEntry(BaseModel):
     output_usd_per_mtok: Decimal = Field(ge=0)
     # Extra keyword arguments for the provider's chat model class.
     options: dict[str, Any] = {}
+    # Extra model settings used only when tools are bound.
+    tool_call_options: dict[str, Any] = {}
 
 
 class ModelConfig(CatalogEntry):

@@ -114,3 +114,8 @@ def test_repository_config_lists_every_task_and_only_planning_is_essential():
         "smoke",
     }
     assert {name for name, task in config.tasks.items() if task.essential} == {"planning"}
+
+
+def test_repository_config_sets_tool_options_for_openai_fallback():
+    cfg = load_llm_config(REPO_CONFIG)
+    assert cfg.models["openai"].tool_call_options == {"reasoning_effort": "none"}

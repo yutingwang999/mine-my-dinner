@@ -23,6 +23,8 @@ catalog:
     capabilities: [tool_calling, strict_json, images]
     input_usd_per_mtok: 0.10
     output_usd_per_mtok: 0.50
+    tool_call_options:
+      reasoning_effort: none
   # DeepSeek charges half of these rates off-peak. The peak rate is used so the
   # monthly cap never underestimates spending. Thinking mode is on by default and
   # rejects the forced tool_choice that structured output sends, so it is off.
@@ -31,6 +33,8 @@ catalog:
     capabilities: [tool_calling, images]
     input_usd_per_mtok: 0.30
     output_usd_per_mtok: 1.20
+    # If thinking is ever enabled for planning, every later request must pass
+    # reasoning_content back, or the API returns 400.
     options:
       extra_body: {thinking: {type: disabled}}
   deepseek-v4-pro:
