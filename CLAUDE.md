@@ -14,6 +14,14 @@ Use the Python interpreter set by `python.defaultInterpreterPath` in `.vscode/se
 
 Do not install Python packages. If a package is needed, stop and tell the user which package is needed and why.
 
+## Secrets
+
+Never read, print, create, edit, or delete `.env` files. When a value in `.env` is needed, tell the user what to set. Never print or log the values of secret environment variables.
+
+Application code gets its configuration from environment variables, so running the app, scripts, and database queries is allowed.
+
+`.env.example` is not covered by this rule and must never hold real secrets.
+
 ## Language
 
 Write every file in this repository in English, including code, comments, documentation, plans, and configuration.

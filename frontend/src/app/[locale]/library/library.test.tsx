@@ -1,0 +1,169 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { RecipeLibrary } from "@/components/RecipeLibrary";
+import type { SavedRecipe } from "@/lib/api";
+import { type Call, callsTo, draft, mockFetch, renderWithProviders, reply } from "@/test/helpers";
+
+vi.mock("@/i18n/navigation", () => ({
+  Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
+    <a href={href}>{children}</a>
+  ),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+function saved(fields: Partial<SavedRecipe> = {}): SavedRecipe {
+  // A saved recipe has no provenance; the extra field is ignored.
+  return {
+    ...draft(),
+    id: 1,
+    title: "番茄炒蛋",
+    source_url: "https://recipes.example/1",
+    cookware: [{ name: "炒锅", cookware_id: 3 }],
+    cookware_ids: [3],
+    source_text: null,
+    images: [],
+    embedded: true,
+    created_at: "2026-11-01T00:00:00Z",
+    ...fields,
+  };
+}
+
+let calls: Call[];
+
+function setup(items = [saved()]) {
+  calls = mockFetch({
+    "GET /api/recipes": () => ({ items, total: items.length, page: 1 }),
+    "DELETE /api/recipes/1": () => new Response(null, { status: 204 }),
+    "PUT /api/recipes/1": (body) => ({ ...saved(), ...(body as object) }),
+    "POST /api/recipes/allergy-check": () => ({ conflicts: [], unknown: [] }),
+  });
+  renderWithProviders(<RecipeLibrary />);
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("library", () => {
+  it("searches and filters, and shows name and source link", async () => {
+    setup();
+    expect(await screen.findByText("番茄炒蛋")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Source" })).toHaveAttribute(
+      "href",
+      "https://recipes.example/1",
+    );
+    await userEvent.type(screen.getByRole("searchbox", { name: /Search title/ }), "番茄");
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes(`q=${encodeURIComponent("番茄")}`))).toBe(true),
+    );
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Dish type" }), "soup");
+    await waitFor(() => expect(calls.some((call) => call.url.includes("dish_type=soup"))).toBe(true));
+  });
+
+  it("shows the kept source text and screenshots on request", async () => {
+    const image = `${"a".repeat(64)}.png`;
+    setup([
+      saved({
+        source_text: "番茄炒蛋：番茄两个，鸡蛋三个",
+        images: [{ file_name: image, mime_type: "image/png", position: 0 }],
+      }),
+    ]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    expect(item.queryByText("番茄炒蛋：番茄两个，鸡蛋三个")).toBeNull();
+    await userEvent.click(item.getByRole("button", { name: "Show the full method" }));
+    expect(item.getByText("番茄炒蛋：番茄两个，鸡蛋三个")).toBeInTheDocument();
+    expect(item.getByRole("img", { name: "Screenshot 1" })).toHaveAttribute("src", `/api/images/${image}`);
+  });
+
+  it("lists the supplies to have ready", async () => {
+    setup([saved({ supplies: ["保鲜膜", "锡纸"] })]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    expect(item.getByText("Have ready: 保鲜膜, 锡纸")).toBeInTheDocument();
+  });
+
+  it("marks the source as an underlined external link", async () => {
+    setup([saved()]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    const link = item.getByRole("link", { name: "Source" });
+    expect(link).toHaveClass("external-link");
+    expect(link).toHaveTextContent("↗");
+  });
+
+  it("offers no full method when nothing was kept", async () => {
+    setup([saved({ source_url: null })]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    expect(item.queryByRole("button", { name: "Show the full method" })).toBeNull();
+  });
+
+  it("shows an empty state", async () => {
+    setup([]);
+    expect(await screen.findByText("No recipes found.")).toBeInTheDocument();
+  });
+
+  it("asks before deleting a recipe", async () => {
+    setup();
+    const item = within(await screen.findByTestId("recipe-1"));
+    await userEvent.click(item.getByRole("button", { name: "Delete" }));
+    expect(item.getByText("Delete 番茄炒蛋?")).toBeInTheDocument();
+    expect(item.getByText(/Saved menus still show this dish's name/)).toBeInTheDocument();
+    expect(callsTo(calls, "DELETE", "/api/recipes/1")).toHaveLength(0);
+    await userEvent.click(item.getByRole("button", { name: "Yes, delete" }));
+    await waitFor(() => expect(callsTo(calls, "DELETE", "/api/recipes/1")).toHaveLength(1));
+  });
+
+  it("can cancel a delete", async () => {
+    setup();
+    const item = within(await screen.findByTestId("recipe-1"));
+    await userEvent.click(item.getByRole("button", { name: "Delete" }));
+    await userEvent.click(item.getByRole("button", { name: "Cancel" }));
+    expect(item.queryByText("Delete 番茄炒蛋?")).toBeNull();
+    expect(callsTo(calls, "DELETE", "/api/recipes/1")).toHaveLength(0);
+  });
+
+  it("sets time_source to user when an edit changes the time", async () => {
+    setup();
+    const item = within(await screen.findByTestId("recipe-1"));
+    await userEvent.click(item.getByRole("button", { name: "Edit" }));
+    const time = screen.getByRole("spinbutton", { name: "Time (minutes)" });
+    await userEvent.clear(time);
+    await userEvent.type(time, "30");
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    await waitFor(() => expect(callsTo(calls, "PUT", "/api/recipes/1")).toHaveLength(1));
+    const body = callsTo(calls, "PUT", "/api/recipes/1")[0].body as Record<string, unknown>;
+    expect(body).toMatchObject({ time_min: 30, time_source: "user", cookware_ids: [3] });
+    expect(body.provenance).toBeNull();
+  });
+
+  it("keeps the edit form open when saving fails", async () => {
+    calls = mockFetch({
+      "GET /api/recipes": () => ({ items: [saved()], total: 1, page: 1 }),
+      "PUT /api/recipes/1": () => reply(422, { code: "unknown_ingredient" }),
+      "POST /api/recipes/allergy-check": () => ({ conflicts: [], unknown: [] }),
+    });
+    renderWithProviders(<RecipeLibrary />);
+    await userEvent.click(within(await screen.findByTestId("recipe-1")).getByRole("button", { name: "Edit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    expect(await screen.findByText(/An ingredient link is not valid/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save recipe" })).toBeInTheDocument();
+  });
+});
+
+describe("choice groups in the library", () => {
+  it("keeps choice groups when editing a saved recipe", async () => {
+    const grouped = saved();
+    grouped.ingredients = grouped.ingredients.map((line, i) => ({
+      ...line,
+      choice_group: i < 2 ? 1 : null,
+    }));
+    setup([grouped]);
+    const item = within(await screen.findByTestId("recipe-1"));
+    await userEvent.click(item.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("group", { name: /Pick one/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
+    await waitFor(() => expect(callsTo(calls, "PUT", "/api/recipes/1")).toHaveLength(1));
+    const body = callsTo(calls, "PUT", "/api/recipes/1")[0].body as {
+      ingredients: { choice_group: number | null }[];
+    };
+    expect(body.ingredients.map((line) => line.choice_group)).toEqual([1, 1]);
+  });
+});

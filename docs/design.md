@@ -56,7 +56,7 @@ Dig tonight's dinner out of your saved recipes and your fridge.
 | Experiment tracking | Weights & Biases or TensorBoard |
 | Labeling | Label Studio or Argilla (a spreadsheet and scripts are fine at small volumes) |
 | Development process | Claude Code + Superpowers (planning, TDD, systematic debugging, subagent execution, code review) |
-| Repository | Start as a private GitHub repository and make it public after Phase 1. From the first commit, `.gitignore` excludes `.env`, and only `.env.example` is committed. Run gitleaks locally as a pre-commit secret scan, because GitHub push protection on private repositories usually requires payment. Before going public, scan the full history with gitleaks and add a README, architecture diagram, and LICENSE |
+| Repository | Start as a private GitHub repository and make it public after Phase 1. From the first commit, `.gitignore` excludes `.env`, and only `.env.example` is committed. Before going public, check the full history for secrets and add a README, architecture diagram, and LICENSE |
 | Languages | **Chinese and English**: switchable UI (such as next-intl); recipes in both languages; the ingredient dictionary holds Chinese and English names and aliases in both languages; each recipe records its original language |
 | Embeddings | **Always use Gemini embeddings** (`gemini-embedding-001`), which are multilingual and allow Chinese and English content to be searched across languages. There is no embedding-model failover; failed calls are retried or queued. The pgvector HNSW index limits `vector` columns to about 2000 dimensions, so set the output dimension to 768 or 1536 before creating tables (follow the official documentation). Changing models requires recomputing all vectors |
 | API costs | **Monthly cap**: set budget alerts on each provider. Code records the tokens, cost, and latency of each call in `llm_calls`, and stops non-essential calls once the monthly cap is exceeded |
@@ -115,7 +115,16 @@ Dig tonight's dinner out of your saved recipes and your fridge.
 
 **Not used:** unofficial subtitle APIs and video download tools. The system does not bypass login or anti-scraping measures.
 
-**Storage principle:** store only refined structured data (dish name, ingredients, step summary) and the original link. Do not store videos, images, or source text. Step summaries are short paraphrases and are not publicly displayed.
+**Storage principle:** store refined structured data (dish name, ingredients, step summary), the original link, and the source the user provided, so the user can cook from the full method later:
+
+| Import | Kept as the full method |
+|---|---|
+| Web link only | The link. The page is the method, so its text is not copied |
+| Pasted text, with or without a link | The pasted text, plus the first link if there is one |
+| Batch file | That dish's part of the file |
+| Screenshots | The images, as files on the local disk |
+
+Source text and images stay on the user's own machine. They are never published, never shown in the public demo, and never committed to the repository. The import page asks the user to import only content they may use, such as recipes they wrote, their own notes, or content shared for personal use. Videos are not stored. Step summaries are short paraphrases and are not publicly displayed.
 
 ### 4.3 Tiered Extraction (Cheapest First)
 
@@ -158,10 +167,11 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 | `name` | Ingredient name as the source states it, without the amount ("葱花", "土豆") |
 | `ingredient_id` | The normalized dictionary entry (葱花 → 葱, 生抽 → 生抽, never 生抽 → 酱油); empty when unmatched (see 5.5) |
 | `amount` | Number; may be empty |
-| `unit` | Grams, milliliters, pieces, stalks, spoons, or empty |
-| `amount_type` | `exact` (precise weight or volume) / `count` (number of items) / `spoon` (household measures such as spoonfuls or handfuls) / `vague` (such as "a little" or "to taste") / `missing` (name only) |
+| `unit` | Grams, milliliters, pieces, stalks, tablespoons, teaspoons, spoons (size not stated), or empty. A spoon whose size the source does not state stays a spoon. A household measure with no unit in this list, such as a bowl, cup, handful, or pinch, keeps its number with an empty unit, and the source wording names the measure |
+| `amount_type` | `exact` (precise weight or volume) / `count` (number of items) / `spoon` (household measures such as spoonfuls, bowls, cups, or handfuls) / `vague` (such as "a little" or "to taste") / `missing` (name only) |
 | `role` | Main ingredient / secondary ingredient / seasoning |
 | `optional` | Whether the dish can be made without it; H1 does not require optional ingredients |
+| `choice_group` | Lines of one recipe sharing a value are alternatives ("yogurt or chocolate spread"): one of the group is required when its members are not optional. Empty for an ordinary line. A group has at least two lines, and its members are optional together |
 
 **Rule:** the model must not overwrite "a little" with an estimated gram amount. When an estimate is genuinely needed, such as a shopping list hint, store it separately and label it as an estimate.
 
@@ -184,8 +194,9 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 |---|---|---|
 | `ingredients` (ingredient dictionary) | `name_zh`, `name_en` (normalized names), `aliases_zh[]`, `aliases_en[]`, `category` (vegetable / fruit / mushroom / meat / seafood / egg and dairy / soy product / staple food / nut / seasoning / other), `stock_mode` (availability / count / level), `allergens[]` (values from the fixed list in 5.5; empty = confirmed none, null = unknown), `parent_id` (nullable; see "Ingredient hierarchy" below), `source` (`seed` = reviewed seed data / `user` = created by the user) | Normalization, inventory precision, and allergy checks depend on this table. Chinese and English recipes normalize to the same `ingredient_id`, and the UI displays the name in the current language. For example, "海米" is tagged crustaceans and "蚝油" is tagged shellfish |
 | `cookware` (cookware dictionary) | `name_zh`, `name_en`, `aliases_zh[]`, `aliases_en[]`, `source` (`seed` / `user`) | Normalizes "炒锅" and "wok" to one `cookware_id` |
-| `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores only structured information, the step summary, and the link, never the source text |
-| `recipe_ingredients` | `recipe_id`, `raw`, `name`, `ingredient_id` (nullable), `amount`, `unit`, `amount_type`, `role` (main / secondary / seasoning), `optional` | See 5.1. See 5.5 for handling an empty `ingredient_id` |
+| `recipes` | `lang` (original language, zh/en), `title`, `dish_type` (meat dish / vegetable dish / soup / staple food / snack / dessert / other), `time_min` (nullable), `time_source` (`stated` / `user` / `estimated` / empty), `servings`, `tags[]`, `steps_summary`, `source_type`, `source_url`, `source_text` (the pasted text or batch part; null for web and screenshot imports), `supplies[]` (consumables the method uses, such as plastic wrap, foil, baking paper, or skewers: shown as a reminder and never checked when planning), `parent_recipe_id` (a variant points to its original), `variant_note`, `embedding vector` (null until computed) | Stores structured information, the step summary, the link, and the source the user provided (see the storage principle in 4.2) |
+| `recipe_images` | `recipe_id`, `file_name` (content hash plus extension), `mime_type`, `size_bytes`, `position` | Screenshots kept as the full method. The files live in `backend/data/images/`, which `.gitignore` excludes. A file is deleted once no recipe and no extraction log refers to it |
+| `recipe_ingredients` | `recipe_id`, `raw`, `name`, `ingredient_id` (nullable), `amount`, `unit`, `amount_type`, `role` (main / secondary / seasoning), `optional`, `choice_group` (nullable) | See 5.1. See 5.5 for handling an empty `ingredient_id` |
 | `recipe_cookware` | `recipe_id`, `cookware_id` | Availability only |
 
 **Ingredient hierarchy:** normalization maps only different wordings or forms of the same ingredient and keeps the specific kind the source names. A kind of a broader ingredient is its own dictionary entry that points to the broader one through `parent_id`, such as 酱油 → 生抽 and 老抽, or 猪肉 → 五花肉. The hierarchy has one level.
@@ -216,7 +227,7 @@ Gram amounts are not required. Keep the source wording, structure it where possi
 
 Substituted recipe variants are stored in `recipes` and point to the original through `parent_recipe_id`.
 
-**Deleting a recipe:** saved plans keep the dish by name: `meal_plan_items.recipe_title` stays and `recipe_id` becomes null. The recipe's ratings and notes are deleted. Its variants stay, with `parent_recipe_id` set to null.
+**Deleting a recipe:** saved plans keep the dish by name: `meal_plan_items.recipe_title` stays and `recipe_id` becomes null. The recipe's ratings and notes are deleted, and so are its source text and screenshots, except screenshots an extraction log still refers to. Its variants stay, with `parent_recipe_id` set to null.
 
 **Planning and evaluation**
 
@@ -225,14 +236,14 @@ Substituted recipe variants are stored in `recipes` and point to the original th
 | `meal_plans` | `thread_id`, `constraints` (JSON with total headcount, selected `diner_id` values, and anonymous rules for temporary guests, never temporary guests' names), `confirmed_at`, `edits` (JSON; see "Manual plan edits" in 7.5). Holds only plans the user accepted; drafts and versions stay in the checkpointer |
 | `meal_plan_items` | `plan_id`, `recipe_id` (nullable), `recipe_title` (snapshot), `servings` |
 | `shopping_lists` | `plan_id`, `items` (JSON). Saved only after the user confirms the list |
-| `extraction_logs` | `input_text`, `model_output`, `user_corrected`, `model_name` |
+| `extraction_logs` | `input_text`, `model_output`, `user_corrected`, `model_name`, `image_files` (the saved screenshots, so screenshot samples can be rerun) |
 | `llm_calls` | `task` (extraction / planning / image understanding / embeddings, and so on), `provider`, `model`, `input_tokens`, `output_tokens`, `cost_estimate`, `latency_ms`, `success`, `fallback_used`, `created_at` |
 
 **Purpose of `llm_calls`:** it is the basis for the monthly cap, the record of whether failover occurred, and the data source for evaluation cost and latency metrics. Per-model prices live in the configuration file with the date they were last updated.
 
 The LangGraph checkpointer and Store create their own tables in the same database.
 
-**Trade-off in `extraction_logs`:** building the evaluation set requires keeping the input text, which conflicts with the "do not store source text" principle. The table is therefore used only for private evaluation. It stays local, is limited in quantity, is not displayed in the UI, and is not part of the public demo. The public demo does not write to it.
+**`extraction_logs` is separate from recipes:** it keeps the input text, or references to the saved screenshots, together with the model output and the user's correction, so the evaluation set survives when a recipe is edited or deleted. It is used only for private evaluation. It stays local, is limited in quantity, is not displayed in the UI, and is not part of the public demo. The public demo does not write to it.
 
 ### 5.4 Inventory Deduction
 
@@ -405,7 +416,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 |---|---|
 | H1 | Fridge-only mode: each dish's main and secondary ingredients (except `optional`) must be in inventory and not at level "none", with matches following the ingredient hierarchy in 5.3. Seasonings are checked for availability only. Items in `always_in_stock` are assumed available. Unrecognized ingredients count as "not in inventory" (see 5.5) |
 | H2 | No allergens or restricted ingredients of this meal's diners. Allergy rules on a listed allergen are checked through the dictionary's `allergens[]`; rules on a specific ingredient and dietary restrictions are checked through `ingredient_id`, normalized names, and aliases. All checks include the ingredient hierarchy in 5.3. Variants are checked too. Unrecognized ingredients follow 5.5 |
-| H3 | The user has all required cookware |
+| H3 | The user has all required cookware. Supplies such as plastic wrap or foil are not checked |
 | H4 | The composition matches the requested number of dishes and soups (`meat dish` and `vegetable dish` count as dishes, and `soup` as soups) |
 | H5 | No duplicates; each `recipe_id` must exist in the user's recipe library |
 | H6 | When the user gives a time limit: a dish whose duration source is `stated` or `user` must not exceed it |
@@ -432,7 +443,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 | `estimated` | Not in the source; estimated by the model at import | Can be selected with an S7 warning; dishes with known durations are preferred when otherwise equal |
 | Empty | No estimate is available | Can be selected with an S7 warning and ranks lower |
 
-Import confirmation shows the estimated duration, and it becomes `user` if the user changes it. A later "cooked this meal" feature could let the user record actual time.
+Import confirmation shows the duration and its source. A changed duration becomes `user` by default, and the user can mark it `stated` when the source gives it, which also corrects an extraction that mislabeled a stated time. `estimated` is offered only while the model's own number is unchanged. A later "cooked this meal" feature could let the user record actual time.
 
 **Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written back to `current_plan`, so the next conversation turn sees it. The user can also add, remove, and change items when confirming the shopping list.
 
@@ -482,7 +493,7 @@ Import confirmation shows the estimated duration, and it becomes `user` if the u
 
 **Conversation records:** temporary guests' information does not enter friend profiles, but what the user said stays in the checkpointer's conversation records. Saved friends' nicknames are replaced with codes before model calls, but anonymity cannot be guaranteed for temporary guests' names. The product must therefore provide conversation deletion and explain in the UI how conversations are kept and that their content may be sent to the model provider.
 
-**Public demo:** a separate deployment with its own database, which holds only hand-written or licensed sample data and none of the real instance's data. Visitors share that database. Each browser session has its own `thread_id`, so visitors cannot see each other's conversations. Visitors can plan and revise meals, but cannot change shared recipes, inventory, or dictionaries. Import can show an extraction result but does not save it. Long-term memory writes are off, friend profiles are not available, and the database is reset on a schedule.
+**Public demo:** a separate deployment with its own database, which holds only hand-written or licensed sample data and none of the real instance's data. Visitors share that database. Each browser session has its own `thread_id`, so visitors cannot see each other's conversations. Visitors can plan and revise meals, but cannot change shared recipes, inventory, or dictionaries. Import can show an extraction result but does not save it, so no source text or images are stored. Long-term memory writes are off, friend profiles are not available, and the database is reset on a schedule.
 
 **Scope:** Phase 1 supports rules and filtering for several diners. Ratings still record only the user's own scores.
 
@@ -492,7 +503,7 @@ Import confirmation shows the estimated duration, and it becomes `user` if the u
 
 | Target | Metrics |
 |---|---|
-| Ingredient extraction | Ingredient name F1 (primary metric); amount accuracy (only for samples whose source gives a precise amount); amount type accuracy (whether vague amounts are `vague` and absent amounts are `missing`); **fabrication rate** (the share of outputs with a number where the source has no amount); valid JSON rate |
+| Ingredient extraction | Ingredient name F1 (primary metric); amount accuracy (only for lines whose source gives a number: weights, volumes, counts, and household measures, with the number and unit both right); amount type accuracy (whether vague amounts are `vague` and absent amounts are `missing`); **fabrication rate** (the share of outputs with a number where the source has no amount); valid JSON rate |
 | Planning | Constraint satisfaction rate (hard constraints); preference adherence rate (LLM as judge); average number of retries |
 | Cost and performance | Cost per item, latency, vLLM throughput |
 | Video approaches (Phase 3) | F1, cost, and latency comparison across approaches |
@@ -510,7 +521,7 @@ Import confirmation shows the estimated duration, and it becomes `user` if the u
 
 | Layer | What it checks | When it runs | Calls a real model |
 |---|---|---|---|
-| Unit tests | Whether code logic such as `validate_plan` is correct, including whether it rejects known-bad plans | Every commit, and in CI | No |
+| Unit tests | Whether code logic such as `validate_plan` is correct, including whether it rejects known-bad plans | Locally before each commit, and in CI on pull requests to `main` | No |
 | Runtime validation | Whether this generated plan satisfies hard constraints; if not, it goes back for replanning | Every planning run | Yes |
 | Model evaluation | First-attempt pass rate, final pass rate, and average retries on fixed requests and inventories | Locally, after changing prompts, models, or graph structure | Yes |
 
@@ -576,7 +587,7 @@ Estimates assume 4-6 hours per day, with 1 day ≈ one working day. They are onl
 
 | ID | Task | Deliverable / done criteria | Estimate |
 |---|---|---|---|
-| T0.1 | Repository skeleton | Private GitHub repository `mine-my-dinner`; backend (FastAPI) and frontend (Next.js with internationalization configured) in one repository; docker-compose starts PostgreSQL + pgvector; `.gitignore` (including `.env` and `data/`), `.env.example`, gitleaks pre-commit; pytest runs; minimal CI runs unit tests on every push, with no real model calls or evaluation data | 1-1.5 days |
+| T0.1 | Repository skeleton | Private GitHub repository `mine-my-dinner`; backend (FastAPI) and frontend (Next.js with internationalization configured) in one repository; docker-compose starts PostgreSQL + pgvector; `.gitignore` (including `.env` and `data/`), `.env.example`; pytest runs; minimal CI runs unit tests on pull requests to `main`, with no real model calls or evaluation data | 1-1.5 days |
 | T0.2 | Database tables and migrations | Create the tables in 5.3 (Alembic migrations, with the vector dimension set per Section 3); **bilingual ingredient dictionary seed data** (about 200 common ingredients with Chinese and English names and aliases, category, `stock_mode`, and `parent_id`; may be generated by an LLM and then checked by a person); the fixed allergen list and ingredient allergen tags (never null for seed entries); cookware dictionary seed data; default always-in-stock list; automatic creation of the user's own `diners` record | 1.5-2 days |
 | T0.3 | Multi-model call layer | Implement the model factory, unified calls, capability registry, per-task model selection, and automatic failover per 3.1; pre-call and post-call hooks for nickname replacement and restoration, which T1.4 fills in; embedding calls with no failover; **write every call to `llm_calls` and enforce the monthly cap**; unit tests use mocked (or recorded) responses, plus one smoke script with real calls | 1.5-2 days |
 | T0.4 | Extraction format and normalization | Pydantic models (recipes with `lang`, `dish_type`, `time_min`, `time_source`, `servings`, `tags`, `steps_summary`; ingredients with `amount_type`, `role`, `optional`; cookware); extraction prompt v1; normalization (dictionary + alias matching, flagging unmatched ingredients and cookware) | 1 day |
@@ -602,7 +613,7 @@ Estimates assume 4-6 hours per day, with 1 day ≈ one working day. They are onl
 | T1.8 | Subgraphs B, C, and D | Import through the graph (interrupt for review); manual entry; ingredient substitution (suggestion, user decision, saved variant) | 2.5-3 days |
 | T1.9 | Chat UI | Next.js chat page: streaming output, confirmation buttons during interrupts, diner selection card, and plan and shopping list display with manual editing; the permanent allergen notice from 5.5; a page for viewing recent saved plans and their shopping lists; a view of dishes left out for unknown allergens, with a way to resolve them; conversation deletion and an explanation of how conversations are kept and that their content may be sent to the model provider; the delete-friend dialog's warning about conversations and its link to conversation deletion; **Chinese and English UI switching**, with the agent replying in the user's language | 2.5-3.5 days |
 | T1.10 | Planning evaluation | Expand the minimal evaluation from T1.4 to 30-50 test requests with varied inventory scenarios; metrics: constraint satisfaction rate, final pass rate, average retries, preference adherence rate (LLM as judge), and cost and latency from `llm_calls`; **compare DeepSeek, OpenAI, and Gemini as planning models**; implement the local regression gate from Section 8 for extraction and planning | 2 days |
-| T1.11 | Wrap-up and publication | README, architecture diagram, LICENSE, a gitleaks scan of the full history, cleanup of secrets and private data, and making the repository public | 0.5-1 day |
+| T1.11 | Wrap-up and publication | README, architecture diagram, LICENSE, a check of the full history for secrets, cleanup of secrets and private data, and making the repository public | 0.5-1 day |
 
 **Phase 1 acceptance:** fridge-only and shopping-allowed planning, multi-turn revision, manual plan edits, meals for several people, memory reads and writes, and all four subgraphs work; the permanent allergen notice appears wherever 5.5 requires it; planning evaluation has numbers; the repository is public.
 

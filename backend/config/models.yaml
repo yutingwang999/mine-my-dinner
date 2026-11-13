@@ -1,0 +1,84 @@
+# Each model name below picks a model ID from the catalog. The environment
+# variables GEMINI_MODEL, OPENAI_MODEL, DEEPSEEK_MODEL, and GEMINI_EMBEDDING_MODEL
+# can pick another catalog ID. A model ID needs a catalog entry, so that its
+# price and capabilities are always known.
+#
+# Prices are USD per million tokens, from each provider's official pricing page.
+prices_updated: 2026-11-03
+
+catalog:
+  gemini-3.5-flash-lite:
+    provider: google_genai
+    capabilities: [tool_calling, strict_json, images, video, speech_to_text]
+    input_usd_per_mtok: 0.30
+    output_usd_per_mtok: 2.50
+  # These prices rise to 1.50 and 7.50 on 2027-01-01.
+  gemini-3.8-flash:
+    provider: google_genai
+    capabilities: [tool_calling, strict_json, images, video, speech_to_text]
+    input_usd_per_mtok: 0.75
+    output_usd_per_mtok: 3.75
+  gpt-6-luna:
+    provider: openai
+    capabilities: [tool_calling, strict_json, images]
+    input_usd_per_mtok: 0.10
+    output_usd_per_mtok: 0.50
+  # DeepSeek charges half of these rates off-peak. The peak rate is used so the
+  # monthly cap never underestimates spending. Thinking mode is on by default and
+  # rejects the forced tool_choice that structured output sends, so it is off.
+  deepseek-flash:
+    provider: deepseek
+    capabilities: [tool_calling, images]
+    input_usd_per_mtok: 0.30
+    output_usd_per_mtok: 1.20
+    options:
+      extra_body: {thinking: {type: disabled}}
+  deepseek-v4-pro:
+    provider: deepseek
+    capabilities: [tool_calling]
+    input_usd_per_mtok: 1.32
+    output_usd_per_mtok: 3.96
+    options:
+      extra_body: {thinking: {type: disabled}}
+  # Changing the embedding model requires recomputing every stored vector.
+  gemini-embedding-001:
+    provider: google_genai
+    capabilities: [embeddings]
+    input_usd_per_mtok: 0.15
+    output_usd_per_mtok: 0
+
+models:
+  gemini: gemini-3.5-flash-lite
+  openai: gpt-6-luna
+  deepseek: deepseek-flash
+  gemini_embedding: gemini-embedding-001
+
+tasks:
+  extraction:
+    primary: gemini
+    fallback: openai
+    requires: [strict_json]
+    timeout_seconds: 60
+  image_understanding:
+    primary: gemini
+    fallback: openai
+    requires: [strict_json, images]
+    timeout_seconds: 90
+  allergen_suggestions:
+    primary: gemini
+    fallback: openai
+    requires: [strict_json]
+    timeout_seconds: 30
+  planning:
+    primary: deepseek
+    fallback: openai
+    requires: [tool_calling]
+    essential: true
+    timeout_seconds: 60
+  embeddings:
+    primary: gemini_embedding
+    requires: [embeddings]
+    timeout_seconds: 30
+  smoke:
+    primary: gemini
+    timeout_seconds: 60

@@ -1,0 +1,666 @@
+:root {
+  --background: #f7f7f5;
+  --foreground: #1f1f1f;
+  --card: #ffffff;
+  --border: #d9d9d4;
+  --muted: #6b6b66;
+  --accent: #2f6f4f;
+  --accent-text: #ffffff;
+  --control: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #121212;
+    --foreground: #ececec;
+    --card: #1c1c1c;
+    --border: #3a3a3a;
+    --muted: #a3a3a3;
+    --accent: #5fae86;
+    --accent-text: #0f1a14;
+    --control: #242424;
+  }
+}
+
+html {
+  height: 100%;
+}
+
+html,
+body {
+  max-width: 100vw;
+  /* clip, not hidden: hidden makes body a scroll container, which stops sticky panels. */
+  overflow-x: clip;
+}
+
+body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Links to other sites inside content areas: always underlined, so they read
+   as links without hovering. Navigation links keep the bare style above. */
+.external-link {
+  text-decoration: underline;
+}
+
+/* Base layout. The reset above removes every default margin, so pages need these. */
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.site-header nav a {
+  margin-right: 1rem;
+  color: var(--foreground);
+}
+
+.site-header nav a[aria-current] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.site-main {
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin-bottom: 1rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin-bottom: 0.5rem;
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+p {
+  margin: 0.25rem 0;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select,
+textarea {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--control);
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+button {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--control);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button[type="submit"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.card > h2 {
+  margin-bottom: 0;
+}
+
+.hint {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* A label above a full-width control. */
+.stack-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.stack-field > input,
+.stack-field > select,
+.stack-field > textarea {
+  font-weight: normal;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* A list of entries, one per row, with actions on the right. */
+.row-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.row-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.row-list > li:last-child {
+  border-bottom: none;
+}
+
+.row-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
+.row-list > li > .line-panel {
+  flex-basis: 100%;
+}
+
+/* Import page: the paste box is wide, the other sources sit side by side. */
+.import-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+
+.import-grid > .card {
+  margin-bottom: 0;
+}
+
+.import-grid > .wide {
+  grid-column: 1 / -1;
+}
+
+.import-grid input[type="text"] {
+  width: 100%;
+}
+
+.batch-result ul {
+  margin-left: 1.25rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+}
+
+/* Review form: one field per row, so each value is easy to check. */
+.review-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 64rem;
+}
+
+.review-form h2 {
+  margin-top: 1rem;
+  font-size: 1.1rem;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 32rem);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.field textarea {
+  /* Grows with its text, so a long summary needs no scrolling. */
+  field-sizing: content;
+  resize: vertical;
+  min-height: 6rem;
+}
+
+.field-note {
+  margin-left: 9.75rem;
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
+.review-form input,
+.review-form select,
+.review-form textarea,
+.review-form button {
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+}
+
+.review-form button {
+  cursor: pointer;
+}
+
+.line-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.line {
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.line.unmatched {
+  border-left-color: #d97706;
+  background: #d9770614;
+}
+
+.line.skipped {
+  opacity: 0.7;
+}
+
+.line-raw {
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
+.line-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: end;
+}
+
+.mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  font-size: 0.8rem;
+}
+
+.mini-field input[type="number"] {
+  width: 6rem;
+}
+
+.mini-field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.line-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.line.unmatched .line-status strong {
+  color: #b45309;
+}
+
+.line-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-top: 1px dashed #8886;
+}
+
+.allergen-picker {
+  border: 1px solid #8884;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.allergen-picker legend {
+  padding: 0 0.25rem;
+}
+
+.allergen-picker > p,
+.allergen-picker > div {
+  flex-basis: 100%;
+}
+
+.notice {
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.notice-warning {
+  border: 1px solid #dc2626;
+  background: #dc262614;
+}
+
+.notice-info {
+  border: 1px solid #8886;
+}
+
+.notice ul {
+  margin-left: 1.25rem;
+}
+
+/* Dictionary browser: one entry per row, details in a muted line below the name. */
+.dictionary-browser h2 {
+  margin-top: 1.5rem;
+}
+
+.browse-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.browse-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.browse-list li {
+  padding: 0.375rem 0;
+  border-bottom: 1px solid #8883;
+}
+
+.browse-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.badge {
+  border: 1px solid #8886;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  font-size: 0.75rem;
+}
+
+.pager {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.browse-filters label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.card-list {
+  list-style: none;
+}
+
+/* A heading sitting in a row of actions keeps the actions on the right. */
+.actions > h2,
+.actions > h3 {
+  margin: 0 auto 0 0;
+}
+
+.line-fields > strong {
+  align-self: center;
+}
+
+/* Review form as one card, with Save and the other actions kept in reach. */
+.review-form {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem 1.25rem 0;
+}
+
+.review-form > button {
+  align-self: flex-start;
+}
+
+.form-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem -1.25rem 0;
+  padding: 0.75rem 1.25rem;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+}
+
+/* Delete sits apart from the fields, so it is not clicked by mistake. */
+.line .line-fields > button:last-child {
+  margin-left: auto;
+}
+
+/* An inline confirmation for an action that loses data: hard to miss. */
+.confirm-box {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  background: #dc26261a;
+}
+
+button.danger {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+/* Review: the source text stays beside the form while the user scrolls. */
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (min-width: 1100px) {
+  .site-main:has(.review-layout) {
+    max-width: 90rem;
+  }
+
+  .review-layout {
+    grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr);
+  }
+
+  .source-panel {
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
+  }
+}
+
+.source-panel {
+  margin-bottom: 0;
+}
+
+.source-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  line-height: 1.6;
+}
+
+.screenshots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.screenshots img {
+  max-width: 14rem;
+  max-height: 20rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* Supplies sit in the form like the other sections, without a fieldset border. */
+fieldset.supplies {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Choice groups: interchangeable ingredients shown as one "pick one" card. */
+.line-group {
+  border: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: color-mix(in srgb, var(--accent) 6%, var(--background));
+}
+
+/* Accent tints read weaker on a dark page, so the card's wash gets a boost there. */
+@media (prefers-color-scheme: dark) {
+  .line-group {
+    background: color-mix(in srgb, var(--accent) 12%, var(--background));
+  }
+}
+
+.choice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.choice-title {
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.choice-or {
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+  list-style: none;
+}
+
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Shown while a grouped line is dragged: drop it here to leave its choice. */
+.drop-out {
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  padding: 0.75rem;
+  text-align: center;
+  color: var(--accent);
+  font-weight: 600;
+  list-style: none;
+}
