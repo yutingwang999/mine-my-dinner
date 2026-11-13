@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import sessionmaker
 
 from minemydinner.constants import EMBEDDING_DIMENSION
 from minemydinner.llm.client import AllModelsFailed, MonthlyCapExceeded
@@ -177,3 +178,9 @@ def over_cap_client() -> FakeEmbedClient:
 
 def all_failed_client() -> FakeEmbedClient:
     return FakeEmbedClient(error=AllModelsFailed("down"))
+
+
+def rollback_session_factory(session):
+    """A sessionmaker on the test connection. Its sessions join the test transaction through a
+    savepoint, so a tool's commit never reaches the database."""
+    return sessionmaker(bind=session.get_bind(), join_transaction_mode="create_savepoint")
