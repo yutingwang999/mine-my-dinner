@@ -27,7 +27,7 @@
     "urlLabel": "Web page link",
     "urlSubmit": "Import page",
     "screenshotsLabel": "Screenshots of one dish",
-    "screenshotsHint": "1 to 5 PNG, JPEG, or WebP images, up to 10 MB each. Images are not stored.",
+    "screenshotsHint": "1 to 5 PNG, JPEG, or WebP images, up to 10 MB each. They are kept on this computer with the recipe.",
     "screenshotsSubmit": "Extract from screenshots",
     "batchLabel": "Text file with several dishes",
     "batchHint": "Separate dishes with a line of ---, or with blank lines. Up to 50 dishes. Links in the file are saved as sources but not opened.",

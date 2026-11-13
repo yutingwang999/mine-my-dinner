@@ -16,8 +16,30 @@ TIMEOUT_SECONDS = 15
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MAX_ROBOTS_BYTES = 512 * 1024
 MIN_MAIN_TEXT_CHARS = 200
+MIN_MAIN_TEXT_CHARS_CJK = 80
+CJK_SHARE = 0.3
 MAX_REDIRECTS = 5
 HTML_TYPES = ("text/html", "application/xhtml+xml")
+
+
+CJK_RANGES = (
+    (0x4E00, 0x9FFF),  # CJK unified ideographs
+    (0x3400, 0x4DBF),  # extension A
+    (0x3040, 0x30FF),  # hiragana and katakana
+    (0xAC00, 0xD7AF),  # hangul syllables
+)
+
+
+def _is_cjk(char: str) -> bool:
+    return any(low <= ord(char) <= high for low, high in CJK_RANGES)
+
+
+def min_main_text_chars(text: str) -> int:
+    """Chinese packs more into fewer characters, so mostly-CJK text needs fewer."""
+    visible = [char for char in text if not char.isspace()]
+    if visible and sum(map(_is_cjk, visible)) / len(visible) >= CJK_SHARE:
+        return MIN_MAIN_TEXT_CHARS_CJK
+    return MIN_MAIN_TEXT_CHARS
 
 
 class WebImportError(Exception):
@@ -133,14 +155,16 @@ def fetch_page_text(url: str) -> str:
         with closing(fetcher.get(url)) as response:
             if response.status_code != 200:
                 raise WebImportError("fetch_failed")
-            content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-            if content_type and content_type.lower() not in HTML_TYPES:
+            # An absent header still tries HTML; a present but empty one is not HTML.
+            raw_type = response.headers.get("Content-Type")
+            content_type = (raw_type or "").split(";")[0].strip().lower()
+            if raw_type is not None and content_type not in HTML_TYPES:
                 raise WebImportError("not_html")
             try:
                 body = fetcher._read(response, MAX_PAGE_BYTES)
             except httpx.HTTPError as error:
                 raise WebImportError("fetch_failed") from error
     text = trafilatura.extract(body, url=url, include_comments=False)
-    if not text or len(text.strip()) < MIN_MAIN_TEXT_CHARS:
+    if not text or len(text.strip()) < min_main_text_chars(text):
         raise WebImportError("no_main_text")
     return text.strip()

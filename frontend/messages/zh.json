@@ -27,7 +27,7 @@
     "urlLabel": "网页链接",
     "urlSubmit": "导入网页",
     "screenshotsLabel": "同一道菜的截图",
-    "screenshotsHint": "1 到 5 张 PNG、JPEG 或 WebP 图片，每张不超过 10 MB。图片不会被保存。",
+    "screenshotsHint": "1 到 5 张 PNG、JPEG 或 WebP 图片，每张不超过 10 MB。图片会随菜谱保存在这台电脑上。",
     "screenshotsSubmit": "从截图提取",
     "batchLabel": "包含多道菜的文本文件",
     "batchHint": "用单独一行 --- 或空行分隔各道菜，最多 50 道。文件里的链接只记为来源，不会被打开。",
