@@ -36,17 +36,22 @@ Issues found while importing real recipes in Task 9 (T0.8). The first list was f
 
 ## Still open
 
-| Issue | Effect | Possible fix |
-|---|---|---|
-| Reloading the page loses the review queue | Unsaved drafts must be finished before a reload | Keep drafts in the browser's local storage |
-| No progress during a batch import | The page looks stuck while it waits | Show "3 of 10 done" |
-| Several recipes pasted without a `---` line are read as one | A dish can be lost or merged | Have the model report how many recipes it sees and warn, or split them |
-| Built-in entries cannot take user aliases | Wording such as 马铃薯丁 must be linked by hand every time | Add the aliases to the seed dictionary, or let the user add personal aliases to built-in entries |
-| Cookware entries have no edit form | They can only be deleted | Add an edit form; the API exists |
-| Links without `http://` or `https://` are not recognized | `www.` links and app short links must be entered as the source by hand | Widen the link pattern |
-| Web pages with under 200 characters of main text are rejected | A short Chinese recipe page can be refused | Lower the floor for Chinese pages |
-| The model duplicates ingredients across the list, the method, and formula lines | 蛋 reappears as 鸡蛋 and as a 荷包蛋/水煮蛋 choice group, 吐司 as 全麦吐司, despite a dedup rule in the prompt; the duplicates survive out-of-sample tests, so this is the model's instruction-following ceiling | Delete the duplicates during review for now; revisit in `extract_v2` or with a stronger model, and let the evaluation metrics track it |
-| Added lines count as lines the model missed | Evaluation blames the model for ingredients the source never had | Ask, when adding, whether the source has the ingredient |
-| An allergen suggestion is requested again when its form reopens | A small repeated cost | Cache suggestions for the page session |
-| 吐司 is an alias of 面包 in the seed dictionary | Toast links to bread | Decide whether toast is its own entry |
-| No mobile layout or overall visual design | The pages have base styling only | A separate design pass |
+"Lands in" refers to the Phase 1 design, `docs/superpowers/specs/2026-11-13-phase-1-agent-design.md`.
+
+| Issue | Effect | Possible fix | Lands in |
+|---|---|---|---|
+| Reloading the page loses the review queue | Unsaved drafts must be finished before a reload | Keep drafts in the browser's local storage | T1.9b |
+| No progress during a batch import | The page looks stuck while it waits | Show "3 of 10 done" | T1.9b |
+| Several recipes pasted without a `---` line are read as one | A dish can be lost or merged | Have the model report how many recipes it sees and warn, or split them | T1.0 (`extract_v2`) |
+| Built-in entries cannot take user aliases | Wording such as 马铃薯丁 must be linked by hand every time | Add the aliases to the seed dictionary, or let the user add personal aliases to built-in entries | T1.0 (personal aliases) |
+| Cookware entries have no edit form | They can only be deleted | Add an edit form; the API exists | T1.9b |
+| Links without `http://` or `https://` are not recognized | `www.` links and app short links must be entered as the source by hand | Widen the link pattern | T1.0 |
+| Web pages with under 200 characters of main text are rejected | A short Chinese recipe page can be refused | Lower the floor for Chinese pages | T1.0 |
+| The model duplicates ingredients across the list, the method, and formula lines | 蛋 reappears as 鸡蛋 and as a 荷包蛋/水煮蛋 choice group, 吐司 as 全麦吐司, despite a dedup rule in the prompt; the duplicates survive out-of-sample tests, so this is the model's instruction-following ceiling | Delete the duplicates during review for now; revisit in `extract_v2` or with a stronger model, and let the evaluation metrics track it | T1.10 (tracked by metrics) |
+| Added lines count as lines the model missed | Evaluation blames the model for ingredients the source never had | Ask, when adding, whether the source has the ingredient | T1.10 |
+| An allergen suggestion is requested again when its form reopens | A small repeated cost | Cache suggestions for the page session | T1.9b |
+| 吐司 is an alias of 面包 in the seed dictionary | Toast links to bread | Decide whether toast is its own entry | Deferred; personal aliases cover the broader gap |
+| No mobile layout or overall visual design | The pages have base styling only | A separate design pass | T1.9b |
+| The import page says screenshots are not stored | The hint contradicts design 4.2: screenshots are kept locally with the recipe | Fix the hint text | T1.0 |
+| "My ingredients" and "My cookware" on the dictionary page have no paging | The lists grow without limit, unlike the built-in browser | Page them like the built-in browser | T1.9b |
+| The library shows only the source, not the stored ingredients | Users do not think to click Edit to see them | A read-only recipe detail view, shared with the chat plan card | T1.9 |
