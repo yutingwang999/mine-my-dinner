@@ -2,6 +2,8 @@
 
 This explains how the code chooses the dishes the planning model sees first: how recipes are searched, ranked, spread across main ingredients, and protected so that enough usable dishes reach the model. It describes the behaviour of Phase 1 plan 2a (`backend/minemydinner/planning/search.py` and `shortlist.py`). The design is in `docs/superpowers/specs/2026-11-14-phase-1-plan-2a-planner-efficiency-design.md`, Sections 5.4 and 5.6.
 
+"Makeable" and "missing" follow the stock rules in `docs/planner-stock-rules.md`.
+
 The model still chooses the dishes. Code only decides which candidates it sees first and in what order. Hard rules (allergies, dish counts, named ingredients, time limits) are checked by code after the model chooses, whatever the order was.
 
 ## 1. The pipeline
