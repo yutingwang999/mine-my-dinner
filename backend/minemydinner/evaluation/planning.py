@@ -6,12 +6,19 @@ fictional recipe library, runs each scenario on a fresh thread with the real pla
 """
 
 import argparse
+import hashlib
+import json
+import math
+import shutil
+import subprocess
 import sys
+import time
 import uuid
 from collections import Counter
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -41,6 +48,7 @@ from minemydinner.models import (
     RecipeCookware,
     RecipeIngredient,
 )
+from minemydinner.recipes.embedding import try_embed_recipe
 from minemydinner.planning.composition import count_categories
 from minemydinner.planning.context import MealConstraints, load_planning_context
 from minemydinner.planning.shortlist import (
@@ -63,6 +71,10 @@ class UnsafeDatabase(Exception):
 
 
 class InputError(Exception):
+    pass
+
+
+class UnsafeWorkingTree(Exception):
     pass
 
 
@@ -91,6 +103,20 @@ class RunOutcome:
     failures: list[str] = field(default_factory=list)
     # A check with no model run (model_calls is 0 by design): kept out of the summary rates.
     check_only: bool = False
+    # For the saved results: the graph thread, the PlanningRun row, and the shown titles.
+    thread_id: str = ""
+    planning_run_id: int | None = None
+    titles: list[str] = field(default_factory=list)
+    cache_write_input_tokens: int = 0
+    # Embedding calls made during the scenario (the meaning-based search of its queries).
+    embedding_calls: int = 0
+    # Scenario start to finish (planner, database, and tool time included), in ms.
+    wall_ms: int = 0
+    # The latency of each planning_eval model call (latency_ms is their sum).
+    call_latencies: list[int] = field(default_factory=list)
+    # For results.jsonl only (never in summary.json): the PlanningRun row and the llm_calls
+    # rows of the scenario.
+    record: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -503,6 +529,7 @@ def run_scenario(
         if client is None:
             raise ValueError(f"Scenario {scenario.name} is check-only and needs a client")
         return _spread_outcome(factory, client, scenario)
+    started = time.perf_counter()
     with factory() as session:
         reset_scenario_state(session, scenario)
         watermark = session.scalar(select(func.coalesce(func.max(LlmCall.id), 0)))
@@ -526,17 +553,15 @@ def run_scenario(
         run = session.scalars(
             select(PlanningRun).where(PlanningRun.thread_id == thread_id)
         ).one_or_none()
-        rows = session.execute(
-            select(
-                LlmCall.provider,
-                LlmCall.model,
-                LlmCall.input_tokens,
-                LlmCall.output_tokens,
-                LlmCall.cached_input_tokens,
-                LlmCall.cost_estimate,
-                LlmCall.latency_ms,
-            ).where(LlmCall.id > watermark, LlmCall.task == EVAL_TASK)
+        all_rows = session.scalars(
+            select(LlmCall).where(LlmCall.id > watermark).order_by(LlmCall.id)
         ).all()
+        rows = [r for r in all_rows if r.task == EVAL_TASK]
+        embedding_calls = sum(r.task == "embeddings" for r in all_rows)
+        record = {
+            "planning_run": _run_row(run),
+            "llm_calls": [_call_row(r) for r in all_rows],
+        }
     plan = state.get("current_plan")
     passed = bool(run and run.final_passed)
     first_passed = bool(run and run.first_passed)
@@ -572,7 +597,53 @@ def run_scenario(
         next_actions=list((plan or {}).get("next_actions", [])),
         as_expected=not failures,
         failures=failures,
+        thread_id=thread_id,
+        planning_run_id=run.id if run else None,
+        titles=[r["title"] for r in (plan or {}).get("recipes", [])],
+        cache_write_input_tokens=sum(r.cache_write_input_tokens or 0 for r in rows),
+        embedding_calls=embedding_calls,
+        wall_ms=int((time.perf_counter() - started) * 1000),
+        call_latencies=[r.latency_ms or 0 for r in rows],
+        record=record,
     )
+
+
+def _run_row(run: PlanningRun | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    return {
+        "id": run.id,
+        "thread_id": run.thread_id,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "prompt_version": run.prompt_version,
+        "tools_version": run.tools_version,
+        "request": run.request,
+        "defaults_used": list(run.defaults_used),
+        "events": run.events,
+        "retries": run.retries,
+        "first_passed": run.first_passed,
+        "final_passed": run.final_passed,
+        "final_plan": run.final_plan,
+        "has_temporary_guests": run.has_temporary_guests,
+    }
+
+
+def _call_row(call: LlmCall) -> dict[str, Any]:
+    return {
+        "id": call.id,
+        "task": call.task,
+        "provider": call.provider,
+        "model": call.model,
+        "input_tokens": call.input_tokens,
+        "cached_input_tokens": call.cached_input_tokens,
+        "cache_write_input_tokens": call.cache_write_input_tokens,
+        "output_tokens": call.output_tokens,
+        "cost_estimate": call.cost_estimate,
+        "latency_ms": call.latency_ms,
+        "success": call.success,
+        "fallback_used": call.fallback_used,
+        "created_at": call.created_at.isoformat() if call.created_at else None,
+    }
 
 
 def evaluate(
@@ -583,6 +654,8 @@ def evaluate(
     checkpointer,
     on_outcome: Callable[[RunOutcome], None] | None = None,
     use_shortlist: bool = True,
+    with_embeddings: bool = False,
+    stats: dict[str, int] | None = None,
 ) -> list[RunOutcome]:
     """Seed, load the library, run every scenario, and always empty the app tables after.
 
@@ -594,8 +667,14 @@ def evaluate(
     try:
         with factory() as session:
             seed_all(session)
-            load_library(session, library)
+            recipes = load_library(session, library)
             session.commit()
+            if with_embeddings:
+                # One embedding call per recipe, so meaning-based search works in the run.
+                failed = sum(not try_embed_recipe(session, client, recipe) for recipe in recipes)
+                if stats is not None:
+                    stats["library_embedding_calls"] = len(recipes)
+                    stats["library_embeddings_failed"] = failed
         recorder = PlanningRecorder(factory)
         graph = build_graph(
             GraphDeps(factory, client, recorder, task=EVAL_TASK, use_shortlist=use_shortlist),
@@ -673,6 +752,317 @@ def print_summary(outcomes: list[RunOutcome]) -> None:
     print(
         "  (latency is summed over each scenario's model calls; a failed run counts as not passed)"
     )
+    plan = group_metrics([o for o in scenario_runs if o.expected_plan])
+    if plan["scenarios"]:
+        latency = plan["latency"]
+        print(f"Scenarios that expect a plan ({plan['scenarios']})")
+        print(f"  as expected:             {plan['outcomes']['as_expected']}")
+        print(f"  first-attempt pass rate: {plan['outcomes']['first_pass_rate']:.2f}")
+        print(f"  average model calls:     {plan['calls']['avg_model_calls']:.1f}")
+        print(f"  cost per scenario (USD): {plan['cost']['avg_per_scenario']['cache_aware_usd']}")
+        print(
+            "  wall time avg/p50/p95:   "
+            f"{latency['wall_ms']['avg']}/{latency['wall_ms']['p50']}/{latency['wall_ms']['p95']} ms"
+        )
+        print(
+            "  per model call avg/p95:  "
+            f"{latency['per_call_ms']['avg']}/{latency['per_call_ms']['p95']} ms"
+        )
+
+
+# ---- saved results ----
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+RUNS_ROOT = Path(__file__).resolve().parents[2] / "eval_data" / "planning" / "runs"
+# Run folders are written by the evaluation itself, so they never count as uncommitted work.
+RUNS_PREFIX = "backend/eval_data/planning/runs/"
+
+
+def _git(*args: str) -> str | None:
+    """Output of a read-only git command, or None when git is unavailable or fails."""
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=20, check=True
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout
+
+
+def ensure_clean_tree() -> None:
+    """Refuse to run with uncommitted changes (outside the run folders) or without git, so
+    every run's recorded commit is exactly the code that ran."""
+    status = _git("status", "--porcelain", "--untracked-files=all")
+    if status is None:
+        raise UnsafeWorkingTree("git is unavailable, so the working tree cannot be checked; refusing to run")
+    for line in status.splitlines():
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if line.strip() and not path.startswith(RUNS_PREFIX):
+            raise UnsafeWorkingTree(
+                "The working tree has uncommitted changes; commit them before a run"
+            )
+
+
+def _file_info(path: Path) -> dict[str, str]:
+    try:
+        shown = path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        shown = path.name
+    return {"path": shown, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def _task_models(client: LLMClient, task: str) -> dict[str, Any] | None:
+    config = client.config.tasks.get(task)
+    if config is None:
+        return None
+    candidates = []
+    for name in config.candidates:
+        model = client.config.models[name]
+        candidates.append(
+            {
+                "provider": model.provider,
+                "model": model.model,
+                "input_usd_per_mtok": model.input_usd_per_mtok,
+                "cached_input_usd_per_mtok": model.cached_input_usd_per_mtok,
+                "cache_write_usd_per_mtok": model.cache_write_usd_per_mtok,
+                "output_usd_per_mtok": model.output_usd_per_mtok,
+            }
+        )
+    return {"essential": config.essential, "candidates": candidates}
+
+
+def run_info(
+    scenarios_path: Path,
+    library_path: Path,
+    client: LLMClient,
+    no_shortlist: bool,
+    with_embeddings: bool,
+    git_commit: str | None,
+    started_at: str,
+    finished_at: str,
+) -> dict[str, Any]:
+    """The run's times and conditions for summary.json. Holds no URL, key, or environment."""
+    # Imported here: only the saved results need these constants and versions.
+    from minemydinner.agent.planner import (
+        MODEL_CALL_LIMIT,
+        PLANNER_INPUT_TOKEN_BUDGET,
+        TOOL_CALL_LIMIT,
+        TOOLS_VERSION,
+    )
+    from minemydinner.agent.request import PROMPT_VERSION
+    from minemydinner.planning import shortlist
+
+    return {
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "conditions": {
+            "git_commit": git_commit,
+            "scenarios_file": _file_info(scenarios_path),
+            "library_file": _file_info(library_path),
+            "prompt_version": PROMPT_VERSION,
+            "tools_version": TOOLS_VERSION,
+            "flags": {"no_shortlist": no_shortlist, "with_embeddings": with_embeddings},
+            "constants": {
+                "MODEL_CALL_LIMIT": MODEL_CALL_LIMIT,
+                "TOOL_CALL_LIMIT": TOOL_CALL_LIMIT,
+                "PLANNER_INPUT_TOKEN_BUDGET": PLANNER_INPUT_TOKEN_BUDGET,
+                "SHORTLIST_MIN_PER_CATEGORY": shortlist.SHORTLIST_MIN_PER_CATEGORY,
+                "SHORTLIST_MARGIN": shortlist.SHORTLIST_MARGIN,
+                "SHORTLIST_SAME_MAIN": shortlist.SHORTLIST_SAME_MAIN,
+            },
+            "models": {
+                EVAL_TASK: _task_models(client, EVAL_TASK),
+                "embeddings": _task_models(client, "embeddings"),
+                "prices_updated": client.config.prices_updated.isoformat(),
+            },
+        },
+    }
+
+
+def make_run_id(
+    started: datetime, scenarios_path: Path, no_shortlist: bool, with_embeddings: bool
+) -> str:
+    stamp = started.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    name = scenarios_path.stem.removeprefix("scenarios_")
+    shortlist_part = "no-shortlist" if no_shortlist else "shortlist"
+    vectors_part = "vectors" if with_embeddings else "no-vectors"
+    return f"{stamp}-{name}-{shortlist_part}-{vectors_part}"
+
+
+def percentile(values: list[int], pct: float) -> int:
+    """Nearest-rank percentile; 0 for no values."""
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[max(math.ceil(pct / 100 * len(ordered)), 1) - 1]
+
+
+def _entry(outcome: RunOutcome) -> dict[str, Any]:
+    item = asdict(outcome)
+    item.pop("record")
+    item["name"] = item.pop("scenario")
+    item["model_time_ms"] = item.pop("latency_ms")
+    item.pop("call_latencies")
+    if outcome.check_only:
+        item["thread_id"] = None
+        item["planning_run_id"] = None
+    return item
+
+
+METRICS_BASIS = (
+    "model_time_ms: sum of the scenario's model-call latencies; wall_ms: scenario start to "
+    "finish (database and tool time included); per_call: individual planning_eval model "
+    "calls. Groups: all and expect_plan/expect_stop (by the scenario's expect_plan); "
+    "check-only scenarios are in no group. Aggregates compare only within the same scenario "
+    "set; compare same-named scenarios across different sets."
+)
+
+
+def _stats(values: list[int], with_max: bool = False) -> dict[str, int]:
+    result = {
+        "avg": round(sum(values) / len(values)) if values else 0,
+        "p50": percentile(values, 50),
+        "p95": percentile(values, 95),
+    }
+    if with_max:
+        result["max"] = max(values, default=0)
+    return result
+
+
+def _average(total: Decimal, count: int) -> Decimal:
+    return (total / count).quantize(Decimal("0.000001")) if count else Decimal("0")
+
+
+def group_metrics(
+    runs: list[RunOutcome], library_embedding_calls: int | None = None
+) -> dict[str, Any]:
+    """The metrics of one group of scenario runs (never check-only ones). Pure.
+    `library_embedding_calls` adds the library's embedding calls (the "all" group only)."""
+    n = len(runs)
+    s = summarize(runs)
+    embeddings: dict[str, int] = {"scenarios": sum(o.embedding_calls for o in runs)}
+    if library_embedding_calls is not None:
+        embeddings = {
+            "library": library_embedding_calls,
+            "scenarios": embeddings["scenarios"],
+            "total": library_embedding_calls + embeddings["scenarios"],
+        }
+    inputs = sum(o.input_tokens for o in runs)
+    cached = sum(o.cached_input_tokens for o in runs)
+    written = sum(o.cache_write_input_tokens for o in runs)
+    per_call = [latency for o in runs for latency in o.call_latencies]
+    return {
+        "scenarios": n,
+        "outcomes": {
+            "first_pass_rate": s["first_pass_rate"],
+            "final_pass_rate": s["final_pass_rate"],
+            "as_expected": s["as_expected"],
+            "avg_retries": s["avg_retries"],
+        },
+        "calls": {
+            "model_calls": sum(o.model_calls for o in runs),
+            "avg_model_calls": s["avg_model_calls"],
+            "max_model_calls": max((o.model_calls for o in runs), default=0),
+            "embedding_calls": embeddings,
+        },
+        "tokens": {
+            "input": inputs,
+            "cached": cached,
+            "written": written,
+            "avg_per_scenario": {
+                "input": round(inputs / n) if n else 0,
+                "cached": round(cached / n) if n else 0,
+                "written": round(written / n) if n else 0,
+            },
+            "cache_hit_rate": s["cache_hit_rate"],
+            "max_call_input": s["max_call_input_tokens"],
+        },
+        "cost": {
+            "cache_aware_usd": s["cost_usd"],
+            "uncached_usd": s["uncached_cost_usd"],
+            "avg_per_scenario": {
+                "cache_aware_usd": _average(s["cost_usd"], n),
+                "uncached_usd": _average(s["uncached_cost_usd"], n),
+            },
+        },
+        "latency": {
+            "wall_ms": _stats([o.wall_ms for o in runs], with_max=True),
+            "model_time_ms": _stats([o.latency_ms for o in runs]),
+            "per_call_ms": _stats(per_call),
+        },
+    }
+
+
+def build_summary(
+    run_id: str, info: dict[str, Any], outcomes: list[RunOutcome], library_embedding_calls: int
+) -> dict[str, Any]:
+    """summary.json: conditions, timing, metrics, and per-scenario results, with no model
+    text (the `detail` text and the record stay in results.jsonl)."""
+    runs = [o for o in outcomes if not o.check_only]
+    s = summarize(outcomes)
+    started = datetime.fromisoformat(info["started_at"])
+    finished = datetime.fromisoformat(info["finished_at"])
+    scenarios = []
+    for outcome in outcomes:
+        item = _entry(outcome)
+        item.pop("detail")
+        scenarios.append(item)
+    return {
+        "run_id": run_id,
+        "started_at": info["started_at"],
+        "finished_at": info["finished_at"],
+        "conditions": info["conditions"],
+        "timing": {"total_seconds": round((finished - started).total_seconds(), 1)},
+        "metrics": {
+            "basis": METRICS_BASIS,
+            "checks": s["checks"],
+            "groups": {
+                "all": group_metrics(runs, library_embedding_calls),
+                "expect_plan": group_metrics([o for o in runs if o.expected_plan]),
+                "expect_stop": group_metrics([o for o in runs if not o.expected_plan]),
+            },
+        },
+        "scenarios": scenarios,
+    }
+
+
+def _tools_document() -> dict[str, Any]:
+    from minemydinner.agent.planner import PlanProposal
+    from minemydinner.planning.tools import PLANNER_TOOLS
+
+    return {
+        "tools": [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "args_schema": tool.tool_call_schema.model_json_schema(),
+            }
+            for tool in PLANNER_TOOLS
+        ],
+        "final_answer": {"name": "PlanProposal", "schema": PlanProposal.model_json_schema()},
+    }
+
+
+def _dump(value: Any, indent: int | None = None) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=indent, default=str)
+
+
+def write_run(
+    root: Path, run_id: str, summary: dict[str, Any], outcomes: list[RunOutcome]
+) -> Path:
+    """Write the run folder: summary.json, results.jsonl (git-ignored), tools.json, and the
+    prompt files of the version used. Returns the folder."""
+    from minemydinner.agent.request import PROMPT_DIR
+
+    folder = root / run_id
+    (folder / "prompts").mkdir(parents=True, exist_ok=True)
+    (folder / "summary.json").write_text(_dump(summary, indent=2), encoding="utf-8")
+    (folder / "tools.json").write_text(_dump(_tools_document(), indent=2), encoding="utf-8")
+    lines = [_dump({**_entry(o), **o.record}) for o in outcomes]
+    (folder / "results.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for prompt in sorted(PROMPT_DIR.glob("*.md")):
+        shutil.copy2(prompt, folder / "prompts" / prompt.name)
+    return folder
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -684,7 +1074,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run the planner without the shortlist (tools only), for comparison",
     )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=RUNS_ROOT,
+        help="the folder that holds the run folders (default: backend/eval_data/planning/runs)",
+    )
+    parser.add_argument(
+        "--with-embeddings",
+        action="store_true",
+        help="embed the library's recipes first, so meaning-based search works",
+    )
     args = parser.parse_args(argv)
+    try:
+        ensure_clean_tree()
+    except UnsafeWorkingTree as error:
+        print(error, file=sys.stderr)
+        return 2
     settings = get_settings()
     try:
         check_test_database(settings)
@@ -701,6 +1107,16 @@ def main(argv: list[str] | None = None) -> int:
         settings.llm_monthly_cap_usd,
     )
     print(f"Planning evaluation of {len(scenarios)} scenarios (task {EVAL_TASK})")
+    started = datetime.now(timezone.utc)
+    saved: Path | None = None
+    failed = True  # until the run completes
+    collected: list[RunOutcome] = []
+    stats: dict[str, int] = {}
+
+    def on_outcome(outcome: RunOutcome) -> None:
+        collected.append(outcome)
+        print_outcome(outcome)
+
     try:
         with open_checkpointer(settings.database_url) as saver:
             outcomes = evaluate(
@@ -709,15 +1125,47 @@ def main(argv: list[str] | None = None) -> int:
                 library,
                 scenarios,
                 saver,
-                print_outcome,
+                on_outcome,
                 use_shortlist=not args.no_shortlist,
+                with_embeddings=args.with_embeddings,
+                stats=stats,
             )
+        failed = False
     except (UnsafeDatabase, ValueError) as error:
         print(error, file=sys.stderr)
         return 2
     finally:
         engine.dispose()
+        # Best effort, also after a partial run that raised: the outcomes so far are kept.
+        if collected:
+            finished = datetime.now(timezone.utc)
+            try:
+                commit = (_git("rev-parse", "HEAD") or "").strip() or None
+                info = run_info(
+                    args.scenarios,
+                    args.library,
+                    client,
+                    args.no_shortlist,
+                    args.with_embeddings,
+                    commit,
+                    started.isoformat(),
+                    finished.isoformat(),
+                )
+                run_id = make_run_id(
+                    started, args.scenarios, args.no_shortlist, args.with_embeddings
+                )
+                summary = build_summary(
+                    run_id, info, collected, stats.get("library_embedding_calls", 0)
+                )
+                saved = write_run(args.results_dir, run_id, summary, collected)
+            except Exception as error:
+                # Never let a failed save replace the run's own error.
+                print(f"Could not save the results: {type(error).__name__}", file=sys.stderr)
+            if saved and failed:
+                print(f"Partial results saved to {saved}", file=sys.stderr)
     print_summary(outcomes)
+    if saved:
+        print(f"Run folder: {saved}")
     return 0
 
 

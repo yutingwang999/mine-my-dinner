@@ -5,6 +5,7 @@ clean up after themselves and skip when the test database is not empty.
 """
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 import yaml
@@ -26,15 +27,23 @@ from minemydinner.evaluation.planning import (
     load_scenarios,
     summarize,
     uncached_cost,
+    UnsafeWorkingTree,
+    build_summary,
+    ensure_clean_tree,
+    main,
+    make_run_id,
+    percentile,
+    run_info,
     run_scenario,
+    write_run,
 )
 from minemydinner.llm.client import LLMClient
 from minemydinner.llm.config import load_llm_config
-from minemydinner.llm.registry import register_provider
+from minemydinner.llm.registry import register_embedding_provider, register_provider
 from minemydinner.models import LlmCall, PlanningRun, Recipe
 from minemydinner.seed import seed_all
 from minemydinner.settings import Settings
-from tests.agentfakes import ScriptedChatModel, final_proposal
+from tests.agentfakes import FakeEmbeddings, ScriptedChatModel, final_proposal
 from tests.fakes import write_config
 from tests.planningfakes import make_recipe
 
@@ -234,11 +243,11 @@ def test_loaders_read_the_scenario_schema(tmp_path):
 # ---- fake-model end to end, on the test database ----
 
 
-def _config_with_planning_eval(tmp_path):
-    path = write_config(
-        tmp_path / "models.yaml",
-        providers={"deepseek": "eval_primary", "openai": "eval_fallback"},
-    )
+def _config_with_planning_eval(tmp_path, embedding_provider=None):
+    providers = {"deepseek": "eval_primary", "openai": "eval_fallback"}
+    if embedding_provider:
+        providers["gemini_embedding"] = embedding_provider
+    path = write_config(tmp_path / "models.yaml", providers=providers)
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     document["tasks"]["planning_eval"] = {**document["tasks"]["planning"], "essential": False}
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
@@ -282,10 +291,10 @@ def eval_db(engine):
         session.commit()
 
 
-def _client(tmp_path, factory, model):
+def _client(tmp_path, factory, model, embedding_provider=None):
     register_provider("eval_primary", lambda m, timeout: model)
     register_provider("eval_fallback", lambda m, timeout: model)
-    config = load_llm_config(_config_with_planning_eval(tmp_path))
+    config = load_llm_config(_config_with_planning_eval(tmp_path, embedding_provider))
     return LLMClient(config, factory, Decimal("20"))
 
 
@@ -532,3 +541,289 @@ def test_locale_reply_check_ignores_recipe_titles():
     zh = _scenario(expect_locale_reply="zh")
     assert _check(zh, _plan(["a"]), reply="今晚吃青椒肉丝", titles=zh_titles) == []
     assert _check(zh, _plan(["a"]), reply="Dinner: 青椒肉丝", titles=zh_titles) != []
+
+# ---- run folders ----
+
+REPLY = "SECRET-MODEL-REPLY 今晚吃饭"
+RUNS_PREFIX = "backend/eval_data/planning/runs/"
+
+
+def _outcomes():
+    return [
+        RunOutcome(
+            "a", True, True, 0, Decimal("0.0123"), 900, 5, input_tokens=100,
+            cached_input_tokens=40, cache_write_input_tokens=10, max_call_input_tokens=60,
+            uncached_cost=Decimal("0.02"), reasons=["time_limit"],
+            next_actions=["drop_time_limit"], thread_id="t-1", planning_run_id=7,
+            titles=["青椒肉丝"], detail="recipes: 青椒肉丝", embedding_calls=2,
+            wall_ms=1500, call_latencies=[100, 200, 200, 400],
+            record={
+                "planning_run": {"events": [{"response": {"content": REPLY}}]},
+                "llm_calls": [{"id": 1, "task": "planning_eval", "served": None}],
+            },
+        ),
+        RunOutcome(
+            "b", False, False, 1, Decimal("0.01"), 2100, 3, as_expected=False, failures=["x"],
+            input_tokens=50, thread_id="t-2", planning_run_id=8, expected_plan=False,
+            wall_ms=2500, call_latencies=[700, 1400],
+        ),
+        RunOutcome(
+            "spread", True, True, 0, Decimal("0"), 0, 0, check_only=True, record={},
+        ),
+    ]
+
+
+def _info(tmp_path, **kwargs):
+    scenarios = tmp_path / "scenarios_demo.yaml"
+    library = tmp_path / "lib.yaml"
+    scenarios.write_text("scenarios: []", encoding="utf-8")
+    library.write_text("dishes: []", encoding="utf-8")
+    client = LLMClient(load_llm_config(_config_with_planning_eval(tmp_path)), None, Decimal("1"))
+    return run_info(
+        scenarios, library, client, no_shortlist=kwargs.get("no_shortlist", False),
+        with_embeddings=kwargs.get("with_embeddings", False), git_commit="abc123",
+        started_at="2026-11-15T10:00:00+00:00", finished_at="2026-11-15T10:05:00+00:00",
+    )
+
+
+def test_run_id_format():
+    from datetime import datetime, timezone
+
+    when = datetime(2026, 11, 15, 4, 0, 0, tzinfo=timezone.utc)
+    assert make_run_id(when, Path("x/scenarios_baseline.yaml"), False, False) == (
+        "20261115T040000Z-baseline-shortlist-no-vectors"
+    )
+    assert make_run_id(when, Path("scenarios_plan2a.yaml"), True, True) == (
+        "20261115T040000Z-plan2a-no-shortlist-vectors"
+    )
+    assert make_run_id(when, Path("custom.yaml"), False, True).endswith("-custom-shortlist-vectors")
+
+
+def test_percentiles_use_nearest_rank():
+    values = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+    assert percentile(values, 50) == 500 and percentile(values, 95) == 1000
+    assert percentile([7], 50) == 7 and percentile([], 95) == 0
+    assert percentile([30, 10, 20], 50) == 20
+
+
+def _write(tmp_path, embeddings=0):
+    import json
+
+    info = _info(tmp_path, no_shortlist=True, with_embeddings=embeddings > 0)
+    summary = build_summary("RID", info, _outcomes(), embeddings)
+    folder = write_run(tmp_path / "runs", "RID", summary, _outcomes())
+    return folder, json.loads((folder / "summary.json").read_text(encoding="utf-8"))
+
+
+def test_run_folder_layout_and_summary(tmp_path):
+    folder, data = _write(tmp_path, embeddings=3)
+    assert folder == tmp_path / "runs" / "RID"
+    assert {p.name for p in folder.iterdir()} == {
+        "summary.json", "results.jsonl", "tools.json", "prompts"
+    }
+    assert set(data) == {
+        "run_id", "started_at", "finished_at", "conditions", "timing", "metrics", "scenarios"
+    }
+    cond = data["conditions"]
+    assert set(cond) == {
+        "git_commit", "scenarios_file", "library_file", "prompt_version", "tools_version",
+        "flags", "constants", "models",
+    }
+    assert cond["git_commit"] == "abc123" and len(cond["scenarios_file"]["sha256"]) == 64
+    assert cond["flags"] == {"no_shortlist": True, "with_embeddings": True}
+    assert cond["constants"]["MODEL_CALL_LIMIT"] == 6
+    model = cond["models"]["planning_eval"]["candidates"][0]
+    assert {"provider", "model", "input_usd_per_mtok", "cached_input_usd_per_mtok",
+            "output_usd_per_mtok"} <= set(model)
+    assert "prices_updated" in cond["models"]
+    assert data["timing"]["total_seconds"] == 300
+    metrics = data["metrics"]
+    assert set(metrics) == {"basis", "checks", "groups"} and metrics["checks"] == "1/1"
+    for word in ("model_time_ms", "wall_ms", "per_call"):
+        assert word in metrics["basis"]
+    assert set(metrics["groups"]) == {"all", "expect_plan", "expect_stop"}
+    m = metrics["groups"]["all"]
+    assert set(m) == {"scenarios", "outcomes", "calls", "tokens", "cost", "latency"}
+    assert m["scenarios"] == 2 and m["outcomes"]["as_expected"] == "1/2"
+    assert m["calls"]["embedding_calls"] == {"library": 3, "scenarios": 2, "total": 5}
+    assert m["calls"]["max_model_calls"] == 5 and m["calls"]["model_calls"] == 8
+    assert m["tokens"]["input"] == 150 and m["tokens"]["written"] == 10
+    assert m["tokens"]["cache_hit_rate"] == pytest.approx(40 / 150)
+    assert m["tokens"]["avg_per_scenario"] == {"input": 75, "cached": 20, "written": 5}
+    assert m["cost"]["cache_aware_usd"] == "0.0223"
+    assert Decimal(m["cost"]["avg_per_scenario"]["cache_aware_usd"]) == Decimal("0.01115")
+    assert Decimal(m["cost"]["avg_per_scenario"]["uncached_usd"]) == Decimal("0.01")
+    lat = m["latency"]
+    assert lat["wall_ms"] == {"avg": 2000, "p50": 1500, "p95": 2500, "max": 2500}
+    assert lat["model_time_ms"] == {"avg": 1500, "p50": 900, "p95": 2100}
+    assert lat["per_call_ms"] == {"avg": 500, "p50": 200, "p95": 1400}
+    plan = metrics["groups"]["expect_plan"]
+    assert plan["scenarios"] == 1 and plan["outcomes"]["as_expected"] == "1/1"
+    assert plan["latency"]["per_call_ms"] == {"avg": 225, "p50": 200, "p95": 400}
+    assert plan["latency"]["wall_ms"]["max"] == 1500 and "library" not in plan["calls"]["embedding_calls"]
+    stop = metrics["groups"]["expect_stop"]
+    assert stop["scenarios"] == 1 and stop["outcomes"]["as_expected"] == "0/1"
+    assert stop["latency"]["model_time_ms"]["avg"] == 2100
+    first = data["scenarios"][0]
+    assert first["name"] == "a" and first["planning_run_id"] == 7 and first["cost"] == "0.0123"
+    assert first["titles"] == ["青椒肉丝"] and first["check_only"] is False
+    assert first["wall_ms"] == 1500 and first["model_time_ms"] == 900
+    assert "latency_ms" not in first and "call_latencies" not in first
+    assert data["scenarios"][2]["thread_id"] is None and data["scenarios"][2]["check_only"]
+    assert "record" not in first and "detail" not in first
+
+
+def test_summary_holds_no_model_text_but_results_do(tmp_path):
+    import json
+
+    folder, _ = _write(tmp_path)
+    summary_text = (folder / "summary.json").read_text(encoding="utf-8")
+    lines = (folder / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and REPLY in lines[0] and REPLY not in summary_text
+    first = json.loads(lines[0])
+    assert first["name"] == "a"
+    assert first["planning_run"]["events"][0]["response"]["content"] == REPLY
+    assert first["llm_calls"][0]["task"] == "planning_eval"
+    assert "青椒肉丝" in summary_text  # titles are kept, unescaped
+    for text in (summary_text, "\n".join(lines)):
+        assert TEST_URL not in text and "postgresql" not in text and "api_key" not in text.lower()
+
+
+def test_tools_and_prompts_are_saved(tmp_path):
+    import json
+
+    from minemydinner.agent.planner import PlanProposal
+    from minemydinner.agent.request import PROMPT_DIR
+    from minemydinner.planning.tools import PLANNER_TOOLS
+
+    folder, _ = _write(tmp_path)
+    tools = json.loads((folder / "tools.json").read_text(encoding="utf-8"))
+    assert [t["name"] for t in tools["tools"]] == [t.name for t in PLANNER_TOOLS]
+    for saved, tool in zip(tools["tools"], PLANNER_TOOLS):
+        assert saved["description"] == tool.description
+        assert saved["args_schema"] == tool.tool_call_schema.model_json_schema()
+    assert tools["final_answer"] == {
+        "name": "PlanProposal", "schema": PlanProposal.model_json_schema()
+    }
+    copied = {p.name: p.read_bytes() for p in (folder / "prompts").iterdir()}
+    assert copied == {p.name: p.read_bytes() for p in PROMPT_DIR.glob("*.md")} and copied
+
+
+def test_a_dirty_tree_is_refused_and_runs_are_excluded(monkeypatch):
+    import minemydinner.evaluation.planning as module
+
+    def status(lines):
+        monkeypatch.setattr(module, "_git", lambda *a: lines)
+
+    status("")
+    assert ensure_clean_tree() is None
+    status(f"?? {RUNS_PREFIX}\n M {RUNS_PREFIX}x/summary.json\n")
+    assert ensure_clean_tree() is None
+    status(f" M backend/minemydinner/x.py\n?? {RUNS_PREFIX}y/\n")
+    with pytest.raises(UnsafeWorkingTree, match="uncommitted"):
+        ensure_clean_tree()
+    status(" M backend/eval_data/planning/library.yaml\n")
+    with pytest.raises(UnsafeWorkingTree):
+        ensure_clean_tree()
+    status(None)  # git unavailable
+    with pytest.raises(UnsafeWorkingTree, match="git"):
+        ensure_clean_tree()
+
+
+def test_the_conditions_record_prices_and_the_embedding_task(tmp_path):
+    conditions = _info(tmp_path)["conditions"]
+    assert set(conditions["models"]) >= {"planning_eval", "prices_updated"}
+    assert "embeddings" in conditions["models"]
+
+
+def test_with_embeddings_embeds_each_recipe_and_counts_the_calls(tmp_path, eval_db):
+    embedder = FakeEmbeddings()
+    register_embedding_provider("eval_embed", lambda m, timeout: embedder)
+    model = TitleModel(eval_db, "清炒小白菜")
+    client = _client(tmp_path, eval_db, model, embedding_provider="eval_embed")
+    library = [LIBRARY[0], {**LIBRARY[0], "title": "炒小白菜二号"}]
+    stats = {}
+    [outcome] = evaluate(
+        eval_db, client, library, [_scenario()], InMemorySaver(), with_embeddings=True,
+        stats=stats,
+    )
+    assert len(embedder.embedded) == 2 and stats["library_embedding_calls"] == 2
+    assert stats["library_embeddings_failed"] == 0
+    assert outcome.final_passed and outcome.embedding_calls == 0
+    _assert_clean(eval_db)
+
+
+def test_the_planner_record_and_calls_reach_the_outcome(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [_scenario()], InMemorySaver()
+    )
+    run = outcome.record["planning_run"]
+    assert run["thread_id"] == outcome.thread_id and run["events"]
+    assert {c["task"] for c in outcome.record["llm_calls"]} == {"planning_eval"}
+    assert len(outcome.record["llm_calls"]) == outcome.model_calls
+    assert outcome.cache_write_input_tokens >= 0
+
+
+def test_a_failing_save_never_hides_the_run_error(tmp_path, monkeypatch, capsys):
+    import contextlib
+
+    import minemydinner.evaluation.planning as module
+
+    class Boom(Exception):
+        pass
+
+    settings = Settings(_env_file=None, database_url=TEST_URL, test_database_url=TEST_URL)
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    monkeypatch.setattr(module, "ensure_clean_tree", lambda: None)
+    monkeypatch.setattr(module, "_git", lambda *a: "abc\n")
+    monkeypatch.setattr(module, "read_library", lambda path: [])
+    monkeypatch.setattr(module, "load_scenarios", lambda path: [_scenario()])
+    monkeypatch.setattr(
+        module, "create_engine", lambda url: type("E", (), {"dispose": lambda s: None})()
+    )
+    monkeypatch.setattr(module, "sessionmaker", lambda **kw: None)
+    monkeypatch.setattr(module, "load_llm_config", lambda **kw: None)
+    monkeypatch.setattr(module, "LLMClient", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "open_checkpointer", lambda url: contextlib.nullcontext(None))
+
+    def run_then_fail(*args, **kwargs):
+        args[5](RunOutcome("a", True, True, 0, Decimal("0"), 0, 1))
+        raise Boom("run failed")
+
+    def bad_save(*args, **kwargs):
+        raise KeyError("secret-looking detail")
+
+    monkeypatch.setattr(module, "evaluate", run_then_fail)
+    monkeypatch.setattr(module, "run_info", bad_save)
+    with pytest.raises(Boom):
+        main(["--scenarios", str(tmp_path / "s.yaml"), "--library", str(tmp_path / "l.yaml")])
+    err = capsys.readouterr().err
+    assert "KeyError" in err and "secret-looking" not in err
+
+
+def test_a_dirty_tree_stops_main_before_anything_runs(tmp_path, monkeypatch, capsys):
+    import minemydinner.evaluation.planning as module
+
+    monkeypatch.setattr(module, "_git", lambda *a: " M backend/x.py\n")
+    called = []
+    monkeypatch.setattr(module, "get_settings", lambda: called.append(1))
+    code = main(["--scenarios", str(tmp_path / "s.yaml"), "--library", str(tmp_path / "l.yaml")])
+    assert code == 2 and not called and "uncommitted" in capsys.readouterr().err
+
+
+def test_an_empty_group_is_all_zeros(tmp_path):
+    summary = build_summary("RID", _info(tmp_path), [], 0)
+    stop = summary["metrics"]["groups"]["expect_stop"]
+    assert stop["scenarios"] == 0 and stop["latency"]["wall_ms"]["max"] == 0
+    assert stop["tokens"]["avg_per_scenario"]["input"] == 0
+
+
+def test_wall_ms_and_call_latencies_are_recorded(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [_scenario()], InMemorySaver()
+    )
+    assert outcome.wall_ms > 0
+    assert len(outcome.call_latencies) == outcome.model_calls
+    assert sum(outcome.call_latencies) == outcome.latency_ms

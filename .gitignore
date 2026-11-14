@@ -226,6 +226,8 @@ __marimo__/
 
 # Local evaluation and recipe data
 data/
+# Full per-run evaluation records (summary.json, prompts, and tools.json are committed)
+backend/eval_data/planning/runs/*/results.jsonl
 
 # Private planning documents
 docs/private/

@@ -57,7 +57,12 @@ class ScriptedChatModel:
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         calls = [{**call, "id": f"call-{next(_ids)}"} for call in reply.tool_calls]
         usage = reply.usage_metadata or self.usage
-        return AIMessage(content=reply.content, tool_calls=calls, usage_metadata=usage)
+        return AIMessage(
+            content=reply.content,
+            tool_calls=calls,
+            usage_metadata=usage,
+            response_metadata=reply.response_metadata,
+        )
 
     def with_structured_output(self, schema: type, include_raw: bool = False):
         assert include_raw

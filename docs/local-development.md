@@ -124,4 +124,23 @@ $env:DATABASE_URL = (& $py -c "from minemydinner.settings import Settings; print
 Remove-Item Env:DATABASE_URL
 ```
 
-Add `--no-shortlist` to run the planner without the code-built shortlist, for comparison.
+Options:
+
+- `--no-shortlist` runs the planner without the code-built shortlist, for comparison.
+- `--with-embeddings` computes embeddings for the fictional recipes after loading them, so meaning-based search is tested too (a few cheap embedding calls, counted separately).
+
+The script refuses to start when the working tree has uncommitted changes (run folders excepted), so every run belongs to one commit.
+
+Each run writes a folder `backend/eval_data/planning/runs/<run id>/`, where the run id is `<UTC time>-<scenario set>-<shortlist|no-shortlist>-<vectors|no-vectors>`:
+
+- `summary.json` (committed): conditions (commit, data file hashes, prompt and tool versions, models and prices, settings), metrics by area, and each scenario's metrics. It holds no model text.
+- `prompts/` and `tools.json` (committed): the prompt files and the model-facing tool definitions the run used.
+- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. Keep a private copy outside Git if the run matters.
+
+How to read the metrics in `summary.json`:
+
+- `model_time_ms` is the sum of one scenario's model-call latencies. `wall_ms` is the scenario from start to finish, with database and tool time included. `per_call_ms` covers the individual model calls (`planning_eval` task), not scenarios.
+- Latency is reported as avg, p50, and p95 (nearest rank); wall time also has the max. Cost and tokens have totals and per-scenario averages.
+- Metrics come in three groups: `all`, `expect_plan` (scenarios that should end with a plan), and `expect_stop` (scenarios that should stop early with a reason). Check-only scenarios are in no group; their pass count is `metrics.checks`.
+- Compare aggregates only between runs of the same scenario set. When the sets differ, compare same-named scenarios.
+

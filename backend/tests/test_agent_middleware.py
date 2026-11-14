@@ -126,6 +126,20 @@ def test_model_call_event_names_the_model(planner_env, session, r1):
     assert event["response"]["tool_calls"][0]["name"] == "PlanProposal"
 
 
+def test_model_call_event_records_the_served_model(planner_env, session, r1):
+    reply = final_proposal([r1.id])
+    reply.response_metadata = {"model_name": "served-model-2026"}
+    _, run_id = run_planner(planner_env, script=[reply])
+    (event,) = events(session, run_id)
+    assert event["served_model"] == "served-model-2026"
+
+
+def test_model_call_event_has_a_null_served_model_when_absent(planner_env, session, r1):
+    _, run_id = run_planner(planner_env, script=[final_proposal([r1.id])])
+    (event,) = events(session, run_id)
+    assert event["served_model"] is None
+
+
 def test_primary_failure_fails_over_inside_the_loop(planner_env_primary_fails, session, r1):
     env = planner_env_primary_fails
     out, run_id = run_planner(env, script=[tool_call("get_inventory", {}), final_proposal([r1.id])])
