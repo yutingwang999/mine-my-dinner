@@ -4,7 +4,7 @@
 
 **Goal:** Make planning cheap, fast, and honest about why a request cannot be met: a code-built, category-balanced shortlist in the planner's first message, an early stop with reasons and fitting next actions, one counting rule for every dish category, cache-aware cost accounting, and an evaluation that measures the change.
 
-**Architecture:** New pure planning modules (`planning/shortlist.py`, `planning/feasibility.py`, `planning/composition.py`) compute candidates, feasibility, and category counts in code. The graph gains a feasibility step before the planner and before each retry; the planner's first message carries the shortlist in a cache-stable order, and a token-budget middleware ends runaway attempts. `LLMClient` records cached input tokens and prices them from `models.yaml`. Prompts move to `plan_v2`.
+**Architecture:** New pure planning modules (`planning/shortlist.py`, `planning/feasibility.py`, `planning/composition.py`) compute candidates, feasibility, and category counts in code. The graph gains a feasibility step before the planner and before each retry; the planner's first message carries the shortlist before the request summary and is reused unchanged on retries, and a token-budget middleware ends runaway attempts. `LLMClient` records cached input tokens and prices them from `models.yaml`. Prompts move to `plan_v2`.
 
 **Tech Stack:** Python 3.13, FastAPI, SQLAlchemy 2, Alembic, LangChain 1.4.2 / LangGraph, pytest; Next.js, next-intl, vitest.
 

@@ -12,6 +12,7 @@ from minemydinner.planning.shortlist import (
     SHORTLIST_SAME_MAIN,
     ShortlistEntry,
     build_shortlist,
+    build_shortlist_result,
     needed_by_dish_type,
 )
 from minemydinner.planning.validate import PlanSpec
@@ -290,6 +291,30 @@ def test_shortlist_respects_dietary_exclusions(session, seeded):
     assert entries[1].dislikes == ["Diner 1: 黄瓜"]
     text = json.dumps([asdict(e) for e in entries], ensure_ascii=False)
     assert "Zhang Wei" not in text and "source_text" not in text
+
+
+def test_shortlist_result_carries_the_search_notes(session, seeded):
+    from tests.planningfakes import all_failed_client
+
+    make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+    ok = make_recipe(session, "清炒白菜", lines=[L("小白菜", role="main")])
+    me = self_diner(session)
+    rule(session, me.id, "allergy", allergen="egg")
+    result = build_shortlist_result(
+        session,
+        all_failed_client(),
+        ctx_for(session, me.id),
+        spec(dishes=1),
+        ParsedRequest(query="清淡"),
+        {},
+    )
+    assert ids(result.entries["vegetable dish"]) == [ok.id]
+    assert result.left_out_unknown_allergens == ["神秘菜"]
+    assert result.semantic_paused is True
+    calm = build_shortlist_result(
+        session, FakeEmbedClient(), ctx_for(session), spec(dishes=1), ParsedRequest(), {}
+    )
+    assert calm.left_out_unknown_allergens == [] and calm.semantic_paused is False
 
 
 def test_entry_fields(session, seeded):

@@ -30,7 +30,13 @@ from minemydinner.agent.request import PROMPT_VERSION, get_request_style, set_re
 from minemydinner.planning.feasibility import Shortfall
 from minemydinner.models import AppPreference, LlmCall, PlanningRun
 from minemydinner.agent.planner import TOOLS_VERSION
-from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client
+from tests.agentfakes import (
+    FakeEmbeddings,
+    ScriptedChatModel,
+    final_proposal,
+    make_llm_client,
+    tool_call,
+)
 from tests.planningfakes import (
     L,
     make_recipe,
@@ -684,3 +690,243 @@ def test_counts_text_uses_singular_and_omits_unasked_zeros():
     }
     assert _unmet_for_user(h4, {}, "en") == "The plan has 2 dishes, 0 soups; 1 dish, 1 soup were asked for"
     assert _unmet_for_user(h4, {}, "zh") == "方案有 2 道菜，0 道汤，要求是 1 道菜，1 道汤"
+
+
+# ---- the planner's opening, retries, and the shortlist (Task 7) ----
+
+
+def make_graph_env(tmp_path, session, model=None, embeddings=None, **deps_kwargs):
+    session.execute(delete(AppPreference))
+    session.flush()
+    set_request_style(session, "plan_then_adjust")
+    model = model or ScriptedChatModel(
+        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]}
+    )
+    factory = rollback_session_factory(session)
+    client = make_llm_client(tmp_path, factory, model, embeddings=embeddings)
+    deps = GraphDeps(factory, client, PlanningRecorder(factory), **deps_kwargs)
+    env = GraphEnv(build_graph(deps, InMemorySaver()), model, session, thread("plan-7"))
+    env.deps = deps
+    return env
+
+
+def planner_calls(env: GraphEnv) -> list[list]:
+    """The messages of each planner model call, as the model received them."""
+    return [
+        sent
+        for sent in env.model.sent
+        if sent and sent[0].type == "system" and "PlanProposal" in sent[0].content
+    ]
+
+
+def recorded_model_calls(env: GraphEnv) -> list[dict]:
+    return [e for e in run_record(env).events if e["kind"] == "model_call"]
+
+
+def shortlist_line(opening: str) -> str:
+    (line,) = [line for line in opening.splitlines() if line.startswith("{")]
+    return line
+
+
+def shortlist_of(opening: str) -> dict:
+    return json.loads(shortlist_line(opening))
+
+
+ENTRY_KEYS = [
+    "id", "title", "time_min", "time_source", "servings",
+    "missing", "missing_cookware", "uses_expiring", "dislikes",
+]
+
+
+def test_first_message_is_shortlist_then_summary(graph_env, veg, meat):
+    replies = [final_proposal([veg.id, meat.id])]
+    out = plan(graph_env, "two dishes", parse={"dishes": 2}, replies=replies)
+    (sent,) = planner_calls(graph_env)
+    # The system prompt, then one human message: the opening.
+    assert [m.type for m in sent] == ["system", "human"]
+    opening = sent[1].content
+    assert opening == out["planner_opening"]
+    shortlist = shortlist_of(opening)
+    assert list(shortlist) == ["meat dish", "vegetable dish"]
+    assert [e["id"] for e in shortlist["meat dish"]] == [meat.id]
+    (entry,) = shortlist["vegetable dish"]
+    assert list(entry) == ENTRY_KEYS
+    assert entry == {
+        "id": veg.id, "title": "清炒白菜", "time_min": None, "time_source": None, "servings": 2,
+        "missing": [], "missing_cookware": [], "uses_expiring": [], "dislikes": [],
+    }
+    # Compact JSON, before the request summary.
+    line = shortlist_line(opening)
+    assert ", " not in line and '": ' not in line
+    assert opening.index(line) < opening.index("Plan this meal.")
+    assert "Reply locale: en" in opening and "Dishes (meat plus vegetable): 2" in opening
+    assert out["current_plan"]["passed"]
+
+
+def test_summary_states_counts_split_minimum_and_other_categories(
+    tmp_path, session, seeded, veg, meat
+):
+    make_recipe(session, "蛋花汤", "soup", [L("鸡蛋", role="main")])
+    make_recipe(session, "米饭", "staple food", [L("大米", linked=False)])
+    make_recipe(session, "凉拌黄瓜", "vegetable dish", [L("黄瓜")])
+    env = make_graph_env(tmp_path, session)
+    parse = {
+        "mode": "shopping", "dishes": 3, "meat_dishes": 1, "vegetable_dishes": 1,
+        "soups": 1, "staples": 1, "must_use": ["猪肉"], "prefer_use": ["土豆"],
+    }
+    out = plan(env, "dinner", parse=parse, replies=[final_proposal([veg.id])])
+    opening = out["planner_opening"]
+    assert "Dishes (meat plus vegetable): 3" in opening
+    assert "Split: at least 1 meat dish, at least 1 vegetable dish" in opening
+    assert "Soups: 1" in opening
+    assert "Staple foods: 1, desserts: 0, snacks: 0" in opening
+    assert "Must use in at least one dish: 猪肉" in opening
+    assert "Prefer using: 土豆" in opening
+
+
+def test_retry_reuses_the_identical_opening(graph_env, veg, meat):
+    replies = [final_proposal([veg.id]), final_proposal([veg.id, meat.id])]
+    out = plan(graph_env, "two dishes please", parse={"dishes": 2}, replies=replies)
+    assert out["retries"] == 1 and out["current_plan"]["passed"]
+    sent = planner_calls(graph_env)
+    assert len(sent) == 2
+    # The system prompt and the opening are byte-identical; one retry message is appended.
+    assert [m.content for m in sent[1][:2]] == [m.content for m in sent[0][:2]]
+    assert len(sent[1]) == 3 and sent[1][2].type == "human"
+    calls = recorded_model_calls(graph_env)
+    opening = calls[0]["messages"][:2]
+    retry_index = 1
+    assert calls[retry_index]["messages"][: len(opening)] == calls[0]["messages"][: len(opening)]
+
+
+def test_retry_message_summarizes_the_previous_attempt(graph_env, session, veg):
+    pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
+    replies = [final_proposal([pork.id]), final_proposal([veg.id])]
+    out = plan(graph_env, "dinner", parse={"dishes": 1}, replies=replies)
+    assert out["retries"] == 1
+    retry = planner_calls(graph_env)[1][-1].content
+    shortlist = shortlist_of(out["planner_opening"])
+    offered = [e["id"] for entries in shortlist.values() for e in entries]
+    assert sorted(offered) == sorted([veg.id, pork.id])
+    assert f"Your proposal [{pork.id}] failed these checks." in retry
+    assert "not in stock: 五花肉" in retry
+    assert "Shortlist ids offered: " + ", ".join(str(i) for i in offered) in retry
+    assert f"Ids proposed: {pork.id}" in retry
+    assert f"Missing items per proposed recipe: {pork.id}: 五花肉" in retry
+
+
+def test_no_shortlist_switch_sends_summary_only(tmp_path, session, seeded, veg):
+    env = make_graph_env(tmp_path, session, use_shortlist=False)
+    replies = [final_proposal([999999]), final_proposal([veg.id])]
+    out = plan(env, "dinner", parse={"dishes": 1}, replies=replies)
+    sent = planner_calls(env)
+    opening = sent[0][1].content
+    assert opening.startswith("Plan this meal.") and "{" not in opening
+    assert opening == out["planner_opening"]
+    assert sent[1][1].content == opening
+    assert "Shortlist ids offered: none" in sent[1][2].content
+
+
+class ShortlistPicker(ScriptedChatModel):
+    """Answers at once from the shortlist in the opening: the top entry of each needed type."""
+
+    def invoke(self, messages, config=None, **kwargs):
+        first = messages[0] if messages else None
+        if not (first is not None and first.type == "system" and "PlanProposal" in first.content):
+            return super().invoke(messages, config, **kwargs)
+        self.sent.append(list(messages))
+        shortlist = shortlist_of(messages[1].content)
+        ids = [entries[0]["id"] for entries in shortlist.values() if entries]
+        call = {**final_proposal(ids).tool_calls[0], "id": "pick"}
+        return AIMessage(content="", tool_calls=[call], usage_metadata=self.usage)
+
+
+@pytest.fixture
+def graph_env_shortlist_fits(tmp_path, session, seeded, veg, meat):
+    stock(session, "鸡蛋", count=6)
+    make_recipe(session, "蛋花汤", "soup", [L("鸡蛋", role="main")])
+    model = ShortlistPicker(structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]})
+    return make_graph_env(tmp_path, session, model=model)
+
+
+def test_typical_request_needs_one_planner_call(graph_env_shortlist_fits):
+    env = graph_env_shortlist_fits
+    parse = {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1, "soups": 1}
+    out = plan(env, "一荤一素一汤", parse=parse)
+    assert out["current_plan"]["passed"] and out["retries"] == 0
+    assert len(planner_calls(env)) == 1
+    assert [e["kind"] for e in run_record(env).events] == ["model_call", "validation"]
+
+
+def test_one_query_vector_cache_per_run(tmp_path, session, seeded, veg):
+    embeddings = FakeEmbeddings()
+    env = make_graph_env(tmp_path, session, embeddings=embeddings)
+    replies = [
+        tool_call("search_recipes", {"query": "清淡"}),
+        final_proposal([999999]),
+        tool_call("search_recipes", {"query": "清淡"}),
+        final_proposal([veg.id]),
+    ]
+    out = plan(env, "清淡的", parse={"dishes": 1, "query": "清淡"}, replies=replies)
+    assert out["retries"] == 1 and out["current_plan"]["passed"]
+    # The shortlist and both attempts' searches share one embedding of the query.
+    assert embeddings.embedded == ["清淡"]
+    # The run's cache is dropped once the run ends.
+    assert env.deps.run_query_vectors == {}
+
+
+def test_shortlist_search_notes_reach_the_plan_card(tmp_path, session, seeded, veg):
+    rule(session, self_diner(session).id, "allergy", allergen="egg")
+    make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+    env = make_graph_env(tmp_path, session, embeddings=FakeEmbeddings(error=RuntimeError("down")))
+    parse = {"dishes": 1, "query": "清淡"}
+    out = plan(env, "清淡的", parse=parse, replies=[final_proposal([veg.id])])
+    current = out["current_plan"]
+    # The planner never searched; the notes come from the shortlist.
+    assert current["semantic_paused"] is True
+    assert current["left_out_unknown_allergens"] == ["神秘菜"]
+
+
+def test_planner_search_respects_the_request_filters(tmp_path, session, seeded):
+    quick = make_recipe(session, "快手菜", lines=[L("小白菜")], time_min=15, time_source="stated")
+    slow = make_recipe(session, "慢炖菜", lines=[L("小白菜")], time_min=90, time_source="stated")
+    embeddings = FakeEmbeddings()
+    env = make_graph_env(tmp_path, session, embeddings=embeddings)
+    parse = {"mode": "shopping", "dishes": 1, "time_limit_min": 30, "query": "清淡"}
+    replies = [tool_call("search_recipes", {"max_time": 120}), final_proposal([quick.id])]
+    out = plan(env, "半小时内，清淡的", parse=parse, replies=replies)
+    assert out["current_plan"]["passed"]
+    (search,) = [e for e in run_record(env).events if e["kind"] == "tool_call"]
+    hit_ids = [hit["id"] for hit in search["result"]["hits"]]
+    assert quick.id in hit_ids and slow.id not in hit_ids
+    # The request's query ranked the search too, reusing the shortlist's embedding.
+    assert embeddings.embedded == ["清淡"]
+
+
+class FailingPlanner(ScriptedChatModel):
+    """Answers the router and the parser, then fails every planner call."""
+
+    def invoke(self, messages, config=None, **kwargs):
+        if messages and messages[0].type == "system" and "PlanProposal" in messages[0].content:
+            raise RuntimeError("provider down")
+        return super().invoke(messages, config, **kwargs)
+
+
+def test_query_vectors_are_dropped_when_the_planner_fails(tmp_path, session, seeded, veg):
+    model = FailingPlanner(structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]})
+    env = make_graph_env(tmp_path, session, model=model)
+    with pytest.raises(Exception):
+        plan(env, "清淡的", parse={"dishes": 1, "query": "清淡"})
+    assert env.deps.run_query_vectors == {}
+
+
+def test_search_tool_filters_and_ranks_with_the_named_ingredients(tmp_path, session, seeded):
+    egg = make_recipe(session, "番茄炒蛋", lines=[L("番茄", role="main"), L("鸡蛋", role="main")])
+    make_recipe(session, "清炒白菜", lines=[L("小白菜", role="main")])
+    env = make_graph_env(tmp_path, session)
+    parse = {"mode": "shopping", "dishes": 1, "all_use": ["鸡蛋"]}
+    replies = [tool_call("search_recipes", {}), final_proposal([egg.id])]
+    out = plan(env, "全做鸡蛋", parse=parse, replies=replies)
+    assert out["current_plan"]["passed"]
+    (search,) = [e for e in run_record(env).events if e["kind"] == "tool_call"]
+    assert [hit["id"] for hit in search["result"]["hits"]] == [egg.id]

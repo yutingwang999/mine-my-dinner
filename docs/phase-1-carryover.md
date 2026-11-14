@@ -121,6 +121,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 
 - `parse.md` (plan_v2) has no example of moving "must use" names to "prefer" after "the named ingredients are optional", and no example of a soup range.
 - `_counts_text` would produce an empty clause if a spec required no dishes and no soups; unreachable while every spec needs at least one dish in total.
+- The planner's request summary prints an explicit "0 vegetable dishes" when a split names one side as 0, and states "Every count is exact unless it says at least". Both are new model-facing wording to watch in the evaluation.
 
 ### Cost accounting
 

@@ -9,7 +9,7 @@ few makeable dishes or none using a must_use ingredient), and cut.
 
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -190,6 +190,17 @@ def _spread(
     return kept
 
 
+@dataclass(frozen=True)
+class ShortlistResult:
+    """The shortlist plus the notes its search produced, for the plan card."""
+
+    entries: dict[str, list[ShortlistEntry]]
+    # Titles of recipes left out because an ingredient's allergens are unknown.
+    left_out_unknown_allergens: list[str] = field(default_factory=list)
+    # True when meaning-based search was unavailable and the query matched text only.
+    semantic_paused: bool = False
+
+
 def build_shortlist(
     session: Session,
     client: LLMClient,
@@ -198,6 +209,18 @@ def build_shortlist(
     parsed: "ParsedRequest",
     query_vectors: dict[str, list[float]],
 ) -> dict[str, list[ShortlistEntry]]:
+    """Candidates per needed dish type (see `build_shortlist_result`), without the notes."""
+    return build_shortlist_result(session, client, ctx, spec, parsed, query_vectors).entries
+
+
+def build_shortlist_result(
+    session: Session,
+    client: LLMClient,
+    ctx: PlanningContext,
+    spec: "PlanSpec",
+    parsed: "ParsedRequest",
+    query_vectors: dict[str, list[float]],
+) -> ShortlistResult:
     """Candidates per needed dish type, keyed by dish type, each list in rank order.
 
     Uses the request's query, time limit, and exclude_recent_days as search does; the
@@ -207,7 +230,7 @@ def build_shortlist(
     makeable and relevance stays first."""
     needed = needed_by_dish_type(spec)
     if not needed:
-        return {}
+        return ShortlistResult({})
     ranking_names = _names(spec.must_use, spec.prefer_use)
     result = search_recipes(
         session,
@@ -241,4 +264,8 @@ def build_shortlist(
         ranked = [hit for hit in hits if hit.dish_type == dish_type]
         kept = _spread(ranked, slots_for(count), count, groups, makeable, must_users)
         shortlist[dish_type] = [ShortlistEntry.from_hit(hit) for hit in kept]
-    return shortlist
+    return ShortlistResult(
+        shortlist,
+        [excluded.title for excluded in result.left_out_unknown_allergens],
+        result.semantic_paused,
+    )

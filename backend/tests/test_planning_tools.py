@@ -329,6 +329,113 @@ def test_planner_deps_get_their_own_query_vectors():
     assert a.query_vectors == {"x": [1.0]} and b.query_vectors == {}
 
 
+def test_search_tool_ranks_and_filters_like_the_shortlist(session_factory, session, seeded):
+    egg = make_recipe(session, "番茄炒蛋", lines=[L("番茄", role="main"), L("鸡蛋", role="main")])
+    cabbage = make_recipe(session, "清炒白菜", lines=[L("小白菜", role="main")])
+
+    def search(**names):
+        deps = PlannerDeps(
+            session_factory=session_factory,
+            client=FakeEmbedClient(),
+            constraints=MealConstraints(diner_ids=()),
+            mode="shopping",
+            **names,
+        )
+        call = {
+            "name": "search_recipes",
+            "args": {"runtime": _runtime(deps)},
+            "id": "c",
+            "type": "tool_call",
+        }
+        hits = json.loads(ALL_TOOLS["search_recipes"].invoke(call).content)["hits"]
+        return [hit["id"] for hit in hits if hit["id"] in (egg.id, cabbage.id)]
+
+    # Newer first by default; the request's named ingredients rank, and all_use filters.
+    assert search() == [cabbage.id, egg.id]
+    assert search(prefer_use=["鸡蛋"]) == [egg.id, cabbage.id]
+    assert search(must_use=["鸡蛋"]) == [egg.id, cabbage.id]
+    assert search(all_use=["鸡蛋"]) == [egg.id]
+
+
+@pytest.fixture
+def search_args(session_factory, monkeypatch):
+    """Runs the search tool with request filters on PlannerDeps; returns what reached search."""
+    from minemydinner.planning import tools
+    from minemydinner.planning.search import SearchResult
+
+    seen: dict = {}
+
+    def capture(session, client, ctx, **kwargs):
+        seen.clear()
+        seen.update(kwargs)
+        return SearchResult([])
+
+    monkeypatch.setattr(tools, "search_recipes", capture)
+
+    def run(args, **request):
+        deps = PlannerDeps(
+            session_factory=session_factory,
+            client=FakeEmbedClient(),
+            constraints=MealConstraints(diner_ids=()),
+            mode="shopping",
+            **request,
+        )
+        call = {
+            "name": "search_recipes",
+            "args": {**args, "runtime": _runtime(deps)},
+            "id": "c",
+            "type": "tool_call",
+        }
+        ALL_TOOLS["search_recipes"].invoke(call)
+        return dict(seen)
+
+    return run
+
+
+def test_search_tool_always_applies_the_request_time_limit(search_args):
+    assert search_args({"max_time": 60}, time_limit_min=30)["max_time"] == 30
+    assert search_args({"max_time": 20}, time_limit_min=30)["max_time"] == 20
+    assert search_args({}, time_limit_min=30)["max_time"] == 30
+    assert search_args({"max_time": 45})["max_time"] == 45
+    assert search_args({})["max_time"] is None
+
+
+def test_search_tool_defaults_recency_and_query_from_the_request(search_args):
+    request = {"exclude_recent_days": 7, "query": "清淡"}
+    defaulted = search_args({}, **request)
+    assert defaulted["exclude_recent_days"] == 7 and defaulted["query"] == "清淡"
+    # The request's query only ranks, as in the shortlist; it never empties a search.
+    assert defaulted["keep_unmatched"] is True
+    # The model's own query wins and filters as before.
+    given = search_args({"exclude_recent_days": 3, "query": "辣"}, **request)
+    assert given["query"] == "辣" and given["keep_unmatched"] is False
+    # The recency window never shrinks below the request's; the model may widen it.
+    assert given["exclude_recent_days"] == 7
+    assert search_args({"exclude_recent_days": 14}, **request)["exclude_recent_days"] == 14
+    assert search_args({"exclude_recent_days": 3})["exclude_recent_days"] == 3
+    assert search_args({})["query"] is None and search_args({})["exclude_recent_days"] is None
+
+
+def test_search_tool_time_limit_drops_slower_recipes(session_factory, session, seeded):
+    quick = make_recipe(session, "快手菜", lines=[L("小白菜")], time_min=15, time_source="stated")
+    slow = make_recipe(session, "慢炖菜", lines=[L("小白菜")], time_min=90, time_source="stated")
+    deps = PlannerDeps(
+        session_factory=session_factory,
+        client=FakeEmbedClient(),
+        constraints=MealConstraints(diner_ids=()),
+        mode="shopping",
+        time_limit_min=30,
+    )
+    call = {
+        "name": "search_recipes",
+        "args": {"max_time": 120, "runtime": _runtime(deps)},
+        "id": "c",
+        "type": "tool_call",
+    }
+    hits = {h["id"] for h in json.loads(ALL_TOOLS["search_recipes"].invoke(call).content)["hits"]}
+    assert quick.id in hits and slow.id not in hits
+
+
 @pytest.mark.parametrize("mode,first", [("fridge_only", "far"), ("shopping", "near")])
 def test_search_tool_ranks_makeable_first_only_in_fridge_mode(
     session_factory, session, seeded, mode, first

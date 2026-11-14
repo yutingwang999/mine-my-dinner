@@ -6,7 +6,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy import delete, select
 
 from minemydinner.agent.graph import GraphDeps
-from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
+from minemydinner.agent.planner import (
+    MODEL_CALL_LIMIT,
+    PLANNER_INPUT_TOKEN_BUDGET,
+    TOOL_CALL_LIMIT,
+    TOOLS_VERSION,
+    PlanProposal,
+    build_planner,
+)
 from minemydinner.agent.records import PlanningRecorder, load_run
 from minemydinner.agent.request import PROMPT_VERSION
 from minemydinner.llm.client import LLMClient
@@ -184,11 +191,105 @@ def test_invalid_tool_arguments_are_recorded(planner_env, session, r1):
 
 def test_runaway_loop_is_cut_off(planner_env_endless_tools, session):
     out, run_id = run_planner(planner_env_endless_tools)
-    assert len(planner_env_endless_tools.primary.sent) == 12
+    assert len(planner_env_endless_tools.primary.sent) == MODEL_CALL_LIMIT
     assert out.get("structured_response") is None
     assert "limit" in out["messages"][-1].content
     kinds = [e["kind"] for e in events(session, run_id)]
-    assert kinds.count("model_call") == 12
+    assert kinds.count("model_call") == MODEL_CALL_LIMIT
+
+
+def test_planner_limits_and_middleware_order(tmp_path, session, seeded, monkeypatch):
+    from minemydinner.agent import planner as planner_module
+
+    assert (MODEL_CALL_LIMIT, TOOL_CALL_LIMIT, PLANNER_INPUT_TOKEN_BUDGET) == (6, 10, 32000)
+    seen = {}
+    real = planner_module.create_agent
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(planner_module, "create_agent", capture)
+    make_env(tmp_path, session)
+    names = [type(m).__name__ for m in seen["middleware"]]
+    assert names == [
+        "CallLayerMiddleware",
+        "TokenBudgetMiddleware",
+        "ModelCallLimitMiddleware",
+        "ToolCallLimitMiddleware",
+    ]
+    assert seen["middleware"][1].budget == PLANNER_INPUT_TOKEN_BUDGET
+
+
+def big(input_tokens: int) -> dict:
+    return {"input_tokens": input_tokens, "output_tokens": 5, "total_tokens": input_tokens + 5}
+
+
+@pytest.fixture
+def planner_env_big_inputs(tmp_path, session, seeded):
+    primary = ScriptedChatModel(usage=big(PLANNER_INPUT_TOKEN_BUDGET))
+    return make_env(tmp_path, session, primary=primary)
+
+
+def test_budget_ends_the_attempt_without_rewriting_history(planner_env_big_inputs, session):
+    env = planner_env_big_inputs
+    first = tool_call("get_inventory", {})
+    first.usage_metadata = big(1000)
+    script = [first, tool_call("get_inventory", {}), tool_call("get_inventory", {})]
+    out, run_id = run_planner(env, script=script, text="Plan dinner for me.")
+    # The second call reached the budget and asked for a tool: no third call, no tool run.
+    assert len(env.primary.sent) == 2
+    assert out.get("structured_response") is None
+    assert [m.type for m in out["messages"]] == ["human", "ai", "tool", "ai"]
+    assert out["messages"][-1].tool_calls and out["messages"][-1].content == ""
+    # Earlier messages are exactly what the second call was sent: nothing trimmed or rewritten.
+    second = env.primary.sent[1]
+    assert second[0].type == "system"
+    assert [(m.type, m.content) for m in second[1:]] == [
+        (m.type, m.content) for m in out["messages"][:3]
+    ]
+    assert out["messages"][0].content == "Plan dinner for me."
+    recorded = events(session, run_id)
+    assert [e["kind"] for e in recorded] == ["model_call", "tool_call", "model_call", "budget_stop"]
+    # The stop is in the planning record only, never in the message history.
+    assert recorded[-1] == {"kind": "budget_stop", "input_tokens": PLANNER_INPUT_TOKEN_BUDGET}
+    assert not any("budget" in str(m.content) for m in out["messages"])
+
+
+def test_no_budget_stop_event_below_the_budget(tmp_path, session, seeded, r1):
+    primary = ScriptedChatModel(usage=big(PLANNER_INPUT_TOKEN_BUDGET - 1))
+    env = make_env(tmp_path, session, primary=primary)
+    _, run_id = run_planner(env, script=[tool_call("get_inventory", {}), final_proposal([r1.id])])
+    assert "budget_stop" not in [e["kind"] for e in events(session, run_id)]
+
+
+def test_budget_below_the_limit_lets_the_run_continue(tmp_path, session, seeded, r1):
+    primary = ScriptedChatModel(usage=big(PLANNER_INPUT_TOKEN_BUDGET - 1))
+    env = make_env(tmp_path, session, primary=primary)
+    out, _ = run_planner(env, script=[tool_call("get_inventory", {}), final_proposal([r1.id])])
+    assert len(env.primary.sent) == 2 and out["structured_response"].recipe_ids == [r1.id]
+
+
+def test_final_answer_at_the_budget_is_kept(planner_env_big_inputs, r1):
+    out, _ = run_planner(planner_env_big_inputs, script=[final_proposal([r1.id])])
+    assert out["structured_response"].recipe_ids == [r1.id]
+
+
+def test_budget_middleware_writes_nothing_but_the_jump():
+    from minemydinner.agent.budget import TokenBudgetMiddleware
+
+    middleware = TokenBudgetMiddleware(100)
+    ask = AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "1"}])
+    over = ask.model_copy(update={"usage_metadata": big(100)})
+    under = ask.model_copy(update={"usage_metadata": big(99)})
+    answer = AIMessage(content="done", usage_metadata=big(500))
+    assert middleware.after_model({"messages": [HumanMessage("x"), over]}, None) == {
+        "jump_to": "end"
+    }
+    assert middleware.after_model({"messages": [HumanMessage("x"), under]}, None) is None
+    assert middleware.after_model({"messages": [HumanMessage("x"), answer]}, None) is None
+    # No usage reported: nothing to compare, the run goes on.
+    assert middleware.after_model({"messages": [HumanMessage("x"), ask]}, None) is None
 
 
 def test_tool_error_payloads_are_recorded_as_invalid(planner_env, session, r1, monkeypatch):

@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -30,6 +30,7 @@ from minemydinner.planning.composition import composition_gap
 from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
 from minemydinner.planning.feasibility import Shortfall, check_feasibility
 from minemydinner.planning.inventory import meal_preferences
+from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
 from minemydinner.planning.stock import compute_missing, missing_cookware
 from minemydinner.planning.tools import PlannerDeps
 from minemydinner.planning.validate import PlanSpec, ValidationResult, validate_plan
@@ -79,6 +80,11 @@ class GraphDeps:
     recorder: PlanningRecorder
     # The LLMClient task name for every model call in the graph.
     task: str = "planning"
+    # False sends the planner the request summary alone, with no shortlist (evaluation).
+    use_shortlist: bool = True
+    # Query embeddings per planning run (by run_id), shared by the shortlist and every
+    # attempt's searches. Kept here, not in the checkpointed state; dropped when the run ends.
+    run_query_vectors: dict[int, dict[str, list[float]]] = field(default_factory=dict)
 
 
 def load_route_prompt() -> str:
@@ -374,6 +380,56 @@ def next_actions(
     return [a for a in NEXT_ACTION_ORDER if a in chosen]
 
 
+# ---- the planner's opening ----
+
+
+SHORTLIST_HEADER = (
+    "Shortlist: candidates from the user's library for each dish type this meal needs, "
+    "best first, as JSON keyed by dish type."
+)
+
+
+def shortlist_json(entries: dict[str, list[ShortlistEntry]]) -> str:
+    """The shortlist as compact JSON, in a fixed order: dish types as the shortlist orders
+    them, entries in rank order, fields in a fixed order (the dish type is the key)."""
+    data = {
+        dish_type: [
+            {name: value for name, value in asdict(entry).items() if name != "dish_type"}
+            for entry in items
+        ]
+        for dish_type, items in entries.items()
+    }
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def planner_opening(entries: dict[str, list[ShortlistEntry]] | None, summary: str) -> str:
+    """The planner's first message, built once per run: the shortlist, then the request
+    summary (design 5.7: most stable first). Without a shortlist, the summary alone."""
+    if entries is None:
+        return summary
+    return f"{SHORTLIST_HEADER}\n{shortlist_json(entries)}\n\n{summary}"
+
+
+def _split_text(spec: dict) -> str:
+    sides = [
+        _count_phrase(spec[side], side, False, bool(spec.get("split_is_minimum")))
+        for side in _SIDE_CATEGORIES
+        if spec.get(side) is not None
+    ]
+    return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
+
+
+def _merge_notes(notes: dict | None, titles: list[str], paused: bool) -> dict:
+    """Search notes with `titles` added (once each) and `paused` or-ed in."""
+    notes = notes or {}
+    left_out = list(notes.get("left_out_unknown_allergens", []))
+    left_out += [t for t in dict.fromkeys(titles) if t not in left_out]
+    return {
+        "left_out_unknown_allergens": left_out,
+        "semantic_paused": bool(notes.get("semantic_paused", False)) or paused,
+    }
+
+
 # ---- the graph ----
 
 
@@ -490,6 +546,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "blocked_codes": [],
             "shortfalls": [],
             "search_notes": {"left_out_unknown_allergens": [], "semantic_paused": False},
+            "planner_opening": None,
+            "shortlist_ids": [],
         }
 
     def feasibility_step(state: ChatState) -> Command:
@@ -515,63 +573,116 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         lines = [
             f"Reply locale: {state.get('locale', 'en')}",
             f"Mode: {spec['mode']}",
-            f"Dishes: {spec['dishes']}, soups: {spec['soups']}",
             f"Headcount: {state['constraints']['headcount']}",
+            f"Dishes (meat plus vegetable): {spec['dishes']}",
+            f"Split: {_split_text(spec)}",
+            f"Soups: {spec['soups']}",
+            f"Staple foods: {spec.get('staples', 0)}, desserts: {spec.get('desserts', 0)}, "
+            f"snacks: {spec.get('snacks', 0)}",
+            "Every count is exact unless it says at least.",
             f"Time limit: {spec['time_limit_min'] or 'none'}"
             + (" minutes" if spec["time_limit_min"] else ""),
             f"Filled by default: {', '.join(state['defaults_used']) or 'nothing'}",
         ]
         if parsed.get("query"):
             lines.append(f"The user feels like: {parsed['query']}")
-        counts = [
-            f"{name.replace('_', ' ')}: {spec[name]}"
-            for name in ("meat_dishes", "vegetable_dishes", "staples", "desserts", "snacks")
-            if spec.get(name)
-        ]
-        if counts:
-            suffix = " (the split counts are minimums)" if spec.get("split_is_minimum") else ""
-            lines.append(f"Also: {', '.join(counts)}{suffix}")
-        if parsed.get("must_use"):
-            lines.append(f"Must use in at least one dish: {', '.join(parsed['must_use'])}")
-        if parsed.get("all_use"):
-            lines.append(f"Every dish must use: {', '.join(parsed['all_use'])}")
-        if parsed.get("prefer_use"):
-            lines.append(f"Prefer using: {', '.join(parsed['prefer_use'])}")
+        # The spec carries the named ingredients as the request settled them.
+        if spec.get("must_use"):
+            lines.append(f"Must use in at least one dish: {', '.join(spec['must_use'])}")
+        if spec.get("all_use"):
+            lines.append(f"Every dish must use: {', '.join(spec['all_use'])}")
+        if spec.get("prefer_use"):
+            lines.append(f"Prefer using: {', '.join(spec['prefer_use'])}")
         if parsed.get("exclude_recent_days"):
             lines.append(f"Exclude dishes from the last {parsed['exclude_recent_days']} days")
         lines.append("Diners' dietary limits:")
         lines.extend(f"- {line}" for line in preferences or ["none recorded"])
         return "Plan this meal.\n" + "\n".join(lines)
 
-    def retry_message(state: ChatState) -> str:
+    def retry_message(state: ChatState, session, ctx) -> str:
+        """The violations of the previous attempt, then a short summary of it."""
         codes = diner_codes(_constraints(state))
         ids = state["proposal"]["recipe_ids"]
         problems = [_violation_for_model(v, codes) for v in state["validation"]["violations"]]
+        known = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(ids)))) if ids else set()
+        missing = compute_missing(session, ctx, sorted(known)) if known else {}
+        per_recipe = [
+            f"{i}: " + (", ".join(line.name for line in missing.get(i, [])) or "nothing")
+            for i in dict.fromkeys(ids)
+            if i in known
+        ]
+        offered = state.get("shortlist_ids") or []
+        summary = [
+            "Shortlist ids offered: " + (", ".join(str(i) for i in offered) or "none"),
+            "Ids proposed: " + (", ".join(str(i) for i in ids) or "none"),
+            "Missing items per proposed recipe: " + ("; ".join(per_recipe) or "none"),
+        ]
         return (
             f"Your proposal {ids} failed these checks. Propose a new plan that fixes each one:\n"
             + "\n".join(f"- {p}" for p in problems)
+            + "\n\nThe previous attempt:\n"
+            + "\n".join(f"- {line}" for line in summary)
         )
 
     def planner(state: ChatState) -> dict:
+        try:
+            return plan_attempt(state)
+        except BaseException:
+            # The run will not reach present_plan: drop its query embeddings here.
+            deps.run_query_vectors.pop(state["run_id"], None)
+            raise
+
+    def plan_attempt(state: ChatState) -> dict:
         constraints = _constraints(state)
+        spec = PlanSpec.model_validate(state["spec"])
+        # One cache per run, so the shortlist and every attempt embed a query once.
+        vectors = deps.run_query_vectors.setdefault(state["run_id"], {})
+        update: dict[str, Any] = {}
+        notes = state.get("search_notes")
+        opening = state.get("planner_opening")
         with deps.session_factory() as session:
             ctx = load_planning_context(session, constraints)
-            preferences = meal_preferences(session, ctx)
-        messages = [HumanMessage(request_summary(state, preferences))]
-        validation = state.get("validation")
-        if validation is not None and not validation["passed"]:
-            messages.append(HumanMessage(retry_message(state)))
+            if opening is None:
+                # Built once per run and stored, so every attempt sends the same bytes.
+                summary = request_summary(state, meal_preferences(session, ctx))
+                entries = None
+                if deps.use_shortlist:
+                    parsed = ParsedRequest.model_validate(state["request"])
+                    found = build_shortlist_result(
+                        session, deps.client, ctx, spec, parsed, vectors
+                    )
+                    entries = found.entries
+                    notes = _merge_notes(
+                        notes, found.left_out_unknown_allergens, found.semantic_paused
+                    )
+                opening = planner_opening(entries, summary)
+                update["planner_opening"] = opening
+                update["shortlist_ids"] = [
+                    entry.id for items in (entries or {}).values() for entry in items
+                ]
+            messages = [HumanMessage(opening)]
+            validation = state.get("validation")
+            if validation is not None and not validation["passed"]:
+                messages.append(HumanMessage(retry_message(state, session, ctx)))
         context = PlannerDeps(
-            deps.session_factory, deps.client, constraints, state["spec"]["mode"]
+            deps.session_factory,
+            deps.client,
+            constraints,
+            spec.mode,
+            query_vectors=vectors,
+            must_use=list(spec.must_use),
+            all_use=list(spec.all_use),
+            prefer_use=list(spec.prefer_use),
+            time_limit_min=spec.time_limit_min,
+            exclude_recent_days=state["request"].get("exclude_recent_days"),
+            query=state["request"].get("query"),
         )
         out = get_planner().invoke(
             {"messages": messages, "run_id": state["run_id"]}, context=context
         )
-        # A run cut off by the call limits has no proposal; validation then fails it.
+        # A run cut off by the call limits or the token budget has no proposal; validation
+        # then fails it.
         proposal = out.get("structured_response") or PlanProposal(recipe_ids=[], note="")
-        notes = dict(state.get("search_notes") or {})
-        left_out = list(notes.get("left_out_unknown_allergens", []))
-        paused = bool(notes.get("semantic_paused", False))
         for message in out["messages"]:
             if not (isinstance(message, ToolMessage) and message.name == "search_recipes"):
                 continue
@@ -581,13 +692,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 continue
             if not isinstance(result, dict):
                 continue
-            for title in result.get("left_out_unknown_allergens", []):
-                if title not in left_out:
-                    left_out.append(title)
-            paused = paused or bool(result.get("semantic_paused"))
+            notes = _merge_notes(
+                notes,
+                list(result.get("left_out_unknown_allergens", [])),
+                bool(result.get("semantic_paused")),
+            )
         return {
+            **update,
             "proposal": proposal.model_dump(),
-            "search_notes": {"left_out_unknown_allergens": left_out, "semantic_paused": paused},
+            "search_notes": _merge_notes(notes, [], False),
         }
 
     def check_plan(state: ChatState) -> Command:
@@ -742,6 +855,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 # The fixed closest note always leads; the model's own note may follow it.
                 closest = CLOSEST_NOTE_ZH if _zh(locale) else CLOSEST_NOTE_EN
                 note = closest + "\n\n" + note if note else closest
+        # The run is over: its query embeddings are no longer needed.
+        deps.run_query_vectors.pop(state["run_id"], None)
         deps.recorder.finish(
             state["run_id"],
             retries=state["retries"],

@@ -44,6 +44,34 @@ class PlannerDeps:
     mode: str
     # Query embeddings for this planning run, so a repeated search query is embedded once.
     query_vectors: dict[str, list[float]] = field(default_factory=dict)
+    # The request's named ingredients (PlanSpec), so search ranks and filters as the
+    # shortlist does: must_use and prefer_use rank, all_use filters.
+    must_use: list[str] = field(default_factory=list)
+    all_use: list[str] = field(default_factory=list)
+    prefer_use: list[str] = field(default_factory=list)
+    # The request's filters, so a search respects the request as the shortlist does: the
+    # time limit and the recency filter always apply (the stricter value wins), and the
+    # query fills in when the model passes none.
+    time_limit_min: int | None = None
+    exclude_recent_days: int | None = None
+    query: str | None = None
+
+
+def _stricter(*limits: int | None) -> int | None:
+    """The shortest time limit given, or None."""
+    given = [limit for limit in limits if limit is not None]
+    return min(given) if given else None
+
+
+def _longer(*days: int | None) -> int | None:
+    """The longest recency window given (more dishes avoided), or None."""
+    given = [n for n in days if n is not None]
+    return max(given) if given else None
+
+
+def _names(*groups: Sequence[str] | None) -> list[str]:
+    """The non-blank names of every group, once each, in order."""
+    return list(dict.fromkeys(n for group in groups for n in group or () if n.strip()))
 
 
 def _default(value: Any) -> Any:
@@ -177,14 +205,18 @@ def get_inventory(
         "Search the recipe library. Dishes the selected diners cannot eat are already "
         "excluded by code; you cannot include them. tags are a preference that ranks "
         "matching dishes first, never a filter: pass tags only when the user names a "
-        "characteristic. Set exclude_recent_days only when the user asks to avoid recent "
-        "dishes. dish_type limits the search to one type. Pass the ids you have already "
+        "characteristic. The request's time limit and recency filter always apply, and "
+        "its query is used when you pass none; pass your own query to look for something "
+        "else. Set max_time or exclude_recent_days only when the user asks for something "
+        "stricter. dish_type limits the search to one type. Pass the ids you have already "
         "seen in exclude_ids to fetch the next batch. Returns up to 20 hits; each hit "
         "carries missing (required ingredients not in stock), missing_cookware (cookware "
         "the household does not own), uses_expiring (ingredients close to expiry it uses), "
         "and dislikes (soft dislikes it hits, by diner code). Hits with fewer missing items "
         "rank higher after relevance; in fridge-only mode, dishes with nothing missing "
-        "rank first. Also returns left_out_unknown_allergens (titles of "
+        "rank first. Dishes using the ingredients the request names rank higher; when the "
+        "request says every dish must use an ingredient, only dishes using it are returned. "
+        "Also returns left_out_unknown_allergens (titles of "
         "dishes left out because an ingredient could not be checked), semantic_paused (true "
         "when meaning-based search was unavailable), and unresolved_must_use (must_use names "
         "the dictionary does not know)."
@@ -201,6 +233,7 @@ def search_recipes_tool(
     exclude_ids: list[int] | None = None,
 ) -> dict:
     deps = runtime.context
+    own_query = bool(query and query.strip())
 
     def body(session: Session) -> dict:
         ctx = load_planning_context(session, deps.constraints)
@@ -208,14 +241,19 @@ def search_recipes_tool(
             session,
             deps.client,
             ctx,
-            query=query,
-            max_time=max_time,
+            # A query the model passes wins and drops what it does not reach; otherwise the
+            # request's query only ranks, as in the shortlist, so it never empties a search.
+            query=query if own_query else deps.query,
+            keep_unmatched=not own_query,
+            max_time=_stricter(max_time, deps.time_limit_min),
             tags=tags,
-            must_use=must_use,
-            exclude_recent_days=exclude_recent_days,
+            must_use=_names(must_use, deps.all_use) or None,
+            # The user asked to avoid recent dishes; the model may widen that, never relax it.
+            exclude_recent_days=_longer(exclude_recent_days, deps.exclude_recent_days),
             dish_types=[dish_type] if dish_type else None,
             exclude_ids=exclude_ids or (),
             query_vectors=deps.query_vectors,
+            prefer_use=_names(deps.must_use, deps.prefer_use),
             makeable_first=deps.mode == "fridge_only",
         )
         return {

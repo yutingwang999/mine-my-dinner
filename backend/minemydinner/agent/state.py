@@ -29,8 +29,14 @@ class ChatState(TypedDict):
     blocked_codes: list[str]
     # The feasibility shortfalls (dicts); non-empty means the planner is skipped.
     shortfalls: list[dict]
-    # From the planner's searches: left_out_unknown_allergens and semantic_paused.
+    # From the shortlist and the planner's searches: left_out_unknown_allergens and
+    # semantic_paused.
     search_notes: dict | None
+    # The planner's first message, built once per run (shortlist, then request summary) and
+    # sent unchanged by every attempt, so retries share a cached prompt prefix.
+    planner_opening: str | None
+    # The recipe ids the shortlist offered, in opening order, for the retry message.
+    shortlist_ids: list[int]
     retries: int
     current_plan: dict | None
     plan_versions: list[dict]
