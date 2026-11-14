@@ -54,7 +54,12 @@ Task-review and final-review findings that were judged safe to defer. None block
 - **Unknown-allergen override ignores the diner.** An `H2Override` with `unknown_allergens` covers a recipe for every diner. When manual edits create it, decide whether each diner with an allergy must confirm, or check that `diner_key` belongs to such a diner.
 - **`check_recipes` treats nonexistent recipe ids as safe.** Every caller checks existence today (H5, the tools' known-id check, search), so it is safe in practice; keep it that way or make the function report unknown ids.
 - **S3 calls `date.today()` inline.** Pass `today` as a parameter; tests near midnight can flake.
-- **S1 and S6 skip optional lines, and S1 reports per line rather than per ingredient.**
+- **S1 and S6 skip optional lines, and S1 reports per line rather than per ingredient.** Plan 2a makes S1 sum per ingredient across the plan's dishes (warning only).
+
+### Shopping list (T1.5)
+
+- **Merge one ingredient across dishes into one line.** Design 5.1 and 7.5 do not say whether two dishes that both lack spring onion give one line or two. Merge them, listing each dish's stated amount.
+- **"In stock but not enough" belongs on the list.** H1 only asks whether an ingredient is in stock, so 3 eggs in stock against two dishes needing 2 each puts nothing on the list today. Reuse plan 2a's per-ingredient summing (the S1 change): where amounts sum exactly (grams, pieces), list the shortfall ("eggs: 1 more"); where they do not (vague, spoon, or level-mode stock), list each dish's stated amount and let the user judge. Never estimate an amount the recipe does not state (design 5.1, Phase 1 design 6.4).
 - **Choice-group semantics:** a group mixing optional and required lines is undocumented and untested; a parent line whose child has level `none` reports `not_in_stock` rather than `level_none`.
 - **`update_inventory` can report `tool_failed` after a successful commit** if shaping the result fails, and has no direct rollback test. It is not among the planner's tools yet; fix before adding it.
 - **`meal_preferences` can produce an empty subject** when a rule's dictionary entry is missing.
