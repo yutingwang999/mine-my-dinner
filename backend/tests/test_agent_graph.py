@@ -239,7 +239,7 @@ def test_failed_validation_retries_with_errors(graph_env, veg, meat):
     assert "H4" in record.events[1]["result"]["violations"][0]["code"]
     assert record.retries == 1 and record.first_passed is False and record.final_passed is True
     retry_request = planner_requests(graph_env)[1]
-    assert "wants 2 dishes and 0 soups" in retry_request and str(veg.id) in retry_request
+    assert "the user wants 2 dishes" in retry_request and str(veg.id) in retry_request
 
 
 def test_h2_failure_after_retries_is_never_shown(graph_env, session):
@@ -380,7 +380,7 @@ def test_record_keeps_replaced_names_and_state_keeps_restored(tmp_path, session,
         replies=[final_proposal([dish.id], note="Diner 2 will like it")],
         structured={
             "Intent": [{"intent": "plan"}],
-            "ParsedRequest": [{"query": "something Diner 2 likes", "must_use": ["Diner 2"]}],
+            "ParsedRequest": [{"query": "something Diner 2 likes", "prefer_use": ["Diner 2"]}],
         },
     )
     factory = rollback_session_factory(session)
@@ -401,9 +401,69 @@ def test_record_keeps_replaced_names_and_state_keeps_restored(tmp_path, session,
     session.expire_all()
     record = session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
     assert record.request["parsed"]["query"] == "something Diner 2 likes"
-    assert record.request["parsed"]["must_use"] == ["Diner 2"]
+    assert record.request["parsed"]["prefer_use"] == ["Diner 2"]
     assert record.request["messages"] == ["dinner Diner 2 likes"]
     assert record.final_plan["recipes"][0]["title"] == "Diner 2的白菜"
     assert "小李" not in json.dumps(record.request, ensure_ascii=False)
     assert "小李" not in json.dumps(record.final_plan, ensure_ascii=False)
     assert "小李" not in json.dumps(record.events, ensure_ascii=False)
+
+
+def test_closest_attempt_breaks_ties_by_composition_gap(graph_env, session):
+    meats = [make_recipe(session, f"肉{i}", "meat dish") for i in range(2)]
+    vegs = [make_recipe(session, f"菜{i}", "vegetable dish") for i in range(3)]
+    one_meat = [meats[0].id] + [v.id for v in vegs]
+    two_meat = [m.id for m in meats] + [v.id for v in vegs]
+    parse = {"mode": "shopping", "dishes": 6, "meat_dishes": 3, "vegetable_dishes": 3}
+    replies = [final_proposal(one_meat), final_proposal(two_meat), final_proposal(one_meat)]
+    out = plan(graph_env, "three meat and three vegetable dishes", parse=parse, replies=replies)
+    assert out["retries"] == MAX_RETRIES
+    current = out["current_plan"]
+    assert [r["id"] for r in current["recipes"]] == two_meat
+    assert [u["code"] for u in current["unmet"]] == ["H4"]
+
+
+def test_h4_and_h7_wording_for_the_model_and_the_user():
+    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+
+    h4 = {
+        "code": "H4",
+        "recipe_id": None,
+        "detail": {
+            "required": {"dishes": 3, "soups": 0, "meat_dishes": 1},
+            "present": {"dishes": 2, "soups": 1, "meat_dishes": 0},
+            "minimum": True,
+        },
+    }
+    assert _violation_for_model(h4, {}) == (
+        "The plan has 2 dishes, 1 soup, 0 meat dishes; the user wants 3 dishes, 0 soups, "
+        "1 meat dish (the meat and vegetable counts are minimums)."
+    )
+    assert "方案有 2 道菜，1 道汤，0 道荤菜" in _unmet_for_user(h4, {}, "zh")
+    assert "(the meat and vegetable counts are minimums)" in _unmet_for_user(h4, {}, "en")
+    h7 = {
+        "code": "H7",
+        "recipe_id": None,
+        "detail": {"name": "鸡蛋", "rule": "all", "recipes_without": [7]},
+    }
+    assert _unmet_for_user(h7, {7: "白菜"}, "en") == 'These dishes do not use 鸡蛋: "白菜"'
+    assert _unmet_for_user(h7, {7: "白菜"}, "zh") == "这些菜没有用到鸡蛋：“白菜”"
+    must = {**h7, "detail": {**h7["detail"], "rule": "must"}}
+    assert _unmet_for_user(must, {}, "en") == "No dish in the plan uses 鸡蛋"
+    assert "7" in _violation_for_model(h7, {}) and "鸡蛋" in _violation_for_model(must, {})
+
+
+def test_counts_text_uses_singular_and_omits_unasked_zeros():
+    from minemydinner.agent.graph import _unmet_for_user
+
+    h4 = {
+        "code": "H4",
+        "recipe_id": None,
+        "detail": {
+            "required": {"dishes": 1, "soups": 1, "staples": 0, "desserts": 0, "snacks": 0},
+            "present": {"dishes": 2, "soups": 0, "staples": 0, "desserts": 0, "snacks": 0},
+            "minimum": False,
+        },
+    }
+    assert _unmet_for_user(h4, {}, "en") == "The plan has 2 dishes, 0 soups; 1 dish, 1 soup were asked for"
+    assert _unmet_for_user(h4, {}, "zh") == "方案有 2 道菜，0 道汤，要求是 1 道菜，1 道汤"

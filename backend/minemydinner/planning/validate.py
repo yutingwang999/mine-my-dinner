@@ -14,8 +14,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from minemydinner.models import Rating, Recipe
+from minemydinner.planning.composition import (
+    CATEGORY_OF_DISH_TYPE,
+    category_shortfall,
+    count_categories,
+    required_counts,
+    sum_exact_amounts,
+)
 from minemydinner.planning.context import PlanningContext
 from minemydinner.planning.dietary import DietaryCheck, RuleConflict, check_recipes
+from minemydinner.planning.named import recipes_using
 from minemydinner.planning.stock import compute_missing, missing_cookware
 
 EXPIRY_SOON_DAYS = 3
@@ -165,16 +173,44 @@ def _h3(session: Session, ctx: PlanningContext, ids: list[int]) -> list[Finding]
 
 
 def _h4(spec: PlanSpec, recipes: list[Recipe]) -> list[Finding]:
-    dishes = sum(r.dish_type in COUNTED_DISH_TYPES for r in recipes)
-    soups = sum(r.dish_type == "soup" for r in recipes)
-    if (dishes, soups) == (spec.dishes, spec.soups):
+    present = count_categories(r.dish_type for r in recipes)
+    required = required_counts(spec)
+    if all(
+        category_shortfall(c, need, present[c], spec.split_is_minimum) == 0
+        for c, need in required.items()
+    ):
         return []
     return [
         Finding(
             code="H4",
-            detail={"dishes": dishes, "soups": soups, "wanted": [spec.dishes, spec.soups]},
+            detail={"required": required, "present": present, "minimum": spec.split_is_minimum},
         )
     ]
+
+
+def _h7(
+    session: Session, ctx: PlanningContext, spec: PlanSpec, recipes: list[Recipe]
+) -> list[Finding]:
+    """Named ingredients (design 5.1): `must_use` needs one counted dish that uses the name,
+    `all_use` needs every counted dish to. Recipes of type "other" are ignored."""
+    counted = [r.id for r in recipes if r.dish_type in CATEGORY_OF_DISH_TYPE]
+    if not counted:
+        return []
+    findings = []
+    for rule, names in (("must", spec.must_use), ("all", spec.all_use)):
+        for name in names:
+            if not name.strip():
+                continue
+            using = recipes_using(session, ctx, name, counted)
+            without = [i for i in counted if i not in using]
+            if (rule == "must" and not using) or (rule == "all" and without):
+                findings.append(
+                    Finding(
+                        code="H7",
+                        detail={"name": name, "rule": rule, "recipes_without": without},
+                    )
+                )
+    return findings
 
 
 def _h6(spec: PlanSpec, recipes: list[Recipe]) -> list[Finding]:
@@ -193,33 +229,21 @@ def _h6(spec: PlanSpec, recipes: list[Recipe]) -> list[Finding]:
 
 
 def _s1(ctx: PlanningContext, recipes: list[Recipe]) -> list[Finding]:
-    findings = []
-    for recipe in recipes:
-        for line in recipe.ingredients:
-            item = ctx.stock.get(line.ingredient_id) if line.ingredient_id else None
-            if item is None or line.optional or line.amount is None:
-                continue
-            if line.amount_type == "exact" and line.unit == "g":
-                have, unit = item.grams, "g"
-            elif line.amount_type == "count" and line.unit == "piece":
-                have, unit = item.count, "piece"
-            else:
-                continue
-            if have is not None and line.amount > have:
-                findings.append(
-                    Finding(
-                        code="S1",
-                        recipe_id=recipe.id,
-                        detail={
-                            "ingredient_id": line.ingredient_id,
-                            "name": line.name,
-                            "needed": line.amount,
-                            "have": have,
-                            "unit": unit,
-                        },
-                    )
-                )
-    return findings
+    return [
+        Finding(
+            code="S1",
+            detail={
+                "ingredient_id": need.ingredient_id,
+                "name": need.name,
+                "needed": need.needed,
+                "have": need.have,
+                "unit": need.unit,
+                "parts": need.parts,
+            },
+        )
+        for need in sum_exact_amounts(ctx, recipes).values()
+        if need.needed > need.have
+    ]
 
 
 def _s2(check: DietaryCheck) -> list[Finding]:
@@ -339,7 +363,7 @@ def validate_plan(
     recipe_ids: list[int],
     overrides: Sequence[H2Override] = (),
 ) -> ValidationResult:
-    """Check a plan against H1-H6 and S1-S8. Opens no session and writes nothing."""
+    """Check a plan against H1-H7 and S1-S8. Opens no session and writes nothing."""
     violations, ids = _h5(session, recipe_ids)
     recipes = list(
         session.scalars(
@@ -357,6 +381,7 @@ def validate_plan(
     violations += _h2(check, ids, overrides)
     violations += _h3(session, ctx, ids)
     violations += _h4(spec, recipes)
+    violations += _h7(session, ctx, spec, recipes)
     violations += _h6(spec, recipes)
 
     warnings = (

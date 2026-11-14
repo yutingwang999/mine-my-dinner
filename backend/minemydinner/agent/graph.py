@@ -26,6 +26,7 @@ from minemydinner.agent.request import (
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
+from minemydinner.planning.composition import composition_gap
 from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.stock import compute_missing, missing_cookware
@@ -102,6 +103,47 @@ def _current_request(messages: list) -> list[str]:
 # ---- plain words ----
 
 
+CATEGORY_WORDS = {
+    "dishes": ("dish", "dishes", "道菜"),
+    "soups": ("soup", "soups", "道汤"),
+    "meat_dishes": ("meat dish", "meat dishes", "道荤菜"),
+    "vegetable_dishes": ("vegetable dish", "vegetable dishes", "道素菜"),
+    "staples": ("staple food", "staple foods", "份主食"),
+    "desserts": ("dessert", "desserts", "份甜品"),
+    "snacks": ("snack", "snacks", "份小吃"),
+}
+
+
+def _counts_text(counts: dict, detail: dict, zh: bool) -> str:
+    """The counts of the categories that matter, in plain words: those the plan asks for
+    or contains, plus a named meat or vegetable count. A 0 nobody asked for is left out."""
+    required, present = detail["required"], detail["present"]
+    parts = []
+    for category, (one, many, cn) in CATEGORY_WORDS.items():
+        named_split = category in required and category.endswith("_dishes")
+        if required.get(category, 0) or present.get(category, 0) or named_split:
+            n = counts.get(category, 0)
+            parts.append(f"{n} {cn}" if zh else f"{n} {one if n == 1 else many}")
+    return ("，" if zh else ", ").join(parts)
+
+
+def _minimum_note(detail: dict, zh: bool) -> str:
+    if not detail["minimum"]:
+        return ""
+    if zh:
+        return "（荤菜和素菜的数量是最少要求）"
+    return " (the meat and vegetable counts are minimums)"
+
+
+def _composition_gap_of(spec: PlanSpec, validation: dict) -> int:
+    """How far an attempt is from the asked composition. The counts come from the H4
+    finding; with no H4 finding every category already matches, so the gap is 0."""
+    for finding in validation["violations"]:
+        if finding["code"] == "H4":
+            return composition_gap(spec, finding["detail"]["present"])
+    return 0
+
+
 def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
     """One violation, told to the planner so it can fix it."""
     code, recipe_id, detail = finding["code"], finding["recipe_id"], finding["detail"]
@@ -123,10 +165,18 @@ def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
         lacking = ", ".join(detail["missing"])
         return f"Recipe {recipe_id}: needs cookware the household lacks: {lacking}."
     if code == "H4":
-        wanted_dishes, wanted_soups = detail["wanted"]
         return (
-            f"The plan has {detail['dishes']} dishes and {detail['soups']} soups; "
-            f"the user wants {wanted_dishes} dishes and {wanted_soups} soups."
+            f"The plan has {_counts_text(detail['present'], detail, False)}; "
+            f"the user wants {_counts_text(detail['required'], detail, False)}"
+            f"{_minimum_note(detail, False)}."
+        )
+    if code == "H7":
+        ids = ", ".join(str(i) for i in detail["recipes_without"])
+        if detail["rule"] == "must":
+            return f"No dish in the plan uses {detail['name']}, which the user requires in the meal."
+        return (
+            f"Every dish must use {detail['name']}, but these recipes do not: {ids}. "
+            "Replace them with dishes that use it."
         )
     if code == "H5" and detail.get("reason") == "duplicate":
         return f"Recipe {recipe_id} appears more than once."
@@ -156,16 +206,26 @@ def _unmet_for_user(finding: dict, titles: dict[int, str], locale: str) -> str:
             return f"{title}：缺少厨具（{names}）"
         return f"{title}: missing cookware ({names})"
     if code == "H4":
-        dishes, soups = detail["wanted"]
+        present = _counts_text(detail["present"], detail, zh)
+        wanted = _counts_text(detail["required"], detail, zh)
+        note = _minimum_note(detail, zh)
         if zh:
-            return (
-                f"方案有 {detail['dishes']} 道菜和 {detail['soups']} 道汤，"
-                f"要求是 {dishes} 道菜和 {soups} 道汤"
-            )
-        return (
-            f"The plan has {detail['dishes']} dishes and {detail['soups']} soups; "
-            f"{dishes} dishes and {soups} soups were asked for"
+            return f"方案有 {present}，要求是 {wanted}{note}"
+        return f"The plan has {present}; {wanted} were asked for{note}"
+    if code == "H7":
+        lacking = ("、" if zh else ", ").join(
+            f"“{titles[i]}”" if zh else f'"{titles[i]}"'
+            for i in detail["recipes_without"]
+            if i in titles
         )
+        name = detail["name"]
+        if detail["rule"] == "must":
+            if zh:
+                return f"方案里没有用到{name}的菜"
+            return f"No dish in the plan uses {name}"
+        if zh:
+            return f"这些菜没有用到{name}：{lacking}"
+        return f"These dishes do not use {name}: {lacking}"
     if code == "H6":
         minutes, limit = detail["time_min"], detail["limit"]
         if zh:
@@ -422,9 +482,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             update["blocked_codes"] = [c for c in NEVER_SHOWN if c in seen or c in blocked]
         else:
             best = state.get("best")
-            # Fewest violations; a later attempt wins a tie, since it saw the errors.
-            if best is None or len(result.violations) <= len(best["validation"]["violations"]):
-                update["best"] = {"proposal": state["proposal"], "validation": dumped}
+            gap = _composition_gap_of(spec, dumped)
+            attempt = (len(result.violations), gap)
+            previous = (
+                (len(best["validation"]["violations"]), best.get("gap", 0)) if best else None
+            )
+            # Fewest violations, then the smallest composition gap; a later attempt wins a
+            # tie, since it saw the errors.
+            if previous is None or attempt <= previous:
+                update["best"] = {"proposal": state["proposal"], "validation": dumped, "gap": gap}
         if not result.passed and state["retries"] < MAX_RETRIES:
             update["retries"] = state["retries"] + 1
             return Command(update=update, goto="planner")

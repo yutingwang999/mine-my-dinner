@@ -185,18 +185,116 @@ def test_h4_counts_dishes_and_soups(session, seeded):
     assert ok.violations == []
     bad = run(session, ctx_for(session), [meat, soup], spec(dishes=2, soups=0))
     (v,) = bad.violations
-    assert (v.code, v.recipe_id, v.detail) == (
-        "H4",
-        None,
-        {"dishes": 1, "soups": 1, "wanted": [2, 0]},
-    )
+    assert (v.code, v.recipe_id) == ("H4", None)
+    assert v.detail["required"] == {
+        "dishes": 2,
+        "soups": 0,
+        "staples": 0,
+        "desserts": 0,
+        "snacks": 0,
+    }
+    assert v.detail["present"]["dishes"] == 1 and v.detail["present"]["soups"] == 1
+    assert v.detail["minimum"] is False
 
 
-def test_staple_dish_is_an_extra_for_h4(session, seeded):
+def test_staple_dish_does_not_count_as_a_dish(session, seeded):
     meat = make_recipe(session, "肉", dish_type="meat dish")
     rice = make_recipe(session, "饭", dish_type="staple food")
-    result = run(session, ctx_for(session), [meat, rice], spec(dishes=1, soups=0))
+    result = run(session, ctx_for(session), [meat, rice], spec(dishes=1, soups=0, staples=1))
     assert "H4" not in codes(result.violations)
+
+
+def h4(result):
+    return [v for v in result.violations if v.code == "H4"]
+
+
+def test_h4_checks_staples_and_desserts_exactly(session, seeded):
+    meat = make_recipe(session, "肉", dish_type="meat dish")
+    cake = make_recipe(session, "蛋糕", dish_type="dessert")
+    (v,) = h4(run(session, ctx_for(session), [meat, cake], spec(dishes=1)))
+    assert v.detail["present"]["desserts"] == 1 and v.detail["required"]["desserts"] == 0
+    assert not h4(run(session, ctx_for(session), [meat, cake], spec(dishes=1, desserts=1)))
+    rice = make_recipe(session, "饭", dish_type="staple food")
+    assert h4(run(session, ctx_for(session), [meat], spec(dishes=1, staples=1)))
+    assert not h4(run(session, ctx_for(session), [meat, rice], spec(dishes=1, staples=1)))
+
+
+def test_h4_named_split_is_exact(session, seeded):
+    meat = make_recipe(session, "肉", dish_type="meat dish")
+    v1 = make_recipe(session, "菜1")
+    v2 = make_recipe(session, "菜2")
+    plan = spec(dishes=2, meat_dishes=1, vegetable_dishes=1)
+    assert not h4(run(session, ctx_for(session), [meat, v1], plan))
+    (v,) = h4(run(session, ctx_for(session), [v1, v2], plan))
+    assert v.detail["required"]["meat_dishes"] == 1
+    assert v.detail["present"]["vegetable_dishes"] == 2
+
+
+def test_h4_minimum_split_counts_only_shortfall(session, seeded):
+    meat = make_recipe(session, "肉", dish_type="meat dish")
+    v1 = make_recipe(session, "菜1")
+    v2 = make_recipe(session, "菜2")
+    plan = spec(dishes=3, meat_dishes=1, vegetable_dishes=1, split_is_minimum=True)
+    assert not h4(run(session, ctx_for(session), [meat, v1, v2], plan))
+    (v,) = h4(run(session, ctx_for(session), [v1, v2, make_recipe(session, "菜3")], plan))
+    assert v.detail["minimum"] is True
+
+
+def test_other_type_is_never_counted(session, seeded):
+    meat = make_recipe(session, "肉", dish_type="meat dish")
+    drink = make_recipe(session, "酸梅汤", dish_type="other")
+    assert not h4(run(session, ctx_for(session), [meat, drink], spec(dishes=1)))
+
+
+# ---- H7: named ingredients ----
+
+
+def h7(result):
+    return [v for v in result.violations if v.code == "H7"]
+
+
+def test_h7_must_use_needs_one_dish(session, seeded):
+    plain = make_recipe(session, "白菜", lines=[L("小白菜")])
+    egg = make_recipe(session, "蛋", lines=[L("鸡蛋")])
+    plan = spec(dishes=1, must_use=["鸡蛋"])
+    (v,) = h7(run(session, ctx_for(session), [plain], plan))
+    assert v.recipe_id is None
+    assert v.detail == {"name": "鸡蛋", "rule": "must", "recipes_without": [plain.id]}
+    assert not h7(run(session, ctx_for(session), [egg], plan))
+    assert not h7(run(session, ctx_for(session), [plain, egg], spec(dishes=2, must_use=["鸡蛋"])))
+
+
+def test_h7_all_use_needs_every_dish(session, seeded):
+    plain = make_recipe(session, "白菜", lines=[L("小白菜")])
+    egg = make_recipe(session, "蛋", lines=[L("鸡蛋")])
+    (v,) = h7(run(session, ctx_for(session), [egg, plain], spec(dishes=2, all_use=["鸡蛋"])))
+    assert v.detail == {"name": "鸡蛋", "rule": "all", "recipes_without": [plain.id]}
+    assert not h7(run(session, ctx_for(session), [egg], spec(dishes=1, all_use=["鸡蛋"])))
+
+
+def test_h7_child_ingredient_satisfies_the_parent(session, seeded):
+    belly = make_recipe(session, "红烧肉", dish_type="meat dish", lines=[L("五花肉")])
+    assert not h7(run(session, ctx_for(session), [belly], spec(dishes=1, must_use=["猪肉"])))
+
+
+def test_h7_unknown_name_matches_line_text(session, seeded):
+    sauce = make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+    other = make_recipe(session, "白菜", lines=[L("小白菜")])
+    plan = spec(dishes=1, must_use=["某种酱"])
+    assert not h7(run(session, ctx_for(session), [sauce], plan))
+    assert h7(run(session, ctx_for(session), [other], plan))
+
+
+def test_h7_ignores_other_type_recipes(session, seeded):
+    egg = make_recipe(session, "蛋", lines=[L("鸡蛋")])
+    drink = make_recipe(session, "酸梅汤", dish_type="other", lines=[L("小白菜")])
+    result = run(session, ctx_for(session), [egg, drink], spec(dishes=1, all_use=["鸡蛋"]))
+    assert not h7(result)
+
+
+def test_prefer_use_is_never_validated(session, seeded):
+    plain = make_recipe(session, "白菜", lines=[L("小白菜")])
+    assert not h7(run(session, ctx_for(session), [plain], spec(dishes=1, prefer_use=["鸡蛋"])))
 
 
 def test_nonexistent_and_duplicate_ids_fail_h5(session, seeded):
@@ -243,7 +341,8 @@ def test_s1_g_line_exceeding_stock_grams(session, seeded):
     set_amount(r, "五花肉", 500, "g", "exact")
     stock(session, "五花肉", level="plenty", grams=300)
     (w,) = run(session, ctx_for(session), [r]).warnings
-    assert (w.code, w.recipe_id) == ("S1", r.id)
+    assert (w.code, w.recipe_id) == ("S1", None)
+    assert w.detail["parts"] == [{"recipe_id": r.id, "amount": 500}]
     assert w.detail["name"] == "五花肉"
     assert (w.detail["needed"], w.detail["have"], w.detail["unit"]) == (500, 300, "g")
     json.dumps(w.detail)
@@ -263,6 +362,31 @@ def test_s1_piece_line_vs_stock_count_and_unit_mismatch(session, seeded):
     r4 = make_recipe(session, "蛋4", lines=[L("鸡蛋")])
     set_amount(r4, "鸡蛋", 2, "piece", "count")
     assert "S1" not in codes(run(session, ctx_for(session), [r4]).warnings)
+
+
+def test_s1_sums_one_ingredient_across_dishes(session, seeded):
+    stock(session, "鸡蛋", count=3)
+    a = make_recipe(session, "蛋a", lines=[L("鸡蛋")])
+    b = make_recipe(session, "蛋b", lines=[L("鸡蛋")])
+    for r in (a, b):
+        set_amount(r, "鸡蛋", 2, "piece", "count")
+    result = run(session, ctx_for(session), [a, b], spec(dishes=2))
+    (w,) = [f for f in result.warnings if f.code == "S1"]
+    assert w.recipe_id is None
+    assert w.detail["needed"] == 4 and w.detail["have"] == 3 and len(w.detail["parts"]) == 2
+    assert w.detail["unit"] == "piece"
+    json.dumps(w.detail)
+
+
+def test_s1_skips_vague_and_level_amounts(session, seeded):
+    stock(session, "鸡蛋", level="plenty")
+    stock(session, "猪肉", count=1)
+    a = make_recipe(session, "蛋a", lines=[L("鸡蛋"), L("猪肉")])
+    b = make_recipe(session, "蛋b", lines=[L("鸡蛋")])
+    set_amount(a, "鸡蛋", 9, "piece", "count")
+    set_amount(b, "鸡蛋", 9, "piece", "count")
+    result = run(session, ctx_for(session), [a, b], spec(dishes=2))
+    assert "S1" not in codes(result.warnings)
 
 
 def test_s1_uses_the_lines_own_ingredient_stock_row(session, seeded):

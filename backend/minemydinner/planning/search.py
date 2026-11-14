@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from minemydinner.extraction.normalize import all_terms, match_ingredient
@@ -11,6 +11,7 @@ from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceed
 from minemydinner.models import MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
 from minemydinner.planning.context import PlanningContext
 from minemydinner.planning.dietary import check_recipes
+from minemydinner.planning.named import uses_clause
 
 # Only a time the source or the user gave can rule a recipe out (H6); an estimate cannot.
 FIRM_TIME_SOURCES = ("stated", "user")
@@ -46,19 +47,6 @@ class SearchResult:
 
 def _fold(value: str) -> str:
     return value.casefold().strip()
-
-
-def _must_use_clause(session: Session, ctx: PlanningContext, name: str, unresolved: list[str]):
-    """A line linked to the named ingredient or to one of its children. A name the
-    dictionary does not know falls back to the line wording."""
-    entry = match_ingredient(session, name)
-    if entry is None:
-        unresolved.append(name)
-        match = func.lower(RecipeIngredient.name).contains(_fold(name), autoescape=True)
-    else:
-        accepted = {entry.id} | {c for c, parent in ctx.parents.items() if parent == entry.id}
-        match = RecipeIngredient.ingredient_id.in_(accepted)
-    return exists().where(RecipeIngredient.recipe_id == Recipe.id, match)
 
 
 def _line_terms(session: Session, recipe_ids: list[int]) -> dict[int, list[str]]:
@@ -122,7 +110,7 @@ def search_recipes(
     unresolved: list[str] = []
     for name in must_use or []:
         if name.strip():
-            candidates = candidates.where(_must_use_clause(session, ctx, name, unresolved))
+            candidates = candidates.where(uses_clause(session, ctx, name, unresolved))
     if exclude_recent_days is not None:
         since = datetime.now(timezone.utc) - timedelta(days=exclude_recent_days)
         recent = (
