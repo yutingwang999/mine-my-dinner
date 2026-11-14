@@ -213,8 +213,8 @@ def get_inventory(
         "carries missing (required ingredients not in stock), missing_cookware (cookware "
         "the household does not own), uses_expiring (ingredients close to expiry it uses), "
         "and dislikes (soft dislikes it hits, by diner code). Hits with fewer missing items "
-        "rank higher after relevance; in fridge-only mode, dishes with nothing missing "
-        "rank first. Dishes using the ingredients the request names rank higher; when the "
+        "rank higher after relevance. In fridge-only mode only dishes with nothing "
+        "missing are returned. Dishes using the ingredients the request names rank higher; when the "
         "request says every dish must use an ingredient, only dishes using it are returned. "
         "Also returns left_out_unknown_allergens (titles of "
         "dishes left out because an ingredient could not be checked), semantic_paused (true "
@@ -254,7 +254,7 @@ def search_recipes_tool(
             exclude_ids=exclude_ids or (),
             query_vectors=deps.query_vectors,
             prefer_use=_names(deps.must_use, deps.prefer_use),
-            makeable_first=deps.mode == "fridge_only",
+            makeable_only=deps.mode == "fridge_only",
         )
         return {
             "hits": result.hits,

@@ -115,6 +115,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - **`uses_expiring` lists optional lines** in search hits and the shortlist.
 - **Mixed units for one ingredient** (grams on one line, pieces on another) are not summed together by S1; the later unit is skipped, as before.
 - **Short unknown names under "must use"** match more widely now that the original line text is searched too (as the design allows).
+- **The feasibility check ignores "exclude recently cooked"** while the shortlist and search apply it; it has no effect until saved plans exist (T1.5), then align them.
 - **"Any mix of meat and vegetable dishes" is not offered for a combined dish shortfall**; that case only arises when no split was named, so it does not matter today.
 
 ### Parsing and wording

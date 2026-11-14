@@ -436,9 +436,11 @@ def test_search_tool_time_limit_drops_slower_recipes(session_factory, session, s
     assert quick.id in hits and slow.id not in hits
 
 
-@pytest.mark.parametrize("mode,first", [("fridge_only", "far"), ("shopping", "near")])
-def test_search_tool_ranks_makeable_first_only_in_fridge_mode(
-    session_factory, session, seeded, mode, first
+@pytest.mark.parametrize(
+    "mode,expected", [("fridge_only", ["far"]), ("shopping", ["near", "far"])]
+)
+def test_search_tool_returns_only_makeable_recipes_in_fridge_mode(
+    session_factory, session, seeded, mode, expected
 ):
     stock(session, "豆腐", count=2)
     recipes = {
@@ -458,4 +460,6 @@ def test_search_tool_ranks_makeable_first_only_in_fridge_mode(
         "type": "tool_call",
     }
     hits = json.loads(ALL_TOOLS["search_recipes"].invoke(call).content)["hits"]
-    assert hits[0]["id"] == recipes[first].id
+    assert [h["id"] for h in hits] == [recipes[name].id for name in expected]
+    if mode == "fridge_only":
+        assert all(h["missing"] == [] for h in hits)

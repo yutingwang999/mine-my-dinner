@@ -360,12 +360,14 @@ def test_search_query_count_does_not_grow_with_hits(session, seeded, count_queri
     assert run(6) == few
 
 
-def test_makeable_first_ranks_makeable_before_relevance(session, seeded):
+def test_makeable_only_drops_recipes_with_missing_lines(session, seeded):
     stock(session, "豆腐", count=2)
     near = make_recipe(session, "近", lines=[L("小白菜")], embedding=unit_vector(0))
-    far = make_recipe(session, "远", lines=[L("豆腐")], embedding=unit_vector(5))
+    far = make_recipe(
+        session, "远", lines=[L("豆腐"), L("小葱", optional=True)], embedding=unit_vector(5)
+    )
     client = FakeEmbedClient(vector=unit_vector(0))
     ctx = ctx_for(session)
     assert ids(search_recipes(session, client, ctx, query="菜")) == [near.id, far.id]
-    first = search_recipes(session, client, ctx, query="菜", makeable_first=True)
-    assert ids(first) == [far.id, near.id]
+    only = search_recipes(session, client, ctx, query="菜", makeable_only=True)
+    assert ids(only) == [far.id]

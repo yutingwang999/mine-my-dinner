@@ -65,7 +65,7 @@ In the order of one planning run:
 | Feasibility check (before any model call) | Per needed dish type, how many recipes are makeable (fridge-only), and how many of those use a named ingredient | `feasibility.py`, through search's per-recipe facts |
 | Feasibility check, quick named-ingredient test | Whether a named ingredient is at home at all (Section 4) | `feasibility.py` `_unavailable` |
 | Search | Each hit carries the names it is missing | `search.py` |
-| Candidate list | Ranking (makeable first in fridge-only mode; fewer missing ranks higher) and the "enough makeable dishes" protection | `shortlist.py`, through search |
+| Candidate list | Fridge-only: only makeable recipes are kept, a filter (the planner's own searches apply it too). Shopping: fewer missing ranks higher. The "enough makeable dishes" safeguard after the spread | `shortlist.py` and `tools.py`, through search |
 | Planner tools | Search hits carry missing items; the `compute_missing` tool lists them on request | `tools.py` |
 | Validation H1 (fridge-only) | A dish in the plan that is missing something breaks H1 | `validate.py` |
 | Plan card | "Missing: …" under each dish | `graph.py` |

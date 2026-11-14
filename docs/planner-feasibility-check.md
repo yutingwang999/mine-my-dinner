@@ -20,7 +20,7 @@ Six reasons, checked in this order. All reasons that hold are reported, not only
 | Empty fridge (`empty_inventory`) | No inventory row outside the always-in-stock list **and** nothing the meal needs can be made | Fridge-only | Empty fridge, only seasonings always in stock |
 | No cookware (`no_cookware`) | For some needed dish type, no recipe fits the cookware the user owns | Always | Every vegetable dish needs a wok; only a baking tray is owned |
 | Not enough from the fridge (`not_enough_dishes`) | For some needed dish type, fewer makeable recipes than the meal needs | Fridge-only | 2 vegetable dishes asked, the fridge makes 1 |
-| Time limit (`time_limit`) | For some needed dish type, no recipe fits the limit (stated or user-given times only) | A time limit is set | 10-minute limit, every soup takes 40 minutes |
+| Time limit (`time_limit`) | For some needed dish type, no recipe fits the limit (stated or user-given times only). In fridge-only mode only makeable recipes count | A time limit is set | 10-minute limit, every soup takes 40 minutes |
 | Not enough in the library (`not_enough_in_library`) | For some needed dish type, fewer safe recipes in the library than the meal needs | Always | "一荤一素", no meat dish the diners can eat |
 | Named ingredient (`named_ingredient`) | A "must use" or "every dish uses" ingredient cannot be met | An ingredient is named | "全做鸡蛋", no eggs in the fridge |
 
@@ -29,6 +29,7 @@ How each is decided:
 - **"Safe"** means what search allows: allergy and dietary exclusions apply, and dishes left out for unknown allergens do not count.
 - **"Makeable"** follows the stock rules in `docs/planner-stock-rules.md`, exactly as validation (H1) and the plan card judge it.
 - **The whole library is checked**, not the candidate list.
+- **The time limit in fridge-only mode** is judged on the makeable recipes, because only those reach the candidate list and the planner's searches. If every makeable soup is over the limit, the check stops with the time limit even when a quicker soup exists that would need shopping. When nothing of a type is makeable (already "not enough from the fridge"), the time limit is judged on every safe recipe, so the user also learns whether shopping alone would meet it.
 - **Dish types and counts** come from the request: meat and vegetable dishes are checked together unless the user named a split; a split the parse marked as a minimum ("三个菜，一荤一素") is compared as "at least".
 - **When in doubt, the request goes through.** Ingredients shared between two dishes are not modelled, a time the recipe does not state counts as fitting, and an ingredient name the dictionary does not know is only checked against the library. A wrong early stop on a request that could be met is the failure this check must never cause.
 - **An empty fridge** is reported together with the reasons that do not depend on stock (cookware, time limit, library size), so the user does not stock up only to meet a second problem. The stock-based reasons are not repeated, since they would only restate the empty fridge.
@@ -93,4 +94,5 @@ Fridge-only unless stated.
 | Eggs absent from stock | 全做鸡蛋, 两道素菜 | Stops: "No 鸡蛋 in the fridge". The named ingredients are optional, Fewer dishes, Allow shopping, Update inventory, Import recipes |
 | Eggs in stock at count 0 | 全做鸡蛋, 两道素菜 | Stops: "Only 0 vegetable dishes with 鸡蛋 can be made; this meal needs 2 vegetable dishes", with the same next steps |
 | 10-minute limit, every soup takes 40 minutes (stated) | 一菜一汤, 10分钟 (shopping allowed) | Stops: time limit. Drop the time limit, Fewer dishes |
+| 30-minute limit; the only makeable soup takes 60 minutes, a 10-minute soup needs tomatoes not in the fridge | 一汤, 30分钟 | Stops: time limit (the quick soup cannot be made from the fridge) |
 | Enough makeable dishes of each type | 两菜一汤 | Goes ahead to the candidate list and the planner |

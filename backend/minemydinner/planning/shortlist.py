@@ -136,19 +136,27 @@ def _spread(
     makeable: Callable[[RecipeHit], bool],
     must_users: dict[str, set[int]],
 ) -> list[RecipeHit]:
-    """Stage 4 and 5 for one dish type. `ranked` is every candidate in rank order."""
+    """Stage 4 and 5 for one dish type. `ranked` is every candidate in rank order.
+
+    Slots are a cap, never padded. The walk keeps at most SHORTLIST_SAME_MAIN recipes per
+    main-ingredient set; slots still empty afterwards are back-filled from the skipped
+    recipes in rank order. The protections then run."""
     rank = {hit.id: index for index, hit in enumerate(ranked)}
     kept: list[RecipeHit] = []
+    skipped: list[RecipeHit] = []
     per_group: Counter = Counter()
     for hit in ranked:
         if len(kept) >= slots:
             break
         group = groups.get(hit.id)
         if group is not None and per_group[group] >= SHORTLIST_SAME_MAIN:
+            skipped.append(hit)
             continue
         kept.append(hit)
         if group is not None:
             per_group[group] += 1
+    kept.extend(skipped[: slots - len(kept)])
+    kept.sort(key=lambda k: rank[k.id])
     kept_ids = {hit.id for hit in kept}
     # Recipes left out, by the spread or the cut, in rank order.
     others = [hit for hit in ranked if hit.id not in kept_ids]
@@ -225,9 +233,8 @@ def build_shortlist_result(
 
     Uses the request's query, time limit, and exclude_recent_days as search does; the
     query ranks and never empties a type. all_use keeps only recipes using every named
-    ingredient; must_use and prefer_use rank. In fridge-only mode a makeable recipe has no
-    missing line and ranks before query relevance; in shopping mode every safe recipe is
-    makeable and relevance stays first."""
+    ingredient; must_use and prefer_use rank. In fridge-only mode only makeable recipes (no
+    missing required line) are fetched; in shopping mode every safe recipe is makeable."""
     needed = needed_by_dish_type(spec)
     if not needed:
         return ShortlistResult({})
@@ -245,7 +252,7 @@ def build_shortlist_result(
         query_vectors=query_vectors,
         prefer_use=ranking_names,
         keep_unmatched=True,
-        makeable_first=spec.mode == "fridge_only",
+        makeable_only=spec.mode == "fridge_only",
     )
     hits = result.hits
     recipe_ids = [hit.id for hit in hits]

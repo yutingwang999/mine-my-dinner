@@ -142,6 +142,9 @@ def test_recipe_without_main_line_is_not_grouped(session, seeded):
 
 
 def test_parent_entry_groups_children(session, seeded):
+    # Created oldest first; the walk meets 荤2, 荤1, both 肉末, then 红烧肉 (skipped: the
+    # 猪肉 group is full), then 荤0 fills the last slot, so no back-fill is needed.
+    oldest = make_recipe(session, "荤0", dish_type="meat dish", lines=[L("虾", role="main")])
     pork = make_recipe(session, "红烧肉", dish_type="meat dish", lines=[L("猪肉", role="main")])
     mince = [
         make_recipe(session, f"肉末{i}", dish_type="meat dish", lines=[L("猪肉末", role="main")])
@@ -149,33 +152,48 @@ def test_parent_entry_groups_children(session, seeded):
     ]
     others = [
         make_recipe(session, f"荤{i}", dish_type="meat dish", lines=[L(name, role="main")])
-        for i, name in enumerate(["鸡肉", "牛肉"])
+        for i, name in ((1, "鸡肉"), (2, "牛肉"))
     ]
     result = shortlist(session, spec(dishes=2, meat_dishes=2))["meat dish"]
     assert pork.id not in ids(result)
-    assert set(ids(result)) == {r.id for r in mince + others}
+    assert set(ids(result)) == {r.id for r in mince + others + [oldest]}
 
 
-def test_spread_keeps_enough_makeable_dishes(session, seeded):
+@pytest.mark.parametrize("dishes", [2, 3])
+def test_eggs_only_fridge_lists_every_makeable_egg_dish(session, seeded, dishes):
+    # Only eggs in stock; 蒸蛋羹, 葱花煎蛋, 水煮蛋, 溏心蛋 need eggs only.
     stock(session, "鸡蛋", count=10)
     make_many(session, 6, "vegetable dish", "素")
-    eggs = egg_dishes(session, 4)  # 蒸蛋羹, 葱花煎蛋, 水煮蛋, 溏心蛋: eggs only
-    plan_spec = spec(mode="fridge_only", dishes=3, vegetable_dishes=3)
+    eggs = egg_dishes(session, 4)
+    plan_spec = spec(mode="fridge_only", dishes=dishes, vegetable_dishes=dishes)
     result = shortlist(session, plan_spec)
     assert set(result) == {"vegetable dish"}
     entries = result["vegetable dish"]
-    assert len(entries) == 6
-    makeable = [e for e in entries if not e.missing]
-    assert len(makeable) == 3
-    assert {e.id for e in makeable} <= {e.id for e in eggs}
-    # The list stays in rank order: makeable dishes first.
-    assert entries[:3] == makeable
+    # The fetch keeps makeable dishes only; the spread keeps two, the back-fill the rest.
+    assert ids(entries) == [e.id for e in reversed(eggs)]
+    assert all(not e.missing for e in entries)
 
 
 def test_spread_keeps_enough_dishes_in_shopping_mode(session, seeded):
     eggs = egg_dishes(session, 4)
     result = shortlist(session, spec(dishes=3, vegetable_dishes=3))["vegetable dish"]
-    assert set(ids(result)) == {e.id for e in eggs[1:]}
+    assert ids(result) == [e.id for e in reversed(eggs)]
+
+
+def test_slots_are_a_cap_without_padding(session, seeded):
+    made = make_many(session, 2, "vegetable dish", "素")
+    result = shortlist(session, spec(dishes=1))
+    assert ids(result["vegetable dish"]) == [made[1].id, made[0].id]
+    assert result["meat dish"] == []
+
+
+def test_back_fill_uses_skipped_recipes_in_rank_order(session, seeded):
+    others = make_many(session, 2, "vegetable dish", "素")
+    eggs = egg_dishes(session, 4)  # newest, so they rank first
+    entries = ids(shortlist(session, spec(dishes=1))["vegetable dish"])
+    # The walk keeps eggs[3], eggs[2], skips eggs[1] and eggs[0], keeps both others; one
+    # slot is left, and the back-fill takes the highest-ranked skipped recipe.
+    assert entries == [eggs[3].id, eggs[2].id, eggs[1].id, others[1].id, others[0].id]
 
 
 def test_named_ingredient_is_left_out_of_the_spread(session, seeded):
@@ -366,7 +384,7 @@ def _near_unmakeable_and_far_makeable(session):
     return near, far
 
 
-def test_fridge_only_ranks_makeable_before_query_relevance(session, seeded):
+def test_fridge_only_shortlist_holds_only_makeable_recipes(session, seeded):
     near, far = _near_unmakeable_and_far_makeable(session)
     result = shortlist(
         session,
@@ -375,11 +393,10 @@ def test_fridge_only_ranks_makeable_before_query_relevance(session, seeded):
         client=FakeEmbedClient(vector=unit_vector(0)),
     )
     entries = result["vegetable dish"]
-    assert len(entries) == 5
-    # min(slots, makeable available) = 3 makeable entries, all ahead of the rest.
-    assert [e.missing for e in entries[:3]] == [[], [], []]
-    assert {e.id for e in entries[:3]} == {r.id for r in far}
-    assert all(e.missing for e in entries[3:])
+    # Five slots, three makeable recipes: the list stops at three and is not padded.
+    assert {e.id for e in entries} == {r.id for r in far}
+    assert all(not e.missing for e in entries)
+    assert result["meat dish"] == []
 
 
 def test_shopping_keeps_query_relevance_first(session, seeded):
@@ -421,3 +438,39 @@ def test_fridge_only_must_use_keeps_the_makeable_user(session, seeded):
     entries = ids(result["vegetable dish"])
     assert makeable.id in entries
     assert unmakeable.id not in entries
+
+
+def test_must_use_protection_runs_after_the_back_fill(session, seeded):
+    other = make_recipe(session, "清炒白菜", lines=[L("小白菜", role="main")], embedding=unit_vector(0))
+    eggs = [
+        make_recipe(session, f"蛋{i}", lines=[L("鸡蛋", role="main")], embedding=unit_vector(0))
+        for i in range(5)
+    ]
+    # Uses tomato (a secondary line) and has eggs as its main set; farthest from the query.
+    tomato = make_recipe(
+        session,
+        "番茄蛋",
+        lines=[L("鸡蛋", role="main"), L("番茄")],
+        embedding=unit_vector(5),
+    )
+    result = shortlist(
+        session,
+        spec(dishes=1, must_use=["番茄"]),
+        parsed=ParsedRequest(query="清淡"),
+        client=FakeEmbedClient(vector=unit_vector(0)),
+    )
+    entries = ids(result["vegetable dish"])
+    # Walk: eggs[4], eggs[3], then 清炒白菜; eggs[2..0] and 番茄蛋 are skipped ({鸡蛋} full).
+    # Back-fill: eggs[2], eggs[1]. No entry uses tomato, so the protection puts 番茄蛋 back
+    # in place of the lowest-ranked entry, 清炒白菜.
+    assert entries == [eggs[4].id, eggs[3].id, eggs[2].id, eggs[1].id, tomato.id]
+    assert other.id not in entries
+    without = ids(
+        shortlist(
+            session,
+            spec(dishes=1),
+            parsed=ParsedRequest(query="清淡"),
+            client=FakeEmbedClient(vector=unit_vector(0)),
+        )["vegetable dish"]
+    )
+    assert without == [eggs[4].id, eggs[3].id, eggs[2].id, eggs[1].id, other.id]

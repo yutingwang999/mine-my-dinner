@@ -124,8 +124,13 @@ def check_feasibility(session: Session, ctx: PlanningContext, spec: PlanSpec) ->
             continue
         if not any(not hit.missing_cookware for hit in safe):
             found.append(Shortfall("no_cookware", unit.category, unit.needed, 0))
+        # In fridge-only mode only makeable recipes reach the shortlist and search, so the
+        # time limit is judged on them. With none makeable (already not_enough_dishes), it
+        # is judged on every safe recipe, so the user still learns that shopping alone
+        # would not meet the limit.
+        timed = (pool(unit, makeable_only=True) if stock_checks else []) or safe
         if spec.time_limit_min is not None and not any(
-            _fits_time(hit, spec.time_limit_min) for hit in safe
+            _fits_time(hit, spec.time_limit_min) for hit in timed
         ):
             found.append(Shortfall("time_limit", unit.category, unit.needed, 0))
 

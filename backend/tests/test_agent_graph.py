@@ -807,7 +807,9 @@ def test_retry_message_summarizes_the_previous_attempt(graph_env, session, veg):
     retry = planner_calls(graph_env)[1][-1].content
     shortlist = shortlist_of(out["planner_opening"])
     offered = [e["id"] for entries in shortlist.values() for e in entries]
-    assert sorted(offered) == sorted([veg.id, pork.id])
+    # Fridge-only mode shortlists makeable recipes only, so the pork dish (missing 五花肉)
+    # is not offered; the scripted model proposes it anyway and fails H1.
+    assert offered == [veg.id]
     assert f"Your proposal [{pork.id}] failed these checks." in retry
     assert "not in stock: 五花肉" in retry
     assert "Shortlist ids offered: " + ", ".join(str(i) for i in offered) in retry

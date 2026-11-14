@@ -96,7 +96,7 @@ def search_recipes(
     query_vectors: dict[str, list[float]] | None = None,
     prefer_use: Sequence[str] = (),
     keep_unmatched: bool = False,
-    makeable_first: bool = False,
+    makeable_only: bool = False,
 ) -> SearchResult:
     """Search the recipe library. Allergy and dietary exclusions always apply.
 
@@ -106,12 +106,12 @@ def search_recipes(
     each named ingredient or one of its children. dish_types and exclude_ids filter.
     query ranks by meaning when the embedding service is available and by text otherwise;
     a recipe the query does not reach is dropped, or ranked last with keep_unmatched.
+    makeable_only (fridge-only mode) drops every recipe with a missing required line.
     query_vectors caches query embeddings for one planning run, so a repeated query is
     embedded once.
 
     Every hit carries its missing lines, missing cookware, the close-to-expiry stock it
-    uses, and dislike hits. Order: requested tags first; then, with makeable_first (fridge
-    only), recipes with no missing line; then query relevance; then more
+    uses, and dislike hits. Order: requested tags first; then query relevance; then more
     prefer_use ingredients used, fewer missing lines, more close-to-expiry ingredients
     used, no dislike before a dislike, and, only when max_time is set, a firm time before
     an estimate; then rating and recency. limit=None returns every hit.
@@ -185,6 +185,8 @@ def search_recipes(
     ]
     safe = [i for i in reached if i not in hard and not check.blocked_by_unknown(i)]
     facts = _facts(session, ctx, safe, check)
+    if makeable_only:
+        safe = [i for i in safe if not facts[i].missing]
     preferred = dict.fromkeys(safe, 0)
     for name in dict.fromkeys(n for n in prefer_use if n.strip()):
         for recipe_id in recipes_using(session, ctx, name, safe):
@@ -195,7 +197,6 @@ def search_recipes(
         estimated = max_time is not None and by_id[recipe_id].time_source not in FIRM_TIME_SOURCES
         return (
             tier[recipe_id],
-            makeable_first and bool(fact.missing),
             relevance[recipe_id],
             -preferred[recipe_id],
             len(fact.missing),

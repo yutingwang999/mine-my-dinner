@@ -268,3 +268,30 @@ def test_stocked_but_unmakeable_named_ingredient_is_not_absent(session, seeded):
     stock(session, "番茄", count=1)
     found = check(session, spec(mode="fridge_only", dishes=1, must_use=["鸡蛋"]))
     assert not any(s.absent_from_stock for s in found)
+
+
+def test_fridge_only_time_limit_is_judged_on_makeable_recipes(session, seeded):
+    stock(session, "豆腐", count=2)
+    # The quick soup cannot be made from the fridge; the makeable one is over the limit.
+    make_recipe(
+        session, "快汤", dish_type="soup", lines=[L("番茄", role="main")],
+        time_min=10, time_source="stated",
+    )
+    make_recipe(
+        session, "慢汤", dish_type="soup", lines=[L("豆腐", role="main")],
+        time_min=60, time_source="stated",
+    )
+    fridge = check(session, spec(mode="fridge_only", soups=1, time_limit_min=30))
+    assert fridge == [Shortfall("time_limit", "soups", 1, 0)]
+    # Shopping mode can buy tomatoes, so the quick soup fits.
+    assert check(session, spec(mode="shopping", soups=1, time_limit_min=30)) == []
+
+
+def test_fridge_only_with_nothing_makeable_judges_time_on_every_safe_recipe(session, seeded):
+    stock(session, "豆腐", count=2)
+    make_recipe(
+        session, "快汤", dish_type="soup", lines=[L("番茄", role="main")],
+        time_min=60, time_source="stated",
+    )
+    found = check(session, spec(mode="fridge_only", soups=1, time_limit_min=30))
+    assert reasons(found) == ["not_enough_dishes", "time_limit"]
