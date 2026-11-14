@@ -44,7 +44,7 @@ def session(engine: Engine) -> Iterator[Session]:
 @pytest.fixture
 def client(session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_session] = lambda: session
-    yield TestClient(app)
+    yield TestClient(app, base_url="http://localhost")
     app.dependency_overrides.clear()
 
 
