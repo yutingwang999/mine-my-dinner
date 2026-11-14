@@ -15,7 +15,6 @@ class ChatState(TypedDict):
     spec: dict | None
     constraints: dict | None
     # Set when the user skipped the request-style question in this conversation.
-    style_skipped: bool
     # Set once an ask-first question was asked for the current request.
     asked_question: bool
     run_id: int | None

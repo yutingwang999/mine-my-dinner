@@ -54,15 +54,20 @@ def restore(text: str) -> str:
     return text.replace("Diner 1", "小李")
 
 
+# Rows kept in the test database (evaluations, real-app checks) must survive these tests, so the
+# fixture removes only rows created after its starting watermark and the helpers ignore older rows.
+_WATERMARK = {"id": 0}
+
+
 @pytest.fixture
 def session_factory(engine):
     """Real commits, because the call log must commit apart from business work."""
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    with factory.begin() as cleanup:
-        cleanup.execute(delete(LlmCall))
+    with factory() as probe:
+        _WATERMARK["id"] = probe.scalar(select(func.coalesce(func.max(LlmCall.id), 0)))
     yield factory
     with factory.begin() as cleanup:
-        cleanup.execute(delete(LlmCall))
+        cleanup.execute(delete(LlmCall).where(LlmCall.id > _WATERMARK["id"]))
 
 
 @pytest.fixture
@@ -176,7 +181,8 @@ def llm_embed_wrong_size(llm, embedding_fake):
 
 
 def calls(session):
-    return list(session.scalars(select(LlmCall).order_by(LlmCall.id)))
+    return list(session.scalars(select(LlmCall).where(LlmCall.id > _WATERMARK["id"]).order_by(LlmCall.id))
+    )
 
 
 def only_call(session):
@@ -187,7 +193,9 @@ def only_call(session):
 
 def count_calls(session_factory):
     with session_factory() as session:
-        return session.scalar(select(func.count()).select_from(LlmCall))
+        return session.scalar(
+            select(func.count()).select_from(LlmCall).where(LlmCall.id > _WATERMARK["id"])
+        )
 
 
 def test_primary_success_logs_one_call(llm, session):

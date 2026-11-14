@@ -10,7 +10,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from minemydinner.agent.planner import PlanProposal, build_planner
+from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
@@ -28,7 +28,7 @@ from minemydinner.models import Diner, Recipe
 from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.stock import compute_missing, missing_cookware
-from minemydinner.planning.tools import TOOLS_VERSION, PlannerDeps
+from minemydinner.planning.tools import PlannerDeps
 from minemydinner.planning.validate import PlanSpec, ValidationResult, validate_plan
 
 # Retries after the first proposal fails validation (design 7.3: at most N times).
@@ -224,7 +224,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def after_parse(state: ChatState) -> str:
         with deps.session_factory() as session:
             style = get_request_style(session)
-        if style is None and not state.get("style_skipped"):
+        if style is None:
             return "ask_style"
         parsed = ParsedRequest.model_validate(state["request"])
         if not state.get("asked_question") and needs_question(parsed, style):
@@ -237,8 +237,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             with deps.session_factory() as session:
                 set_request_style(session, value)
             return {}
-        # Skipped: nothing is saved, and this conversation plans with defaults.
-        return {"style_skipped": True}
+        # Skipped: the question is asked once, and skipping means plan then adjust (design 6.2).
+        with deps.session_factory() as session:
+            set_request_style(session, "plan_then_adjust")
+        return {}
 
     def ask_question(state: ChatState) -> dict:
         fields = needs_question(ParsedRequest.model_validate(state["request"]), "ask_first")
@@ -468,8 +470,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 ]
                 plan["next_actions"] = _next_actions(spec)
             note = shown["proposal"]["note"]
-            if not note:
-                note = CLOSEST_NOTE_ZH if _zh(locale) else CLOSEST_NOTE_EN
+            if not shown["validation"]["passed"]:
+                # The fixed closest note always leads; the model's own note may follow it.
+                closest = CLOSEST_NOTE_ZH if _zh(locale) else CLOSEST_NOTE_EN
+                note = closest + "\n\n" + note if note else closest
         deps.recorder.finish(
             state["run_id"],
             retries=state["retries"],

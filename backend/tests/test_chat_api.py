@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 
 from minemydinner.agent.graph import OTHER_REPLY_EN, GraphDeps, build_graph
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.agent.request import set_request_style
+from minemydinner.agent.request import get_request_style, set_request_style
 from langchain_core.messages import HumanMessage
 
 from minemydinner.agent.checkpoint import open_checkpointer
@@ -170,11 +170,20 @@ def test_interrupt_then_resume(client, chat_env_first_use):
     assert "plan" in names(events) and "interrupt" not in names(events)
 
 
-def test_resume_with_null_skips_the_style_question(client, chat_env_first_use):
+def test_resume_with_null_skips_the_style_question(client, chat_env_first_use, session):
     tid = new_thread(client)
     sse(post_message(client, tid))
     events = sse(post_resume(client, tid, None))
     assert "plan" in names(events) and "interrupt" not in names(events)
+    session.expire_all()
+    assert get_request_style(session) == "plan_then_adjust"
+
+
+def test_resume_value_is_bounded(client, chat_env_first_use):
+    tid = new_thread(client)
+    sse(post_message(client, tid))
+    assert post_resume(client, tid, "x" * 4001).status_code == 422
+    assert post_resume(client, tid, "x" * 4000).status_code == 200
 
 
 def test_resume_without_pending_question_is_409(client, chat_env):
@@ -207,7 +216,7 @@ def test_unknown_thread_is_404(client, chat_env):
         for r in (
             client.get(f"/api/chat/threads/{tid}"),
             post_message(client, tid),
-            post_resume(client, tid, 1),
+            post_resume(client, tid, "x"),
         ):
             assert r.status_code == 404 and r.json()["code"] == "thread_not_found"
 
@@ -299,7 +308,9 @@ def test_client_disconnect_mid_run_finishes_the_record(client, chat_env):
     chat_env.session.expire_all()
     run = chat_env.session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
     assert run.final_passed is None
-    stream.close()  # what Starlette does when the client goes away
+    # Starlette does not call close(); the generator is closed on garbage collection or
+    # explicitly, and either way its finally block runs.
+    stream.close()
     chat_env.session.expire_all()
     run = chat_env.session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
     assert run.final_passed is False and run.final_plan is None

@@ -6,7 +6,7 @@ tell the model what code already does."""
 import hashlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Annotated, Any, Literal
@@ -331,10 +331,11 @@ PLANNER_TOOLS: list[BaseTool] = [
 INVENTORY_TOOLS: list[BaseTool] = [update_inventory_tool]
 
 
-def tools_version(tools: list[BaseTool]) -> str:
+def tools_version(tools: list[BaseTool], extra_schemas: Sequence[type[BaseModel]] = ()) -> str:
     """The first 12 hex characters of SHA-256 over each tool's name, description, and
-    model-facing argument schema, so a changed tool changes the version."""
-    spec = [
+    model-facing argument schema, plus any extra model-facing schemas such as the planner's
+    final-answer schema, so a changed tool or schema changes the version."""
+    spec: list[Any] = [
         {
             "name": item.name,
             "description": item.description,
@@ -342,8 +343,9 @@ def tools_version(tools: list[BaseTool]) -> str:
         }
         for item in tools
     ]
+    spec += [
+        {"schema": schema.__name__, "json": schema.model_json_schema()} for schema in extra_schemas
+    ]
     canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
-
-TOOLS_VERSION = tools_version(PLANNER_TOOLS)

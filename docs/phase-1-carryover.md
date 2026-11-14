@@ -43,12 +43,12 @@ Seen in the user's first real planning runs: an empty inventory and only a plate
 - **Context grows every call.** Each call resends the whole history (33 messages by the last call of a retry), so token cost grows faster than the call count. The changes above reduce it; trimming old tool results is a further option.
 - **Measure it.** Report average model calls per run next to cost in the planning evaluation, and include a scenario where key cookware is not owned.
 - **Baseline (plan 1 Task 15, `plan_v1`, deepseek-flash, 7 fictional scenarios).** The six feasible scenarios passed on the first attempt with 6-10 model calls each (about $0.004-0.008 per run). The scenario without a wok failed as expected but took 31 calls ($0.035, 2 retries), and its closest plan was two soups with only H4 (composition) unmet: the model avoided the wok dishes, so the user is told about the dish count instead of the missing cookware. Overall: first and final pass rate 0.86, 0.29 retries, 10.3 calls, $0.064 in total, 11.3 s average latency.
+- **Other diners' restrictions in the request text are not captured (plan 2, diner selection).** A request such as "me and Alex, who is allergic to shrimp" is not parsed by `parse_request` or checked by code in plan 1; only the generic S8 warning (unconfirmed diners) appears. Plan 2's diner selection must capture such statements, or at least flag them on the plan card, so a stated allergy is never left to the model's judgment.
 
 ## Minor findings from the final Phase 0 review, deferred
 
 - English method-stated amounts ("two eggs" in a step) are over-cleared to vague by the corroboration guard; adding English number words to the window check would reduce false clears. Safe direction as is.
 - The anti-fabrication guard trusts `raw` verbatim; checking `raw` appears in `source_text` (when available) would close a small fabrication path.
-- A failed `llm_calls` write discards the paid model result (`client.py` `_log` has no error handling).
 - The allergy check posts on every keystroke in the review form; a ~300 ms debounce would cut the chatter (database-only, no model cost).
 - An empty Content-Type is treated as HTML in the web import, yielding `no_main_text` instead of the more accurate `not_html`.
 - `GET /api/recipes` loads ingredients, cookware, and images per row (N+1); use `selectinload` when the library grows.

@@ -70,7 +70,7 @@ def apply_defaults(
     parsed: ParsedRequest, self_diner_id: int | None = None
 ) -> tuple[PlanSpec, MealConstraints, list[str]]:
     """Fill unstated details. Returns the spec, the meal constraints, and the defaulted
-    fields among "headcount", "composition", and "mode", in that order.
+    fields among "headcount", "dishes", "soups", and "mode", in that order.
 
     Only the self diner's rules are known in this plan; everyone else counts as an
     unconfirmed diner until diner selection exists, so S8 warns about them.
@@ -81,11 +81,18 @@ def apply_defaults(
         headcount = 1
         defaults_used.append("headcount")
     dishes, soups = parsed.dishes, parsed.soups
-    if dishes is None or soups is None:
-        default_dishes, default_soups = default_composition(headcount)
-        dishes = default_dishes if dishes is None else dishes
-        soups = default_soups if soups is None else soups
-        defaults_used.append("composition")
+    default_dishes, default_soups = default_composition(headcount)
+    dishes_defaulted, soups_defaulted = dishes is None, soups is None
+    dishes = default_dishes if dishes is None else dishes
+    soups = default_soups if soups is None else soups
+    if dishes + soups == 0:
+        # A meal needs at least one dish; a stated 0 + 0 falls back to the default composition.
+        dishes, soups = default_dishes, default_soups
+        dishes_defaulted = soups_defaulted = True
+    if dishes_defaulted:
+        defaults_used.append("dishes")
+    if soups_defaulted:
+        defaults_used.append("soups")
     mode = parsed.mode
     if mode is None:
         mode = "fridge_only"

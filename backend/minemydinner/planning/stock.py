@@ -24,8 +24,8 @@ def _held(ctx: PlanningContext, ingredient_id: int, role: str) -> bool:
     item = ctx.stock.get(ingredient_id)
     if item is None or item.level == "none":
         return False
-    # A seasoning only needs to be on the shelf, whatever its count says.
-    return role == "seasoning" or item.count != 0
+    # A seasoning only needs to be on the shelf, whatever its count or grams say.
+    return role == "seasoning" or (item.count != 0 and item.grams != 0)
 
 
 def is_available(ctx: PlanningContext, ingredient_id: int, role: str) -> bool:

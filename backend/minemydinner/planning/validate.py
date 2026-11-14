@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -29,6 +29,12 @@ class PlanSpec(BaseModel):
     dishes: int = Field(ge=0)
     soups: int = Field(ge=0)
     time_limit_min: int | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_dish(self) -> "PlanSpec":
+        if self.dishes + self.soups < 1:
+            raise ValueError("A plan needs at least one dish or soup")
+        return self
 
 
 class H2Override(BaseModel):

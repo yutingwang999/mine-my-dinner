@@ -3,16 +3,16 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from minemydinner.agent.graph import GraphDeps
-from minemydinner.agent.planner import PlanProposal, build_planner
+from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
 from minemydinner.agent.records import PlanningRecorder, load_run
 from minemydinner.agent.request import PROMPT_VERSION
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import LlmCall
 from minemydinner.planning.context import MealConstraints
-from minemydinner.planning.tools import TOOLS_VERSION, PlannerDeps
+from minemydinner.planning.tools import PlannerDeps
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client, tool_call
 from tests.planningfakes import L, make_recipe, rollback_session_factory
 from tests.recipefakes import seeded  # noqa: F401
@@ -29,6 +29,8 @@ class PlannerEnv:
 
 
 def make_env(tmp_path, session, primary=None, fallback=None, **hooks) -> PlannerEnv:
+    # Kept rows in the test database are hidden by this rolled-back transaction.
+    session.execute(delete(LlmCall))
     primary = primary or ScriptedChatModel()
     fallback = fallback or ScriptedChatModel()
     factory = rollback_session_factory(session)

@@ -271,7 +271,7 @@ describe("ChatPage", () => {
     await waitFor(() => expect(select).toHaveValue("plan_then_adjust"));
   });
 
-  it("updates the setting when the request-style prompt is answered, and leaves it on Skip", async () => {
+  it("updates the setting when the request-style prompt is answered", async () => {
     setup({
       "POST /api/chat/threads/t1/messages": () =>
         stream(frame("interrupt", { kind: "request_style" }), DONE),
@@ -284,7 +284,7 @@ describe("ChatPage", () => {
     await waitFor(() => expect(select).toHaveValue("plan_then_adjust"));
   });
 
-  it("keeps the setting unchanged when the prompt is skipped", async () => {
+  it("shows plan then adjust in the setting when the prompt is skipped", async () => {
     setup({
       "POST /api/chat/threads/t1/messages": () =>
         stream(frame("interrupt", { kind: "request_style" }), DONE),
@@ -294,7 +294,7 @@ describe("ChatPage", () => {
     await send("dinner");
     await userEvent.click(await screen.findByRole("button", { name: "Skip" }));
     await waitFor(() => expect(callsTo(calls, "POST", "/api/chat/threads/t1/resume")).toHaveLength(1));
-    expect(select).toHaveValue("");
+    await waitFor(() => expect(select).toHaveValue("plan_then_adjust"));
   });
 
   it("keeps the plan and the pending question when a run fails with an error event", async () => {

@@ -197,7 +197,8 @@ export function ChatPage() {
   }
 
   function chooseStyle(value: RequestStyle | null) {
-    if (value !== null) setStyle(value);
+    // Skipping saves "plan then adjust" on the server (design 6.2), so the setting shows it.
+    setStyle(value ?? "plan_then_adjust");
     void run((id) => resume(id, value, locale));
   }
 

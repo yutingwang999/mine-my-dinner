@@ -2,6 +2,9 @@ import json
 from dataclasses import replace
 from datetime import date, timedelta
 
+import pytest
+from pydantic import ValidationError
+
 from minemydinner.models import Rating
 from minemydinner.planning.validate import (
     EXPIRY_SOON_DAYS,
@@ -21,6 +24,12 @@ from tests.planningfakes import (
     stock,
 )
 from tests.recipefakes import by_zh, seeded  # noqa: F401
+
+def test_plan_spec_needs_at_least_one_dish_or_soup():
+    with pytest.raises(ValidationError):
+        PlanSpec(mode="shopping", dishes=0, soups=0)
+    assert PlanSpec(mode="shopping", dishes=0, soups=1).soups == 1
+
 
 SPEC = PlanSpec(mode="shopping", dishes=1, soups=0, time_limit_min=None)
 

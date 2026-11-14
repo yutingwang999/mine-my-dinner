@@ -11,6 +11,8 @@ from sqlalchemy import delete, select
 from minemydinner.agent.checkpoint import open_checkpointer
 from minemydinner.agent.graph import (
     MAX_RETRIES,
+    CLOSEST_NOTE_EN,
+    CLOSEST_NOTE_ZH,
     NO_PLAN_NOTE_EN,
     NO_PLAN_NOTE_ZH,
     OTHER_REPLY_EN,
@@ -21,7 +23,7 @@ from minemydinner.agent.graph import (
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import PROMPT_VERSION, get_request_style, set_request_style
 from minemydinner.models import AppPreference, LlmCall, PlanningRun
-from minemydinner.planning.tools import TOOLS_VERSION
+from minemydinner.agent.planner import TOOLS_VERSION
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client
 from tests.planningfakes import (
     L,
@@ -147,15 +149,15 @@ def test_first_use_asks_request_style_once(graph_env, veg):
     assert "__interrupt__" not in out and len(out["plan_versions"]) == 2
 
 
-def test_skipped_style_question_plans_with_defaults(graph_env, veg):
+def test_skipped_style_question_saves_plan_then_adjust(graph_env, veg):
     set_request_style(graph_env.session, None)
     out = plan(graph_env, "dinner?", replies=[final_proposal([veg.id])])
     (question,) = out["__interrupt__"]
     out = resume(graph_env, {question.id: None})
-    assert out["current_plan"]["defaults_used"] == ["headcount", "composition", "mode"]
+    assert out["current_plan"]["defaults_used"] == ["headcount", "dishes", "soups", "mode"]
     assert out["current_plan"]["passed"]
-    assert get_request_style(graph_env.session) is None
-    # Skipping is not asked again in the same conversation.
+    assert get_request_style(graph_env.session) == "plan_then_adjust"
+    # The question is asked once.
     out = plan(graph_env, "again?")
     assert "__interrupt__" not in out and len(out["plan_versions"]) == 2
 
@@ -233,7 +235,15 @@ def test_fridge_only_shortfall_shows_closest_with_unmet(graph_env, session):
     (unmet,) = current["unmet"]
     assert unmet["code"] == "H1" and unmet["recipe_id"] == pork.id and "五花肉" in unmet["text"]
     assert current["next_actions"] == ["switch_to_shopping"]
-    assert out["messages"][-1].content == "Here is your dinner."
+    # The fixed closest note leads; the model's note follows and is never shown alone.
+    assert out["messages"][-1].content == CLOSEST_NOTE_EN + "\n\n" + "Here is your dinner."
+
+
+def test_closest_note_is_fixed_text_in_the_locale_even_without_a_model_note(graph_env, session):
+    pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
+    out = plan(graph_env, "晚饭", replies=[final_proposal([pork.id], note="")], locale="zh")
+    assert out["current_plan"]["passed"] is False
+    assert out["messages"][-1].content == CLOSEST_NOTE_ZH
 
 
 def test_servings_note_when_headcount_differs(graph_env, veg):
@@ -251,7 +261,7 @@ def test_servings_note_when_headcount_differs(graph_env, veg):
 def test_record_marks_defaults_and_pass_flags(graph_env, veg):
     out = plan(graph_env, "dinner?", replies=[final_proposal([veg.id], note="Enjoy.")])
     record = run_record(graph_env)
-    assert record.defaults_used == ["headcount", "composition", "mode"]
+    assert record.defaults_used == ["headcount", "dishes", "soups", "mode"]
     assert (record.retries, record.first_passed, record.final_passed) == (0, True, True)
     assert record.prompt_version == PROMPT_VERSION and record.tools_version == TOOLS_VERSION
     assert record.thread_id == "plan-1" and record.has_temporary_guests is False
@@ -272,6 +282,7 @@ def test_record_marks_defaults_and_pass_flags(graph_env, veg):
 
 def test_task_name_is_configurable(tmp_path, session, seeded, veg):
     set_request_style(session, "plan_then_adjust")
+    session.execute(delete(LlmCall))  # rolled back; hides rows kept in the test database
     model = ScriptedChatModel(
         replies=[final_proposal([veg.id])],
         structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]},

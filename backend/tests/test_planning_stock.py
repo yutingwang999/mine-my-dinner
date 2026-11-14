@@ -67,6 +67,18 @@ def test_zero_count_counts_as_missing(session, seeded):
     assert [m.reason for m in missing(session, r)] == ["not_in_stock"]
 
 
+def test_zero_grams_counts_as_missing(session, seeded):
+    r = make_recipe(session, "炒", lines=[L("鸡胸肉", role="main")])
+    stock(session, "鸡胸肉", grams=0)
+    assert [m.reason for m in missing(session, r)] == ["not_in_stock"]
+
+
+def test_positive_grams_is_available(session, seeded):
+    r = make_recipe(session, "炒", lines=[L("鸡胸肉", role="main")])
+    stock(session, "鸡胸肉", grams=300)
+    assert missing(session, r) == []
+
+
 def test_positive_count_is_available(session, seeded):
     r = make_recipe(session, "炒", lines=[L("鸡胸肉", role="main")])
     stock(session, "鸡胸肉", count=2)

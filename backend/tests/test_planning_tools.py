@@ -1,15 +1,16 @@
 import json
 
 import pytest
+from pydantic import BaseModel
 from langchain.tools import ToolRuntime
 from sqlalchemy import select
 
+from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal
 from minemydinner.models import Inventory
 from minemydinner.planning.context import MealConstraints
 from minemydinner.planning.tools import (
     INVENTORY_TOOLS,
     PLANNER_TOOLS,
-    TOOLS_VERSION,
     PlannerDeps,
     tools_version,
 )
@@ -59,7 +60,7 @@ def invoke(session_factory):
 
 
 def test_tools_version_is_stable():
-    assert TOOLS_VERSION == tools_version(PLANNER_TOOLS)
+    assert TOOLS_VERSION == tools_version(PLANNER_TOOLS, [PlanProposal])
     assert len(TOOLS_VERSION) == 12
     int(TOOLS_VERSION, 16)
 
@@ -68,6 +69,20 @@ def test_tools_version_changes_with_a_schema(monkeypatch):
     before = tools_version(PLANNER_TOOLS)
     monkeypatch.setattr(PLANNER_TOOLS[0], "description", "changed")
     assert tools_version(PLANNER_TOOLS) != before
+
+
+def test_tools_version_covers_the_final_answer_schema():
+    class Answer(BaseModel):
+        ids: list[int]
+
+    class ChangedAnswer(BaseModel):
+        ids: list[int]
+        extra: str
+
+    assert TOOLS_VERSION != tools_version(PLANNER_TOOLS)
+    assert tools_version(PLANNER_TOOLS, [Answer]) != tools_version(PLANNER_TOOLS)
+    assert tools_version(PLANNER_TOOLS, [Answer]) == tools_version(PLANNER_TOOLS, [Answer])
+    assert tools_version(PLANNER_TOOLS, [ChangedAnswer]) != tools_version(PLANNER_TOOLS, [Answer])
 
 
 def test_planner_tools_order_and_inventory_tool_is_separate():

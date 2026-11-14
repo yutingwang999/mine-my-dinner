@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from minemydinner.agent.middleware import CallLayerMiddleware
 from minemydinner.agent.request import load_prompt
 from minemydinner.llm.registry import build_chat_model
-from minemydinner.planning.tools import PLANNER_TOOLS, PlannerDeps
+from minemydinner.planning.tools import PLANNER_TOOLS, PlannerDeps, tools_version
 
 if TYPE_CHECKING:
     from minemydinner.agent.graph import GraphDeps
@@ -29,6 +29,10 @@ class PlanProposal(BaseModel):
 
     recipe_ids: list[int] = Field(description="Ids of the chosen recipes, from tool results only.")
     note: str = Field(description="One or two sentences to the user, in the reply locale.")
+
+
+# Covers the tools and the final-answer schema, the model-facing surface of the planner.
+TOOLS_VERSION = tools_version(PLANNER_TOOLS, [PlanProposal])
 
 
 class PlannerState(AgentState):

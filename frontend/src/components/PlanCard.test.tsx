@@ -33,10 +33,33 @@ describe("PlanCard", () => {
   });
 
   it("states defaulted values", () => {
-    renderWithProviders(<PlanCard plan={plan({ defaults_used: ["headcount", "composition", "mode"] })} />);
+    renderWithProviders(<PlanCard plan={plan({ defaults_used: ["headcount", "dishes", "mode"] })} />);
     expect(
       screen.getByText("Assumed: 1 person, 1 dish, fridge only. Say if that's wrong."),
     ).toBeInTheDocument();
+  });
+
+  it("states only the defaulted dish count or soup count", () => {
+    const spec = { mode: "fridge_only" as const, dishes: 2, soups: 1, time_limit_min: null };
+    const { unmount } = renderWithProviders(
+      <PlanCard plan={plan({ defaults_used: ["soups"], spec })} />,
+    );
+    expect(screen.getByText("Assumed: 1 soup. Say if that's wrong.")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(<PlanCard plan={plan({ defaults_used: ["dishes"], spec })} />);
+    expect(screen.getByText("Assumed: 2 dishes. Say if that's wrong.")).toBeInTheDocument();
+  });
+
+  it("treats an old composition value as both counts", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          defaults_used: ["composition"],
+          spec: { mode: "fridge_only", dishes: 2, soups: 1, time_limit_min: null },
+        })}
+      />,
+    );
+    expect(screen.getByText("Assumed: 2 dishes, 1 soup. Say if that's wrong.")).toBeInTheDocument();
   });
 
   it("states only the defaulted values", () => {
@@ -94,6 +117,21 @@ describe("PlanCard", () => {
     expect(screen.getByText("葱花蛋: the cooking time (15 min) is only an estimate.")).toBeInTheDocument();
     expect(screen.getByText(/2 other diners have unknown dietary limits/)).toBeInTheDocument();
     expect(screen.getByText("葱花蛋 makes 2 servings; you are cooking for 3 people.")).toBeInTheDocument();
+  });
+
+  it("localizes known units in the stock warning and falls back to the raw unit", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          warnings: [
+            { code: "S1", recipe_id: 1, detail: { name: "oil", needed: 2, have: 1, unit: "tablespoon" } },
+            { code: "S1", recipe_id: 1, detail: { name: "rice", needed: 2, have: 1, unit: "bowl" } },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("葱花蛋: needs 2 tbsp of oil, but you have 1 tbsp.")).toBeInTheDocument();
+    expect(screen.getByText("葱花蛋: needs 2 bowl of rice, but you have 1 bowl.")).toBeInTheDocument();
   });
 
   it("counts dishes left out for unknown allergens and lists their titles on request", async () => {

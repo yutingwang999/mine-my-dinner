@@ -20,9 +20,13 @@ function Assumed({ plan }: { plan: ChatPlan }) {
   if (plan.defaults_used.includes("headcount")) {
     parts.push(t("assumedHeadcount", { count: plan.headcount }));
   }
-  if (plan.defaults_used.includes("composition")) {
+  // An old record may carry "composition", which stood for both counts.
+  const legacy = plan.defaults_used.includes("composition");
+  if (legacy || plan.defaults_used.includes("dishes")) {
     parts.push(t("assumedDishes", { count: plan.spec.dishes }));
-    if (plan.spec.soups > 0) parts.push(t("assumedSoups", { count: plan.spec.soups }));
+  }
+  if (legacy ? plan.spec.soups > 0 : plan.defaults_used.includes("soups")) {
+    parts.push(t("assumedSoups", { count: plan.spec.soups }));
   }
   if (plan.defaults_used.includes("mode")) {
     parts.push(t(plan.spec.mode === "shopping" ? "assumedShopping" : "assumedFridgeOnly"));
@@ -31,8 +35,13 @@ function Assumed({ plan }: { plan: ChatPlan }) {
   return <p className="hint">{t("assumed", { list: format.list(parts, { type: "unit" }) })}</p>;
 }
 
+function unitLabel(tUnit: ReturnType<typeof useTranslations>, unit: string): string {
+  return tUnit.has(unit) ? tUnit(unit) : unit;
+}
+
 function warningText(
   t: ReturnType<typeof useTranslations>,
+  tUnit: ReturnType<typeof useTranslations>,
   finding: PlanFinding,
   titles: Map<number, string>,
 ): string[] {
@@ -42,7 +51,7 @@ function warningText(
     t(key, { title, ...values });
   switch (finding.code) {
     case "S1":
-      return [text("S1", { name: String(d.name), needed: Number(d.needed), have: Number(d.have), unit: String(d.unit) })];
+      return [text("S1", { name: String(d.name), needed: Number(d.needed), have: Number(d.have), unit: unitLabel(tUnit, String(d.unit)) })];
     case "S2":
       return [text("S2", { line: String(d.line) })];
     case "S3":
@@ -74,10 +83,11 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
   const tAction = useTranslations("chat.action");
   const tDish = useTranslations("dishType");
   const tSource = useTranslations("timeSource");
+  const tUnit = useTranslations("unit");
   const [showLeftOut, setShowLeftOut] = useState(false);
 
   const titles = new Map(plan.recipes.map((recipe) => [recipe.id, recipe.title]));
-  const warnings = plan.warnings.flatMap((finding) => warningText(tWarning, finding, titles));
+  const warnings = plan.warnings.flatMap((finding) => warningText(tWarning, tUnit, finding, titles));
 
   return (
     <section className="card plan-card">

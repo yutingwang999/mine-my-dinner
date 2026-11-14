@@ -26,7 +26,7 @@ def test_prompt_version_is_plan_v1():
 
 def test_apply_defaults_reports_each_default():
     spec, constraints, defaults_used = apply_defaults(parsed())
-    assert defaults_used == ["headcount", "composition", "mode"]
+    assert defaults_used == ["headcount", "dishes", "soups", "mode"]
     assert (spec.mode, spec.dishes, spec.soups, spec.time_limit_min) == ("fridge_only", 1, 0, None)
     assert constraints.unconfirmed_diners == 0 and constraints.diner_ids == ()
 
@@ -42,9 +42,22 @@ def test_stated_values_are_kept_and_not_reported():
 def test_composition_default_fills_only_the_unstated_part():
     spec, _, defaults_used = apply_defaults(parsed(headcount=4, dishes=3, mode="shopping"))
     assert (spec.dishes, spec.soups) == (3, 1)
-    assert defaults_used == ["composition"]
-    spec, _, _ = apply_defaults(parsed(headcount=1, dishes=2, mode="shopping"))
+    assert defaults_used == ["soups"]
+    spec, _, defaults_used = apply_defaults(parsed(headcount=1, dishes=2, mode="shopping"))
     assert (spec.dishes, spec.soups) == (2, 0)
+    assert defaults_used == ["soups"]
+    _, _, defaults_used = apply_defaults(parsed(headcount=4, soups=1, mode="shopping"))
+    assert defaults_used == ["dishes"]
+
+
+def test_a_stated_zero_by_zero_falls_back_to_the_default_composition():
+    spec, _, defaults_used = apply_defaults(
+        parsed(headcount=2, dishes=0, soups=0, mode="shopping")
+    )
+    assert (spec.dishes, spec.soups) == (2, 0)
+    assert defaults_used == ["dishes", "soups"]
+    spec, _, _ = apply_defaults(parsed(headcount=1, dishes=0, mode="shopping"))
+    assert spec.dishes + spec.soups >= 1
 
 
 def test_other_people_are_unconfirmed_until_diner_selection():

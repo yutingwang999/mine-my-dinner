@@ -34,7 +34,7 @@ _URL_BODY = r"[^\s<>\"'，。；！？、）】」]"
 _BARE_BODY = r"[^\s<>\"'，。；！？、）】」\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]"
 _NOT_AFTER = r"(?<![A-Za-z0-9.@/_-])"
 # A scheme, a www. prefix, or a bare host.tld/path. A bare host starts with an ASCII letter
-# and has a TLD of 2+ ASCII letters followed by a slash, which keeps 1.5/2, v1.2, 2.5kg/份,
+# and has a TLD of 2+ ASCII letters followed by a slash, which keeps 1.5/2, v1.2, 2.5kg/serving,
 # and e-mail addresses out.
 URL_PATTERN = re.compile(
     rf"https?://{_URL_BODY}+"

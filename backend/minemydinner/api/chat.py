@@ -78,7 +78,7 @@ class MessageBody(BaseModel):
 
 
 class ResumeBody(BaseModel):
-    value: Any = None
+    value: str | None = Field(default=None, max_length=4000)
     locale: Literal["zh", "en"]
 
 
