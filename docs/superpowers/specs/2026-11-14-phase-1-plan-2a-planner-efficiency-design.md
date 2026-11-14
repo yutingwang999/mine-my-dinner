@@ -106,6 +106,16 @@ Parsing rules stated in `parse.md` (v2), with Chinese and English examples:
 - Vague phrases ("丰盛点", "随便", "简单吃点") leave the numbers empty, so defaults apply (design 6.2) when no other count was stated, and the phrase goes into `query` for the planner to read.
 - "想喝汤" means one soup (`soups` = 1); "下饭菜" is a query term, not a count.
 
+**Named ingredients (decided with the user).** Today "优先用鸡蛋", "把鸡蛋用掉", and "全做鸡蛋" all become `must_use`, which is only a search filter and is never validated. They mean three different things, so `ParsedRequest` separates them:
+
+| The user says | Field | Shortlist | Validation |
+|---|---|---|---|
+| "优先用鸡蛋", "鸡蛋多，想用掉些" | `prefer_use: list[str]` | dishes using it rank first; others stay | none (a preference) |
+| "要用到鸡蛋", "这顿一定要用鸡蛋" | `must_use: list[str]` | enough dishes using it are kept; others stay | **H7**: at least one dish in the plan uses each named ingredient |
+| "全做鸡蛋", "每道都要有蛋" | `all_use: list[str]` | only dishes using it | **H7**: every dish in the plan uses each named ingredient |
+
+A dish "uses" a named ingredient by the same rule search's `must_use` filter applies today: a line linked to that dictionary entry or one of its children ("猪肉" is satisfied by 猪肉末), or, for an unlinked line or a name the dictionary does not know, the folded name contained in the line's name or raw text. Ingredients close to expiry keep ranking first on their own (Section 5.4); `prefer_use` adds the user's own choice.
+
 `apply_defaults` changes as described above (defaults only when no category count was stated). A range taken at its lower end is reported in `defaults_used` like a defaulted value, so the card says it was assumed.
 
 ### 5.2 Feasibility check and early stop
@@ -119,6 +129,7 @@ New code in `minemydinner/planning/` (no model call) runs after `load_context` a
 | `not_enough_dishes` | Fridge-only can make only 1 of the 2 dishes asked for ("only 1 dish possible from the fridge") | mode is fridge-only |
 | `time_limit` | No candidate in a needed category fits the time limit (counting only firm time sources for the cut, as search does today) | a time limit is set |
 | `not_enough_in_library` | A needed category has fewer safe recipes in the library (after H2 and unknown-allergen exclusions) than the request needs, including none at all ("you have 0 meat dishes you can eat; this meal needs 1") | always |
+| `named_ingredient` | A `must_use` ingredient is used by no safe recipe in any needed category, or, for `all_use`, a needed category has fewer safe recipes using it than it needs; in fridge-only mode the same counts use makeable recipes, and an ingredient not in stock (and not always in stock) counts as unavailable ("No eggs in the fridge"; "Only 1 vegetable dish with eggs can be made; this meal needs 3") | a named ingredient is required |
 
 How each reason is decided (Claude's calls, from the builder check):
 
@@ -143,6 +154,7 @@ The check must never stop a request that could be met: when in doubt (for exampl
 | `no_cookware`, H3 (missing cookware) | `register_cookware` (new: link to the cookware section of the inventory page), `fewer_dishes` |
 | `time_limit`, H6 | `drop_time_limit`, `fewer_dishes` |
 | `not_enough_in_library`, H4 alone | `fewer_dishes`, `import_recipes` (new: link to the import page) |
+| `named_ingredient`, H7 | `relax_named` (new, sends a fixed short message such as "不一定要用指定的食材" / "The named ingredients are optional"), `fewer_dishes`, `switch_to_shopping` (fridge-only), `update_inventory` (fridge-only), `import_recipes` |
 | H5 alone | none (retry by sending the request again) |
 
 Two conditional actions are added on top of the table:
@@ -150,23 +162,29 @@ Two conditional actions are added on top of the table:
 - `relax_split` (new, sends a fixed short message such as "荤素都行" / "Any mix of meat and vegetable dishes is fine"): offered whenever the request named a meat or vegetable count and the failing category is meat or vegetable dishes. The next parse drops the split and keeps the total.
 - `fewer_dishes` appears only when the request asked for more than one dish or soup.
 
-The existing three actions and `relax_split` send a fixed short chat message. The three link actions (`update_inventory`, `register_cookware`, `import_recipes`) render as links to the existing inventory page (`/[locale]/inventory`) and import page (`/[locale]/import`); the cookware section gets an anchor id so the link lands on it. The reason text follows the existing pattern: the backend writes it in the request's locale from fixed strings, and `current_plan` also carries the reason codes for tests and the evaluation.
+The existing three actions, `relax_split`, and `relax_named` send a fixed short chat message (after `relax_named`, the next parse moves `must_use` and `all_use` names into `prefer_use`). The three link actions (`update_inventory`, `register_cookware`, `import_recipes`) render as links to the existing inventory page (`/[locale]/inventory`) and import page (`/[locale]/import`); the cookware section gets an anchor id so the link lands on it. The reason text follows the existing pattern: the backend writes it in the request's locale from fixed strings, and `current_plan` also carries the reason codes for tests and the evaluation.
 
 ### 5.4 The shortlist
 
 A new function in `minemydinner/planning/` builds the shortlist from the parsed and defaulted request. Its fixed stages, so later plans can add signals without touching the graph:
 
-1. **Fetch per category** safe candidates (H2 exclusions and unknown-allergen exclusions apply exactly as in `search_recipes`), using the request's query, `must_use`, time limit, and `exclude_recent_days` the same way search does. Search gains a dish-type filter so each category is fetched on its own; a single fetch capped at 20 could miss a category entirely. Missing lines and cookware are computed for every fetched candidate (cheap at this library size).
+1. **Fetch per category** safe candidates (H2 exclusions and unknown-allergen exclusions apply exactly as in `search_recipes`), using the request's query, time limit, and `exclude_recent_days` the same way search does. `all_use` filters every category to dishes using each named ingredient. `must_use` does not filter; stage 4 keeps enough dishes using it. `prefer_use` does not filter; stage 3 ranks by it. Search gains a dish-type filter so each category is fetched on its own; a single fetch capped at 20 could miss a category entirely. Missing lines and cookware are computed for every fetched candidate (cheap at this library size).
 2. **Quota by category**: needed categories come from the request: `dishes` ≥ 1 → meat dish and vegetable dish (only the named ones when the split names one side as the whole total, such as "两个荤菜"); `soups` ≥ 1 → soup; `staples` ≥ 1 → staple food; `desserts` ≥ 1 → dessert; `snacks` ≥ 1 → snack. The "other" type is never shortlisted. Each needed category gets `max(SHORTLIST_MIN_PER_CATEGORY, needed + SHORTLIST_MARGIN)` slots, with `SHORTLIST_MIN_PER_CATEGORY` = 5 and `SHORTLIST_MARGIN` = 3 (code constants, tuned after evaluation), where `needed` is the count required of that category (for meat and vegetable without a named split, the counted-dish total). So "8 dishes, 2 meat" gets about 9 vegetable candidates. Other dish types are not shortlisted.
-3. **Rank within each category** by, in order of weight: query relevance (as search ranks today), fridge-only feasibility (fewer missing lines first; in shopping mode, fewer missing lines still rank higher), use of ingredients close to expiry (only where an expiry date was entered), dislikes last (soft rules), and, when a time limit is set, a firm time source before an estimated one.
-4. **Spread main ingredients**: within a category, keep at most `SHORTLIST_SAME_MAIN` = 2 recipes whose main ingredients (`role = main`, compared through the dictionary entry, or the parent entry when one exists) are the same set; free slots go to the next recipes with other main ingredients. A recipe with no linked main line is not grouped with any other.
+3. **Rank within each category** by, in order of weight: query relevance (as search ranks today), use of `must_use` and `prefer_use` ingredients, fridge-only feasibility (fewer missing lines first; in shopping mode, fewer missing lines still rank higher), use of ingredients close to expiry (only where an expiry date was entered), dislikes last (soft rules), and, when a time limit is set, a firm time source before an estimated one.
+4. **Spread main ingredients**: within a category, keep at most `SHORTLIST_SAME_MAIN` = 2 recipes whose main ingredients (`role = main`, compared through the dictionary entry, or the parent entry when one exists) are the same set; free slots go to the next recipes with other main ingredients. A recipe with no linked main line is not grouped with any other. Two protections, both decided with the user:
+   - **Named ingredients are left out of the comparison.** With "全做鸡蛋", 蒸蛋羹 (eggs only) and 水煮蛋 (eggs only) both have no other main ingredient once eggs are set aside, so they are not grouped; 番茄炒蛋 and 番茄蛋汤 are compared by tomato. The spread then varies what goes with the eggs and never removes what the user asked for.
+   - **The spread never leaves too few usable dishes.** If spreading would leave fewer makeable dishes in a category (fridge-only: no missing line; shopping: every safe dish) than that category needs, or fewer dishes using a `must_use` ingredient than one, the highest-ranked recipes it removed are put back, ignoring the per-group limit, until the count is met. Example: only eggs in the fridge, three vegetable dishes asked for, and the makeable ones are 蒸蛋羹, 葱花煎蛋, 水煮蛋, 溏心蛋 (eggs only): the spread would keep two, so one more is put back and the model sees three it can make.
 5. **Cut** to the quota and attach, per recipe: id, title, dish type, time and its source, servings, missing ingredient names, missing cookware names, ingredients close to expiry it uses, and dislike hits. Results hold diner codes only and no `source_text`, as tool results do today.
 
 The shortlist goes into the planner's first message as compact JSON, after the request summary. The planner prompt (`planner.md` v2) says: choose from the shortlist when it fits; search for more only when it does not; check details only when needed; final answer is `PlanProposal` as before.
 
 ### 5.5 Validation change
 
-H4 checks every category count in the spec: dishes (meat plus vegetable) and soups as today, and staples, desserts, and snacks exactly as stated (0 when not stated, so an unrequested staple or dessert fails H4 just as an extra soup does today). When `meat_dishes` or `vegetable_dishes` is set, H4 also checks them: exactly that many, or at least that many when the parse marked them as minimums (named split below the total, Section 5.1). Recipes of type "other" are not counted. The S5 warning ("all dishes are the same type") stays for requests without a split. **S1 sums across dishes (decided with the user).** Today S1 compares each recipe line with stock on its own, so two dishes that each need 2 of the 3 eggs in stock pass silently. S1 now sums, per ingredient, the amounts of every dish in the plan and compares the total with stock, for the cases that can be summed exactly: amounts in grams against stock in grams, and counts in pieces against stock in pieces (the same cases S1 handles today). Vague, spoon, and level-mode amounts are skipped as before. S1 stays a warning: the plan is not failed and no retry is triggered. The card shows, for example, "Eggs: 番茄炒蛋 2 + 蛋花汤 2, 4 needed, 3 in stock". The summing is a separate function that T1.5's shopping list will reuse (`docs/phase-1-carryover.md`). The shortlist does not show these amounts to the model (Section 6).
+H4 checks every category count in the spec: dishes (meat plus vegetable) and soups as today, and staples, desserts, and snacks exactly as stated (0 when not stated, so an unrequested staple or dessert fails H4 just as an extra soup does today). When `meat_dishes` or `vegetable_dishes` is set, H4 also checks them: exactly that many, or at least that many when the parse marked them as minimums (named split below the total, Section 5.1). Recipes of type "other" are not counted. The S5 warning ("all dishes are the same type") stays for requests without a split.
+
+**H7, named ingredients (new hard constraint, decided with the user).** For each `must_use` ingredient, at least one dish in the plan uses it; for each `all_use` ingredient, every counted dish uses it (recipes of type "other" are ignored). "Uses" follows the rule in Section 5.1. The finding names the ingredient, the rule, and the dishes without it. H7 is not a safety rule, so a plan failing only H7 can be shown as the closest attempt with the unmet rule stated.
+
+**S1 sums across dishes (decided with the user).** Today S1 compares each recipe line with stock on its own, so two dishes that each need 2 of the 3 eggs in stock pass silently. S1 now sums, per ingredient, the amounts of every dish in the plan and compares the total with stock, for the cases that can be summed exactly: amounts in grams against stock in grams, and counts in pieces against stock in pieces (the same cases S1 handles today). Vague, spoon, and level-mode amounts are skipped as before. S1 stays a warning: the plan is not failed and no retry is triggered. The card shows, for example, "Eggs: 番茄炒蛋 2 + 蛋花汤 2, 4 needed, 3 in stock". The summing is a separate function that T1.5's shopping list will reuse (`docs/phase-1-carryover.md`). The shortlist does not show these amounts to the model (Section 6).
 
 **Choosing the closest attempt (decided with the user).** When no attempt passes and the plan shown is the closest attempt (design 6.3; attempts with H2 or H5 are never candidates), attempts are compared by the number of violations, then, on a tie, by the composition gap: the sum over every counted category of |required − present| (for a minimum, only the shortfall counts). With "3 meat, 3 vegetable", an attempt with 2 meat and 3 vegetable dishes is closer than one with 1 meat and 3 vegetable dishes, although each has one H4 violation. A remaining tie goes to the later attempt, as today.
 
@@ -213,6 +231,9 @@ Today `llm_calls.cost_estimate` prices every input token at the full rate and `m
   - "一荤一素" in fridge-only mode where the library has meat dishes but none is makeable from stock (expect `not_enough_dishes`, with `switch_to_shopping` and `relax_split`);
   - "丰盛点" with no count, and a request with no count at all (expect defaults stated as assumed, no invented numbers);
   - "三个人，两个菜" (expect two dishes and no soup) and "就吃碗面" (expect one staple and nothing else);
+  - "三道素菜，就用冰箱里的" with only eggs in stock and four egg-only vegetable dishes (expect the shortlist to keep three makeable dishes and a passing plan);
+  - "优先用鸡蛋" (expect egg dishes ranked first, other dishes still offered), "这顿一定要用鸡蛋" (expect at least one egg dish), "全做鸡蛋" (expect every dish to use eggs);
+  - "全做鸡蛋" fridge-only with no eggs in stock (expect `named_ingredient`, with `relax_named`);
   - a library where one main ingredient dominates the vegetable dishes (expect the shortlist to spread main ingredients; checked by a code assertion on the shortlist, not by the model);
   - "两菜一汤加个炒饭" (expect two dishes, one soup, and one staple).
 - Each scenario may state expected `reason` and expected next actions; the runner checks them.
