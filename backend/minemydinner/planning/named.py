@@ -28,22 +28,29 @@ def _text_match(name: str):
     )
 
 
+def line_uses_clause(
+    session: Session, ctx: PlanningContext, name: str, unresolved: list[str] | None = None
+):
+    """SQL condition on RecipeIngredient: this line uses the named ingredient. A name the
+    dictionary does not know is appended to `unresolved` when a list is given."""
+    entry = match_ingredient(session, name)
+    if entry is None:
+        if unresolved is not None:
+            unresolved.append(name)
+        return _text_match(name)
+    accepted = {entry.id} | {c for c, parent in ctx.parents.items() if parent == entry.id}
+    return or_(
+        RecipeIngredient.ingredient_id.in_(accepted),
+        and_(RecipeIngredient.ingredient_id.is_(None), _text_match(name)),
+    )
+
+
 def uses_clause(
     session: Session, ctx: PlanningContext, name: str, unresolved: list[str] | None = None
 ):
     """SQL condition on Recipe: some line uses the named ingredient. A name the dictionary
     does not know is appended to `unresolved` when a list is given."""
-    entry = match_ingredient(session, name)
-    if entry is None:
-        if unresolved is not None:
-            unresolved.append(name)
-        match = _text_match(name)
-    else:
-        accepted = {entry.id} | {c for c, parent in ctx.parents.items() if parent == entry.id}
-        match = or_(
-            RecipeIngredient.ingredient_id.in_(accepted),
-            and_(RecipeIngredient.ingredient_id.is_(None), _text_match(name)),
-        )
+    match = line_uses_clause(session, ctx, name, unresolved)
     return exists().where(RecipeIngredient.recipe_id == Recipe.id, match)
 
 

@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Annotated, Any, Literal
 
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from minemydinner.constants import CATEGORIES, STOCK_LEVELS
+from minemydinner.constants import CATEGORIES, DISH_TYPES, STOCK_LEVELS
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import Recipe
 from minemydinner.planning.context import MealConstraints, load_planning_context
@@ -42,6 +42,8 @@ class PlannerDeps:
     client: LLMClient
     constraints: MealConstraints
     mode: str
+    # Query embeddings for this planning run, so a repeated search query is embedded once.
+    query_vectors: dict[str, list[float]] = field(default_factory=dict)
 
 
 def _default(value: Any) -> Any:
@@ -59,6 +61,9 @@ def _plain(value: Any) -> Any:
 
 Category = Literal[CATEGORIES]  # type: ignore[valid-type]
 StockLevel = Literal[STOCK_LEVELS]  # type: ignore[valid-type]
+# The "other" type (drinks, sauces) is never counted, so search cannot ask for it alone.
+SearchDishType = Literal[tuple(t for t in DISH_TYPES if t != "other")]  # type: ignore[valid-type]
+MAX_EXCLUDE_IDS = 50
 RecipeIds = Annotated[list[Annotated[int, Field(ge=1)]], Field(min_length=1, max_length=20)]
 
 
@@ -94,6 +99,14 @@ class SearchRecipesArgs(BaseModel):
         ge=1,
         le=60,
         description="Skip dishes cooked in the last N days. Set only when the user asks.",
+    )
+    dish_type: SearchDishType | None = Field(
+        default=None, description="Only dishes of this type, or omit for every type."
+    )
+    exclude_ids: list[Annotated[int, Field(ge=1)]] = Field(
+        default_factory=list,
+        max_length=MAX_EXCLUDE_IDS,
+        description="Recipe ids already seen, to fetch the next batch. At most 50.",
     )
 
 
@@ -165,10 +178,16 @@ def get_inventory(
         "excluded by code; you cannot include them. tags are a preference that ranks "
         "matching dishes first, never a filter: pass tags only when the user names a "
         "characteristic. Set exclude_recent_days only when the user asks to avoid recent "
-        "dishes. Returns hits, left_out_unknown_allergens (titles of dishes left out because "
-        "an ingredient could not be checked), semantic_paused (true when meaning-based "
-        "search was unavailable), and unresolved_must_use (must_use names the dictionary "
-        "does not know)."
+        "dishes. dish_type limits the search to one type. Pass the ids you have already "
+        "seen in exclude_ids to fetch the next batch. Returns up to 20 hits; each hit "
+        "carries missing (required ingredients not in stock), missing_cookware (cookware "
+        "the household does not own), uses_expiring (ingredients close to expiry it uses), "
+        "and dislikes (soft dislikes it hits, by diner code). Hits with fewer missing items "
+        "rank higher after relevance; in fridge-only mode, dishes with nothing missing "
+        "rank first. Also returns left_out_unknown_allergens (titles of "
+        "dishes left out because an ingredient could not be checked), semantic_paused (true "
+        "when meaning-based search was unavailable), and unresolved_must_use (must_use names "
+        "the dictionary does not know)."
     ),
 )
 def search_recipes_tool(
@@ -178,6 +197,8 @@ def search_recipes_tool(
     tags: list[str] | None = None,
     must_use: list[str] | None = None,
     exclude_recent_days: int | None = None,
+    dish_type: str | None = None,
+    exclude_ids: list[int] | None = None,
 ) -> dict:
     deps = runtime.context
 
@@ -192,6 +213,10 @@ def search_recipes_tool(
             tags=tags,
             must_use=must_use,
             exclude_recent_days=exclude_recent_days,
+            dish_types=[dish_type] if dish_type else None,
+            exclude_ids=exclude_ids or (),
+            query_vectors=deps.query_vectors,
+            makeable_first=deps.mode == "fridge_only",
         )
         return {
             "hits": result.hits,

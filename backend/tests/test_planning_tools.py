@@ -23,6 +23,7 @@ from tests.planningfakes import (
     rule,
     self_diner,
     stock,
+    unit_vector,
 )
 from tests.recipefakes import by_zh, seeded  # noqa: F401
 
@@ -212,6 +213,10 @@ def test_failing_session_factory_returns_tool_failed_and_logs(caplog):
         ("search_recipes", {"tags": ["a"] * 11}),
         ("search_recipes", {"must_use": ["a"] * 11}),
         ("get_inventory", {"category": "not a category"}),
+        ("search_recipes", {"dish_type": "other"}),
+        ("search_recipes", {"dish_type": "drink"}),
+        ("search_recipes", {"exclude_ids": list(range(1, 52))}),
+        ("search_recipes", {"exclude_ids": [0]}),
     ],
 )
 def test_oversized_or_invalid_arguments_are_rejected(name, args):
@@ -254,3 +259,96 @@ def test_tool_runs_through_toolnode_with_injected_runtime(session_factory, sessi
 
 def test_exclude_recent_days_accepts_60(invoke, seeded):
     assert "hits" in invoke("search_recipes", {"exclude_recent_days": 60})
+
+
+def test_tool_rejects_other_type_and_too_many_exclude_ids():
+    from pydantic import ValidationError
+
+    schema = ALL_TOOLS["search_recipes"].tool_call_schema.model_json_schema()
+    text = json.dumps(schema)
+    assert '"other"' not in text
+    for args in ({"dish_type": "other"}, {"exclude_ids": list(range(1, 52))}):
+        call = {"name": "search_recipes", "args": args, "id": "c", "type": "tool_call"}
+        with pytest.raises(ValidationError):
+            ALL_TOOLS["search_recipes"].invoke(call)
+
+
+def test_search_description_mentions_facts_and_next_batch():
+    text = ALL_TOOLS["search_recipes"].description
+    assert "missing" in text and "missing_cookware" in text
+    assert "exclude_ids" in text and "next batch" in text
+    assert "dish_type" in text
+
+
+def test_search_tool_filters_by_type_and_skips_excluded_ids(invoke, session, seeded):
+    first = make_recipe(session, "番茄汤", dish_type="soup", lines=[L("番茄")], cookware=["炒锅"])
+    second = make_recipe(session, "豆腐汤", dish_type="soup", lines=[L("豆腐")])
+    make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    stock(session, "豆腐", count=1)
+    result = invoke("search_recipes", {"dish_type": "soup", "exclude_ids": [second.id]})
+    assert [h["id"] for h in result["hits"]] == [first.id]
+    hit = result["hits"][0]
+    assert hit["missing"] == ["番茄"] and hit["missing_cookware"] == ["炒锅"]
+    assert hit["uses_expiring"] == [] and hit["dislikes"] == []
+    both = invoke("search_recipes", {"dish_type": "soup"})
+    assert [h["id"] for h in both["hits"]] == [second.id, first.id]
+
+
+def test_search_tool_reuses_the_run_query_vectors(session_factory, session, seeded):
+    make_recipe(session, "近", lines=[L("小白菜")], embedding=unit_vector(0))
+    client = FakeEmbedClient(vector=unit_vector(0))
+    deps = PlannerDeps(
+        session_factory=session_factory,
+        client=client,
+        constraints=MealConstraints(diner_ids=()),
+        mode="plan",
+    )
+    for _ in range(2):
+        call = {
+            "name": "search_recipes",
+            "args": {"query": "菜", "runtime": _runtime(deps)},
+            "id": "c",
+            "type": "tool_call",
+        }
+        assert json.loads(ALL_TOOLS["search_recipes"].invoke(call).content)["hits"]
+    assert client.embedded == ["菜"]
+    assert list(deps.query_vectors) == ["菜"]
+
+
+def test_planner_deps_get_their_own_query_vectors():
+    def deps():
+        return PlannerDeps(
+            session_factory=None,
+            client=FakeEmbedClient(),
+            constraints=MealConstraints(diner_ids=()),
+            mode="plan",
+        )
+
+    a, b = deps(), deps()
+    a.query_vectors["x"] = [1.0]
+    assert a.query_vectors == {"x": [1.0]} and b.query_vectors == {}
+
+
+@pytest.mark.parametrize("mode,first", [("fridge_only", "far"), ("shopping", "near")])
+def test_search_tool_ranks_makeable_first_only_in_fridge_mode(
+    session_factory, session, seeded, mode, first
+):
+    stock(session, "豆腐", count=2)
+    recipes = {
+        "near": make_recipe(session, "近", lines=[L("小白菜")], embedding=unit_vector(0)),
+        "far": make_recipe(session, "远", lines=[L("豆腐")], embedding=unit_vector(5)),
+    }
+    deps = PlannerDeps(
+        session_factory=session_factory,
+        client=FakeEmbedClient(vector=unit_vector(0)),
+        constraints=MealConstraints(diner_ids=()),
+        mode=mode,
+    )
+    call = {
+        "name": "search_recipes",
+        "args": {"query": "菜", "runtime": _runtime(deps)},
+        "id": "c",
+        "type": "tool_call",
+    }
+    hits = json.loads(ALL_TOOLS["search_recipes"].invoke(call).content)["hits"]
+    assert hits[0]["id"] == recipes[first].id
