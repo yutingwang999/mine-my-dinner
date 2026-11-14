@@ -106,4 +106,22 @@ cd backend
 
 `export` writes every log that holds a user correction to a JSONL file. `run` reports ingredient F1, amount accuracy, amount type accuracy, fabrication rate, and valid JSON rate, plus each model's call count, success rate, cost per item, and latency from `llm_calls`.
 
-`data/` is listed in `.gitignore`. Keep exported files there, because evaluation data must never enter the repository.
+`data/` is listed in `.gitignore`. Keep exported files there, because evaluation data from real recipes must never enter the repository.
+
+### Planning evaluation
+
+The planning evaluation runs fictional scenarios against the test database with real models, so each run costs money; run it only on purpose. Its scenarios and fictional recipe libraries are hand-written and committed in `backend/eval_data/planning/`:
+
+- `scenarios_baseline.yaml` with `library.yaml`: the fixed baseline set, kept unchanged so results compare across plans.
+- `scenarios_plan2a.yaml` with `library_extended.yaml`: scenarios for the planner-efficiency features.
+
+Run from `backend/`, with `DATABASE_URL` pointing at the test database (the script refuses the main database and a non-empty test database):
+
+```powershell
+cd backend
+$env:DATABASE_URL = (& $py -c "from minemydinner.settings import Settings; print(Settings().test_database_url)")
+& $py -m minemydinner.evaluation.planning --scenarios eval_data/planning/scenarios_baseline.yaml --library eval_data/planning/library.yaml
+Remove-Item Env:DATABASE_URL
+```
+
+Add `--no-shortlist` to run the planner without the code-built shortlist, for comparison.

@@ -1,0 +1,84 @@
+# Fictional planning scenarios. `inventory` maps an ingredient name to a count (number)
+# or a level (plenty, low, none). `cookware` lists the cookware the household owns.
+scenarios:
+  - name: fridge_only_one_person
+    request: 今晚我一个人吃，只用冰箱里现有的食材，做一个菜。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 6, 小白菜: plenty, 豆腐: 2}
+    cookware: [炒锅]
+    rules: []
+    expect_counts: {dishes: 1, soups: 0}
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: One dish, one person, nothing missing. A plan that passes on the first attempt.
+  - name: two_people_with_a_soup
+    request: 我们两个人吃晚饭，想要两个菜和一个汤，只用家里有的东西。
+    locale: zh
+    inventory: {青椒: 4, 猪肉: plenty, 番茄: 3, 鸡蛋: 6, 紫菜: plenty, 嫩豆腐: 2}
+    cookware: [炒锅, 汤锅]
+    rules: []
+    expect_counts: {dishes: 2, soups: 1}
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Two dishes and one soup; the soup is one of the two soups the stock allows.
+  - name: egg_allergy_and_unknown_ingredient
+    request: 今晚来两个菜，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 6, 鸡腿: 4, 小白菜: plenty, 茄子: 2, 蒜: plenty}
+    cookware: [炒锅, 平底锅]
+    rules:
+      - {type: allergy, allergen: egg}
+    expect_counts: {dishes: 2}
+    expect_left_out_include: [香煎鸡腿]
+    expect_titles_none: [番茄炒蛋, 番茄蛋花汤, 蛋炒饭]
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: No egg dish. The chicken dish has an unlinked line, so it is left out and named in the plan.
+  - name: time_limit_estimated_and_stated
+    request: 一个人吃，做两个菜，总共半小时内要做完，只用家里有的。
+    locale: zh
+    inventory: {西兰花: 2, 蒜: plenty, 豆腐: 2, 猪肉末: plenty, 排骨: plenty}
+    cookware: [炒锅, 砂锅]
+    rules: []
+    expect_counts: {dishes: 2}
+    expect_titles_none: [红烧排骨]
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: The stated 60 minute ribs fail the limit. The estimated broccoli dish is not blocked by it.
+  - name: shopping_allowed_nearly_empty_fridge
+    request: 今晚两个人吃，家里没什么菜了，可以去买，做两个菜。
+    locale: zh
+    inventory: {鸡蛋: 2, 小白菜: low}
+    cookware: [炒锅]
+    rules: []
+    expect_counts: {dishes: 2}
+    expect_missing_nonempty: true
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: A plan with a missing-ingredient list, since shopping is allowed.
+  - name: english_request
+    request: Dinner for two tonight, one meat dish and one vegetable dish, using only what is in the fridge.
+    locale: en
+    inventory: {猪肉: plenty, 青椒: 4, 小白菜: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    rules: []
+    expect_titles_exact: [青椒肉丝, 清炒小白菜]
+    expect_counts: {meat_dishes: 1, vegetable_dishes: 1}
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: en
+    expect: The reply is in English. Pork with green pepper plus the greens.
+  - name: shopping_allowed_key_cookware_missing
+    request: 我们两个人，想吃两个炒菜，缺什么食材可以去买。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: 4, 小白菜: plenty}
+    cookware: [汤锅]
+    expect_plan: false
+    expect_any_code: [no_cookware, H3]
+    rules: []
+    expect: Every meat and vegetable dish needs cookware that is not owned, so no full plan is shown; the reason is no_cookware (or the unmet H3 rule), stated plainly.

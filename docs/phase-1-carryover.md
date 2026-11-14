@@ -128,6 +128,13 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - Provider-prefixed cache fields (such as OpenAI's `priority_cache_read`) are not read; the app uses the Standard tier.
 - Cache counts that a provider does not report are stored as 0 rather than null (priced as uncached either way).
 
+### Evaluation
+
+- The planning evaluation's data is committed in `backend/eval_data/planning/` (fictional, hand-written; moved there from the git-ignored `data/eval/planning/` during plan 2a): `library.yaml` and `scenarios_baseline.yaml` are plan 1's 15 dishes and 7 scenarios, kept unchanged for like-for-like comparison with its baseline; `library_extended.yaml` (23 dishes) and `scenarios_plan2a.yaml` (19 scenarios) test plan 2a's features. Keep the baseline pair unchanged in later plans, or record a new baseline when it must change. Planning scenarios derived from real use stay in `backend/data/`, outside Git.
+- "No invented numbers" for vague requests is checked through the default counts; whether the reply's wording invents numbers is still read by hand. The quality of a plan (balance, "清淡", "丰盛") is read by hand until the T1.10 judge-model metric exists.
+- The reply-language check removes recipe titles and then looks for Chinese characters: an English reply quoting a Chinese ingredient name would fail it, and a mostly English reply with any Chinese word would pass a Chinese check.
+- The time-limit scenario relies on snack dishes with stated times, because the feasibility check never blocks dishes whose time is estimated.
+
 ### Tests and cleanup
 
 - The "must use" shortlist test asserts the outcome without isolating the "must use" protection; the retry-wording test now checks only the dish part.

@@ -17,7 +17,7 @@
 - **Packages:** do not install Python or npm packages. If one is needed, stop and say which and why.
 - **Secrets:** never read, print, create, edit, or delete `.env`. Tests never load `.env` (`Settings(_env_file=None)`). Never print database URLs.
 - **Language:** every repository file in English; Chinese only in UI translations, dictionary names and aliases, and recipe text with expected results in tests and prompt examples.
-- **Data:** no real recipe or evaluation data enters Git. Evaluation scenarios and the fictional library live in `data/eval/planning/` (git-ignored).
+- **Data:** no real recipe or real evaluation data enters Git. The fictional planning scenarios and libraries live in `backend/eval_data/planning/` and are committed (decided with the user during Task 9; earlier they were in the git-ignored `data/eval/planning/`): `scenarios_baseline.yaml` with `library.yaml` (plan 1's set, unchanged) and `scenarios_plan2a.yaml` with `library_extended.yaml`.
 - **Databases:** tests, real-app checks, and evaluations use only `minemydinner_test`. Tests never assume `llm_calls` or `planning_runs` is empty and delete only rows they create.
 - **Tests never call a real model or the network.** Paid calls happen only in the planning evaluation, and only after the user approves each run.
 - **Every model call goes through `LLMClient`** (directly or through `CallLayerMiddleware`). Planning keeps `essential: true`; `planning_eval` stays `essential: false`.
@@ -456,7 +456,7 @@ git commit -m "feat: plan card shows reasons, what was asked, link actions, and 
 
 **Files:**
 - Modify: `backend/minemydinner/evaluation/planning.py`, `backend/tests/test_planning_eval.py`
-- Create locally, never committed: additions to `data/eval/planning/scenarios.yaml` and `library.yaml`
+- Data (committed after the Task 9 move): `backend/eval_data/planning/scenarios_baseline.yaml`, `library.yaml`, `scenarios_plan2a.yaml`, `library_extended.yaml`
 
 **Interfaces:**
 - `RunOutcome` gains `input_tokens: int`, `cached_input_tokens: int`, `max_call_input_tokens: int`, `uncached_cost: Decimal` (all tokens priced at the full input rate, for comparison with the plan 1 baseline), `reasons: list[str]`, `next_actions: list[str]`, `as_expected: bool`. `summarize` adds `"as_expected": "N/M"`, `"cache_hit_rate"`, `"max_call_input_tokens"`, `"uncached_cost_usd"`. Scenarios gain optional `expect_reasons: list[str]`, `expect_next_actions: list[str]`, `expect_counts: dict[str, int]` (category counts of the shown plan); `as_expected` checks every expectation given plus `expect_plan`. CLI gains `--no-shortlist` (sets `GraphDeps.use_shortlist=False`).

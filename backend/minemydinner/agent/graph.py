@@ -783,6 +783,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     "category": s["category"],
                     "needed": s["needed"],
                     "available": s["available"],
+                    "ingredient": s.get("ingredient"),
+                    "absent_from_stock": bool(s.get("absent_from_stock")),
                     "text": reason_text(s, spec["mode"], locale),
                 }
                 for s in shortfalls
