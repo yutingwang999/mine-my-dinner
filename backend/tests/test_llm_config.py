@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from minemydinner.agent.planner import PLANNER_INPUT_TOKEN_BUDGET
 from minemydinner.llm.config import ConfigError, LLMConfig, load_llm_config
 from minemydinner.settings import Settings
 from tests.fakes import write_config
@@ -129,3 +130,22 @@ def test_repository_config_has_non_essential_planning_eval():
     assert evaluation.candidates == planning.candidates
     assert evaluation.requires == planning.requires
     assert evaluation.timeout_seconds == planning.timeout_seconds
+
+
+def test_chat_models_declare_cached_price_and_context_window():
+    cfg = load_llm_config(REPO_CONFIG)
+    for model in cfg.models.values():
+        if "embeddings" not in model.capabilities:
+            assert model.cached_input_usd_per_mtok is not None and model.context_window
+
+
+def test_planner_budget_is_at_most_half_of_every_planning_window():
+    cfg = load_llm_config(REPO_CONFIG)
+    for task in ("planning", "planning_eval"):
+        for name in cfg.tasks[task].candidates:
+            assert PLANNER_INPUT_TOKEN_BUDGET * 2 <= cfg.models[name].context_window
+
+
+def test_chat_model_without_cached_price_is_rejected(tmp_config):
+    with pytest.raises(ConfigError):
+        load_llm_config(tmp_config(drop_cached_price="gemini"))

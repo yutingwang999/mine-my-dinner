@@ -90,6 +90,8 @@ class LlmCall(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(Text, nullable=False)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_write_input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     cost_estimate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
     latency_ms: Mapped[int | None] = mapped_column(Integer)

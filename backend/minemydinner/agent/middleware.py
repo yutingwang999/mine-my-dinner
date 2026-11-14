@@ -17,7 +17,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.llm.client import LLMClient, map_strings
+from minemydinner.llm.client import LLMClient, map_strings, normalize_usage
 from minemydinner.llm.config import ModelConfig
 
 
@@ -52,7 +52,7 @@ def dump_message(message: BaseMessage) -> dict[str, Any]:
 def _usage(response: ModelResponse) -> dict[str, int] | None:
     for message in reversed(response.result):
         if isinstance(message, AIMessage):
-            return message.usage_metadata
+            return normalize_usage(message.usage_metadata)
     return None
 
 

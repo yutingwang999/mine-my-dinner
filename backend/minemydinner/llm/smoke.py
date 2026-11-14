@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from minemydinner.db import SessionFactory, configure_engine
-from minemydinner.llm.client import Attempt, AttemptError, LLMClient
+from minemydinner.llm.client import Attempt, AttemptError, LLMClient, normalize_usage
 from minemydinner.llm.config import LLMConfig, ModelConfig, load_llm_config
 from minemydinner.llm.registry import KEY_VARIABLES
 from minemydinner.models import LlmCall
@@ -130,8 +130,8 @@ def check_tools(config: LLMConfig) -> bool:
             bound = chat_model.bind_tools([get_time], **model.tool_call_options)
             reply = bound.invoke([HumanMessage(TOOL_PROMPT)])
             if not reply.tool_calls:
-                raise AttemptError("no tool call returned", reply.usage_metadata)
-            return reply.tool_calls[0]["name"], reply.usage_metadata
+                raise AttemptError("no tool call returned", normalize_usage(reply.usage_metadata))
+            return reply.tool_calls[0]["name"], normalize_usage(reply.usage_metadata)
 
         ok = _run_check(f"tools[{name}]", client, attempt) and ok
     return ok
@@ -147,8 +147,8 @@ def check_deepseek_vision(config: LLMConfig) -> bool:
         reply = chat_model.invoke([red_image_message()])
         text = str(reply.content)
         if "red" not in text.lower():
-            raise AttemptError(f"reply does not say red: {text[:40]!r}", reply.usage_metadata)
-        return repr(text[:40]), reply.usage_metadata
+            raise AttemptError(f"reply does not say red: {text[:40]!r}", normalize_usage(reply.usage_metadata))
+        return repr(text[:40]), normalize_usage(reply.usage_metadata)
 
     return _run_check("deepseek_vision", client, attempt)
 

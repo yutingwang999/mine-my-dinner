@@ -20,6 +20,8 @@ from minemydinner.planning.tools import PLANNER_TOOLS, PlannerDeps, tools_versio
 if TYPE_CHECKING:
     from minemydinner.agent.graph import GraphDeps
 
+# The most input tokens one planner model call may carry (a later task enforces it).
+PLANNER_INPUT_TOKEN_BUDGET = 32000
 MODEL_CALL_LIMIT = 12
 TOOL_CALL_LIMIT = 20
 

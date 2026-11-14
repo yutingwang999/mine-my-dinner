@@ -9,9 +9,15 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceeded
+from minemydinner.llm.client import (
+    AllModelsFailed,
+    LLMClient,
+    MonthlyCapExceeded,
+    _estimate_cost,
+    normalize_usage,
+)
 from minemydinner.llm.config import CONFIG_PATH as REPO_CONFIG
-from minemydinner.llm.config import ConfigError, load_llm_config
+from minemydinner.llm.config import ConfigError, ModelConfig, load_llm_config
 from minemydinner.llm.registry import (
     build_chat_model,
     build_embedding_model,
@@ -389,7 +395,12 @@ def test_missing_key_is_a_config_error_naming_the_variable(monkeypatch, tmp_path
         build_chat_model(config.models["openai"], 30)
 
 
-USAGE = {"input_tokens": 10, "output_tokens": 5}
+USAGE = {
+    "input_tokens": 10,
+    "cached_input_tokens": 0,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 5,
+}
 
 
 def call_model(cfg, model):
@@ -549,3 +560,112 @@ def test_smoke_checks_go_through_llm_client_and_log(
     assert smoke.check_deepseek_vision(config) is True
     assert [row.task for row in calls(session)] == ["smoke"] * 3
     assert "success=True" in capsys.readouterr().out
+
+
+def catalog_model(**prices: str) -> ModelConfig:
+    return ModelConfig(
+        model="priced",
+        provider="fake",
+        capabilities=["tool_calling"],
+        context_window=100_000,
+        **prices,
+    )
+
+
+def test_cached_tokens_are_not_double_counted():
+    model = catalog_model(
+        input_usd_per_mtok="1.00", cached_input_usd_per_mtok="0.10", output_usd_per_mtok="2.00"
+    )
+    usage = {
+        "input_tokens": 1_000_000,
+        "cached_input_tokens": 600_000,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 1_000_000,
+    }
+    assert _estimate_cost(model, usage) == Decimal("0.40") + Decimal("0.06") + Decimal("2.00")
+
+
+def test_cache_writes_use_the_write_price():
+    model = catalog_model(
+        input_usd_per_mtok="0.10",
+        cached_input_usd_per_mtok="0.01",
+        cache_write_usd_per_mtok="0.125",
+        output_usd_per_mtok="0.50",
+    )
+    usage = {
+        "input_tokens": 1_000_000,
+        "cached_input_tokens": 200_000,
+        "cache_write_input_tokens": 300_000,
+        "output_tokens": 0,
+    }
+    assert _estimate_cost(model, usage) == Decimal("0.05") + Decimal("0.0375") + Decimal("0.002")
+
+
+def test_writes_without_a_write_price_use_the_input_price():
+    model = catalog_model(
+        input_usd_per_mtok="1.00", cached_input_usd_per_mtok="0.10", output_usd_per_mtok="2.00"
+    )
+    usage = {
+        "input_tokens": 1_000_000,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 300_000,
+        "output_tokens": 0,
+    }
+    assert _estimate_cost(model, usage) == Decimal("1.00")
+
+
+def test_missing_cache_report_is_priced_uncached():
+    assert normalize_usage({"input_tokens": 100, "output_tokens": 5}) == {
+        "input_tokens": 100,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 5,
+    }
+
+
+def test_no_usage_normalizes_to_none():
+    assert normalize_usage(None) is None
+
+
+def test_langchain_cache_details_are_read():
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 5,
+        "input_token_details": {"cache_read": 60, "cache_creation": 30},
+    }
+    assert normalize_usage(usage) == {
+        "input_tokens": 100,
+        "cached_input_tokens": 60,
+        "cache_write_input_tokens": 30,
+        "output_tokens": 5,
+    }
+
+
+def test_cache_counts_never_exceed_the_total():
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 5,
+        "input_token_details": {"cache_read": 90, "cache_creation": 50},
+    }
+    result = normalize_usage(usage)
+    assert result["cached_input_tokens"] == 90 and result["cache_write_input_tokens"] == 10
+
+
+def test_llm_calls_row_stores_cached_tokens(llm, primary_fake, session):
+    primary_fake.usage = {
+        "input_tokens": 100,
+        "output_tokens": 5,
+        "total_tokens": 105,
+        "input_token_details": {"cache_read": 60},
+    }
+    llm.invoke_structured("extraction", MESSAGES, Schema)
+    row = only_call(session)
+    assert (row.input_tokens, row.cached_input_tokens, row.cache_write_input_tokens) == (100, 60, 0)
+    # gemini-test: input 1.0, cached 0.5, output 2.0 per million tokens.
+    assert row.cost_estimate == Decimal("0.000080")
+
+
+def test_embedding_rows_store_zero_cached_tokens(llm, session):
+    llm.embed(["x" * 40])
+    row = only_call(session)
+    assert (row.cached_input_tokens, row.cache_write_input_tokens) == (0, 0)

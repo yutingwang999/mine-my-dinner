@@ -46,7 +46,8 @@
 - Test: `backend/tests/test_llm_client.py`, `backend/tests/test_llm_config.py`
 
 **Interfaces:**
-- Produces: `LlmCall.cached_input_tokens: int | None`. `CatalogEntry.cached_input_usd_per_mtok: Decimal | None` and `CatalogEntry.context_window: int | None`, both required (not None) for entries whose capabilities include `tool_calling` or `strict_json`, absent for embedding entries. `normalize_usage(usage: Mapping[str, Any] | None) -> dict[str, int] | None` in `llm/client.py`, returning `{"input_tokens": total, "cached_input_tokens": cached, "output_tokens": out}` with `cached_input_tokens` 0 when the provider reported nothing. `_estimate_cost(model, input_tokens, cached_input_tokens, output_tokens) -> Decimal`.
+- Produces: `LlmCall.cached_input_tokens: int | None` and `LlmCall.cache_write_input_tokens: int | None`. `CatalogEntry.cached_input_usd_per_mtok: Decimal | None` and `CatalogEntry.context_window: int | None`, both required (not None) for entries whose capabilities include `tool_calling` or `strict_json`, absent for embedding entries; `CatalogEntry.cache_write_usd_per_mtok: Decimal | None = None` (None = no write charge, written tokens priced at the input rate). `normalize_usage(usage: Mapping[str, Any] | None) -> dict[str, int] | None` in `llm/client.py`, returning `{"input_tokens": total, "cached_input_tokens": read, "cache_write_input_tokens": written, "output_tokens": out}` with the cache counts 0 when the provider reported nothing. `_estimate_cost(model, usage: dict[str, int]) -> Decimal` = (total − read − written) × input + written × (write or input) + read × cached + output × output.
+- Confirmed prices (controller price check 2026-11-14, user decision on writes; USD per 1M, Standard tier): deepseek-flash cached 0.006, no write, window 1,000,000; deepseek-v4-pro cached 0.044, no write, window 1,000,000; gpt-6-luna cached 0.01, write 0.125, window 922,000 (max input; note the 2× tier above 272K); gemini-3.5-flash-lite cached 0.03, no write, window 1,048,576; gemini-3.8-flash cached 0.075, no write, window 1,048,576 (note: cached 0.15 from 2027-01-01 with input 1.50 and output 7.50). Comment in `models.yaml`: Gemini implicit caching is assumed to have no storage charge.
 - `PLANNER_INPUT_TOKEN_BUDGET = 32000` lives in `minemydinner/agent/planner.py` (used by Task 7); this task's config test imports it.
 
 - [ ] **Step 1: Price check (controller, before dispatch).** For every chat model in the catalog (`gemini-3.5-flash-lite`, `gemini-3.8-flash`, `gpt-6-luna`, `deepseek-flash`, `deepseek-v4-pro`), read the provider's official pricing and model pages and note: cached-input price per million tokens, any cache write or storage charge, any price tier by context length, and the context window. Show the table to the user and get their confirmation before the implementer writes the values. A model without prompt caching gets its full input price as the cached price.
@@ -58,19 +59,25 @@
 def test_cached_tokens_are_not_double_counted():
     model = catalog_model(input_usd_per_mtok="1.00", cached_input_usd_per_mtok="0.10", output_usd_per_mtok="2.00")
     # 1,000,000 input of which 600,000 cached, 1,000,000 output
-    assert _estimate_cost(model, 1_000_000, 600_000, 1_000_000) == Decimal("0.40") + Decimal("0.06") + Decimal("2.00")
+    usage = {"input_tokens": 1_000_000, "cached_input_tokens": 600_000, "cache_write_input_tokens": 0, "output_tokens": 1_000_000}
+    assert _estimate_cost(model, usage) == Decimal("0.40") + Decimal("0.06") + Decimal("2.00")
+
+def test_cache_writes_use_the_write_price():
+    model = catalog_model(input_usd_per_mtok="0.10", cached_input_usd_per_mtok="0.01", cache_write_usd_per_mtok="0.125", output_usd_per_mtok="0.50")
+    usage = {"input_tokens": 1_000_000, "cached_input_tokens": 200_000, "cache_write_input_tokens": 300_000, "output_tokens": 0}
+    assert _estimate_cost(model, usage) == Decimal("0.05") + Decimal("0.0375") + Decimal("0.002")
 
 def test_missing_cache_report_is_priced_uncached():
-    assert normalize_usage({"input_tokens": 100, "output_tokens": 5}) == {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 5}
+    assert normalize_usage({"input_tokens": 100, "output_tokens": 5}) == {"input_tokens": 100, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5}
 
-def test_langchain_cache_read_is_read():
-    usage = {"input_tokens": 100, "output_tokens": 5, "input_token_details": {"cache_read": 60}}
-    assert normalize_usage(usage)["cached_input_tokens"] == 60
+def test_langchain_cache_details_are_read():
+    usage = {"input_tokens": 100, "output_tokens": 5, "input_token_details": {"cache_read": 60, "cache_creation": 30}}
+    assert normalize_usage(usage) == {"input_tokens": 100, "cached_input_tokens": 60, "cache_write_input_tokens": 30, "output_tokens": 5}
 
 def test_llm_calls_row_stores_cached_tokens(session_factory, fake_cached_model):  # 100 in, 60 cached
     client.invoke_structured(...)
     row = latest_call()
-    assert (row.input_tokens, row.cached_input_tokens) == (100, 60)
+    assert (row.input_tokens, row.cached_input_tokens, row.cache_write_input_tokens) == (100, 60, 0)
     assert row.cost_estimate == expected_cost_with_cache
 
 # test_llm_config.py
@@ -94,7 +101,7 @@ def test_chat_model_without_cached_price_is_rejected(tmp_path): ...  # ConfigErr
 Run: `cd backend && "$PY" -m pytest tests/test_llm_client.py tests/test_llm_config.py -v`
 Expected: FAIL (`normalize_usage`, the new fields, and `PLANNER_INPUT_TOKEN_BUDGET` do not exist).
 
-- [ ] **Step 4: Implement.** Migration `0007` adds the nullable integer column (downgrade drops it), following `0005`'s style. `normalize_usage` reads LangChain's `usage_metadata` (`input_tokens` is the total including cached; `input_token_details.cache_read` is the cached part); confirm in the installed `langchain-openai`, `langchain-deepseek`, and `langchain-google-genai` how each fills these fields and handle any provider that reports cached tokens elsewhere, keeping `input_tokens` the total. `run_task`, `invoke_structured`, `CallLayerMiddleware`, and `AttemptError` pass the normalized dict; `_log` stores all three counts. The monthly cap sums `cost_estimate` as today. Embedding calls store `cached_input_tokens` 0. Add `PLANNER_INPUT_TOKEN_BUDGET = 32000` to `agent/planner.py`. Fill `models.yaml` with the confirmed values from Step 1 and set `prices_updated` to the check date; note any length tier in a comment.
+- [ ] **Step 4: Implement.** Migration `0007` adds the two nullable integer columns (downgrade drops them), following `0005`'s style. `normalize_usage` reads LangChain's `usage_metadata` (`input_tokens` is the total including cached and written; `input_token_details.cache_read` and `input_token_details.cache_creation` are the parts); confirm in the installed `langchain-openai`, `langchain-deepseek`, and `langchain-google-genai` how each fills these fields and handle any provider that reports them elsewhere, keeping `input_tokens` the total and never letting read + written exceed it. `run_task`, `invoke_structured`, `CallLayerMiddleware`, and `AttemptError` pass the normalized dict; `_log` stores all four counts. The monthly cap sums `cost_estimate` as today. Embedding calls store `cached_input_tokens` 0. Add `PLANNER_INPUT_TOKEN_BUDGET = 32000` to `agent/planner.py`. Fill `models.yaml` with the confirmed values from Step 1 and set `prices_updated` to the check date; note any length tier in a comment.
 
 - [ ] **Step 5: Run the migration on the test database, then the tests**
 

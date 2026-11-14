@@ -26,6 +26,7 @@ def write_config(
     fallback: str | None = None,
     requires: list[str] | None = None,
     drop_price: str | None = None,
+    drop_cached_price: str | None = None,
     primary_provider: str | None = None,
     providers: dict[str, str] | None = None,
 ) -> Path:
@@ -39,6 +40,10 @@ def write_config(
         }
         for model, (provider, capabilities, input_price, output_price) in CATALOG_DEFAULTS.items()
     }
+    for entry in catalog.values():
+        if "embeddings" not in entry["capabilities"] or len(entry["capabilities"]) > 1:
+            entry["cached_input_usd_per_mtok"] = 0.5
+            entry["context_window"] = 100_000
     for name, provider in (providers or {}).items():
         catalog[MODEL_DEFAULTS[name]]["provider"] = provider
     tasks: dict[str, dict[str, Any]] = {
@@ -57,6 +62,8 @@ def write_config(
         tasks[task]["requires"] = requires
     if drop_price is not None:
         del catalog[MODEL_DEFAULTS[drop_price]]["input_usd_per_mtok"]
+    if drop_cached_price is not None:
+        del catalog[MODEL_DEFAULTS[drop_cached_price]]["cached_input_usd_per_mtok"]
     if primary_provider is not None:
         catalog[MODEL_DEFAULTS[tasks[task]["primary"]]]["provider"] = primary_provider
     document = {
@@ -81,6 +88,7 @@ class FakeChatModel:
         self.error: Exception | None = None
         self.parsing_error: Exception | None = None
         self.returns_nothing = False
+        self.usage: dict[str, Any] = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
         self.call_count = 0
         self.last_text: str | None = None
         self.last_image_url: str | None = None
@@ -111,10 +119,7 @@ class _FakeRunnable:
         self.model.record(messages)
         if self.model.error is not None:
             raise self.model.error
-        raw = AIMessage(
-            content="{}",
-            usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-        )
+        raw = AIMessage(content="{}", usage_metadata=self.model.usage)
         if self.model.parsing_error is not None:
             return {"raw": raw, "parsed": None, "parsing_error": self.model.parsing_error}
         if self.model.returns_nothing:
