@@ -415,7 +415,12 @@
     "action": {
       "switch_to_shopping": "Allow shopping",
       "fewer_dishes": "Fewer dishes",
-      "drop_time_limit": "No time limit"
+      "drop_time_limit": "No time limit",
+      "relax_split": "Any mix is fine",
+      "relax_named": "Named ingredients optional",
+      "update_inventory": "Update your stock",
+      "register_cookware": "Register your cookware",
+      "import_recipes": "Import more recipes"
     },
     "plan": {
       "title": "Plan",
@@ -437,10 +442,31 @@
       "leftOut": "{count, plural, one {# dish was left out because an ingredient has an unknown allergen.} other {# dishes were left out because an ingredient has an unknown allergen.}}",
       "showLeftOut": "Show which dishes",
       "leftOutTitles": "Dishes left out",
-      "semanticPaused": "Search by meaning is paused for now, so results may be less relevant. Searching by name still works."
+      "semanticPaused": "Search by meaning is paused for now, so results may be less relevant. Searching by name still works.",
+      "asked": "As you asked: {list}.",
+      "askedDishes": "{count, plural, one {# dish} other {# dishes}}",
+      "askedDishesSplit": "{dishes} ({split})",
+      "askedMeat": "{minimum, select, true {at least } other {}}{count, plural, one {# meat dish} other {# meat dishes}}",
+      "askedVegetable": "{minimum, select, true {at least } other {}}{count, plural, one {# vegetable dish} other {# vegetable dishes}}",
+      "askedSoups": "{count, plural, one {# soup} other {# soups}}",
+      "askedStaples": "{count, plural, one {# staple} other {# staples}}",
+      "askedDesserts": "{count, plural, one {# dessert} other {# desserts}}",
+      "askedSnacks": "{count, plural, one {# snack} other {# snacks}}",
+      "askedFridgeOnly": "fridge only",
+      "askedShopping": "shopping allowed",
+      "askedTime": "within {minutes} min",
+      "askedPrefer": "Prefer using: {list}",
+      "askedMust": "Must use: {list}",
+      "askedAll": "Use in every dish: {list}",
+      "assumedStaples": "{count, plural, one {# staple} other {# staples}}",
+      "assumedDesserts": "{count, plural, one {# dessert} other {# desserts}}",
+      "assumedSnacks": "{count, plural, one {# snack} other {# snacks}}",
+      "assumedMeat": "{count, plural, one {# meat dish} other {# meat dishes}}",
+      "assumedVegetable": "{count, plural, one {# vegetable dish} other {# vegetable dishes}}",
+      "reasons": "Why this plan could not be made"
     },
     "warning": {
-      "S1": "{title}: needs {needed} {unit} of {name}, but you have {have} {unit}.",
+      "S1": "{name}: {parts}, {needed} {unit} needed, {have} {unit} in stock.",
       "S2": "{title}: {line} goes against a diner's preference.",
       "S3": "Something in your fridge expires on {date} and this plan does not use it.",
       "S4": "{title} was rated low ({score}).",
@@ -452,6 +478,17 @@
       "S8diners": "{count, plural, one {# other diner has} other {# other diners have}} unknown dietary limits; please check them yourself.",
       "S8lines": "{title}: some ingredients were not recognized ({list}).",
       "other": "{title}: check {code}."
+    },
+    "actionMessage": {
+      "switch_to_shopping": "Allow shopping",
+      "fewer_dishes": "Fewer dishes",
+      "drop_time_limit": "No time limit",
+      "relax_split": "Any mix of meat and vegetable dishes is fine",
+      "relax_named": "The named ingredients are optional"
+    },
+    "problem": {
+      "split_exceeds_total": "The meat and vegetable dishes add up to more than the total number of dishes. Tell me the counts again.",
+      "too_many": "That is more than I can plan at once, at most 12 dishes in total. Tell me how many you want."
     }
   }
 }

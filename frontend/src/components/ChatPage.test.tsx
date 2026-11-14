@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import en from "../../messages/en.json";
 import { ChatPage } from "@/components/ChatPage";
-import { THREAD_KEY } from "@/lib/chat";
+import { type NextAction, THREAD_KEY } from "@/lib/chat";
 import { plan } from "@/test/chatFixtures";
 import { type Call, callsTo, mockFetch, renderWithProviders, reply } from "@/test/helpers";
 
@@ -204,6 +204,66 @@ describe("ChatPage", () => {
       text: "Allow shopping",
       locale: "en",
     });
+  });
+
+  it.each<[NextAction, string, string]>([
+    ["relax_split", "Any mix is fine", "Any mix of meat and vegetable dishes is fine"],
+    ["relax_named", "Named ingredients optional", "The named ingredients are optional"],
+  ])("sends the fixed %s message", async (action, label, text) => {
+    setup({
+      "POST /api/chat/threads/t1/messages": (body) =>
+        (body as { text: string }).text === text
+          ? stream(frame("message", { role: "assistant", text: "Relaxed." }), DONE)
+          : stream(frame("plan", plan({ passed: false, next_actions: [action] })), DONE),
+    });
+    await send("dinner");
+    await userEvent.click(await screen.findByRole("button", { name: label }));
+    expect(await screen.findByText("Relaxed.")).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")[1].body).toEqual({ text, locale: "en" });
+  });
+
+  it("shows the contradiction hint for a composition question", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(
+          frame("interrupt", { kind: "question", fields: ["composition"], problem: "split_exceeds_total" }),
+          DONE,
+        ),
+    });
+    await send("dinner");
+    expect(await screen.findByText(/add up to more than the total/)).toBeInTheDocument();
+  });
+
+  it("shows the too-many hint for a composition question", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(frame("interrupt", { kind: "question", fields: ["composition"], problem: "too_many" }), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByText(/at most 12 dishes in total/)).toBeInTheDocument();
+  });
+
+  it("restores a plan saved before the new fields existed without crashing", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t8");
+    const old = plan({
+      warnings: [{ code: "S1", recipe_id: 1, detail: { name: "oil", needed: 2, have: 1, unit: "ml" } }],
+    }) as unknown as Record<string, unknown>;
+    for (const key of ["reasons", "defaults_used", "next_actions", "servings_notes", "unmet"]) delete old[key];
+    old.spec = { mode: "fridge_only", dishes: 1, soups: 0, time_limit_min: null };
+    setup({
+      "GET /api/chat/threads/t8": () => ({ messages: [], current_plan: old, pending: null }),
+    });
+    expect(await screen.findByText(/check the actual ingredients for allergens/)).toBeInTheDocument();
+    expect(screen.getByText("oil: 葱花蛋 2, 2 ml needed, 1 ml in stock.")).toBeInTheDocument();
+  });
+
+  it("falls back to the standard hint for an unknown problem", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(frame("interrupt", { kind: "question", fields: ["composition"], problem: "brand_new" }), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByText(/how many dishes you want/)).toBeInTheDocument();
   });
 
   it("shows a localized message for an error event and stays usable", async () => {

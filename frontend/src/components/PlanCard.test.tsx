@@ -1,9 +1,12 @@
-import { screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NextIntlClientProvider } from "next-intl";
 import { describe, expect, it, vi } from "vitest";
 
+import zh from "../../messages/zh.json";
+
 import { PlanCard } from "@/components/PlanCard";
-import { plan } from "@/test/chatFixtures";
+import { plan, spec } from "@/test/chatFixtures";
 import { renderWithProviders } from "@/test/helpers";
 
 describe("PlanCard", () => {
@@ -40,13 +43,13 @@ describe("PlanCard", () => {
   });
 
   it("states only the defaulted dish count or soup count", () => {
-    const spec = { mode: "fridge_only" as const, dishes: 2, soups: 1, time_limit_min: null };
+    const twoAndSoup = spec({ dishes: 2, soups: 1 });
     const { unmount } = renderWithProviders(
-      <PlanCard plan={plan({ defaults_used: ["soups"], spec })} />,
+      <PlanCard plan={plan({ defaults_used: ["soups"], spec: twoAndSoup })} />,
     );
     expect(screen.getByText("Assumed: 1 soup. Say if that's wrong.")).toBeInTheDocument();
     unmount();
-    renderWithProviders(<PlanCard plan={plan({ defaults_used: ["dishes"], spec })} />);
+    renderWithProviders(<PlanCard plan={plan({ defaults_used: ["dishes"], spec: twoAndSoup })} />);
     expect(screen.getByText("Assumed: 2 dishes. Say if that's wrong.")).toBeInTheDocument();
   });
 
@@ -55,7 +58,7 @@ describe("PlanCard", () => {
       <PlanCard
         plan={plan({
           defaults_used: ["composition"],
-          spec: { mode: "fridge_only", dishes: 2, soups: 1, time_limit_min: null },
+          spec: spec({ dishes: 2, soups: 1 }),
         })}
       />,
     );
@@ -68,7 +71,7 @@ describe("PlanCard", () => {
         plan={plan({
           defaults_used: ["mode"],
           headcount: 3,
-          spec: { mode: "fridge_only", dishes: 2, soups: 1, time_limit_min: null },
+          spec: spec({ dishes: 2, soups: 1 }),
         })}
       />,
     );
@@ -124,14 +127,14 @@ describe("PlanCard", () => {
       <PlanCard
         plan={plan({
           warnings: [
-            { code: "S1", recipe_id: 1, detail: { name: "oil", needed: 2, have: 1, unit: "tablespoon" } },
-            { code: "S1", recipe_id: 1, detail: { name: "rice", needed: 2, have: 1, unit: "bowl" } },
+            { code: "S1", recipe_id: null, detail: { name: "oil", needed: 2, have: 1, unit: "tablespoon", parts: [{ recipe_id: 1, amount: 2 }] } },
+            { code: "S1", recipe_id: null, detail: { name: "rice", needed: 2, have: 1, unit: "bowl", parts: [{ recipe_id: 1, amount: 2 }] } },
           ],
         })}
       />,
     );
-    expect(screen.getByText("葱花蛋: needs 2 tbsp of oil, but you have 1 tbsp.")).toBeInTheDocument();
-    expect(screen.getByText("葱花蛋: needs 2 bowl of rice, but you have 1 bowl.")).toBeInTheDocument();
+    expect(screen.getByText("oil: 葱花蛋 2, 2 tbsp needed, 1 tbsp in stock.")).toBeInTheDocument();
+    expect(screen.getByText("rice: 葱花蛋 2, 2 bowl needed, 1 bowl in stock.")).toBeInTheDocument();
   });
 
   it("counts dishes left out for unknown allergens and lists their titles on request", async () => {
@@ -150,5 +153,136 @@ describe("PlanCard", () => {
   it("omits the semantic-search notice when search works", () => {
     renderWithProviders(<PlanCard plan={plan()} />);
     expect(screen.queryByText(/Search by meaning is paused/)).toBeNull();
+  });
+});
+
+describe("PlanCard what was asked, reasons, and links", () => {
+  it("renders link actions as links with the locale", () => {
+    const { unmount } = renderWithProviders(
+      <PlanCard
+        plan={plan({
+          passed: false,
+          recipes: [],
+          next_actions: ["update_inventory", "register_cookware", "import_recipes", "relax_split"],
+        })}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Update your stock" })).toHaveAttribute("href", "/en/inventory");
+    expect(screen.getByRole("link", { name: "Register your cookware" })).toHaveAttribute(
+      "href",
+      "/en/inventory#cookware",
+    );
+    expect(screen.getByRole("link", { name: "Import more recipes" })).toHaveAttribute("href", "/en/import");
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Any mix is fine"]);
+    unmount();
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard plan={plan({ next_actions: ["register_cookware"] })} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByRole("link", { name: "登记厨具" })).toHaveAttribute("href", "/zh/inventory#cookware");
+  });
+
+  it("lists named ingredients by kind under what was asked", () => {
+    renderWithProviders(
+      <PlanCard plan={plan({ defaults_used: ["mode"], spec: spec({ prefer_use: ["鸡蛋"], must_use: ["番茄"], all_use: ["葱"] }) })} />,
+    );
+    expect(
+      screen.getByText("As you asked: 1 dish, Prefer using: 鸡蛋, Must use: 番茄, Use in every dish: 葱."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows reasons with needed and available counts", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          recipes: [],
+          passed: false,
+          reasons: [
+            { reason: "not_enough_dishes", category: "meat", needed: 2, available: 1, text: "Need 2 meat dishes, only 1 can be made." },
+            { reason: "no_cookware", category: "soup", needed: null, available: null, text: "No cookware registered." },
+            { reason: "no_cookware", category: "meat", needed: null, available: null, text: "No cookware registered." },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("Need 2 meat dishes, only 1 can be made.")).toBeInTheDocument();
+    expect(screen.getAllByText("No cookware registered.")).toHaveLength(1);
+    expect(screen.getByText(/check the actual ingredients for allergens/)).toBeInTheDocument();
+  });
+
+  it("states what was asked and only then what was assumed", () => {
+    const { unmount } = renderWithProviders(
+      <PlanCard
+        plan={plan({
+          defaults_used: [],
+          spec: spec({ mode: "shopping", dishes: 3, soups: 1, staples: 1, time_limit_min: 30 }),
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("As you asked: 3 dishes, 1 soup, 1 staple, shopping allowed, within 30 min."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Assumed/)).toBeNull();
+    unmount();
+    renderWithProviders(<PlanCard plan={plan({ defaults_used: ["headcount", "mode"], spec: spec({ dishes: 2 }) })} />);
+    expect(screen.getByText("As you asked: 2 dishes.")).toBeInTheDocument();
+    expect(screen.getByText("Assumed: 1 person, fridge only. Say if that's wrong.")).toBeInTheDocument();
+  });
+
+  it("shows 'at least' for a minimum split", () => {
+    const { unmount } = renderWithProviders(
+      <PlanCard
+        plan={plan({ defaults_used: ["mode"], spec: spec({ dishes: 4, meat_dishes: 1, vegetable_dishes: 1, split_is_minimum: true }) })}
+      />,
+    );
+    expect(
+      screen.getByText("As you asked: 4 dishes (at least 1 meat dish, at least 1 vegetable dish)."),
+    ).toBeInTheDocument();
+    unmount();
+    renderWithProviders(
+      <PlanCard plan={plan({ defaults_used: ["mode"], spec: spec({ dishes: 2, meat_dishes: 1, vegetable_dishes: 1 }) })} />,
+    );
+    expect(screen.getByText("As you asked: 2 dishes (1 meat dish, 1 vegetable dish).")).toBeInTheDocument();
+  });
+
+  it("renders the S1 warning with each dish's part", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          recipes: [
+            { id: 1, title: "番茄炒蛋", dish_type: "vegetable dish", time_min: 10, time_source: "stated", servings: 2 },
+            { id: 2, title: "蛋花汤", dish_type: "soup", time_min: 10, time_source: "stated", servings: 2 },
+          ],
+          warnings: [
+            {
+              code: "S1",
+              recipe_id: null,
+              detail: {
+                ingredient_id: 7,
+                name: "鸡蛋",
+                needed: 4,
+                have: 3,
+                unit: "piece",
+                parts: [
+                  { recipe_id: 1, amount: 2 },
+                  { recipe_id: 2, amount: 2 },
+                ],
+              },
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("鸡蛋: 番茄炒蛋 2 + 蛋花汤 2, 4 piece needed, 3 piece in stock.")).toBeInTheDocument();
+  });
+});
+
+describe("PlanCard unknown actions", () => {
+  it("skips next actions the UI does not know", () => {
+    renderWithProviders(
+      <PlanCard plan={plan({ next_actions: ["fewer_dishes", "brand_new" as never] })} />,
+    );
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Fewer dishes"]);
   });
 });

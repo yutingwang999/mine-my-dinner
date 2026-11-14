@@ -1,10 +1,11 @@
 "use client";
 
-import { useFormatter, useTranslations } from "next-intl";
+import Link from "next/link";
+import { useFormatter, useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { AllergenNotice } from "@/components/AllergenNotice";
-import type { ChatPlan, NextAction, PlanFinding } from "@/lib/chat";
+import { type ChatPlan, KNOWN_ACTIONS, type NextAction, type PlanFinding } from "@/lib/chat";
 
 type Props = {
   plan: ChatPlan;
@@ -12,6 +13,59 @@ type Props = {
   onAction?: (action: NextAction) => void;
   busy?: boolean;
 };
+
+const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
+  update_inventory: "/inventory",
+  register_cookware: "/inventory#cookware",
+  import_recipes: "/import",
+};
+
+/** What the user stated: the spec fields that were not filled by a default. */
+function Asked({ plan }: { plan: ChatPlan }) {
+  const t = useTranslations("chat.plan");
+  const format = useFormatter();
+  const { spec, defaults_used: defaults } = plan;
+  const stated = (name: string) => !defaults.includes(name);
+  const items: string[] = [];
+  const minimum = spec.split_is_minimum;
+  const split: string[] = [];
+  if (spec.meat_dishes != null && stated("meat_dishes")) {
+    split.push(t("askedMeat", { count: spec.meat_dishes, minimum: String(minimum) }));
+  }
+  if (spec.vegetable_dishes != null && stated("vegetable_dishes")) {
+    split.push(t("askedVegetable", { count: spec.vegetable_dishes, minimum: String(minimum) }));
+  }
+  // An old record's "composition" stood for both counts, so neither was stated.
+  if (stated("dishes") && !defaults.includes("composition") && spec.dishes > 0) {
+    const dishes = t("askedDishes", { count: spec.dishes });
+    items.push(
+      split.length > 0
+        ? t("askedDishesSplit", { dishes, split: format.list(split, { type: "unit" }) })
+        : dishes,
+    );
+  }
+  if (stated("soups") && !defaults.includes("composition") && spec.soups > 0) {
+    items.push(t("askedSoups", { count: spec.soups }));
+  }
+  for (const [name, key] of [
+    ["staples", "askedStaples"],
+    ["desserts", "askedDesserts"],
+    ["snacks", "askedSnacks"],
+  ] as const) {
+    if (stated(name) && spec[name] > 0) items.push(t(key, { count: spec[name] }));
+  }
+  if (stated("mode")) items.push(t(spec.mode === "shopping" ? "askedShopping" : "askedFridgeOnly"));
+  if (spec.time_limit_min !== null) items.push(t("askedTime", { minutes: spec.time_limit_min }));
+  for (const [list, key] of [
+    [spec.prefer_use, "askedPrefer"],
+    [spec.must_use, "askedMust"],
+    [spec.all_use, "askedAll"],
+  ] as const) {
+    if (list.length > 0) items.push(t(key, { list: list.join(", ") }));
+  }
+  if (items.length === 0) return null;
+  return <p className="hint">{t("asked", { list: format.list(items, { type: "unit" }) })}</p>;
+}
 
 function Assumed({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.plan");
@@ -27,6 +81,21 @@ function Assumed({ plan }: { plan: ChatPlan }) {
   }
   if (legacy ? plan.spec.soups > 0 : plan.defaults_used.includes("soups")) {
     parts.push(t("assumedSoups", { count: plan.spec.soups }));
+  }
+  for (const [name, key] of [
+    ["staples", "assumedStaples"],
+    ["desserts", "assumedDesserts"],
+    ["snacks", "assumedSnacks"],
+  ] as const) {
+    if (plan.defaults_used.includes(name) && plan.spec[name] > 0) {
+      parts.push(t(key, { count: plan.spec[name] }));
+    }
+  }
+  if (plan.defaults_used.includes("meat_dishes") && plan.spec.meat_dishes != null) {
+    parts.push(t("assumedMeat", { count: plan.spec.meat_dishes }));
+  }
+  if (plan.defaults_used.includes("vegetable_dishes") && plan.spec.vegetable_dishes != null) {
+    parts.push(t("assumedVegetable", { count: plan.spec.vegetable_dishes }));
   }
   if (plan.defaults_used.includes("mode")) {
     parts.push(t(plan.spec.mode === "shopping" ? "assumedShopping" : "assumedFridgeOnly"));
@@ -50,8 +119,15 @@ function warningText(
   const text = (key: string, values: Record<string, string | number> = {}) =>
     t(key, { title, ...values });
   switch (finding.code) {
-    case "S1":
-      return [text("S1", { name: String(d.name), needed: Number(d.needed), have: Number(d.have), unit: unitLabel(tUnit, String(d.unit)) })];
+    case "S1": {
+      // One finding per ingredient across dishes; `parts` says what each dish needs.
+      const parts = Array.isArray(d.parts)
+        ? (d.parts as { recipe_id: number; amount: number }[])
+        : [{ recipe_id: finding.recipe_id ?? -1, amount: Number(d.needed) }];
+      const list = parts.map((part) => `${titles.get(part.recipe_id) ?? ""} ${part.amount}`.trim()).join(" + ");
+      const unit = unitLabel(tUnit, String(d.unit));
+      return [text("S1", { name: String(d.name), parts: list, needed: Number(d.needed), have: Number(d.have), unit })];
+    }
     case "S2":
       return [text("S2", { line: String(d.line) })];
     case "S3":
@@ -87,6 +163,9 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
   const [showLeftOut, setShowLeftOut] = useState(false);
 
   const titles = new Map(plan.recipes.map((recipe) => [recipe.id, recipe.title]));
+  const locale = useLocale();
+  const actions = plan.next_actions.filter((action) => KNOWN_ACTIONS.includes(action));
+  const reasonTexts = [...new Set(plan.reasons.map((reason) => reason.text))];
   const warnings = plan.warnings.flatMap((finding) => warningText(tWarning, tUnit, finding, titles));
 
   return (
@@ -137,6 +216,16 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
           </ul>
         </div>
       )}
+      {reasonTexts.length > 0 && (
+        <div className="notice notice-warning">
+          <h3>{t("reasons")}</h3>
+          <ul>
+            {reasonTexts.map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {plan.unmet.length > 0 && (
         <div className="notice notice-warning">
           <h3>{t("unmet")}</h3>
@@ -147,15 +236,23 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
           </ul>
         </div>
       )}
-      {plan.next_actions.length > 0 && (
+      {actions.length > 0 && (
         <div className="actions" aria-label={t("nextActions")} role="group">
-          {plan.next_actions.map((action) => (
-            <button key={action} type="button" disabled={busy} onClick={() => onAction?.(action)}>
-              {tAction(action)}
-            </button>
-          ))}
+          {actions.map((action) => {
+            const href = LINK_ACTIONS[action];
+            return href ? (
+              <Link key={action} href={`/${locale}${href}`}>
+                {tAction(action)}
+              </Link>
+            ) : (
+              <button key={action} type="button" disabled={busy} onClick={() => onAction?.(action)}>
+                {tAction(action)}
+              </button>
+            );
+          })}
         </div>
       )}
+      <Asked plan={plan} />
       <Assumed plan={plan} />
       {plan.left_out_unknown_allergens.length > 0 && (
         <div>

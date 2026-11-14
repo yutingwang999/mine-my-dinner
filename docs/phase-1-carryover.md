@@ -132,6 +132,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 
 - The "must use" shortlist test asserts the outcome without isolating the "must use" protection; the retry-wording test now checks only the dish part.
 - A long line in `llm/smoke.py`, an obscure condition in `tests/fakes.py`, and single quotes in migration `0007`.
+- The plan card's list of known next actions (`KNOWN_ACTIONS` in `PlanCard.tsx`) repeats the `NextAction` type by hand; a typed record would catch drift at compile time.
 
 ## Minor findings from the final Phase 0 review, deferred
 

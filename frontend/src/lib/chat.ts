@@ -1,7 +1,15 @@
 import { ApiError, type DishType, type TimeSource } from "@/lib/api";
 
 export type Locale = "zh" | "en";
-export type NextAction = "switch_to_shopping" | "fewer_dishes" | "drop_time_limit";
+export type NextAction =
+  | "switch_to_shopping"
+  | "fewer_dishes"
+  | "drop_time_limit"
+  | "relax_split"
+  | "relax_named"
+  | "update_inventory"
+  | "register_cookware"
+  | "import_recipes";
 export type RequestStyle = "ask_first" | "plan_then_adjust";
 
 export type PlanFinding = {
@@ -24,9 +32,24 @@ export type ChatPlan = {
   missing_cookware: Record<string, string[]>;
   warnings: PlanFinding[];
   unmet: { code: string; recipe_id: number | null; text: string }[];
+  reasons: { reason: string; category: string | null; needed: number | null; available: number | null; text: string }[];
   next_actions: NextAction[];
   defaults_used: string[];
-  spec: { mode: "fridge_only" | "shopping"; dishes: number; soups: number; time_limit_min: number | null };
+  spec: {
+    mode: "fridge_only" | "shopping";
+    dishes: number;
+    soups: number;
+    meat_dishes: number | null;
+    vegetable_dishes: number | null;
+    split_is_minimum: boolean;
+    staples: number;
+    desserts: number;
+    snacks: number;
+    time_limit_min: number | null;
+    must_use: string[];
+    all_use: string[];
+    prefer_use: string[];
+  };
   headcount: number;
   servings_notes: { recipe_id: number; servings: number; headcount: number }[];
   left_out_unknown_allergens: string[];
@@ -36,7 +59,7 @@ export type ChatPlan = {
 
 export type Pending =
   | { kind: "request_style" }
-  | { kind: "question"; fields: string[] };
+  | { kind: "question"; fields: string[]; problem?: "split_exceeds_total" | "too_many" };
 
 export type ChatMessage = { role: "user" | "assistant"; text: string };
 
@@ -173,4 +196,59 @@ export async function putRequestStyle(value: RequestStyle): Promise<RequestStyle
     body: JSON.stringify({ value }),
   });
   return ((await response.json()) as { value: RequestStyle | null }).value;
+}
+
+export const KNOWN_ACTIONS: readonly NextAction[] = [
+  "switch_to_shopping",
+  "fewer_dishes",
+  "drop_time_limit",
+  "relax_split",
+  "relax_named",
+  "update_inventory",
+  "register_cookware",
+  "import_recipes",
+];
+
+/**
+ * Fills the fields a plan saved by an older version lacks, so the card can rely on the
+ * current shape. An old S1 warning (one recipe, no `parts`) gets one part from it.
+ */
+export function normalizePlan(raw: ChatPlan): ChatPlan {
+  const old = raw as unknown as Partial<ChatPlan> & { spec?: Partial<ChatPlan["spec"]> };
+  const spec: Partial<ChatPlan["spec"]> = old.spec ?? {};
+  return {
+    ...raw,
+    recipes: old.recipes ?? [],
+    missing: old.missing ?? {},
+    missing_cookware: old.missing_cookware ?? {},
+    unmet: old.unmet ?? [],
+    reasons: old.reasons ?? [],
+    next_actions: old.next_actions ?? [],
+    defaults_used: old.defaults_used ?? [],
+    servings_notes: old.servings_notes ?? [],
+    left_out_unknown_allergens: old.left_out_unknown_allergens ?? [],
+    warnings: (old.warnings ?? []).map((finding) => {
+      if (finding.code !== "S1" || Array.isArray(finding.detail?.parts)) return finding;
+      const parts =
+        finding.recipe_id === null
+          ? []
+          : [{ recipe_id: finding.recipe_id, amount: Number(finding.detail?.needed ?? 0) }];
+      return { ...finding, detail: { ...finding.detail, parts } };
+    }),
+    spec: {
+      mode: spec.mode ?? "fridge_only",
+      dishes: spec.dishes ?? 0,
+      soups: spec.soups ?? 0,
+      meat_dishes: spec.meat_dishes ?? null,
+      vegetable_dishes: spec.vegetable_dishes ?? null,
+      split_is_minimum: spec.split_is_minimum ?? false,
+      staples: spec.staples ?? 0,
+      desserts: spec.desserts ?? 0,
+      snacks: spec.snacks ?? 0,
+      time_limit_min: spec.time_limit_min ?? null,
+      must_use: spec.must_use ?? [],
+      all_use: spec.all_use ?? [],
+      prefer_use: spec.prefer_use ?? [],
+    },
+  };
 }
