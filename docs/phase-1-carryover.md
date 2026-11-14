@@ -45,6 +45,56 @@ Seen in the user's first real planning runs: an empty inventory and only a plate
 - **Baseline (plan 1 Task 15, `plan_v1`, deepseek-flash, 7 fictional scenarios).** The six feasible scenarios passed on the first attempt with 6-10 model calls each (about $0.004-0.008 per run). The scenario without a wok failed as expected but took 31 calls ($0.035, 2 retries), and its closest plan was two soups with only H4 (composition) unmet: the model avoided the wok dishes, so the user is told about the dish count instead of the missing cookware. Overall: first and final pass rate 0.86, 0.29 retries, 10.3 calls, $0.064 in total, 11.3 s average latency.
 - **Other diners' restrictions in the request text are not captured (plan 2, diner selection).** A request such as "me and Alex, who is allergic to shrimp" is not parsed by `parse_request` or checked by code in plan 1; only the generic S8 warning (unconfirmed diners) appears. Plan 2's diner selection must capture such statements, or at least flag them on the plan card, so a stated allergy is never left to the model's judgment.
 
+## Deferred from Phase 1 plan 1
+
+Task-review and final-review findings that were judged safe to defer. None blocks the first slice; each names where it most likely lands.
+
+### Planning and safety (plan 2, rest of T1.4)
+
+- **Unknown-allergen override ignores the diner.** An `H2Override` with `unknown_allergens` covers a recipe for every diner. When manual edits create it, decide whether each diner with an allergy must confirm, or check that `diner_key` belongs to such a diner.
+- **`check_recipes` treats nonexistent recipe ids as safe.** Every caller checks existence today (H5, the tools' known-id check, search), so it is safe in practice; keep it that way or make the function report unknown ids.
+- **S3 calls `date.today()` inline.** Pass `today` as a parameter; tests near midnight can flake.
+- **S1 and S6 skip optional lines, and S1 reports per line rather than per ingredient.**
+- **Choice-group semantics:** a group mixing optional and required lines is undocumented and untested; a parent line whose child has level `none` reports `not_in_stock` rather than `level_none`.
+- **`update_inventory` can report `tool_failed` after a successful commit** if shaping the result fails, and has no direct rollback test. It is not among the planner's tools yet; fix before adding it.
+- **`meal_preferences` can produce an empty subject** when a rule's dictionary entry is missing.
+- **The no-valid-plan next actions** offer "switch to shopping" for an H5-only failure, where it does not help (see also the cookware item above).
+- **Headcount is recomputed** as `unconfirmed_diners + 1` in the graph; return it from `apply_defaults` instead.
+- **`agent/graph.py` is about 500 lines.** Move the plain-words helpers to their own module when it next grows.
+- **Duplicate dietary rules produce duplicate conflicts; no NFKC folding** in dietary matching, search, or the extraction guard (all fail safe).
+
+### Chat API and page (plan 2 or T1.9)
+
+- **No guard against concurrent requests on one thread** (two messages, or a message and a resume). Acceptable for one user; add a per-thread lock before anything multi-user.
+- **A new message while a question is pending starts a fresh run** and drops the pending question. Decide whether to block it (409) or keep allowing it.
+- **Progress events fire when a node finishes,** so nothing shows during the first model call. A start-of-node signal would need another stream mode.
+- **The chat runtime is built lazily** on the first request and could be built twice by two concurrent first requests; build it in `lifespan`.
+- **Only the latest plan is shown and restored after a reload;** `plan_versions` is kept in state but not returned by `GET /api/chat/threads/{id}`.
+- **The chat input is a single line;** a textarea suits long requests.
+- **The stream is not aborted when the page unmounts.**
+- **A non-404 failure while loading a stored thread** keeps the stale id in `localStorage`; the next send then starts a new thread and overwrites it.
+- **The request-style select updates before the resume returns,** so a failed resume can show a style the backend did not save until reload. A restored pending question can be stale if the backend advanced before an error event.
+- **`token` events are reserved but never sent** in this slice; the page handles them if they arrive.
+
+### Evaluation (T1.10)
+
+- **The planning evaluation's database check** compares against the configured test URL and the main database name but does not require a `*_test` name; `ensure_empty` is the remaining guard.
+- **The summary has no "as expected N/M" line,** so a scenario that is meant to fail lowers the pass rates without comment.
+- **A hard kill skips cleanup;** the next run then refuses until the test database is emptied by hand. `main()` also opens the checkpointer before `ensure_empty`, and a connection error prints a raw traceback.
+- **`planning_eval` spending is counted only in the test database's `llm_calls`,** so evaluation spend never counts toward the real monthly cap. Document it or count it centrally.
+- **Kept rows matter.** The test database keeps `llm_calls` and `planning_runs` rows from evaluations and real-app checks. Tests must not assume these tables are empty and must delete only rows they create. Before plan 1's final fixes, a Phase 0 fixture deleted the whole `llm_calls` table, which lost the per-call rows of plan 1's Task 14 check and Task 15 run (the baseline totals above survive).
+
+### Import, dictionary, and extraction (from plan 1 Tasks 1-4)
+
+- **Personal aliases:** no size limit on `PersonalAliasesIn`; the dictionary browser can show a stale dish count after a refresh.
+- **Amount guard:** digit and decimal corroboration is still a substring match ("2" inside "12", "1.5" inside "11.5"); `raw`-in-source is a bare substring and can join across line breaks. The candidates are listed in design 8.4 for T1.10.
+- **Web import:** `http://` links still swallow directly following CJK text.
+- **Smoke tool:** the vision check passes on "not red" or "infrared"; `_report` reads the latest `llm_calls` row, which can be stale or missing when the cap stops a call; the smoke test does not assert the `bind_tools` options or the failure path.
+
+### Cleanup
+
+- Import order in several tests; a stale comment above `asked_question` in `agent/state.py`; a test named `commits_without_reaching_the_database` that does reach it; long lines in `stock.py` and `test_planning_tools.py`; weak `!= 403` assertions and no custom-origin test for the Origin check; `engine.dispose()` not in a `finally` in `lifespan`; `route.md` re-read on every call; `GraphDeps` fields typed `Any`; the `.allergen-notice` class has no CSS rule of its own.
+
 ## Minor findings from the final Phase 0 review, deferred
 
 - English method-stated amounts ("two eggs" in a step) are over-cleared to vague by the corroboration guard; adding English number words to the window check would reduce false clears. Safe direction as is.
