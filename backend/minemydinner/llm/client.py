@@ -60,13 +60,14 @@ class AttemptError(Exception):
         self.usage = usage
 
 
-def _map_strings(value: Any, transform: Callable[[str], str]) -> Any:
+def map_strings(value: Any, transform: Callable[[str], str]) -> Any:
+    """Apply `transform` to every string inside nested dicts, lists, and tuples."""
     if isinstance(value, str):
         return transform(value)
     if isinstance(value, dict):
-        return {key: _map_strings(item, transform) for key, item in value.items()}
+        return {key: map_strings(item, transform) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return [_map_strings(item, transform) for item in value]
+        return [map_strings(item, transform) for item in value]
     return value
 
 
@@ -147,6 +148,10 @@ class LLMClient:
         """Apply the pre-hooks to a copy of the messages."""
         return [self._prepare_message(message) for message in messages]
 
+    def prepare_text(self, text: str) -> str:
+        """Apply the pre-hooks to text bound for a model."""
+        return self._apply_pre_hooks(text)
+
     def restore_text(self, text: str) -> str:
         """Apply the post-hooks to text from a model."""
         return self._apply_post_hooks(text)
@@ -221,7 +226,7 @@ class LLMClient:
     def _restore[T: BaseModel](self, parsed: T, schema: type[T]) -> T:
         if not self.post_hooks:
             return parsed
-        return schema.model_validate(_map_strings(parsed.model_dump(), self._apply_post_hooks))
+        return schema.model_validate(map_strings(parsed.model_dump(), self._apply_post_hooks))
 
     def _log(
         self,

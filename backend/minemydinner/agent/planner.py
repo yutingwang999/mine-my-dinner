@@ -1,0 +1,56 @@
+"""The planner: an inner agent that calls the planning tools and proposes one meal."""
+
+from typing import TYPE_CHECKING
+
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    AgentState,
+    ModelCallLimitMiddleware,
+    ToolCallLimitMiddleware,
+)
+from langchain.agents.structured_output import ToolStrategy
+from langgraph.graph.state import CompiledStateGraph
+from pydantic import BaseModel, Field
+
+from minemydinner.agent.middleware import CallLayerMiddleware
+from minemydinner.agent.request import load_prompt
+from minemydinner.llm.registry import build_chat_model
+from minemydinner.planning.tools import PLANNER_TOOLS, PlannerDeps
+
+if TYPE_CHECKING:
+    from minemydinner.agent.graph import GraphDeps
+
+MODEL_CALL_LIMIT = 12
+TOOL_CALL_LIMIT = 20
+
+
+class PlanProposal(BaseModel):
+    """The planner's final answer: one meal from the user's recipe library."""
+
+    recipe_ids: list[int] = Field(description="Ids of the chosen recipes, from tool results only.")
+    note: str = Field(description="One or two sentences to the user, in the reply locale.")
+
+
+class PlannerState(AgentState):
+    run_id: int
+
+
+def build_planner(deps: "GraphDeps") -> CompiledStateGraph:
+    """The planner agent. Its model is only a placeholder: CallLayerMiddleware swaps in the
+    model of each attempt that `LLMClient.run_task` makes."""
+    config = deps.client.config
+    task = config.tasks[deps.task]
+    placeholder = build_chat_model(config.models[task.primary], task.timeout_seconds)
+    return create_agent(
+        model=placeholder,
+        tools=PLANNER_TOOLS,
+        system_prompt=load_prompt("planner.md"),
+        middleware=[
+            CallLayerMiddleware(deps.client, deps.task, deps.recorder),
+            ModelCallLimitMiddleware(run_limit=MODEL_CALL_LIMIT),
+            ToolCallLimitMiddleware(run_limit=TOOL_CALL_LIMIT),
+        ],
+        response_format=ToolStrategy(PlanProposal),
+        context_schema=PlannerDeps,
+        state_schema=PlannerState,
+    )
