@@ -71,3 +71,15 @@ def count_queries(session: Session):
             event.remove(bind, "before_cursor_execute", on_execute)
 
     return counting
+
+
+@pytest.fixture(scope="session")
+def test_database_url(test_settings: Settings) -> str:
+    return test_settings.test_database_url
+
+
+@pytest.fixture
+def fake_planning_llm():
+    from tests.planningfakes import FakePlanningLLM
+
+    return FakePlanningLLM("other")

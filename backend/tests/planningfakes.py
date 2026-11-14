@@ -184,3 +184,18 @@ def rollback_session_factory(session):
     """A sessionmaker on the test connection. Its sessions join the test transaction through a
     savepoint, so a tool's commit never reaches the database."""
     return sessionmaker(bind=session.get_bind(), join_transaction_mode="create_savepoint")
+
+
+class FakePlanningLLM:
+    """Stands in for LLMClient in graph tests. Returns scripted intents in order."""
+
+    def __init__(self, *intents: str):
+        self.intents = list(intents) or ["other"]
+        self.calls: list[tuple[str, list]] = []
+
+    def invoke_structured(self, task, messages, schema):
+        from minemydinner.llm.client import StructuredResult
+
+        self.calls.append((task, list(messages)))
+        intent = self.intents.pop(0) if len(self.intents) > 1 else self.intents[0]
+        return StructuredResult(schema(intent=intent), "fake:planning", False)

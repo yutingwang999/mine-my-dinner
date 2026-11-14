@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from minemydinner.api import diners, dictionary, imports, inventory, recipes
+from minemydinner.agent.checkpoint import open_checkpointer
+from minemydinner.api import diners, dictionary, imports, inventory, preferences, recipes
 from minemydinner.api.deps import ERROR_HANDLERS, get_llm_client
 from minemydinner.db import SessionFactory, configure_engine
 from minemydinner.recipes.embedding import retry_pending_embeddings
@@ -25,11 +26,15 @@ def _retry_embeddings_in_background() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    engine = configure_engine(get_settings().database_url)
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    database_url = get_settings().database_url
+    engine = configure_engine(database_url)
     # A thread, so a slow provider never delays startup.
     threading.Thread(target=_retry_embeddings_in_background, daemon=True).start()
-    yield
+    # The chat endpoint builds its graph on this saver.
+    with open_checkpointer(database_url) as saver:
+        app.state.checkpointer = saver
+        yield
     engine.dispose()
 
 
@@ -40,6 +45,7 @@ app.include_router(recipes.images_router)
 app.include_router(dictionary.router)
 app.include_router(inventory.router)
 app.include_router(diners.router)
+app.include_router(preferences.router)
 
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

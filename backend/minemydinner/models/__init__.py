@@ -1,3 +1,4 @@
+from minemydinner.models.agent import AppPreference, PlanningRun
 from minemydinner.models.base import Base
 from minemydinner.models.people import (
     AlwaysInStock,
@@ -25,6 +26,7 @@ from minemydinner.models.recipes import (
 
 __all__ = [
     "AlwaysInStock",
+    "AppPreference",
     "Base",
     "Cookware",
     "CookwareOwned",
@@ -36,6 +38,7 @@ __all__ = [
     "LlmCall",
     "MealPlan",
     "MealPlanItem",
+    "PlanningRun",
     "Rating",
     "Recipe",
     "RecipeCookware",
