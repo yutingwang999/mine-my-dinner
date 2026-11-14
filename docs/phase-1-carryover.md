@@ -100,6 +100,38 @@ Task-review and final-review findings that were judged safe to defer. None block
 
 - Import order in several tests; a stale comment above `asked_question` in `agent/state.py`; a test named `commits_without_reaching_the_database` that does reach it; long lines in `stock.py` and `test_planning_tools.py`; weak `!= 403` assertions and no custom-origin test for the Origin check; `engine.dispose()` not in a `finally` in `lifespan`; `route.md` re-read on every call; `GraphDeps` fields typed `Any`; the `.allergen-notice` class has no CSS rule of its own.
 
+## Deferred from Phase 1 plan 2a (in progress; updated after each task)
+
+Findings judged safe to defer during plan 2a's task reviews. The final whole-branch review triages them again before merge.
+
+### To revisit
+
+- **The feasibility check runs again before every retry.** Within one planning run its inputs (request, library, stock, cookware) do not change, so today the second check always repeats the first. It is kept on purpose (decided with the user): it becomes useful once stock or diners can change during a run (an `update_inventory` planner tool, diner selection in plan 2b). Revisit then, or remove it if neither arrives.
+
+### Planning logic
+
+- **Named ingredient stocked at count 0.** The quick "is it at home" test reads every named ingredient leniently (as a seasoning), so a non-seasoning such as eggs at count 0 passes that test. The per-recipe check still stops the request, with "only 0 dishes with 鸡蛋 can be made" instead of "no 鸡蛋 in the fridge". Passing the ingredient's real role would give the plainer wording.
+- **A recipe with no ingredient lines counts as makeable**, so it also keeps the empty-fridge reason from appearing.
+- **`uses_expiring` lists optional lines** in search hits and the shortlist.
+- **Mixed units for one ingredient** (grams on one line, pieces on another) are not summed together by S1; the later unit is skipped, as before.
+- **Short unknown names under "must use"** match more widely now that the original line text is searched too (as the design allows).
+- **"Any mix of meat and vegetable dishes" is not offered for a combined dish shortfall**; that case only arises when no split was named, so it does not matter today.
+
+### Parsing and wording
+
+- `parse.md` (plan_v2) has no example of moving "must use" names to "prefer" after "the named ingredients are optional", and no example of a soup range.
+- `_counts_text` would produce an empty clause if a spec required no dishes and no soups; unreachable while every spec needs at least one dish in total.
+
+### Cost accounting
+
+- Provider-prefixed cache fields (such as OpenAI's `priority_cache_read`) are not read; the app uses the Standard tier.
+- Cache counts that a provider does not report are stored as 0 rather than null (priced as uncached either way).
+
+### Tests and cleanup
+
+- The "must use" shortlist test asserts the outcome without isolating the "must use" protection; the retry-wording test now checks only the dish part.
+- A long line in `llm/smoke.py`, an obscure condition in `tests/fakes.py`, and single quotes in migration `0007`.
+
 ## Minor findings from the final Phase 0 review, deferred
 
 - English method-stated amounts ("two eggs" in a step) are over-cleared to vague by the corroboration guard; adding English number words to the window check would reduce false clears. Safe direction as is.

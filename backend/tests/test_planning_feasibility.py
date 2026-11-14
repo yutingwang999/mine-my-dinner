@@ -136,7 +136,7 @@ def test_all_use_without_the_ingredient_in_stock(session, seeded):
     make_recipe(session, "炒蛋", lines=[L("鸡蛋", role="main")])
     stock(session, "番茄", count=2)
     found = check(session, spec(mode="fridge_only", dishes=1, all_use=["鸡蛋"]))
-    assert Shortfall("named_ingredient", None, None, None, "鸡蛋") in found
+    assert Shortfall("named_ingredient", None, None, None, "鸡蛋", absent_from_stock=True) in found
 
 
 def test_all_use_counts_per_category(session, seeded):
@@ -250,3 +250,21 @@ def test_empty_fridge_one_makeable_but_two_needed(session, seeded):
     make_recipe(session, "炒肉", dish_type="meat dish", lines=[L("鸡胸肉", role="main")])
     found = check(session, spec(mode="fridge_only", dishes=2))
     assert found == [Shortfall("not_enough_dishes", "dishes", 2, 1)]
+
+
+def test_split_minimum_marks_side_shortfalls_as_minimum(session, seeded):
+    make_recipe(session, "炒青菜", dish_type="vegetable dish")
+    found = check(session, spec(dishes=2, meat_dishes=1, split_is_minimum=True))
+    meat = [s for s in found if s.category == "meat_dishes"]
+    assert meat and all(s.minimum for s in meat)
+    exact = check(session, spec(dishes=1, meat_dishes=1))
+    assert not any(s.minimum for s in exact)
+
+
+def test_stocked_but_unmakeable_named_ingredient_is_not_absent(session, seeded):
+    make_recipe(session, "炒蛋", lines=[L("鸡蛋", role="main"), L("番茄", role="main")])
+    make_recipe(session, "炒菜", lines=[L("番茄", role="main")])
+    stock(session, "鸡蛋", count=2)
+    stock(session, "番茄", count=1)
+    found = check(session, spec(mode="fridge_only", dishes=1, must_use=["鸡蛋"]))
+    assert not any(s.absent_from_stock for s in found)

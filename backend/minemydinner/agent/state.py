@@ -27,6 +27,8 @@ class ChatState(TypedDict):
     best: dict | None
     # H2 and H5, in that order, when any attempt of the run had them.
     blocked_codes: list[str]
+    # The feasibility shortfalls (dicts); non-empty means the planner is skipped.
+    shortfalls: list[dict]
     # From the planner's searches: left_out_unknown_allergens and semantic_paused.
     search_notes: dict | None
     retries: int

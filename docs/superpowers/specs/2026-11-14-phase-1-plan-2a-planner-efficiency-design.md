@@ -155,7 +155,8 @@ The check must never stop a request that could be met: when in doubt (for exampl
 | `time_limit`, H6 | `drop_time_limit`, `fewer_dishes` |
 | `not_enough_in_library`, H4 alone | `fewer_dishes`, `import_recipes` (new: link to the import page) |
 | `named_ingredient`, H7 | `relax_named` (new, sends a fixed short message such as "不一定要用指定的食材" / "The named ingredients are optional"), `fewer_dishes`, `switch_to_shopping` (fridge-only), `update_inventory` (fridge-only), `import_recipes` |
-| H5 alone | none (retry by sending the request again) |
+| H2 (every attempt broke an allergy or diet rule; no plan shown) | `fewer_dishes`, `switch_to_shopping` (fridge-only) — added during implementation: both widen the model's safe choices, and a dead end is worse for the user |
+| H5 alone | none (retry by sending the request again); the no-plan note then promises no changes |
 
 Two conditional actions are added on top of the table:
 

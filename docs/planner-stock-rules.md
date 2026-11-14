@@ -1,6 +1,6 @@
 # How the Planner Decides What Is in Stock
 
-This explains how the planner decides whether an ingredient is "at home", where that decision is used during one planning run, and the few places that look at stock differently. It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/stock.py`, `feasibility.py`, `validate.py`). The candidate list built on top of it is described in `docs/planner-shortlist-and-ranking.md`.
+This explains how the planner decides whether an ingredient is "at home", where that decision is used during one planning run, and the few places that look at stock differently. It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/stock.py`, `feasibility.py`, `validate.py`). The candidate list built on top of it is described in `docs/planner-shortlist-and-ranking.md`, and the feasibility check that uses it before planning in `docs/planner-feasibility-check.md`.
 
 The rule is written once (`_held` and `is_available` in `stock.py`) and reached through `compute_missing`, which lists what each recipe is missing. Every step that asks "is this dish missing something?" goes through it, so a dish is judged the same way in the feasibility check, the candidate list, the planner's tools, validation, and the plan card.
 
@@ -88,7 +88,7 @@ Right after the quick test, the per-recipe check counts makeable dishes using th
 |---|---|---|---|
 | No row | not at home | (skipped) | Stops early: "No 鸡蛋 in the fridge" |
 | Row marked "none" | not at home | (skipped) | Stops early: "No 鸡蛋 in the fridge" |
-| Row with count 0 | held (lenient) | egg dishes miss their main 鸡蛋, so 0 makeable | Stops early: "Only 0 vegetable dishes with 鸡蛋 can be made; this meal needs 2" |
+| Row with count 0 | held (lenient) | egg dishes miss their main 鸡蛋, so 0 makeable | Stops early: "Only 0 vegetable dishes with 鸡蛋 can be made; this meal needs 2 vegetable dishes" |
 | Row with count 6 | held | egg dishes are makeable | Planning goes ahead |
 
 "这顿一定要用鸡蛋" behaves the same way: with eggs at count 0, no makeable dish uses eggs, so it stops early with the named-ingredient reason.
@@ -111,5 +111,5 @@ When the fridge is empty, the checks that depend on stock (makeable counts, name
 | salt, oil, water, sugar, soy sauce, vinegar | 两道素菜 | Empty fridge (nothing makeable), with next actions "switch to shopping", "fewer dishes", "update inventory" |
 | the same, and no wok owned | 两道素菜 | Empty fridge **and** no cookware, with the union of both next actions |
 | also 鸡蛋; the library has 蒸蛋羹 (鸡蛋, 盐) | 一道素菜 | No shortfall: 蒸蛋羹 is makeable, planning goes ahead |
-| also 鸡蛋; only 蒸蛋羹 is makeable | 两道素菜 | Not enough dishes: "By the current fridge you can make 1 vegetable dish; this meal needs 2" |
+| also 鸡蛋; only 蒸蛋羹 is makeable | 两道素菜 | Not enough dishes: "By the current fridge you can make 1 vegetable dish; this meal needs 2 vegetable dishes" |
 | the defaults, and the library has 糖水 (糖, 水) | 一道甜品 | No shortfall: 糖水 is makeable |

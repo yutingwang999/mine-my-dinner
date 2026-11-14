@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -28,6 +28,7 @@ from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
 from minemydinner.planning.composition import composition_gap
 from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
+from minemydinner.planning.feasibility import Shortfall, check_feasibility
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.stock import compute_missing, missing_cookware
 from minemydinner.planning.tools import PlannerDeps
@@ -48,6 +49,16 @@ NO_PLAN_NOTE_EN = (
     "Below is what stopped it and what you can change."
 )
 NO_PLAN_NOTE_ZH = "没有找到满足所有硬性规则的方案，所以这次不展示方案。下面是原因和可以调整的地方。"
+EARLY_STOP_NOTE_EN = (
+    "This request cannot be met as it stands, so I have not planned anything. "
+    "Below is why and what you can change."
+)
+EARLY_STOP_NOTE_ZH = "按现在的条件这个需求做不到，所以没有出方案。下面是原因和可以调整的地方。"
+NO_PLAN_NOTE_BARE_EN = (
+    "I could not find a plan that meets every hard rule, so none is shown. "
+    "Below is what stopped it. Send the request again to try once more."
+)
+NO_PLAN_NOTE_BARE_ZH = "没有找到满足所有硬性规则的方案，所以这次不展示方案。下面是原因，可以再发一次请求重试。"
 CLOSEST_NOTE_EN = "This is the closest plan I could find. Some rules are not met; see below."
 UNCLEAR_REPLY_EN = (
     "I could not make sense of the number of dishes in that request, so I have not planned "
@@ -246,18 +257,121 @@ def _no_plan_reason(code: str, locale: str) -> str:
     return "The proposed dishes were not all from your recipe library"
 
 
-def _next_actions(spec: dict) -> list[str]:
-    actions = []
-    if spec["mode"] == "fridge_only":
-        actions.append("switch_to_shopping")
-    counted = sum(
-        spec.get(name, 0) for name in ("dishes", "soups", "staples", "desserts", "snacks")
-    )
-    if counted > 1:
-        actions.append("fewer_dishes")
-    if spec["time_limit_min"] is not None:
-        actions.append("drop_time_limit")
-    return actions
+def _count_phrase(n: int | None, category: str, zh: bool, minimum: bool = False) -> str:
+    one, many, cn = CATEGORY_WORDS[category]
+    if zh:
+        return f"{'至少 ' if minimum else ''}{n} {cn}"
+    return f"{'at least ' if minimum else ''}{n} {one if n == 1 else many}"
+
+
+def reason_text(shortfall: dict, mode: str, locale: str) -> str:
+    """One feasibility reason in plain words, in the request's locale. Fixed strings that
+    state what the meal needs and what is available; never model output."""
+    zh = _zh(locale)
+    reason, category = shortfall["reason"], shortfall["category"]
+    needed, available = shortfall["needed"], shortfall["available"]
+    name = shortfall.get("ingredient")
+    fridge = mode == "fridge_only"
+    minimum = bool(shortfall.get("minimum"))
+    if reason == "empty_inventory":
+        return "冰箱里没有可以用来做菜的食材" if zh else "There is nothing in the fridge to cook with"
+    if reason == "no_cookware":
+        if zh:
+            return "你的菜谱里没有一道能用你现有的厨具做出来"
+        return "None of your recipes can be made with the cookware you have"
+    if reason == "time_limit":
+        return "你的菜谱里没有一道符合时间限制" if zh else "None of your recipes fits the time limit"
+    if reason == "not_enough_dishes":
+        have = _count_phrase(available, category, zh)
+        want = _count_phrase(needed, category, zh, minimum)
+        if zh:
+            return f"按冰箱现有的食材只能做 {have}，这餐需要 {want}"
+        return f"By the current fridge you can make {have}; this meal needs {want}"
+    if reason == "not_enough_in_library":
+        have = _count_phrase(available, category, zh)
+        want = _count_phrase(needed, category, zh, minimum)
+        if zh:
+            return f"你的菜谱库里你能吃的只有 {have}，这餐需要 {want}"
+        return f"Your library has {have} you can eat; this meal needs {want}"
+    # named_ingredient
+    if category is None:
+        if fridge and shortfall.get("absent_from_stock"):
+            return f"冰箱里没有{name}" if zh else f"No {name} in the fridge"
+        if fridge:
+            if zh:
+                return f"用现有的食材做不出用到{name}的菜"
+            return f"No dish that can be made from the fridge uses {name}"
+        if zh:
+            return f"你的菜谱库里没有用到{name}的菜"
+        return f"No dish in your library uses {name}"
+    have = _count_phrase(available, category, zh)
+    want = _count_phrase(needed, category, zh, minimum)
+    if zh:
+        verb = "只能做" if fridge else "只有"
+        return f"用到{name}的菜{verb} {have}，这餐需要 {want}"
+    if fridge:
+        return f"Only {have} with {name} can be made; this meal needs {want}"
+    return f"Your library has only {have} with {name}; this meal needs {want}"
+
+
+# Every next action, in the order the card shows them.
+NEXT_ACTION_ORDER = (
+    "switch_to_shopping",
+    "fewer_dishes",
+    "drop_time_limit",
+    "relax_split",
+    "relax_named",
+    "update_inventory",
+    "register_cookware",
+    "import_recipes",
+)
+_SIDE_CATEGORIES = ("meat_dishes", "vegetable_dishes")
+# Every reason and unmet rule that offers fewer_dishes: the design 5.3 table plus H2 (ruling
+# after review); H5 alone gets no action.
+_FEWER_DISHES_CODES = {
+    "empty_inventory", "no_cookware", "not_enough_dishes", "time_limit", "not_enough_in_library",
+    "named_ingredient", "H1", "H2", "H3", "H4", "H6", "H7",
+}
+
+
+def next_actions(
+    spec: dict,
+    reasons: list[str],
+    unmet_codes: list[str],
+    short_categories: list[str] | None = None,
+) -> list[str]:
+    """The next actions that fit the reasons and unmet rules (design 5.3): their union, in
+    NEXT_ACTION_ORDER. `short_categories` are the feasibility categories that fell short;
+    when given, relax_split needs a meat or vegetable category among them."""
+    codes = set(reasons) | set(unmet_codes)
+    fridge = spec["mode"] == "fridge_only"
+    total = sum(spec.get(n, 0) for n in ("dishes", "soups", "staples", "desserts", "snacks"))
+    chosen: set[str] = set()
+    if fridge and codes & {"empty_inventory", "not_enough_dishes", "named_ingredient", "H1", "H2"}:
+        chosen.add("switch_to_shopping")
+    if total > 1 and codes & _FEWER_DISHES_CODES:
+        chosen.add("fewer_dishes")
+    if codes & {"time_limit", "H6"}:
+        chosen.add("drop_time_limit")
+    names_split = spec.get("meat_dishes") is not None or spec.get("vegetable_dishes") is not None
+    if names_split:
+        if short_categories is None:
+            side_short = bool(codes & {"not_enough_in_library", "not_enough_dishes"})
+        else:
+            side_short = any(c in _SIDE_CATEGORIES for c in short_categories)
+        if side_short or "H4" in codes:
+            chosen.add("relax_split")
+    if codes & {"named_ingredient", "H7"}:
+        chosen.add("relax_named")
+    if codes & {"empty_inventory", "not_enough_dishes", "H1"} or (
+        fridge and "named_ingredient" in codes
+    ):
+        chosen.add("update_inventory")
+    if codes & {"no_cookware", "H3"}:
+        chosen.add("register_cookware")
+    if codes & {"not_enough_in_library", "H4", "named_ingredient", "H7"}:
+        chosen.add("import_recipes")
+    return [a for a in NEXT_ACTION_ORDER if a in chosen]
 
 
 # ---- the graph ----
@@ -374,8 +488,27 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "first_passed": None,
             "best": None,
             "blocked_codes": [],
+            "shortfalls": [],
             "search_notes": {"left_out_unknown_allergens": [], "semantic_paused": False},
         }
+
+    def feasibility_step(state: ChatState) -> Command:
+        """No model call: when the request cannot be met, skip the planner and say why."""
+        spec = PlanSpec.model_validate(state["spec"])
+        with deps.session_factory() as session:
+            ctx = load_planning_context(session, _constraints(state))
+            found: list[Shortfall] = check_feasibility(session, ctx, spec)
+        if not found:
+            return Command(update={"shortfalls": []}, goto="planner")
+        dumped = [asdict(shortfall) for shortfall in found]
+        deps.recorder.add_event(
+            state["run_id"],
+            {
+                "kind": "feasibility",
+                "shortfalls": map_strings(dumped, deps.client.prepare_text),
+            },
+        )
+        return Command(update={"shortfalls": dumped}, goto="present_plan")
 
     def request_summary(state: ChatState, preferences: list[str]) -> str:
         spec, parsed = state["spec"], state["request"]
@@ -493,16 +626,20 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 update["best"] = {"proposal": state["proposal"], "validation": dumped, "gap": gap}
         if not result.passed and state["retries"] < MAX_RETRIES:
             update["retries"] = state["retries"] + 1
-            return Command(update=update, goto="planner")
+            return Command(update=update, goto="check_feasibility")
         return Command(update=update, goto="present_plan")
 
     def present_plan(state: ChatState) -> dict:
         locale = state.get("locale", "en")
-        spec, final = state["spec"], state["validation"]
+        spec = state["spec"]
+        final = state["validation"] or {"passed": False}
+        shortfalls = state.get("shortfalls") or []
         constraints = _constraints(state)
         headcount = state["constraints"]["headcount"]
         notes = state.get("search_notes") or {}
-        if final["passed"]:
+        if shortfalls:
+            shown = None
+        elif final["passed"]:
             shown = {"proposal": state["proposal"], "validation": final}
         else:
             # Design 6.3: the closest attempt without an H2 or H5 finding, if any.
@@ -521,16 +658,40 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "servings_notes": [],
             "left_out_unknown_allergens": notes.get("left_out_unknown_allergens", []),
             "semantic_paused": notes.get("semantic_paused", False),
+            "reasons": [],
             "passed": final["passed"],
         }
-        if shown is None:
+        if shortfalls:
+            # Design 5.2: the planner did not run (or a retry was stopped): fixed text, no recipes.
+            plan["passed"] = False
+            plan["reasons"] = [
+                {
+                    "reason": s["reason"],
+                    "category": s["category"],
+                    "needed": s["needed"],
+                    "available": s["available"],
+                    "text": reason_text(s, spec["mode"], locale),
+                }
+                for s in shortfalls
+            ]
+            plan["next_actions"] = next_actions(
+                spec,
+                [s["reason"] for s in shortfalls],
+                [],
+                [s["category"] for s in shortfalls if s["category"]],
+            )
+            note = EARLY_STOP_NOTE_ZH if _zh(locale) else EARLY_STOP_NOTE_EN
+        elif shown is None:
             # Design 6.3: a plan breaking H2 or H5 is never shown; the note is fixed text.
             plan["unmet"] = [
                 {"code": code, "recipe_id": None, "text": _no_plan_reason(code, locale)}
                 for code in state.get("blocked_codes") or []
             ]
-            plan["next_actions"] = _next_actions(spec)
-            note = NO_PLAN_NOTE_ZH if _zh(locale) else NO_PLAN_NOTE_EN
+            plan["next_actions"] = next_actions(spec, [], list(state.get("blocked_codes") or []))
+            if plan["next_actions"]:
+                note = NO_PLAN_NOTE_ZH if _zh(locale) else NO_PLAN_NOTE_EN
+            else:
+                note = NO_PLAN_NOTE_BARE_ZH if _zh(locale) else NO_PLAN_NOTE_BARE_EN
         else:
             ids = shown["proposal"]["recipe_ids"]
             with deps.session_factory() as session:
@@ -573,7 +734,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     }
                     for v in shown["validation"]["violations"]
                 ]
-                plan["next_actions"] = _next_actions(spec)
+                plan["next_actions"] = next_actions(
+                    spec, [], [v["code"] for v in shown["validation"]["violations"]]
+                )
             note = shown["proposal"]["note"]
             if not shown["validation"]["passed"]:
                 # The fixed closest note always leads; the model's own note may follow it.
@@ -602,7 +765,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     builder.add_node("unclear", unclear)
     builder.add_node("load_context", load_context)
     builder.add_node("planner", planner)
-    builder.add_node("validate_plan", check_plan, destinations=("planner", "present_plan"))
+    builder.add_node(
+        "check_feasibility", feasibility_step, destinations=("planner", "present_plan")
+    )
+    builder.add_node(
+        "validate_plan", check_plan, destinations=("check_feasibility", "present_plan")
+    )
     builder.add_node("present_plan", present_plan)
     builder.add_edge(START, "route_intent")
     builder.add_conditional_edges("route_intent", choose, ["parse_request", "other"])
@@ -610,7 +778,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")
-    builder.add_edge("load_context", "planner")
+    builder.add_edge("load_context", "check_feasibility")
     builder.add_edge("planner", "validate_plan")
     builder.add_edge("present_plan", END)
     builder.add_edge("other", END)

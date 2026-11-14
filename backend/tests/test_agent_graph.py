@@ -13,16 +13,21 @@ from minemydinner.agent.graph import (
     MAX_RETRIES,
     CLOSEST_NOTE_EN,
     CLOSEST_NOTE_ZH,
+    NO_PLAN_NOTE_BARE_EN,
+    NO_PLAN_NOTE_BARE_ZH,
     NO_PLAN_NOTE_EN,
-    NO_PLAN_NOTE_ZH,
     OTHER_REPLY_EN,
     OTHER_REPLY_ZH,
     GraphDeps,
-    _next_actions,
+    EARLY_STOP_NOTE_EN,
+    EARLY_STOP_NOTE_ZH,
     build_graph,
+    next_actions,
+    reason_text,
 )
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import PROMPT_VERSION, get_request_style, set_request_style
+from minemydinner.planning.feasibility import Shortfall
 from minemydinner.models import AppPreference, LlmCall, PlanningRun
 from minemydinner.agent.planner import TOOLS_VERSION
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client
@@ -216,13 +221,213 @@ def test_contradiction_with_an_empty_answer_does_not_loop(graph_env):
     assert out["messages"][-1].type == "ai"
 
 
-def test_next_actions_count_every_category():
-    spec = {
-        "mode": "shopping", "dishes": 0, "soups": 0, "staples": 1, "desserts": 1,
-        "snacks": 0, "time_limit_min": None,
+def _spec(mode: str, **kwargs) -> dict:
+    return {
+        "mode": mode, "dishes": 0, "soups": 0, "staples": 0, "desserts": 0, "snacks": 0,
+        "time_limit_min": None, "meat_dishes": None, "vegetable_dishes": None,
+        "must_use": [], "all_use": [], **kwargs,
     }
-    assert _next_actions(spec) == ["fewer_dishes"]
-    assert _next_actions({**spec, "desserts": 0}) == []
+
+
+FRIDGE_2 = _spec("fridge_only", dishes=2)
+FRIDGE_1 = _spec("fridge_only", dishes=1)
+SHOP_2 = _spec("shopping", dishes=2)
+SPLIT_1_1 = _spec("shopping", dishes=2, meat_dishes=1, vegetable_dishes=1)
+TIME_2 = _spec("shopping", dishes=2, time_limit_min=30)
+FRIDGE_ALL_EGG_3 = _spec("fridge_only", dishes=3, all_use=["鸡蛋"])
+SHOP_MUST_EGG_2 = _spec("shopping", dishes=2, must_use=["鸡蛋"])
+
+
+@pytest.mark.parametrize("spec, reasons, unmet, expected", [
+    (FRIDGE_2, ["empty_inventory"], [], ["switch_to_shopping", "fewer_dishes", "update_inventory"]),
+    (SHOP_2, ["no_cookware"], [], ["fewer_dishes", "register_cookware"]),
+    (FRIDGE_1, ["no_cookware"], [], ["register_cookware"]),
+    (SPLIT_1_1, ["not_enough_in_library"], [], ["fewer_dishes", "relax_split", "import_recipes"]),
+    (SHOP_2, [], ["H5"], []),
+    (FRIDGE_2, [], ["H5"], []),
+    (SHOP_2, [], ["H2"], ["fewer_dishes"]),
+    (FRIDGE_2, [], ["H2"], ["switch_to_shopping", "fewer_dishes"]),
+    (FRIDGE_1, [], ["H2"], ["switch_to_shopping"]),
+    (SHOP_2, [], ["H2", "H5"], ["fewer_dishes"]),
+    (TIME_2, ["time_limit"], [], ["fewer_dishes", "drop_time_limit"]),
+    (FRIDGE_ALL_EGG_3, ["named_ingredient"], [], [
+        "switch_to_shopping", "fewer_dishes", "relax_named", "update_inventory", "import_recipes",
+    ]),
+    (SHOP_MUST_EGG_2, [], ["H7"], ["fewer_dishes", "relax_named", "import_recipes"]),
+    (SHOP_MUST_EGG_2, ["named_ingredient"], [], ["fewer_dishes", "relax_named", "import_recipes"]),
+    (FRIDGE_2, [], ["H1"], ["switch_to_shopping", "fewer_dishes", "update_inventory"]),
+    (SPLIT_1_1, [], ["H4"], ["fewer_dishes", "relax_split", "import_recipes"]),
+    (SHOP_2, [], ["H3"], ["fewer_dishes", "register_cookware"]),
+    (TIME_2, [], ["H6"], ["fewer_dishes", "drop_time_limit"]),
+    (SHOP_2, [], ["H4"], ["fewer_dishes", "import_recipes"]),
+    (FRIDGE_2, ["not_enough_dishes"], [], ["switch_to_shopping", "fewer_dishes", "update_inventory"]),
+    (SPLIT_1_1, ["empty_inventory", "time_limit"], [], ["fewer_dishes", "drop_time_limit", "update_inventory"]),
+])
+def test_next_actions_by_reason(spec, reasons, unmet, expected):
+    assert next_actions(spec, reasons, unmet) == expected
+
+
+def test_relax_split_needs_a_short_meat_or_vegetable_category():
+    reasons = ["not_enough_in_library"]
+    assert "relax_split" not in next_actions(SPLIT_1_1, reasons, [], ["soups"])
+    assert "relax_split" in next_actions(SPLIT_1_1, reasons, [], ["meat_dishes"])
+    # No named split: nothing to relax.
+    assert "relax_split" not in next_actions(SHOP_2, reasons, [], ["dishes"])
+
+
+def test_fewer_dishes_counts_every_category():
+    spec = _spec("shopping", staples=1, desserts=1)
+    assert next_actions(spec, ["time_limit"], []) == ["fewer_dishes", "drop_time_limit"]
+    assert next_actions({**spec, "desserts": 0}, ["no_cookware"], []) == ["register_cookware"]
+
+
+def _early_stop_env(graph_env, session):
+    # A recipe nobody can make from an empty fridge: the request stops before the planner.
+    make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
+
+
+def test_infeasible_request_skips_the_planner(graph_env, session):
+    _early_stop_env(graph_env, session)
+    out = plan(graph_env, "dinner")
+    current = out["current_plan"]
+    assert planner_requests(graph_env) == []
+    assert current["recipes"] == [] and current["passed"] is False
+    assert [r["reason"] for r in current["reasons"]] == ["empty_inventory"]
+    assert current["next_actions"] == ["switch_to_shopping", "update_inventory"]
+    assert out["messages"][-1].content == EARLY_STOP_NOTE_EN
+
+
+def test_feasibility_event_is_recorded_and_run_finished(graph_env, session):
+    _early_stop_env(graph_env, session)
+    out = plan(graph_env, "dinner")
+    record = run_record(graph_env)
+    assert [e["kind"] for e in record.events] == ["feasibility"]
+    assert record.events[0]["shortfalls"] == [
+        {"reason": "empty_inventory", "category": None, "needed": None, "available": None,
+         "ingredient": None, "minimum": False, "absent_from_stock": False}
+    ]
+    assert record.final_passed is False and record.first_passed is False and record.retries == 0
+    assert record.final_plan == out["current_plan"]
+
+
+def test_reason_text_states_needed_and_available_in_locale(graph_env, session):
+    stock(session, "鸡蛋", count=3)
+    make_recipe(session, "炒青菜", "vegetable dish", [L("鸡蛋")])
+    zh = plan(graph_env, "晚饭", parse={"dishes": 1, "meat_dishes": 1}, locale="zh")
+    en = plan(
+        graph_env, "dinner", parse={"dishes": 1, "meat_dishes": 1}, locale="en",
+    )
+    (zh_reason,) = zh["current_plan"]["reasons"]
+    (en_reason,) = en["current_plan"]["reasons"]
+    assert (zh_reason["reason"], zh_reason["category"], zh_reason["needed"]) == (
+        "not_enough_in_library", "meat_dishes", 1,
+    )
+    assert zh_reason["available"] == 0
+    assert en_reason["text"] == "Your library has 0 meat dishes you can eat; this meal needs 1 meat dish"
+    assert zh_reason["text"] == "你的菜谱库里你能吃的只有 0 道荤菜，这餐需要 1 道荤菜"
+    assert zh["messages"][-1].content == EARLY_STOP_NOTE_ZH
+    assert "relax_split" in en["current_plan"]["next_actions"]
+
+
+def test_reason_text_for_named_ingredient_and_plain_reasons():
+    def shortfall(reason, category=None, needed=None, available=None, ingredient=None):
+        return {"reason": reason, "category": category, "needed": needed,
+                "available": available, "ingredient": ingredient}
+
+    assert reason_text(shortfall("named_ingredient", ingredient="鸡蛋"), "shopping", "en") == "No dish in your library uses 鸡蛋"
+    assert reason_text(
+        shortfall("named_ingredient", "vegetable_dishes", 3, 1, "鸡蛋"), "fridge_only", "en"
+    ) == "Only 1 vegetable dish with 鸡蛋 can be made; this meal needs 3 vegetable dishes"
+    assert reason_text(
+        shortfall("not_enough_dishes", "dishes", 2, 1), "fridge_only", "en"
+    ) == "By the current fridge you can make 1 dish; this meal needs 2 dishes"
+    for reason in ("empty_inventory", "no_cookware", "time_limit"):
+        for locale in ("en", "zh"):
+            assert reason_text(shortfall(reason), "fridge_only", locale)
+
+
+def test_reason_text_says_at_least_for_minimums():
+    short = {"reason": "not_enough_in_library", "category": "meat_dishes", "needed": 2,
+             "available": 1, "ingredient": None, "minimum": True}
+    assert reason_text(short, "shopping", "en") == (
+        "Your library has 1 meat dish you can eat; this meal needs at least 2 meat dishes"
+    )
+    assert reason_text(short, "shopping", "zh") == (
+        "你的菜谱库里你能吃的只有 1 道荤菜，这餐需要 至少 2 道荤菜"
+    )
+    fridge = {**short, "reason": "not_enough_dishes"}
+    assert "at least 2 meat dishes" in reason_text(fridge, "fridge_only", "en")
+    exact = {**short, "minimum": False}
+    assert "at least" not in reason_text(exact, "shopping", "en")
+
+
+def test_named_ingredient_text_tells_absent_from_stocked_but_unmakeable():
+    base = {"reason": "named_ingredient", "category": None, "needed": None,
+            "available": None, "ingredient": "鸡蛋"}
+    absent = {**base, "absent_from_stock": True}
+    assert reason_text(absent, "fridge_only", "en") == "No 鸡蛋 in the fridge"
+    assert reason_text(absent, "fridge_only", "zh") == "冰箱里没有鸡蛋"
+    stocked = {**base, "absent_from_stock": False}
+    assert reason_text(stocked, "fridge_only", "en") == (
+        "No dish that can be made from the fridge uses 鸡蛋"
+    )
+    assert reason_text(stocked, "fridge_only", "zh") == "用现有的食材做不出用到鸡蛋的菜"
+    assert reason_text(absent, "shopping", "en") == "No dish in your library uses 鸡蛋"
+
+
+def test_named_ingredient_name_goes_through_prepare_text_in_the_event(
+    tmp_path, session, seeded, veg
+):
+    set_request_style(session, "plan_then_adjust")
+    model = ScriptedChatModel(
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "ParsedRequest": [{"dishes": 1, "must_use": ["小李酱"]}],
+        },
+    )
+    factory = rollback_session_factory(session)
+    client = make_llm_client(
+        tmp_path, factory, model,
+        pre_hooks=[lambda t: t.replace("小李", "Diner 2")],
+        post_hooks=[lambda t: t.replace("Diner 2", "小李")],
+    )
+    graph = build_graph(GraphDeps(factory, client, PlanningRecorder(factory)), InMemorySaver())
+    out = graph.invoke({"messages": [HumanMessage("dinner")], "locale": "en"}, thread("hook-f"))
+    session.expire_all()
+    record = session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
+    (event,) = [e for e in record.events if e["kind"] == "feasibility"]
+    assert [s["ingredient"] for s in event["shortfalls"]] == ["Diner 2酱"]
+    assert "小李" not in json.dumps(record.events, ensure_ascii=False)
+    # The state keeps the restored name.
+    assert out["current_plan"]["reasons"][0]["text"].count("小李酱") == 1
+
+
+def test_feasibility_is_rechecked_before_a_retry(graph_env, veg, monkeypatch):
+    calls = []
+
+    def fake_check(session, ctx, spec):
+        calls.append(1)
+        return [] if len(calls) == 1 else [Shortfall("time_limit", None, None, None)]
+
+    monkeypatch.setattr("minemydinner.agent.graph.check_feasibility", fake_check)
+    out = plan(graph_env, "two dishes", parse={"dishes": 2}, replies=[final_proposal([veg.id])])
+    assert len(calls) == 2 and len(planner_requests(graph_env)) == 1
+    current = out["current_plan"]
+    assert current["recipes"] == [] and current["passed"] is False
+    assert [r["reason"] for r in current["reasons"]] == ["time_limit"]
+    assert out["retries"] == 1
+    record = run_record(graph_env)
+    assert [e["kind"] for e in record.events] == [
+        "model_call", "validation", "feasibility",
+    ]
+    assert record.final_passed is False and record.first_passed is False
+
+
+def test_feasible_request_reaches_the_planner(graph_env, veg):
+    out = plan(graph_env, "dinner", replies=[final_proposal([veg.id])])
+    assert len(planner_requests(graph_env)) == 1
+    assert out["current_plan"]["passed"] is True and out["current_plan"]["reasons"] == []
+    assert [e["kind"] for e in run_record(graph_env).events] == ["model_call", "validation"]
 
 
 def test_failed_validation_retries_with_errors(graph_env, veg, meat):
@@ -242,7 +447,7 @@ def test_failed_validation_retries_with_errors(graph_env, veg, meat):
     assert "the user wants 2 dishes" in retry_request and str(veg.id) in retry_request
 
 
-def test_h2_failure_after_retries_is_never_shown(graph_env, session):
+def test_h2_failure_after_retries_is_never_shown(graph_env, session, veg):
     rule(session, self_diner(session).id, "allergy", allergen="egg")
     stock(session, "鸡蛋", count=6)
     egg = make_recipe(session, "番茄炒蛋", "meat dish", [L("鸡蛋")])
@@ -251,6 +456,7 @@ def test_h2_failure_after_retries_is_never_shown(graph_env, session):
     assert current["recipes"] == [] and current["passed"] is False
     assert out["retries"] == MAX_RETRIES
     assert [u["code"] for u in current["unmet"]] == ["H2"]
+    # Controller ruling: H2 offers switch_to_shopping in fridge-only mode (one dish: no fewer).
     assert current["next_actions"] == ["switch_to_shopping"]
     assert out["messages"][-1].content == NO_PLAN_NOTE_EN
     assert "Diner 1: allergy egg" in planner_requests(graph_env)[0]
@@ -259,7 +465,7 @@ def test_h2_failure_after_retries_is_never_shown(graph_env, session):
 
 def test_no_plan_note_follows_locale(graph_env, veg):
     out = plan(graph_env, "晚饭", replies=[final_proposal([999999])], locale="zh")
-    assert out["messages"][-1].content == NO_PLAN_NOTE_ZH
+    assert out["messages"][-1].content == NO_PLAN_NOTE_BARE_ZH
     assert out["current_plan"]["unmet"][0]["text"] == "提议的菜并不都来自你的菜谱库"
 
 
@@ -267,9 +473,18 @@ def test_unknown_recipe_ids_are_never_shown(graph_env, veg):
     out = plan(graph_env, "dinner", replies=[final_proposal([999999])])
     assert out["current_plan"]["recipes"] == []
     assert [u["code"] for u in out["current_plan"]["unmet"]] == ["H5"]
+    # H5 alone offers no action, so the note must not promise things to change.
+    assert out["current_plan"]["next_actions"] == []
+    assert out["messages"][-1].content == NO_PLAN_NOTE_BARE_EN
 
 
-def test_fridge_only_shortfall_shows_closest_with_unmet(graph_env, session):
+def test_no_action_note_follows_locale(graph_env, veg):
+    out = plan(graph_env, "晚饭", replies=[final_proposal([999999])], locale="zh")
+    assert out["messages"][-1].content == NO_PLAN_NOTE_BARE_ZH
+    assert "调整" not in NO_PLAN_NOTE_BARE_ZH and "change" not in NO_PLAN_NOTE_BARE_EN
+
+
+def test_fridge_only_shortfall_shows_closest_with_unmet(graph_env, session, veg):
     pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
     out = plan(graph_env, "dinner", replies=[final_proposal([pork.id])])
     current = out["current_plan"]
@@ -277,12 +492,14 @@ def test_fridge_only_shortfall_shows_closest_with_unmet(graph_env, session):
     assert current["missing"] == {str(pork.id): ["五花肉"]}
     (unmet,) = current["unmet"]
     assert unmet["code"] == "H1" and unmet["recipe_id"] == pork.id and "五花肉" in unmet["text"]
-    assert current["next_actions"] == ["switch_to_shopping"]
+    assert current["next_actions"] == ["switch_to_shopping", "update_inventory"]
     # The fixed closest note leads; the model's note follows and is never shown alone.
     assert out["messages"][-1].content == CLOSEST_NOTE_EN + "\n\n" + "Here is your dinner."
 
 
-def test_closest_note_is_fixed_text_in_the_locale_even_without_a_model_note(graph_env, session):
+def test_closest_note_is_fixed_text_in_the_locale_even_without_a_model_note(
+    graph_env, session, veg
+):
     pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
     out = plan(graph_env, "晚饭", replies=[final_proposal([pork.id], note="")], locale="zh")
     assert out["current_plan"]["passed"] is False
@@ -341,7 +558,7 @@ def test_task_name_is_configurable(tmp_path, session, seeded, veg):
     assert tasks == {"planning_eval"}
 
 
-def test_closest_attempt_without_h2_is_shown_when_the_last_breaks_h2(graph_env, session):
+def test_closest_attempt_without_h2_is_shown_when_the_last_breaks_h2(graph_env, session, veg):
     rule(session, self_diner(session).id, "allergy", allergen="egg")
     stock(session, "鸡蛋", count=6)
     egg = make_recipe(session, "番茄炒蛋", "meat dish", [L("鸡蛋")])
@@ -351,7 +568,7 @@ def test_closest_attempt_without_h2_is_shown_when_the_last_breaks_h2(graph_env, 
     assert out["retries"] == MAX_RETRIES and out["validation"]["violations"][0]["code"] == "H2"
     assert [r["id"] for r in current["recipes"]] == [pork.id] and current["passed"] is False
     assert [u["code"] for u in current["unmet"]] == ["H1"]
-    assert current["next_actions"] == ["switch_to_shopping"]
+    assert current["next_actions"] == ["switch_to_shopping", "update_inventory"]
 
 
 def test_unknown_allergen_retry_is_worded_for_the_model(graph_env, session, veg):
@@ -410,10 +627,10 @@ def test_record_keeps_replaced_names_and_state_keeps_restored(tmp_path, session,
 
 
 def test_closest_attempt_breaks_ties_by_composition_gap(graph_env, session):
-    meats = [make_recipe(session, f"肉{i}", "meat dish") for i in range(2)]
+    meats = [make_recipe(session, f"肉{i}", "meat dish") for i in range(3)]
     vegs = [make_recipe(session, f"菜{i}", "vegetable dish") for i in range(3)]
     one_meat = [meats[0].id] + [v.id for v in vegs]
-    two_meat = [m.id for m in meats] + [v.id for v in vegs]
+    two_meat = [m.id for m in meats[:2]] + [v.id for v in vegs]
     parse = {"mode": "shopping", "dishes": 6, "meat_dishes": 3, "vegetable_dishes": 3}
     replies = [final_proposal(one_meat), final_proposal(two_meat), final_proposal(one_meat)]
     out = plan(graph_env, "three meat and three vegetable dishes", parse=parse, replies=replies)

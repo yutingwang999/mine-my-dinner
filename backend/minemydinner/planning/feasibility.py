@@ -7,7 +7,7 @@ firm time fits any time limit, and a `must_use` name the dictionary does not kno
 stock check.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy.orm import Session
 
@@ -44,6 +44,10 @@ class Shortfall:
     needed: int | None
     available: int | None
     ingredient: str | None = None
+    # True when the needed count was parsed as a minimum ("at least").
+    minimum: bool = False
+    # named_ingredient in fridge-only mode: the ingredient is not in stock at all.
+    absent_from_stock: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,8 @@ def check_feasibility(session: Session, ctx: PlanningContext, spec: PlanSpec) ->
 
     found = _drop_combined_duplicates(found)
     found.extend(_named_shortfalls(session, ctx, spec, units, pool, stock_checks))
+    if spec.split_is_minimum:
+        found = [replace(s, minimum=True) if s.category in _SIDES else s for s in found]
     return sorted(found, key=lambda shortfall: REASONS.index(shortfall.reason))
 
 
@@ -160,7 +166,9 @@ def _named_shortfalls(
 
     for name in [*must, *every]:
         if stock_checks and _unavailable(session, ctx, name):
-            found.append(Shortfall("named_ingredient", None, None, None, name))
+            found.append(
+                Shortfall("named_ingredient", None, None, None, name, absent_from_stock=True)
+            )
     unavailable = {s.ingredient for s in found}
 
     for name in must:
