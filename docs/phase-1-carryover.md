@@ -1,6 +1,6 @@
 # Phase 1 Carryover
 
-Decisions, warnings, and open items from Phase 0 execution, distilled into this committed file so they reach Phase 1 planning. The source was the execution ledger, which lives only on the developer's machine and outside git, so anything not carried here or into the other docs does not survive it. Items that changed the product's behavior are already folded into `design.md`; this file holds only what is still pending or forward-looking. Read it together with the still-open table in `phase-0-import-feedback.md` when writing the Phase 1 plan.
+Decisions, warnings, and open items from Phase 0 execution, distilled into this committed file so they reach Phase 1 planning. The source was the execution ledger, which lives only on the developer's machine and outside git, so anything not carried here or into the other docs does not survive it. Items that changed the product's behavior are already folded into `design.md`; this file holds only what is still pending or forward-looking. Read it together with the still-open table in `phase-0-import-feedback.md` when writing each Phase 1 plan.
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -31,6 +31,17 @@ Decisions, warnings, and open items from Phase 0 execution, distilled into this 
 - The evaluation export does not yet include `image_files`, so screenshot samples cannot be rerun from the export alone.
 - Prompt version rule: `extract_v1` was edited in place only while `extraction_logs` was empty. Once any log exists, every prompt change gets a new version name (`extract_v2`, ...).
 - The model duplicates ingredients across the list, the method, and formula lines despite a dedup rule in the prompt; this survived out-of-sample tests and is treated as the model's instruction-following ceiling. Revisit in `extract_v2` or with a stronger model, and let the metrics track it.
+
+## Found while trying the first planning slice (Phase 1 plan 1, checkpoint)
+
+Seen in the user's first real planning runs: an empty inventory and only a plate and a baking tray registered as cookware. Every run failed after 2 retries, and each run made about 30 planning model calls (plus 2 for intent and parsing).
+
+- **Missing cookware needs its own next action (rest of T1.4, design 6.3).** When H3 (missing cookware) is what blocks the plan, the offered next actions ("switch to shopping", "fewer dishes", "drop the time limit") cannot help, because cookware is not bought with the meal. Add a next action and plain-words hint such as "register the cookware you have" with a link to the inventory page. Only offer "switch to shopping" when H1 is among the unmet rules.
+- **Stop early when the request cannot be met (rest of T1.4, design 6.3).** Before retrying, let code check whether any candidate can satisfy the blocking rule at all (for example, no recipe in the library fits the owned cookware). If none can, skip the retries and go straight to the no-valid-plan answer with that reason. In the runs above this would cut about 30 calls to about 5.
+- **Fewer tool round trips per attempt (rest of T1.4, tool design).** A typical attempt goes search → recipe details → missing items and cookware → proposal, which is 4-6 model calls. Let `search_recipes` hits carry the missing-ingredient count and missing cookware for each recipe, so the model rarely needs `compute_missing` and `check_cookware` separately. This changes `TOOLS_VERSION`; compare against the evaluation before and after.
+- **Retries restart from nothing (rest of T1.4).** Each retry starts a fresh inner agent that only receives the violation list, so it re-reads the inventory and searches again. Either continue the previous attempt's conversation or pass a short summary of what it already found (candidate ids, missing items).
+- **Context grows every call.** Each call resends the whole history (33 messages by the last call of a retry), so token cost grows faster than the call count. The changes above reduce it; trimming old tool results is a further option.
+- **Measure it.** Report average model calls per run next to cost in the planning evaluation, and include a scenario where key cookware is not owned.
 
 ## Minor findings from the final Phase 0 review, deferred
 

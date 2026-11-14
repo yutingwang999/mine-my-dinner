@@ -664,3 +664,44 @@ fieldset.supplies {
   font-weight: 600;
   list-style: none;
 }
+
+/* Chat page */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 48rem;
+}
+
+.chat-log {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chat-message {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.9rem;
+}
+
+.chat-user {
+  border-color: var(--accent);
+}
+
+.chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.chat-form > .stack-field {
+  align-self: stretch;
+}
+
+.plan-dish {
+  padding: 0.25rem 0;
+}

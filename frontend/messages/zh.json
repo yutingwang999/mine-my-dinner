@@ -13,6 +13,7 @@
   "nav": {
     "label": "主导航",
     "home": "首页",
+    "chat": "对话",
     "import": "导入",
     "review": "审核",
     "library": "菜谱库",
@@ -78,7 +79,10 @@
     "invalid_for_stock_mode": "这些数量不符合这个食材的记录方式。",
     "self_diner": "不能删除你自己的记录。",
     "several_links": "一次只能导入一个链接，请逐个导入。",
-    "several_recipes": "一次只能粘贴一道菜。多道菜请用文本文件导入，用单独一行 --- 分隔。"
+    "several_recipes": "一次只能粘贴一道菜。多道菜请用文本文件导入，用单独一行 --- 分隔。",
+    "internal": "规划时出错了，可以再试一次。",
+    "thread_not_found": "没有找到这段对话，请新建一段。",
+    "nothing_pending": "现在没有等待回答的问题。"
   },
   "review": {
     "title": "审核菜谱",
@@ -375,5 +379,79 @@
     "personalAliasesList": "我的别名：{list}",
     "deleteIngredientNotice": "有 {count} 道菜用到它。删除后，这些菜里的这一行会变成未关联，过敏原算“未知”。",
     "deleteCookwareNotice": "有 {count} 道菜需要它。删除后，这些菜不再记录需要这件厨具。"
+  },
+  "chat": {
+    "title": "规划一餐",
+    "newConversation": "新对话",
+    "inputLabel": "你的消息",
+    "send": "发送",
+    "inputPlaceholder": "例如：今晚做两道菜，用家里现有的食材",
+    "providerNotice": "你的消息会发送给 AI 模型服务商用于规划。对话保存在这台电脑上。",
+    "allergenNotice": "请自己核对实际食材中的过敏原。词典和提取都可能出错，这份方案不是安全保证。",
+    "loading": "正在加载对话…",
+    "you": "你",
+    "assistant": "助手",
+    "progress": {
+      "parse": "正在理解你的需求…",
+      "context": "正在查看冰箱和忌口规则…",
+      "search": "正在搜索你的菜谱…",
+      "check": "正在按规则检查方案…",
+      "retry": "正在调整方案…",
+      "present": "正在整理方案…"
+    },
+    "requestStyle": {
+      "title": "当你没说清楚细节（比如几个人吃、要不要买菜）时，我该怎么处理？",
+      "askFirst": "先问我",
+      "planThenAdjust": "先出方案，我再调整",
+      "skip": "跳过",
+      "settingLabel": "信息不全时",
+      "unset": "尚未选择"
+    },
+    "question": {
+      "hint": "要规划这一餐，请告诉我{fields}。你的下一条消息会作为回答。",
+      "mode": "只用冰箱里现有的食材，还是也可以买菜",
+      "composition": "想做几道菜"
+    },
+    "action": {
+      "switch_to_shopping": "允许购物",
+      "fewer_dishes": "少做几道菜",
+      "drop_time_limit": "不限时间"
+    },
+    "plan": {
+      "title": "方案",
+      "noDishes": "没有可展示的菜。",
+      "timeKnown": "{minutes} 分钟（{source}）",
+      "timeUnknown": "时间未知",
+      "missingIngredients": "缺少食材：{list}",
+      "missingCookware": "缺少厨具：{list}",
+      "servingsNote": "{title}做出 {servings} 份，你是 {headcount} 人吃。",
+      "warnings": "需要注意",
+      "unmet": "未满足",
+      "nextActions": "你可以调整",
+      "assumed": "我假设了：{list}。不对请告诉我。",
+      "assumedHeadcount": "{count} 人",
+      "assumedDishes": "{count} 道菜",
+      "assumedSoups": "{count} 道汤",
+      "assumedFridgeOnly": "只用冰箱现有食材",
+      "assumedShopping": "可以购物",
+      "leftOut": "有 {count} 道菜因为含有过敏原未知的食材而被排除。",
+      "showLeftOut": "查看是哪些菜",
+      "leftOutTitles": "被排除的菜",
+      "semanticPaused": "按语义搜索暂时停用，结果可能没那么相关。按名称搜索仍可使用。"
+    },
+    "warning": {
+      "S1": "{title}：需要 {name} {needed} {unit}，你只有 {have} {unit}。",
+      "S2": "{title}：{line} 不符合某位用餐者的偏好。",
+      "S3": "冰箱里有食材将在 {date} 过期，这份方案没有用到它。",
+      "S4": "{title} 的评分较低（{score}）。",
+      "S5": "所有菜的类型相同。",
+      "S6": "{title}：{name} 快用完了。",
+      "S7unknown": "{title}：烹饪时间未知。",
+      "S7estimated": "{title}：烹饪时间（{minutes} 分钟）只是估计。",
+      "S7total": "总烹饪时间（{total} 分钟）明显超过你的 {limit} 分钟限制。",
+      "S8diners": "另外 {count} 位用餐者的忌口未知，请自己核对。",
+      "S8lines": "{title}：有些食材没有识别出来（{list}）。",
+      "other": "{title}：请留意 {code}。"
+    }
   }
 }

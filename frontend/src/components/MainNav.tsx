@@ -4,7 +4,7 @@ import { useTranslations } from "next-intl";
 
 import { Link, usePathname } from "@/i18n/navigation";
 
-const PAGES = ["home", "import", "review", "library", "inventory", "people", "dictionary"] as const;
+const PAGES = ["home", "chat", "import", "review", "library", "inventory", "people", "dictionary"] as const;
 
 export function MainNav() {
   const t = useTranslations("nav");
