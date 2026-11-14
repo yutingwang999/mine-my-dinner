@@ -68,6 +68,17 @@ class PlanningRecorder:
             session.execute(statement)
             session.commit()
 
+    def fail(self, run_id: int, retries: int) -> None:
+        """Close a run that stopped early. Rows already finished are left alone."""
+        statement = (
+            update(PlanningRun)
+            .where(PlanningRun.id == run_id, PlanningRun.final_passed.is_(None))
+            .values(retries=retries, final_passed=False, final_plan=None)
+        )
+        with self.session_factory() as session:
+            session.execute(statement)
+            session.commit()
+
 
 def load_run(session, run_id: int) -> PlanningRun:
     return session.scalars(select(PlanningRun).where(PlanningRun.id == run_id)).one()
