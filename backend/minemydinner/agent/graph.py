@@ -1,4 +1,5 @@
 import json
+from collections.abc import Collection
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -88,7 +89,7 @@ class GraphDeps:
 
 
 def load_route_prompt() -> str:
-    return load_prompt("route.md")
+    return load_prompt("route")
 
 
 def other_reply(locale: str) -> str:
@@ -389,25 +390,35 @@ SHORTLIST_HEADER = (
 )
 
 
-def shortlist_json(entries: dict[str, list[ShortlistEntry]]) -> str:
+def shortlist_json(
+    entries: dict[str, list[ShortlistEntry]], complete: Collection[str] = ()
+) -> str:
     """The shortlist as compact JSON, in a fixed order: dish types as the shortlist orders
-    them, entries in rank order, fields in a fixed order (the dish type is the key)."""
+    them, each as {"complete": bool, "candidates": [...]} with entries in rank order and
+    fields in a fixed order (the dish type is the key)."""
     data = {
-        dish_type: [
-            {name: value for name, value in asdict(entry).items() if name != "dish_type"}
-            for entry in items
-        ]
+        dish_type: {
+            "complete": dish_type in complete,
+            "candidates": [
+                {name: value for name, value in asdict(entry).items() if name != "dish_type"}
+                for entry in items
+            ],
+        }
         for dish_type, items in entries.items()
     }
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
-def planner_opening(entries: dict[str, list[ShortlistEntry]] | None, summary: str) -> str:
+def planner_opening(
+    entries: dict[str, list[ShortlistEntry]] | None,
+    summary: str,
+    complete: Collection[str] = (),
+) -> str:
     """The planner's first message, built once per run: the shortlist, then the request
     summary (design 5.7: most stable first). Without a shortlist, the summary alone."""
     if entries is None:
         return summary
-    return f"{SHORTLIST_HEADER}\n{shortlist_json(entries)}\n\n{summary}"
+    return f"{SHORTLIST_HEADER}\n{shortlist_json(entries, complete)}\n\n{summary}"
 
 
 def _split_text(spec: dict) -> str:
@@ -456,7 +467,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return "parse_request" if state["intent"] == "plan" else "other"
 
     def parse_request(state: ChatState) -> dict:
-        messages = [SystemMessage(load_prompt("parse.md")), *state["messages"]]
+        messages = [SystemMessage(load_prompt("parse")), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         return {"request": result.parsed.model_dump()}
 
@@ -646,16 +657,18 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 # Built once per run and stored, so every attempt sends the same bytes.
                 summary = request_summary(state, meal_preferences(session, ctx))
                 entries = None
+                complete: frozenset[str] = frozenset()
                 if deps.use_shortlist:
                     parsed = ParsedRequest.model_validate(state["request"])
                     found = build_shortlist_result(
                         session, deps.client, ctx, spec, parsed, vectors
                     )
                     entries = found.entries
+                    complete = found.complete
                     notes = _merge_notes(
                         notes, found.left_out_unknown_allergens, found.semantic_paused
                     )
-                opening = planner_opening(entries, summary)
+                opening = planner_opening(entries, summary, complete)
                 update["planner_opening"] = opening
                 update["shortlist_ids"] = [
                     entry.id for items in (entries or {}).values() for entry in items

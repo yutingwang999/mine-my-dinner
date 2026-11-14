@@ -849,7 +849,7 @@ def run_info(
         TOOL_CALL_LIMIT,
         TOOLS_VERSION,
     )
-    from minemydinner.agent.request import PROMPT_VERSION
+    from minemydinner.agent.request import PROMPT_VERSION, PROMPT_VERSIONS, prompt_files
     from minemydinner.planning import shortlist
 
     return {
@@ -860,6 +860,10 @@ def run_info(
             "scenarios_file": _file_info(scenarios_path),
             "library_file": _file_info(library_path),
             "prompt_version": PROMPT_VERSION,
+            "prompt_versions": dict(PROMPT_VERSIONS),
+            "prompt_files": {
+                path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in prompt_files()
+            },
             "tools_version": TOOLS_VERSION,
             "flags": {"no_shortlist": no_shortlist, "with_embeddings": with_embeddings},
             "constants": {
@@ -1051,8 +1055,8 @@ def write_run(
     root: Path, run_id: str, summary: dict[str, Any], outcomes: list[RunOutcome]
 ) -> Path:
     """Write the run folder: summary.json, results.jsonl (git-ignored), tools.json, and the
-    prompt files of the version used. Returns the folder."""
-    from minemydinner.agent.request import PROMPT_DIR
+    prompt files in use. Returns the folder."""
+    from minemydinner.agent.request import prompt_files
 
     folder = root / run_id
     (folder / "prompts").mkdir(parents=True, exist_ok=True)
@@ -1060,7 +1064,7 @@ def write_run(
     (folder / "tools.json").write_text(_dump(_tools_document(), indent=2), encoding="utf-8")
     lines = [_dump({**_entry(o), **o.record}) for o in outcomes]
     (folder / "results.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    for prompt in sorted(PROMPT_DIR.glob("*.md")):
+    for prompt in prompt_files():
         shutil.copy2(prompt, folder / "prompts" / prompt.name)
     return folder
 

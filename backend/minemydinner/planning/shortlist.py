@@ -207,6 +207,9 @@ class ShortlistResult:
     left_out_unknown_allergens: list[str] = field(default_factory=list)
     # True when meaning-based search was unavailable and the query matched text only.
     semantic_paused: bool = False
+    # Dish types whose list holds every recipe the fetch returned for that type (including
+    # none at all): no other recipe of the type fits this request.
+    complete: frozenset[str] = frozenset()
 
 
 def build_shortlist(
@@ -267,12 +270,16 @@ def build_shortlist_result(
         return spec.mode == "shopping" or not hit.missing
 
     shortlist: dict[str, list[ShortlistEntry]] = {}
+    complete: set[str] = set()
     for dish_type, count in needed.items():
         ranked = [hit for hit in hits if hit.dish_type == dish_type]
         kept = _spread(ranked, slots_for(count), count, groups, makeable, must_users)
         shortlist[dish_type] = [ShortlistEntry.from_hit(hit) for hit in kept]
+        if len(kept) == len(ranked):
+            complete.add(dish_type)
     return ShortlistResult(
         shortlist,
         [excluded.title for excluded in result.left_out_unknown_allergens],
         result.semantic_paused,
+        frozenset(complete),
     )

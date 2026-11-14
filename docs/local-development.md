@@ -133,8 +133,8 @@ The script refuses to start when the working tree has uncommitted changes (run f
 
 Each run writes a folder `backend/eval_data/planning/runs/<run id>/`, where the run id is `<UTC time>-<scenario set>-<shortlist|no-shortlist>-<vectors|no-vectors>`:
 
-- `summary.json` (committed): conditions (commit, data file hashes, prompt and tool versions, models and prices, settings), metrics by area, and each scenario's metrics. It holds no model text.
-- `prompts/` and `tools.json` (committed): the prompt files and the model-facing tool definitions the run used.
+- `summary.json` (committed): conditions (commit, data file hashes, the prompt version label, the version of each prompt and the SHA-256 of each prompt file in use, the tool version, models and prices, settings; see `docs/prompt-versions.md`), metrics by area, and each scenario's metrics. It holds no model text.
+- `prompts/` and `tools.json` (committed): only the prompt files in use, under their versioned names, and the model-facing tool definitions the run used.
 - `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. Keep a private copy outside Git if the run matters.
 
 How to read the metrics in `summary.json`:

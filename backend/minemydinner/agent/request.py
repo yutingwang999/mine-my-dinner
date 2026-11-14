@@ -12,8 +12,11 @@ from minemydinner.models import AppPreference
 from minemydinner.planning.context import MealConstraints
 from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
-PROMPT_VERSION = "plan_v2"
-PROMPT_DIR = Path(__file__).resolve().parent / "prompts" / PROMPT_VERSION
+# One version per prompt, so route, parse, and planner change independently. A version any
+# record has used is never edited; a change makes the next version of that prompt.
+PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v2", "planner": "planner_v3"}
+PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
+PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
 REQUEST_STYLE_KEY = "request_style"
 REQUEST_STYLES = ("ask_first", "plan_then_adjust")
@@ -33,9 +36,14 @@ CountField = Literal[
 ]
 
 
-def load_prompt(name: str) -> str:
-    """A prompt file of the current planning prompt version, such as "parse.md"."""
-    return (PROMPT_DIR / name).read_text(encoding="utf-8")
+def prompt_files() -> list[Path]:
+    """The prompt files in use, in the order of PROMPT_VERSIONS."""
+    return [PROMPT_DIR / f"{version}.md" for version in PROMPT_VERSIONS.values()]
+
+
+def load_prompt(kind: Literal["route", "parse", "planner"]) -> str:
+    """The current version of one prompt."""
+    return (PROMPT_DIR / f"{PROMPT_VERSIONS[kind]}.md").read_text(encoding="utf-8")
 
 
 class ParsedRequest(BaseModel):

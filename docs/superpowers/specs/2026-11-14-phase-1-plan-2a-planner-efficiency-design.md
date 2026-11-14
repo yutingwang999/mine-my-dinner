@@ -40,7 +40,7 @@ All of the Phase 1 design's constraints still hold. In particular:
 
 - Every model call goes through `LLMClient` (directly or through `CallLayerMiddleware`); planning stays essential.
 - Hard constraints H1-H6 and the search exclusions are enforced in `minemydinner/planning/`; prompts only describe them.
-- `planning_runs` already has `plan_v1` rows, so every planning prompt change goes into a new version `plan_v2`; `plan_v1` files stay unchanged. Changing a tool or the final-answer schema changes `TOOLS_VERSION` (by design).
+- `planning_runs` already has `plan_v1` rows, so every planning prompt change goes into a new version; `plan_v1` files stay unchanged. **Per-prompt versions (decided during Task 10 tuning):** route, parse, and planner are versioned separately (`route_v2`, `parse_v2`, `planner_v3`; the old set label `plan_v2` meant `route_v2+parse_v2+planner_v2`); the planner prompt is `planner_v3`, which introduces the complete marker (Section 5.4). See `docs/prompt-versions.md`. Changing a tool or the final-answer schema changes `TOOLS_VERSION` (by design).
 - Evaluation and real-app checks use only the test database; paid runs need the user's approval first. Tests never call a real model, never assume `llm_calls` or `planning_runs` is empty, and delete only rows they create.
 - No new Python packages are expected. If one turns out to be needed, the user installs it.
 
@@ -58,7 +58,7 @@ The user chose B. To keep tool-heavy trajectories available for comparison, the 
 
 ## 5. Decisions
 
-### 5.1 Request parsing (`plan_v2`)
+### 5.1 Request parsing (`parse_v2`)
 
 **One rule for every dish category (decided by the user): what the user states is a hard requirement, and nothing else is assumed unless the user adds it later.**
 
@@ -177,6 +177,8 @@ A new function in `minemydinner/planning/` builds the shortlist from the parsed 
    - **The spread never leaves too few usable dishes.** If spreading would leave fewer makeable dishes in a category (fridge-only: no missing line; shopping: every safe dish) than that category needs, or fewer dishes using a `must_use` ingredient than one, the highest-ranked recipes it removed are put back, ignoring the per-group limit, until the count is met. Example: only eggs in the fridge, three vegetable dishes asked for, and the makeable ones are 蒸蛋羹, 葱花煎蛋, 水煮蛋, 溏心蛋 (eggs only): only those four are fetched, the spread keeps two, and the back-fill restores the other two, so the model sees all four dishes it can make and nothing it cannot.
 5. **Cut** to the quota (a cap; never padded) and attach, per recipe: id, title, dish type, time and its source, servings, missing ingredient names, missing cookware names, ingredients close to expiry it uses, and dislike hits. Results hold diner codes only and no `source_text`, as tool results do today.
 
+**Complete marker (decided during Task 10 tuning):** per dish type, the shortlist records whether it kept every recipe the fetch returned (`complete`, also true for none); the first message gives each type as `{"complete": bool, "candidates": [...]}`, and the planner prompt says not to search a complete type, so a request the shortlist already answers needs no search call.
+
 The shortlist goes into the planner's first message as compact JSON, before the request summary (data first, the task last; Section 5.7). The planner prompt (`planner.md` v2) says: choose from the shortlist when it fits; search for more only when it does not; check details only when needed; final answer is `PlanProposal` as before.
 
 ### 5.5 Validation change
@@ -241,7 +243,7 @@ Today `llm_calls.cost_estimate` prices every input token at the full rate and `m
 - Each scenario may state expected `reason` and expected next actions; the runner checks them.
 - The "no wok" scenario now expects `no_cookware` (or H3 in `unmet`), not H4.
 
-### 5.9 Success criteria (measured on the test database, `plan_v2`, against the plan 1 baseline)
+### 5.9 Success criteria (measured on the test database, current prompts `route_v2+parse_v2+planner_v3`, against the plan 1 baseline)
 
 - Feasible scenarios: first-attempt pass rate at least the baseline (6/6 of the original feasible ones), average planner calls about 2 (total calls per run at most 5 including intent and parsing).
 - Each infeasible scenario ends within 8 model calls with the right reason and next actions; empty inventory within 3. The 8-call bound also covers requests that reach the planner and then fail validation.

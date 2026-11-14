@@ -117,12 +117,14 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - **Short unknown names under "must use"** match more widely now that the original line text is searched too (as the design allows).
 - **The feasibility check ignores "exclude recently cooked"** while the shortlist and search apply it; it has no effect until saved plans exist (T1.5), then align them.
 - **"Any mix of meat and vegetable dishes" is not offered for a combined dish shortfall**; that case only arises when no split was named, so it does not matter today.
+- **Variety within one meal is not guided.** In the Task 10 evaluation (plan2a set, with vectors), "8 dishes, 2 of them meat" got 4 egg dishes (鸡蛋饼, 白煮蛋, 嫩滑蒸蛋, 煎荷包蛋). The plan is valid; the shortlist spreads main ingredients only within one dish type, and nothing asks the planner to vary main ingredients across the whole meal. Consider a soft rule or a prompt line when variety comes up again.
 
 ### Parsing and wording
 
-- `parse.md` (plan_v2) has no example of moving "must use" names to "prefer" after "the named ingredients are optional", and no example of a soup range.
+- `parse_v2.md` has no example of moving "must use" names to "prefer" after "the named ingredients are optional", and no example of a soup range.
 - `_counts_text` would produce an empty clause if a spec required no dishes and no soups; unreachable while every spec needs at least one dish in total.
 - The planner's request summary prints an explicit "0 vegetable dishes" when a split names one side as 0, and states "Every count is exact unless it says at least". Both are new model-facing wording to watch in the evaluation.
+- The shortlist header line (`SHORTLIST_HEADER` in `graph.py`) still says only "JSON keyed by dish type"; the `complete` marker is explained in `planner_v3.md` alone. A type marked complete that holds fewer dishes than needed gets no extra hint (the feasibility check stops that case first today).
 
 ### Cost accounting
 
@@ -142,6 +144,8 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The "must use" shortlist test asserts the outcome without isolating the "must use" protection; the retry-wording test now checks only the dish part.
 - A long line in `llm/smoke.py`, an obscure condition in `tests/fakes.py`, and single quotes in migration `0007`.
 - The plan card's list of known next actions (`KNOWN_ACTIONS` in `PlanCard.tsx`) repeats the `NextAction` type by hand; a typed record would catch drift at compile time.
+- `tests/test_planning_shortlist.py` has a line over 100 characters (complete-marker test).
+- The package-data test (`test_package_data_glob_matches_every_prompt_file`) uses `fnmatch`, whose `*` also crosses `/`, so a too-broad glob would still pass; it does not build a wheel.
 
 ## Minor findings from the final Phase 0 review, deferred
 

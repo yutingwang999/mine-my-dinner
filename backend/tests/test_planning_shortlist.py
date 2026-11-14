@@ -474,3 +474,36 @@ def test_must_use_protection_runs_after_the_back_fill(session, seeded):
         )["vegetable dish"]
     )
     assert without == [eggs[4].id, eggs[3].id, eggs[2].id, eggs[1].id, other.id]
+
+
+def complete_types(session, plan_spec):
+    return build_shortlist_result(
+        session, FakeEmbedClient(), ctx_for(session), plan_spec, ParsedRequest(), {}
+    ).complete
+
+
+def test_type_is_complete_when_fewer_recipes_fit_than_slots(session, seeded):
+    make_many(session, 3, "vegetable dish", "素")
+    assert complete_types(session, spec(dishes=2, meat_dishes=0, vegetable_dishes=2)) == {
+        "vegetable dish"
+    }
+
+
+def test_type_is_not_complete_when_the_cap_cut_a_recipe(session, seeded):
+    make_many(session, 7, "vegetable dish", "素")
+    make_many(session, 2, "soup", "汤")
+    result = complete_types(session, spec(dishes=2, meat_dishes=0, vegetable_dishes=2, soups=1))
+    # 7 vegetable dishes against 5 slots: not complete; the 2 soups all fit.
+    assert result == {"soup"}
+
+
+def test_type_is_not_complete_when_the_spread_left_one_out(session, seeded):
+    # Six dishes, five slots: whichever way the walk goes, one recipe is left out.
+    make_many(session, 6, "vegetable dish", "素")
+    assert "vegetable dish" not in complete_types(session, spec(dishes=1, meat_dishes=0, vegetable_dishes=1))
+
+
+def test_type_with_no_recipes_is_complete(session, seeded):
+    make_many(session, 1, "vegetable dish", "素")
+    result = complete_types(session, spec(dishes=2, soups=1))
+    assert "soup" in result and "meat dish" in result

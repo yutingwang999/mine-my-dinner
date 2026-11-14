@@ -39,7 +39,7 @@ include = ["minemydinner*"]
 
 [tool.setuptools.package-data]
 "minemydinner.extraction" = ["prompts/*.md"]
-"minemydinner.agent" = ["prompts/*/*.md"]
+"minemydinner.agent" = ["prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

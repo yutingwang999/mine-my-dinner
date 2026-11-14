@@ -4,10 +4,13 @@ from pydantic import ValidationError
 from minemydinner.agent.request import (
     PROMPT_DIR,
     PROMPT_VERSION,
+    PROMPT_VERSIONS,
     ParsedRequest,
     apply_defaults,
     default_composition,
+    load_prompt,
     needs_question,
+    prompt_files,
     request_problem,
 )
 from minemydinner.planning.validate import PlanSpec
@@ -27,10 +30,28 @@ def test_default_composition(n, expected):
     assert default_composition(n) == expected
 
 
-def test_prompt_version_is_plan_v2():
-    assert PROMPT_VERSION == "plan_v2"
-    for name in ("parse.md", "route.md", "planner.md"):
-        assert (PROMPT_DIR / name).exists()
+def test_prompt_versions_name_existing_files():
+    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner"]
+    assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
+    assert PROMPT_VERSION == "route_v2+parse_v2+planner_v3"
+    for kind, version in PROMPT_VERSIONS.items():
+        assert version.startswith(f"{kind}_v")
+        assert (PROMPT_DIR / f"{version}.md").exists()
+        assert load_prompt(kind)
+    assert [p.name for p in prompt_files()] == [f"{v}.md" for v in PROMPT_VERSIONS.values()]
+
+
+def test_package_data_glob_matches_every_prompt_file():
+    import tomllib
+    from fnmatch import fnmatch
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    patterns = data["tool"]["setuptools"]["package-data"]["minemydinner.agent"]
+    for path in prompt_files():
+        relative = path.relative_to(PROMPT_DIR.parent).as_posix()
+        assert any(fnmatch(relative, pattern) for pattern in patterns), relative
 
 
 def test_apply_defaults_reports_each_default():

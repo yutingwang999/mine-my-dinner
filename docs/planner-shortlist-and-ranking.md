@@ -20,6 +20,16 @@ The shortlist is built in five steps, in this order:
 
 If the shortlist is not enough, the model can search again with `exclude_ids` to get the next batch, so recipes cut by the slot limit are still reachable.
 
+## 1a. What the planner sees: the complete marker
+
+The shortlist reaches the model as compact JSON keyed by dish type. Each dish type is an object with `complete` and `candidates`. `complete` is true when the list kept every recipe the fetch returned for that type (this includes a type with no recipe at all); then no other recipe of that type fits this request, because the fetch already applied the exclusions, the time limit, recency, `all_use`, and, in fridge-only mode, the makeable filter, the same filters the planner's search tool applies. It is false when the spread or the slot cap left at least one recipe out. The prompt tells the model not to search a complete type, not to search a type the request does not need, and to answer with no tool call when every needed type is complete. Before this marker, the model could not tell that a search would find nothing, and paid evaluation runs showed it searching 1 to 6 more times in fridge-only mode. The opening is built once per run and reused on retries, so the marker is the same on every attempt. The marker was introduced in the planner prompt `planner_v3` (current prompts: `route_v2`, `parse_v2`, `planner_v3`; see `docs/prompt-versions.md`).
+
+Example (shortened): two soups exist, five slots, so both are listed; seven vegetable dishes exist, so two are cut.
+
+```json
+{"vegetable dish":{"complete":false,"candidates":[{"id":11,"title":"清炒白菜", ...}, ...five entries...]},"soup":{"complete":true,"candidates":[{"id":21,"title":"蛋花汤", ...},{"id":22,"title":"紫菜汤", ...}]}}
+```
+
 ## 2. Ranking: eight levels
 
 Ranking compares level 1 first; only recipes tied on level 1 are compared on level 2, and so on.

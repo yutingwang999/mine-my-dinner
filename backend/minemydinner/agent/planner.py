@@ -53,7 +53,7 @@ def build_planner(deps: "GraphDeps") -> CompiledStateGraph:
     return create_agent(
         model=placeholder,
         tools=PLANNER_TOOLS,
-        system_prompt=load_prompt("planner.md"),
+        system_prompt=load_prompt("planner"),
         middleware=[
             CallLayerMiddleware(deps.client, deps.task, deps.recorder),
             TokenBudgetMiddleware(PLANNER_INPUT_TOKEN_BUDGET, deps.recorder),

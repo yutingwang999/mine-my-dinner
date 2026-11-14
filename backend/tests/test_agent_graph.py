@@ -748,8 +748,11 @@ def test_first_message_is_shortlist_then_summary(graph_env, veg, meat):
     assert opening == out["planner_opening"]
     shortlist = shortlist_of(opening)
     assert list(shortlist) == ["meat dish", "vegetable dish"]
-    assert [e["id"] for e in shortlist["meat dish"]] == [meat.id]
-    (entry,) = shortlist["vegetable dish"]
+    assert all(list(group) == ["complete", "candidates"] for group in shortlist.values())
+    assert [e["id"] for e in shortlist["meat dish"]["candidates"]] == [meat.id]
+    # Each type holds every fitting recipe, so both are marked complete.
+    assert [group["complete"] for group in shortlist.values()] == [True, True]
+    (entry,) = shortlist["vegetable dish"]["candidates"]
     assert list(entry) == ENTRY_KEYS
     assert entry == {
         "id": veg.id, "title": "清炒白菜", "time_min": None, "time_source": None, "servings": 2,
@@ -761,6 +764,22 @@ def test_first_message_is_shortlist_then_summary(graph_env, veg, meat):
     assert opening.index(line) < opening.index("Plan this meal.")
     assert "Reply locale: en" in opening and "Dishes (meat plus vegetable): 2" in opening
     assert out["current_plan"]["passed"]
+
+
+def test_opening_marks_a_cut_type_incomplete(
+    tmp_path, session, seeded, veg
+):
+    for i in range(7):
+        make_recipe(session, f"蛋{i}", "vegetable dish", [L("鸡蛋", role="main")])
+    stock(session, "鸡蛋", count=6)
+    env = make_graph_env(tmp_path, session)
+    parse = {"dishes": 1, "vegetable_dishes": 1, "meat_dishes": 0}
+    out = plan(env, "dinner", parse=parse, replies=[final_proposal([veg.id])])
+    shortlist = shortlist_of(out["planner_opening"])
+    assert list(shortlist) == ["vegetable dish"]
+    assert shortlist["vegetable dish"]["complete"] is False
+    assert len(shortlist["vegetable dish"]["candidates"]) == 5
+    assert '"complete":false' in out["planner_opening"]
 
 
 def test_summary_states_counts_split_minimum_and_other_categories(
@@ -793,6 +812,9 @@ def test_retry_reuses_the_identical_opening(graph_env, veg, meat):
     # The system prompt and the opening are byte-identical; one retry message is appended.
     assert [m.content for m in sent[1][:2]] == [m.content for m in sent[0][:2]]
     assert len(sent[1]) == 3 and sent[1][2].type == "human"
+    # The complete markers are part of that opening, kept as built the first time.
+    assert sent[1][1].content == out["planner_opening"]
+    assert shortlist_of(sent[1][1].content)["vegetable dish"]["complete"] is True
     calls = recorded_model_calls(graph_env)
     opening = calls[0]["messages"][:2]
     retry_index = 1
@@ -806,7 +828,7 @@ def test_retry_message_summarizes_the_previous_attempt(graph_env, session, veg):
     assert out["retries"] == 1
     retry = planner_calls(graph_env)[1][-1].content
     shortlist = shortlist_of(out["planner_opening"])
-    offered = [e["id"] for entries in shortlist.values() for e in entries]
+    offered = [e["id"] for group in shortlist.values() for e in group["candidates"]]
     # Fridge-only mode shortlists makeable recipes only, so the pork dish (missing 五花肉)
     # is not offered; the scripted model proposes it anyway and fails H1.
     assert offered == [veg.id]
@@ -838,7 +860,7 @@ class ShortlistPicker(ScriptedChatModel):
             return super().invoke(messages, config, **kwargs)
         self.sent.append(list(messages))
         shortlist = shortlist_of(messages[1].content)
-        ids = [entries[0]["id"] for entries in shortlist.values() if entries]
+        ids = [group["candidates"][0]["id"] for group in shortlist.values() if group["candidates"]]
         call = {**final_proposal(ids).tool_calls[0], "id": "pick"}
         return AIMessage(content="", tool_calls=[call], usage_metadata=self.usage)
 

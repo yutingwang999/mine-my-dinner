@@ -626,8 +626,8 @@ def test_run_folder_layout_and_summary(tmp_path):
     }
     cond = data["conditions"]
     assert set(cond) == {
-        "git_commit", "scenarios_file", "library_file", "prompt_version", "tools_version",
-        "flags", "constants", "models",
+        "git_commit", "scenarios_file", "library_file", "prompt_version", "prompt_versions",
+        "prompt_files", "tools_version", "flags", "constants", "models",
     }
     assert cond["git_commit"] == "abc123" and len(cond["scenarios_file"]["sha256"]) == 64
     assert cond["flags"] == {"no_shortlist": True, "with_embeddings": True}
@@ -690,13 +690,14 @@ def test_summary_holds_no_model_text_but_results_do(tmp_path):
 
 
 def test_tools_and_prompts_are_saved(tmp_path):
+    import hashlib
     import json
 
     from minemydinner.agent.planner import PlanProposal
-    from minemydinner.agent.request import PROMPT_DIR
+    from minemydinner.agent.request import PROMPT_VERSION, PROMPT_VERSIONS, prompt_files
     from minemydinner.planning.tools import PLANNER_TOOLS
 
-    folder, _ = _write(tmp_path)
+    folder, data = _write(tmp_path)
     tools = json.loads((folder / "tools.json").read_text(encoding="utf-8"))
     assert [t["name"] for t in tools["tools"]] == [t.name for t in PLANNER_TOOLS]
     for saved, tool in zip(tools["tools"], PLANNER_TOOLS):
@@ -706,7 +707,14 @@ def test_tools_and_prompts_are_saved(tmp_path):
         "name": "PlanProposal", "schema": PlanProposal.model_json_schema()
     }
     copied = {p.name: p.read_bytes() for p in (folder / "prompts").iterdir()}
-    assert copied == {p.name: p.read_bytes() for p in PROMPT_DIR.glob("*.md")} and copied
+    in_use = {p.name: p.read_bytes() for p in prompt_files()}
+    assert copied == in_use and len(copied) == 3
+    cond = data["conditions"]
+    assert cond["prompt_version"] == PROMPT_VERSION
+    assert cond["prompt_versions"] == PROMPT_VERSIONS
+    assert cond["prompt_files"] == {
+        name: hashlib.sha256(content).hexdigest() for name, content in in_use.items()
+    }
 
 
 def test_a_dirty_tree_is_refused_and_runs_are_excluded(monkeypatch):
