@@ -28,7 +28,20 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_CHARS = 20_000
 SCREENSHOT_INPUT = "[screenshot]"
 BATCH_WORKERS = 4
-URL_PATTERN = re.compile(r"https?://[^\s<>\"'，。；！？、）】」]+")
+_URL_BODY = r"[^\s<>\"'，。；！？、）】」]"
+# Scheme-less links stop at the first CJK character, so a link pasted against Chinese text
+# does not swallow it.
+_BARE_BODY = r"[^\s<>\"'，。；！？、）】」\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]"
+_NOT_AFTER = r"(?<![A-Za-z0-9.@/_-])"
+# A scheme, a www. prefix, or a bare host.tld/path. A bare host starts with an ASCII letter
+# and has a TLD of 2+ ASCII letters followed by a slash, which keeps 1.5/2, v1.2, 2.5kg/serving,
+# and e-mail addresses out.
+URL_PATTERN = re.compile(
+    rf"https?://{_URL_BODY}+"
+    rf"|{_NOT_AFTER}www\.{_BARE_BODY}+"
+    rf"|{_NOT_AFTER}[A-Za-z](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    rf"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{{2,}}/{_BARE_BODY}*"
+)
 TRAILING_PUNCTUATION = ".,;:!?)]}'\""
 
 
@@ -79,16 +92,26 @@ class BatchItem(BaseModel):
     error: str | None
 
 
-def first_url(text: str) -> str | None:
+def _first_link(text: str) -> str | None:
     match = URL_PATTERN.search(text)
     return match.group(0).rstrip(TRAILING_PUNCTUATION) if match else None
 
 
+def _with_scheme(link: str) -> str:
+    return link if link.startswith(("http://", "https://")) else f"https://{link}"
+
+
+def first_url(text: str) -> str | None:
+    """The first link, with https:// prepended when it was written without a scheme."""
+    link = _first_link(text)
+    return _with_scheme(link) if link else None
+
+
 def single_url(text: str) -> str | None:
-    """The URL when the whole trimmed text is one URL."""
+    """The URL when the whole trimmed text is one link."""
     text = text.strip()
-    url = first_url(text)
-    return url if url == text else None
+    link = _first_link(text)
+    return _with_scheme(link) if link == text else None
 
 
 def build_draft(

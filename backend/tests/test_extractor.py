@@ -1,4 +1,5 @@
 import base64
+from hashlib import sha256
 
 import pytest
 from langchain_core.messages import SystemMessage
@@ -8,6 +9,7 @@ from minemydinner.extraction.extractor import (
     ImageInput,
     extract_from_images,
     extract_from_text,
+    load_prompt,
 )
 from minemydinner.llm.client import StructuredResult
 
@@ -83,7 +85,6 @@ def test_raw_output_keeps_invented_amount_but_recipe_does_not(fake_llm_returning
 def test_result_records_model_and_prompt_version(fake_llm):
     result = extract_from_text(fake_llm, "番茄炒蛋")
     assert (result.model_name, result.prompt_version) == ("gemini", PROMPT_VERSION)
-    assert PROMPT_VERSION == "extract_v1"
 
 
 def test_prompt_contains_version_rules_and_input(fake_llm):
@@ -143,3 +144,22 @@ def test_prompt_states_the_design_rules():
     prompt = load_prompt()
     for rule in ("raw", "estimated", "meat dish", "staple food", "生抽", "steps_summary"):
         assert rule in prompt
+
+
+# Hash of load_prompt("extract_v1"): extraction_logs rows reference that version.
+EXTRACT_V1_SHA256 = "aa1554255024f05cc391f0d4cc7c0f429798ad25b008503dd938953f31a72039"
+
+
+def test_prompt_version_is_extract_v2():
+    assert PROMPT_VERSION == "extract_v2" and "recipe_count" in load_prompt()
+
+
+def test_extract_v1_prompt_is_unchanged():
+    digest = sha256(load_prompt("extract_v1").encode("utf-8")).hexdigest()
+    assert digest == EXTRACT_V1_SHA256
+
+
+def test_extracted_recipes_default_to_one_recipe():
+    from minemydinner.extraction.schemas import ExtractedRecipe
+
+    assert ExtractedRecipe.model_validate(INVENTED_AMOUNT).recipe_count == 1

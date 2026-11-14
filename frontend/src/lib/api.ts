@@ -100,6 +100,8 @@ type RecipeFields = {
 export type RecipeDraft = RecipeFields & {
   cookware: { name: string; cookware_id: number | null }[];
   provenance: Provenance;
+  /** How many recipes the model saw in the input; absent on drafts queued before it existed. */
+  recipe_count?: number;
   /** Screenshots of a screenshot import, held in the browser until the recipe is saved. */
   images?: File[];
 };
@@ -123,6 +125,9 @@ export type DictionaryEntry = {
 };
 
 export type IngredientEntry = DictionaryEntry & {
+  /** The user's own wordings; only meaningful on built-in entries. */
+  user_aliases_zh: string[];
+  user_aliases_en: string[];
   category: Category;
   stock_mode: StockMode;
   allergens: Allergen[] | null;
@@ -345,6 +350,12 @@ export const api = {
   listAllCookware: () => get<DictionaryEntry[]>("/api/cookware?limit=500"),
   updateIngredient: (id: number, data: IngredientUpdate) =>
     sendJson<IngredientEntry>("PATCH", `/api/ingredients/${id}`, data),
+  setPersonalAliases: (id: number, aliasesZh: string[], aliasesEn: string[]) =>
+    sendJson<IngredientEntry & { linked_lines: number }>(
+      "PUT",
+      `/api/ingredients/${id}/personal-aliases`,
+      { aliases_zh: aliasesZh, aliases_en: aliasesEn },
+    ),
   deleteIngredient: (id: number) => remove(`/api/ingredients/${id}`),
   listUserCookware: () => get<DictionaryEntry[]>("/api/cookware?source=user"),
   deleteCookware: (id: number) => remove(`/api/cookware/${id}`),

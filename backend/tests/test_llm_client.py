@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -5,6 +6,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceeded
@@ -52,15 +54,20 @@ def restore(text: str) -> str:
     return text.replace("Diner 1", "小李")
 
 
+# Rows kept in the test database (evaluations, real-app checks) must survive these tests, so the
+# fixture removes only rows created after its starting watermark and the helpers ignore older rows.
+_WATERMARK = {"id": 0}
+
+
 @pytest.fixture
 def session_factory(engine):
     """Real commits, because the call log must commit apart from business work."""
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    with factory.begin() as cleanup:
-        cleanup.execute(delete(LlmCall))
+    with factory() as probe:
+        _WATERMARK["id"] = probe.scalar(select(func.coalesce(func.max(LlmCall.id), 0)))
     yield factory
     with factory.begin() as cleanup:
-        cleanup.execute(delete(LlmCall))
+        cleanup.execute(delete(LlmCall).where(LlmCall.id > _WATERMARK["id"]))
 
 
 @pytest.fixture
@@ -174,7 +181,8 @@ def llm_embed_wrong_size(llm, embedding_fake):
 
 
 def calls(session):
-    return list(session.scalars(select(LlmCall).order_by(LlmCall.id)))
+    return list(session.scalars(select(LlmCall).where(LlmCall.id > _WATERMARK["id"]).order_by(LlmCall.id))
+    )
 
 
 def only_call(session):
@@ -185,7 +193,9 @@ def only_call(session):
 
 def count_calls(session_factory):
     with session_factory() as session:
-        return session.scalar(select(func.count()).select_from(LlmCall))
+        return session.scalar(
+            select(func.count()).select_from(LlmCall).where(LlmCall.id > _WATERMARK["id"])
+        )
 
 
 def test_primary_success_logs_one_call(llm, session):
@@ -377,3 +387,165 @@ def test_missing_key_is_a_config_error_naming_the_variable(monkeypatch, tmp_path
     config = load_llm_config(write_config(tmp_path / "models.yaml"))
     with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
         build_chat_model(config.models["openai"], 30)
+
+
+USAGE = {"input_tokens": 10, "output_tokens": 5}
+
+
+def call_model(cfg, model):
+    """An attempt that really calls the (fake) model, so a provider error surfaces."""
+    model.with_structured_output(Schema, include_raw=True).invoke(MESSAGES)
+    return "ok", USAGE
+
+
+def test_run_task_fails_over_and_logs_both(llm_primary_fails, session):
+    outcome = llm_primary_fails.run_task("planning", call_model)
+    assert outcome.fallback_used is True and outcome.model_name.startswith("openai:")
+    assert [c.success for c in calls(session)] == [False, True]
+
+
+def test_run_task_passes_candidate_config_and_built_model(llm, primary_fake):
+    seen = []
+
+    def attempt(cfg, model):
+        seen.append((cfg.model, model))
+        return "ok", None
+
+    outcome = llm.run_task("planning", attempt)
+    assert seen == [("deepseek-test", primary_fake)]
+    assert outcome.model_name == "deepseek:deepseek-test" and outcome.fallback_used is False
+
+
+def test_run_task_without_usage_logs_no_tokens(llm, session):
+    llm.run_task("planning", lambda cfg, model: ("ok", None))
+    call = only_call(session)
+    assert call.input_tokens is None and call.cost_estimate is None and call.success is True
+
+
+def test_run_task_attempt_exception_fails_over_then_raises(llm, session):
+    def attempt(cfg, model):
+        raise RuntimeError("boom")
+
+    with pytest.raises(AllModelsFailed):
+        llm.run_task("planning", attempt)
+    assert [c.success for c in calls(session)] == [False, False]
+
+
+def test_run_task_cap_error_from_attempt_never_fails_over(llm, session):
+    def attempt(cfg, model):
+        raise MonthlyCapExceeded("stop")
+
+    with pytest.raises(MonthlyCapExceeded):
+        llm.run_task("planning", attempt)
+    assert calls(session) == []
+
+
+def test_run_task_respects_cap_for_non_essential(llm_over_cap):
+    with pytest.raises(MonthlyCapExceeded):
+        llm_over_cap.run_task("extraction", lambda cfg, model: ("ok", USAGE))
+
+
+def test_run_task_ignores_cap_for_planning(llm_over_cap):
+    assert llm_over_cap.run_task("planning", lambda cfg, model: ("ok", USAGE)).value == "ok"
+
+
+def test_prepare_messages_and_restore_text_apply_hooks(llm_hooked):
+    prepared = llm_hooked.prepare_messages([HumanMessage("小李 eats")])
+    assert prepared[0].content == "Diner 1 eats"
+    assert llm_hooked.restore_text("Diner 1 eats") == "小李 eats"
+
+
+class BrokenLogFactory:
+    """Reads work, but writing the call log fails."""
+
+    def __init__(self, real):
+        self.real = real
+
+    def __call__(self):
+        return self.real()
+
+    def begin(self):
+        raise OperationalError("INSERT", {}, RuntimeError("db down"))
+
+
+def test_failed_log_write_keeps_the_result(make_client, session_factory, caplog):
+    client = make_client()
+    client.session_factory = BrokenLogFactory(session_factory)
+    with caplog.at_level(logging.ERROR, logger="minemydinner.llm.client"):
+        assert client.invoke_structured("extraction", MESSAGES, Schema).parsed
+    assert "llm_calls" in caplog.text
+
+
+def test_smoke_png_is_a_valid_solid_red_8x8():
+    import struct
+    import zlib
+
+    from minemydinner.llm.smoke import solid_red_png
+
+    png = solid_red_png()
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    chunks, position = {}, 8
+    while position < len(png):
+        length, kind = struct.unpack(">I4s", png[position : position + 8])
+        data = png[position + 8 : position + 8 + length]
+        (crc,) = struct.unpack(">I", png[position + 8 + length : position + 12 + length])
+        assert crc == zlib.crc32(kind + data)
+        chunks[kind] = data
+        position += 12 + length
+    assert struct.unpack(">II", chunks[b"IHDR"][:8]) == (8, 8)
+    pixels = zlib.decompress(chunks[b"IDAT"])
+    assert pixels == (b"\x00" + b"\xff\x00\x00" * 8) * 8
+
+
+def test_smoke_flags_default_off_and_parse():
+    from minemydinner.llm.smoke import parse_args
+
+    default = parse_args([])
+    assert (default.tools, default.deepseek_vision) == (False, False)
+    flagged = parse_args(["--tools", "--deepseek-vision"])
+    assert (flagged.tools, flagged.deepseek_vision) == (True, True)
+
+
+def test_attempt_error_keeps_usage_in_the_failed_row_and_chains_the_cause(llm, session):
+    from minemydinner.llm.client import AttemptError
+
+    def attempt(cfg, model):
+        raise AttemptError("x", USAGE) from ValueError("bad output")
+
+    with pytest.raises(AllModelsFailed) as raised:
+        llm.run_task("planning", attempt)
+    assert isinstance(raised.value.__cause__, ValueError)
+    rows = calls(session)
+    assert [row.success for row in rows] == [False, False]
+    assert all(row.input_tokens == 10 and row.cost_estimate > 0 for row in rows)
+
+
+def test_smoke_checks_go_through_llm_client_and_log(
+    tmp_path, session_factory, session, monkeypatch, capsys
+):
+    from langchain_core.messages import AIMessage
+
+    from minemydinner.llm import smoke
+
+    class ToolModel:
+        def bind_tools(self, tools, **options):
+            return self
+
+        def invoke(self, messages):
+            return AIMessage(
+                content="red",
+                tool_calls=[{"name": "get_time", "args": {"city": "Paris"}, "id": "1"}],
+                usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            )
+
+    register_provider("fake_primary", lambda model, timeout: ToolModel())
+    register_provider("fake_fallback", lambda model, timeout: ToolModel())
+    path = write_config(tmp_path / "models.yaml", providers=FAKE_PROVIDERS)
+    config = load_llm_config(path)
+    config.tasks["smoke"] = config.tasks["extraction"]
+    monkeypatch.setattr(smoke, "SessionFactory", session_factory)
+    monkeypatch.setattr(smoke, "get_settings", lambda: Settings(_env_file=None))
+    assert smoke.check_tools(config) is True
+    assert smoke.check_deepseek_vision(config) is True
+    assert [row.task for row in calls(session)] == ["smoke"] * 3
+    assert "success=True" in capsys.readouterr().out

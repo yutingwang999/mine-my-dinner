@@ -1,5 +1,8 @@
 from minemydinner.llm.client import (
     AllModelsFailed,
+    Attempt,
+    AttemptError,
+    CallOutcome,
     LLMClient,
     MonthlyCapExceeded,
     StructuredResult,
@@ -9,6 +12,9 @@ from minemydinner.llm.config import ConfigError, LLMConfig, load_llm_config
 
 __all__ = [
     "AllModelsFailed",
+    "Attempt",
+    "AttemptError",
+    "CallOutcome",
     "ConfigError",
     "LLMClient",
     "LLMConfig",

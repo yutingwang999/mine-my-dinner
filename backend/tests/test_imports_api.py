@@ -7,6 +7,7 @@ from minemydinner.api.deps import get_llm_client
 from minemydinner.llm.client import AllModelsFailed, MonthlyCapExceeded, StructuredResult
 from minemydinner.main import app
 from minemydinner.models import ExtractionLog, Recipe
+from minemydinner.imports.service import first_url
 from minemydinner.seed import seed_all
 from tests.webfakes import *  # noqa: F403
 
@@ -131,9 +132,19 @@ def test_text_returns_draft_without_writing_a_recipe(client, session, fake_extra
     body = response.json()
     assert body["source_type"] == "text" and body["source_url"] is None
     assert body["provenance"]["input_text"] == "番茄炒蛋"
-    assert body["provenance"]["prompt_version"] == "extract_v1"
+    assert body["provenance"]["prompt_version"] == "extract_v2"
     assert body["provenance"]["model_output"]["title"] == "葱花蛋"
     assert count(session, Recipe) == 0 and count(session, ExtractionLog) == 0
+
+
+def test_draft_carries_recipe_count(client):
+    use_llm(FakeLLM(payload=PAYLOAD | {"recipe_count": 2}))
+    response = client.post("/api/imports/text", json={"text": "番茄炒蛋"})
+    assert response.json()["recipe_count"] == 2
+
+
+def test_draft_recipe_count_defaults_to_one(client, fake_extraction):
+    assert client.post("/api/imports/text", json={"text": "番茄炒蛋"}).json()["recipe_count"] == 1
 
 
 def test_pasted_text_is_trimmed_for_the_model_and_the_stored_source(client, fake_extraction):
@@ -169,6 +180,51 @@ def test_pasted_single_url_is_imported_as_web(client, fake_extraction, mock_site
     body = client.post("/api/imports/text", json={"text": f"  {mock_site.url} "}).json()
     assert (body["source_type"], body["source_url"]) == ("web", mock_site.url)
     assert "番茄炒蛋的做法" in body["provenance"]["input_text"]
+
+
+@pytest.mark.parametrize(
+    ("text", "url"),
+    [
+        ("看这个 www.example.com/recipe/1 很好", "https://www.example.com/recipe/1"),
+        ("xhslink.com/a/AbC12", "https://xhslink.com/a/AbC12"),
+        ("https://example.com/x，然后", "https://example.com/x"),
+        ("www.example.com/r", "https://www.example.com/r"),
+        ("xhslink.com/a/AbC12好吃", "https://xhslink.com/a/AbC12"),
+    ],
+)
+def test_first_url_recognizes_links_without_scheme(text, url):
+    assert first_url(text) == url
+
+
+@pytest.mark.parametrize("text", [
+        "盐1.5/2勺",
+        "比例 3.5/1",
+        "v1.2 版本",
+        "盐2.5kg/份",
+        "1.5kg/只",
+        "0.5ml/次",
+        "1.5tsp/人",
+    ])
+def test_first_url_ignores_numbers_and_versions(text):
+    assert first_url(text) is None
+
+
+def test_single_www_link_is_imported_as_web(client, fake_extraction, monkeypatch):
+    fetched = []
+
+    def fake_fetch(url):
+        fetched.append(url)
+        return "番茄炒蛋的做法。" * 20
+
+    monkeypatch.setattr("minemydinner.imports.service.fetch_page_text", fake_fetch)
+    body = client.post("/api/imports/text", json={"text": " www.example.com/r "}).json()
+    assert fetched == ["https://www.example.com/r"]
+    assert (body["source_type"], body["source_url"]) == ("web", "https://www.example.com/r")
+
+
+def test_text_with_a_scheme_less_link_keeps_it_as_source(client, fake_extraction):
+    body = client.post("/api/imports/text", json={"text": "番茄炒蛋 xhslink.com/a/AbC12 好吃"}).json()
+    assert (body["source_type"], body["source_url"]) == ("text", "https://xhslink.com/a/AbC12")
 
 
 def test_url_import(client, fake_extraction, mock_site):

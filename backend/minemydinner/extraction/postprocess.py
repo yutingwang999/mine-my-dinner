@@ -39,10 +39,27 @@ CHINESE_WORDS_FOR = {
 }
 
 
+ENGLISH_WORDS_FOR = {
+    0.5: ["half"],
+    1: ["one"],
+    2: ["two"],
+    3: ["three"],
+    4: ["four"],
+    5: ["five"],
+    6: ["six"],
+    7: ["seven"],
+    8: ["eight"],
+    9: ["nine"],
+    10: ["ten"],
+    11: ["eleven"],
+    12: ["twelve"],
+}
+
+
 def _amount_words(amount: float) -> list[str]:
-    """The ways the source could spell this amount, such as 2, 两, or 二."""
+    """The ways the source could spell this amount, such as 2, 两, 二, or two."""
     number = str(int(amount)) if amount == int(amount) else str(amount)
-    return [number, *CHINESE_WORDS_FOR.get(amount, [])]
+    return [number, *CHINESE_WORDS_FOR.get(amount, []), *ENGLISH_WORDS_FOR.get(amount, [])]
 
 
 def _source_states_amount(name: str, amount: float | None, source: str) -> bool:
@@ -50,19 +67,40 @@ def _source_states_amount(name: str, amount: float | None, source: str) -> bool:
     does. A neighbouring line's number or a step number must not corroborate it."""
     if amount is None:
         return False
+    source = source.casefold()
     words = _amount_words(amount)
-    for match in re.finditer(re.escape(name), source):
-        before = source[max(0, match.start() - AMOUNT_WINDOW) : match.start()]
-        after = source[match.end() : match.end() + AMOUNT_WINDOW]
-        if any(word in before or word in after for word in words):
+    # Digits and Chinese numerals match as plain text; English words only as whole words,
+    # so "one" is not found in "honey" nor "eight" in "weight".
+    spelled_words = [word for word in words if re.fullmatch(r"[a-z]+", word)]
+    plain = [word for word in words if word not in spelled_words]
+    spelled = [re.compile(rf"\b{word}\b") for word in spelled_words]
+    for match in re.finditer(re.escape(name.casefold()), source):
+        low = max(0, match.start() - AMOUNT_WINDOW)
+        high = match.end() + AMOUNT_WINDOW
+        before, after = source[low : match.start()], source[match.end() : high]
+        if any(word in before or word in after for word in plain):
             return True
+        # A word cut by the window edge does not count: it must lie wholly inside the window.
+        for pattern in spelled:
+            for found in pattern.finditer(source):
+                if (low <= found.start() and found.end() <= match.start()) or (
+                    match.end() <= found.start() and found.end() <= high
+                ):
+                    return True
     return False
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text).casefold()
 
 
 def _enforce_line(line: ExtractedIngredient, source: str | None) -> ExtractedIngredient:
     if line.amount_type in ("vague", "missing"):
         return line.model_copy(update={"amount": None, "unit": None})
-    if states_an_amount(line.raw):
+    # With a text source, `raw` must be a quote from it; a rewritten raw proves nothing.
+    # Screenshots have no source text, so there `raw` is all the evidence there is.
+    raw_is_quoted = source is None or _squash(line.raw) in _squash(source)
+    if raw_is_quoted and states_an_amount(line.raw):
         return line
     # An ingredient-list line without an amount; the method may still state one.
     if source and _source_states_amount(line.name, line.amount, source):

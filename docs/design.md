@@ -77,7 +77,7 @@ Dig tonight's dinner out of your saved recipes and your fridge.
 |---|---|---|---|---|---|
 | Tool calling | ✅ | ✅ | ✅ | ✅ | ✅ (depends on the model and parser) |
 | Structured output | ✅ strict JSON Schema | ✅ | ⚠ JSON mode; schema conformance is not guaranteed | ✅ | ✅ constrained decoding |
-| Images | ✅ | ✅ | ❌ (text-only API) | ✅ | Depends on the model |
+| Images | ✅ | ✅ | ✅ (deepseek-flash; checked 2026-11-14 by a real call) | ✅ | Depends on the model |
 | Direct video understanding | ❌ (needs frame sampling) | ✅ (includes links from some video platforms) | ❌ | ✅ | — |
 | Speech-to-text | ✅ | ✅ | ❌ | ✅ | — |
 | Embeddings | ✅ | ✅ | ❌ | ✅ | Can be deployed separately |

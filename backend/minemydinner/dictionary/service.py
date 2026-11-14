@@ -12,7 +12,7 @@ from sqlalchemy import distinct, exists, func, select, update
 from sqlalchemy.orm import Session
 
 from minemydinner.constants import ALLERGENS, CATEGORIES, STOCK_MODES
-from minemydinner.extraction.normalize import find_term_owner
+from minemydinner.extraction.normalize import all_terms, find_term_owner
 from minemydinner.models import Cookware, DietaryRule, Ingredient, Inventory, RecipeIngredient
 
 CJK = re.compile(r"[㐀-鿿]")
@@ -216,12 +216,12 @@ def delete_user_cookware(session: Session, entry_id: int) -> None:
 
 
 def link_unmatched_lines(session: Session, ingredient: Ingredient) -> int:
-    """Link unmatched recipe lines whose name is one of the entry's names or aliases.
+    """Link unmatched recipe lines whose name is one of the entry's names, aliases or
+    personal aliases.
 
     Names compare as dictionary matching does: ignoring case and outer spaces.
     """
-    names = [ingredient.name_zh, ingredient.name_en, *ingredient.aliases_zh, *ingredient.aliases_en]
-    terms = {name.strip().lower() for name in names if name}
+    terms = {name.strip().lower() for name in all_terms(ingredient)}
     result = session.execute(
         update(RecipeIngredient)
         .where(
@@ -232,6 +232,29 @@ def link_unmatched_lines(session: Session, ingredient: Ingredient) -> int:
         .execution_options(synchronize_session=False)
     )
     return result.rowcount
+
+
+def set_personal_aliases(
+    session: Session, entry_id: int, aliases_zh: list[str], aliases_en: list[str]
+) -> tuple[Ingredient, int]:
+    """Replace the user's own aliases on a built-in entry and link matching lines.
+
+    Returns the entry and how many recipe lines were linked.
+    """
+    entry = session.get(Ingredient, entry_id)
+    if entry is None:
+        raise EntryNotFound()
+    if entry.source == "user":
+        raise ReadOnlyEntry()
+    zh, en = _clean_aliases(aliases_zh), _clean_aliases(aliases_en)
+    for term in [*zh, *en]:
+        owner = find_term_owner(session, Ingredient, term)
+        if owner is not None and owner.id != entry.id:
+            raise TermConflict(term, owner.id)
+    entry.user_aliases_zh = zh
+    entry.user_aliases_en = en
+    session.flush()
+    return entry, link_unmatched_lines(session, entry)
 
 
 @dataclass(frozen=True)

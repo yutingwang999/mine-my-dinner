@@ -1,0 +1,216 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from minemydinner.dictionary.service import set_personal_aliases
+from minemydinner.models import MealPlan, MealPlanItem, Rating
+from minemydinner.planning.search import recipe_detail, search_recipes
+from tests.planningfakes import (
+    FakeEmbedClient,
+    L,
+    all_failed_client,
+    blend_vector,
+    ctx_for,
+    make_recipe,
+    over_cap_client,
+    rule,
+    self_diner,
+    unit_vector,
+)
+from tests.recipefakes import by_zh, seeded  # noqa: F401
+
+
+@pytest.fixture
+def fake_embed():
+    return FakeEmbedClient()
+
+
+def ids(result):
+    return [h.id for h in result.hits]
+
+
+def test_search_excludes_allergen_dish_and_lists_unknown(session, seeded, fake_embed):
+    make_recipe(session, "番茄炒蛋", lines=[L("鸡蛋")])
+    odd = make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+    ok = make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    me = self_diner(session).id
+    rule(session, me, "allergy", allergen="egg")
+    result = search_recipes(session, fake_embed, ctx_for(session, me))
+    assert ids(result) == [ok.id]
+    assert [e.id for e in result.left_out_unknown_allergens] == [odd.id]
+    assert result.left_out_unknown_allergens[0].lines == ["某种酱"]
+    assert not result.semantic_paused
+
+
+def test_dislike_does_not_exclude(session, seeded, fake_embed):
+    r = make_recipe(session, "芹菜炒肉", lines=[L("芹菜")])
+    me = self_diner(session).id
+    rule(session, me, "dislike", ingredient="芹菜")
+    result = search_recipes(session, fake_embed, ctx_for(session, me))
+    assert ids(result) == [r.id]
+
+
+def test_max_time_drops_only_stated_or_user_times(session, seeded, fake_embed):
+    stated = make_recipe(session, "慢炖", lines=[L("小白菜")], time_min=90, time_source="stated")
+    user = make_recipe(session, "慢炖2", lines=[L("小白菜")], time_min=90, time_source="user")
+    est = make_recipe(session, "慢炖3", lines=[L("小白菜")], time_min=90, time_source="estimated")
+    unknown = make_recipe(session, "不知道", lines=[L("小白菜")])
+    quick = make_recipe(session, "快手", lines=[L("小白菜")], time_min=10, time_source="stated")
+    result = search_recipes(session, fake_embed, ctx_for(session), max_time=30)
+    assert set(ids(result)) == {est.id, unknown.id, quick.id}
+    assert stated.id not in ids(result) and user.id not in ids(result)
+
+
+def test_tags_rank_first_but_do_not_filter(session, seeded, fake_embed):
+    plain = make_recipe(session, "白菜", lines=[L("小白菜")])
+    tagged = make_recipe(session, "土豆丝", lines=[L("土豆")])
+    tagged.tags = ["Quick-Fix"]
+    titled = make_recipe(session, "快手汤", lines=[L("小白菜")])
+    session.flush()
+    result = search_recipes(session, fake_embed, ctx_for(session), tags=["quick"])
+    assert ids(result)[0] == tagged.id
+    assert set(ids(result)) == {plain.id, tagged.id, titled.id}
+    by_title = search_recipes(session, fake_embed, ctx_for(session), tags=["快手"])
+    assert ids(by_title)[0] == titled.id
+    assert len(by_title.hits) == 3
+
+
+def test_must_use_accepts_child_lines(session, seeded, fake_embed):
+    sauce = make_recipe(session, "红烧", lines=[L("生抽", role="seasoning")])
+    make_recipe(session, "清炒", lines=[L("小白菜")])
+    result = search_recipes(session, fake_embed, ctx_for(session), must_use=["酱油"])
+    assert ids(result) == [sauce.id]
+
+
+def test_must_use_needs_every_name(session, seeded, fake_embed):
+    both = make_recipe(session, "白菜土豆", lines=[L("小白菜"), L("土豆")])
+    make_recipe(session, "白菜", lines=[L("小白菜")])
+    result = search_recipes(session, fake_embed, ctx_for(session), must_use=["小白菜", "土豆"])
+    assert ids(result) == [both.id]
+
+
+def test_exclude_recent_days_uses_saved_plans(session, seeded, fake_embed):
+    recent = make_recipe(session, "近期", lines=[L("小白菜")])
+    old = make_recipe(session, "很久以前", lines=[L("小白菜")])
+    fresh = make_recipe(session, "没做过", lines=[L("小白菜")])
+    now = datetime.now(timezone.utc)
+    for recipe, age in ((recent, 2), (old, 20)):
+        plan = MealPlan(thread_id="t", constraints={}, confirmed_at=now - timedelta(days=age))
+        session.add(plan)
+        session.flush()
+        session.add(MealPlanItem(plan_id=plan.id, recipe_id=recipe.id, recipe_title=recipe.title))
+    session.flush()
+    result = search_recipes(session, fake_embed, ctx_for(session), exclude_recent_days=7)
+    assert set(ids(result)) == {old.id, fresh.id}
+
+
+def test_no_query_orders_by_rating_then_newest(session, seeded, fake_embed):
+    a = make_recipe(session, "甲", lines=[L("小白菜")])
+    b = make_recipe(session, "乙", lines=[L("小白菜")])
+    c = make_recipe(session, "丙", lines=[L("小白菜")])
+    session.add(Rating(recipe_id=a.id, score=5))
+    session.add(Rating(recipe_id=b.id, score=3))
+    session.flush()
+    result = search_recipes(session, fake_embed, ctx_for(session))
+    assert ids(result) == [a.id, b.id, c.id]
+    assert [h.rating for h in result.hits] == [5, 3, None]
+    assert ids(search_recipes(session, fake_embed, ctx_for(session), limit=2)) == [a.id, b.id]
+
+
+def test_limit_applies_after_exclusion(session, seeded, fake_embed):
+    for i in range(3):
+        make_recipe(session, f"蛋{i}", lines=[L("鸡蛋")])
+    ok = make_recipe(session, "白菜", lines=[L("小白菜")])
+    me = self_diner(session).id
+    rule(session, me, "allergy", allergen="egg")
+    result = search_recipes(session, fake_embed, ctx_for(session, me), limit=1)
+    assert ids(result) == [ok.id]
+
+
+def test_query_ranks_by_vector_distance(session, seeded):
+    far = make_recipe(session, "远", lines=[L("小白菜")], embedding=unit_vector(5))
+    near = make_recipe(session, "近", lines=[L("小白菜")], embedding=blend_vector(0, 5, 0.1))
+    mid = make_recipe(session, "中", lines=[L("小白菜")], embedding=blend_vector(0, 5, 1.0))
+    text_only = make_recipe(session, "汤菜", lines=[L("小白菜")])
+    make_recipe(session, "无关", lines=[L("土豆")])
+    client = FakeEmbedClient(vector=unit_vector(0))
+    result = search_recipes(session, client, ctx_for(session), query="菜")
+    assert ids(result) == [near.id, mid.id, far.id, text_only.id]
+    assert client.embedded == ["菜"] and client.tasks == ["embeddings"]
+    assert not result.semantic_paused
+
+
+@pytest.mark.parametrize("make_client", [over_cap_client, all_failed_client])
+def test_embedding_failure_falls_back_to_text_search(session, seeded, make_client):
+    make_recipe(session, "土豆丝", lines=[L("土豆")])
+    make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    result = search_recipes(session, make_client(), ctx_for(session), query="土豆")
+    assert result.semantic_paused and [h.title for h in result.hits] == ["土豆丝"]
+
+
+def test_text_search_matches_dictionary_alias(session, seeded):
+    make_recipe(session, "素菜", lines=[L("土豆")])
+    make_recipe(session, "别的", lines=[L("小白菜")])
+    result = search_recipes(session, over_cap_client(), ctx_for(session), query="potato")
+    assert [h.title for h in result.hits] == ["素菜"]
+
+
+def test_text_search_matches_personal_alias(session, seeded):
+    make_recipe(session, "素菜", lines=[L("土豆")])
+    set_personal_aliases(session, by_zh(session, "土豆").id, ["洋芋"], [])
+    result = search_recipes(session, over_cap_client(), ctx_for(session), query="洋芋")
+    assert [h.title for h in result.hits] == ["素菜"]
+
+
+def test_text_search_matches_tags(session, seeded):
+    r = make_recipe(session, "素菜", lines=[L("土豆")])
+    r.tags = ["下饭"]
+    session.flush()
+    result = search_recipes(session, over_cap_client(), ctx_for(session), query="下饭")
+    assert ids(result) == [r.id]
+
+
+def test_recipe_detail_has_lines_and_no_source_text(session, seeded):
+    r = make_recipe(
+        session,
+        "红烧",
+        lines=[L("生抽", role="seasoning"), L("某酱", linked=False)],
+        cookware=["炒锅"],
+        time_min=20,
+        time_source="stated",
+        servings=2,
+    )
+    r.source_text = "full method"
+    r.steps_summary = "steps"
+    session.flush()
+    detail = recipe_detail(session, r.id)
+    assert detail["title"] == "红烧" and detail["time_min"] == 20
+    assert detail["time_source"] == "stated" and detail["steps_summary"] == "steps"
+    assert "source_text" not in detail and "images" not in detail
+    assert detail["cookware"] == ["炒锅"]
+    first = detail["lines"][0]
+    assert first["name"] == "生抽" and first["ingredient_id"] == by_zh(session, "生抽").id
+    assert set(first) == {
+        "raw", "name", "ingredient_id", "amount", "unit", "amount_type",
+        "role", "optional", "choice_group",
+    }
+    assert detail["lines"][1]["ingredient_id"] is None
+    assert recipe_detail(session, r.id + 9999) is None
+
+
+def test_blank_must_use_is_skipped_and_unknown_names_are_reported(session, seeded, fake_embed):
+    r = make_recipe(session, "神秘", lines=[L("某种酱", linked=False)])
+    make_recipe(session, "清炒", lines=[L("小白菜")])
+    result = search_recipes(session, fake_embed, ctx_for(session), must_use=["  ", "某种酱"])
+    assert ids(result) == [r.id]
+    assert result.unresolved_must_use == ["某种酱"]
+    known = search_recipes(session, fake_embed, ctx_for(session), must_use=["土豆"])
+    assert known.unresolved_must_use == []
+
+
+def test_text_fallback_splits_words_and_ranks_by_matches(session, seeded):
+    one = make_recipe(session, "土豆丝", lines=[L("土豆")])
+    both = make_recipe(session, "快手土豆", lines=[L("土豆")])
+    make_recipe(session, "清炒", lines=[L("小白菜")])
+    result = search_recipes(session, over_cap_client(), ctx_for(session), query="土豆 快手")
+    assert ids(result) == [both.id, one.id]

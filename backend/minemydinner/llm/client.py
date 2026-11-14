@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -5,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -14,6 +16,8 @@ from minemydinner.constants import EMBEDDING_DIMENSION
 from minemydinner.llm.config import ConfigError, LLMConfig, ModelConfig, TaskConfig
 from minemydinner.llm.registry import build_chat_model, build_embedding_model
 from minemydinner.models import LlmCall
+
+logger = logging.getLogger(__name__)
 
 TextHook = Callable[[str], str]
 
@@ -36,13 +40,34 @@ class StructuredResult[T: BaseModel]:
     fallback_used: bool
 
 
-def _map_strings(value: Any, transform: Callable[[str], str]) -> Any:
+@dataclass(frozen=True)
+class CallOutcome[R]:
+    value: R
+    # The configured name and the model ID, such as "gemini:gemini-3.5-flash-lite".
+    model_name: str
+    fallback_used: bool
+
+
+# Given the candidate's config and a built chat model, returns the result and its usage.
+type Attempt[R] = Callable[[ModelConfig, BaseChatModel], tuple[R, dict[str, int] | None]]
+
+
+class AttemptError(Exception):
+    """Raised by an attempt that failed after the provider billed it; carries the usage."""
+
+    def __init__(self, message: str, usage: dict[str, int] | None) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+def map_strings(value: Any, transform: Callable[[str], str]) -> Any:
+    """Apply `transform` to every string inside nested dicts, lists, and tuples."""
     if isinstance(value, str):
         return transform(value)
     if isinstance(value, dict):
-        return {key: _map_strings(item, transform) for key, item in value.items()}
+        return {key: map_strings(item, transform) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return [_map_strings(item, transform) for item in value]
+        return [map_strings(item, transform) for item in value]
     return value
 
 
@@ -68,12 +93,9 @@ class LLMClient:
         self.pre_hooks = pre_hooks
         self.post_hooks = post_hooks
 
-    def invoke_structured[T: BaseModel](
-        self, task: str, messages: list[BaseMessage], schema: type[T]
-    ) -> StructuredResult[T]:
+    def run_task[R](self, task: str, attempt: Attempt[R]) -> CallOutcome[R]:
         task_config = self._task(task)
         self._check_cap(task, task_config)
-        prepared = [self._prepare_message(message) for message in messages]
         last_error: Exception | None = None
         for position, name in enumerate(task_config.candidates):
             model = self.config.models[name]
@@ -82,22 +104,57 @@ class LLMClient:
             usage = None
             try:
                 chat_model = build_chat_model(model, task_config.timeout_seconds)
-                runnable = chat_model.with_structured_output(schema, include_raw=True)
-                output = runnable.invoke(prepared)
-                usage = output["raw"].usage_metadata
-                if output["parsing_error"] is not None:
-                    raise output["parsing_error"]
-                if output["parsed"] is None:
-                    raise ValueError(f"{name} returned no structured result")
-                parsed = self._restore(output["parsed"], schema)
+                value, usage = attempt(model, chat_model)
+            except MonthlyCapExceeded:
+                raise
             except Exception as error:
-                last_error = error
+                if isinstance(error, AttemptError):
+                    usage = error.usage
+                    last_error = error.__cause__ or error
+                else:
+                    last_error = error
                 self._log(task, model, started, usage, False, fallback_used)
                 continue
             self._log(task, model, started, usage, True, fallback_used)
             # The model ID too, so results stay distinct after a model is swapped.
-            return StructuredResult(parsed, f"{name}:{model.model}", fallback_used)
+            return CallOutcome(value, f"{name}:{model.model}", fallback_used)
         raise AllModelsFailed(f"All models failed for task {task}") from last_error
+
+    def invoke_structured[T: BaseModel](
+        self, task: str, messages: list[BaseMessage], schema: type[T]
+    ) -> StructuredResult[T]:
+        prepared = self.prepare_messages(messages)
+
+        def attempt(
+            model: ModelConfig, chat_model: BaseChatModel
+        ) -> tuple[T, dict[str, int] | None]:
+            runnable = chat_model.with_structured_output(schema, include_raw=True)
+            output = runnable.invoke(prepared)
+            usage = output["raw"].usage_metadata
+            try:
+                if output["parsing_error"] is not None:
+                    raise output["parsing_error"]
+                if output["parsed"] is None:
+                    raise ValueError(f"{model.model} returned no structured result")
+                return self._restore(output["parsed"], schema), usage
+            except Exception as error:
+                # The provider billed this attempt, so its usage still counts.
+                raise AttemptError(str(error), usage) from error
+
+        outcome = self.run_task(task, attempt)
+        return StructuredResult(outcome.value, outcome.model_name, outcome.fallback_used)
+
+    def prepare_messages(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+        """Apply the pre-hooks to a copy of the messages."""
+        return [self._prepare_message(message) for message in messages]
+
+    def prepare_text(self, text: str) -> str:
+        """Apply the pre-hooks to text bound for a model."""
+        return self._apply_pre_hooks(text)
+
+    def restore_text(self, text: str) -> str:
+        """Apply the post-hooks to text from a model."""
+        return self._apply_post_hooks(text)
 
     def embed(self, texts: list[str], task: str = "embeddings") -> list[list[float]]:
         if not texts:
@@ -169,7 +226,7 @@ class LLMClient:
     def _restore[T: BaseModel](self, parsed: T, schema: type[T]) -> T:
         if not self.post_hooks:
             return parsed
-        return schema.model_validate(_map_strings(parsed.model_dump(), self._apply_post_hooks))
+        return schema.model_validate(map_strings(parsed.model_dump(), self._apply_post_hooks))
 
     def _log(
         self,
@@ -183,19 +240,20 @@ class LLMClient:
         """Commit in a session of its own, so a business rollback keeps the record."""
         input_tokens = usage["input_tokens"] if usage else None
         output_tokens = usage["output_tokens"] if usage else None
-        with self.session_factory.begin() as session:
-            session.add(
-                LlmCall(
-                    task=task,
-                    provider=model.provider,
-                    model=model.model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_estimate=(
-                        _estimate_cost(model, input_tokens, output_tokens) if usage else None
-                    ),
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                    success=success,
-                    fallback_used=fallback_used,
-                )
-            )
+        row = LlmCall(
+            task=task,
+            provider=model.provider,
+            model=model.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_estimate=_estimate_cost(model, input_tokens, output_tokens) if usage else None,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            success=success,
+            fallback_used=fallback_used,
+        )
+        try:
+            with self.session_factory.begin() as session:
+                session.add(row)
+        except Exception:
+            # A paid result must still be returned, so a failed log write is only logged.
+            logger.exception("Could not write the llm_calls row for task %s", task)

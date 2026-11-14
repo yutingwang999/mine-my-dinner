@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DictionaryBrowser } from "@/components/DictionaryBrowser";
-import { type Call, mockFetch, renderWithProviders } from "@/test/helpers";
+import { type Call, callsTo, mockFetch, renderWithProviders } from "@/test/helpers";
 
 function ingredient(id: number, fields: Record<string, unknown>) {
   return {
@@ -12,6 +12,8 @@ function ingredient(id: number, fields: Record<string, unknown>) {
     name_en: null,
     aliases_zh: [],
     aliases_en: [],
+    user_aliases_zh: [],
+    user_aliases_en: [],
     source: "seed",
     category: "vegetable",
     stock_mode: "count",
@@ -137,5 +139,45 @@ describe("dictionary browser", () => {
     const wok = within(await screen.findByTestId("all-cookware-3"));
     expect(wok.getByText("炒锅 / wok")).toBeInTheDocument();
     expect(wok.getByText(/铁锅/)).toBeInTheDocument();
+  });
+
+  it("lets the user add a personal alias to a built-in entry", async () => {
+    calls = mockFetch({
+      "GET /api/ingredients": () => INGREDIENTS,
+      "GET /api/cookware": () => COOKWARE,
+      "PUT /api/ingredients/1/personal-aliases": () => ({
+        ...INGREDIENTS[0],
+        user_aliases_zh: ["马铃薯丁"],
+        linked_lines: 1,
+      }),
+    });
+    renderWithProviders(<DictionaryBrowser />);
+    const potato = within(await screen.findByTestId("all-ingredient-1"));
+    await userEvent.click(potato.getByRole("button", { name: "My aliases" }));
+    await userEvent.type(screen.getByLabelText("Chinese aliases (comma-separated)"), "马铃薯丁");
+    await userEvent.click(screen.getByRole("button", { name: "Save aliases" }));
+    expect(callsTo(calls, "PUT", "/api/ingredients/1/personal-aliases")[0].body).toEqual({
+      aliases_zh: ["马铃薯丁"],
+      aliases_en: [],
+    });
+    expect(await screen.findByText(/马铃薯丁/)).toBeInTheDocument();
+  });
+
+  it("offers personal aliases only on built-in entries and explains a conflict", async () => {
+    mockFetch({
+      "GET /api/ingredients": () => INGREDIENTS,
+      "GET /api/cookware": () => COOKWARE,
+      "PUT /api/ingredients/1/personal-aliases": () =>
+        new Response(JSON.stringify({ code: "term_conflict", term: "番茄" }), { status: 409 }),
+    });
+    renderWithProviders(<DictionaryBrowser />);
+    const mine = within(await screen.findByTestId("all-ingredient-4"));
+    expect(mine.queryByRole("button", { name: "My aliases" })).toBeNull();
+
+    const potato = within(screen.getByTestId("all-ingredient-1"));
+    await userEvent.click(potato.getByRole("button", { name: "My aliases" }));
+    await userEvent.type(screen.getByLabelText("Chinese aliases (comma-separated)"), "番茄");
+    await userEvent.click(screen.getByRole("button", { name: "Save aliases" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already belongs to another entry");
   });
 });

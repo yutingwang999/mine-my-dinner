@@ -1,11 +1,12 @@
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from minemydinner.db import get_session
@@ -43,5 +44,42 @@ def session(engine: Engine) -> Iterator[Session]:
 @pytest.fixture
 def client(session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_session] = lambda: session
-    yield TestClient(app)
+    yield TestClient(app, base_url="http://localhost")
     app.dependency_overrides.clear()
+
+
+class QueryCounter:
+    count = 0
+
+
+@pytest.fixture
+def count_queries(session: Session):
+    """Count the SQL statements run on the test connection inside a `with` block."""
+
+    @contextmanager
+    def counting() -> Iterator[QueryCounter]:
+        counter = QueryCounter()
+
+        def on_execute(*_args) -> None:
+            counter.count += 1
+
+        bind = session.get_bind()
+        event.listen(bind, "before_cursor_execute", on_execute)
+        try:
+            yield counter
+        finally:
+            event.remove(bind, "before_cursor_execute", on_execute)
+
+    return counting
+
+
+@pytest.fixture(scope="session")
+def test_database_url(test_settings: Settings) -> str:
+    return test_settings.test_database_url
+
+
+@pytest.fixture
+def fake_planning_llm():
+    from tests.planningfakes import FakePlanningLLM
+
+    return FakePlanningLLM("other")

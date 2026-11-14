@@ -369,6 +369,11 @@ export function ReviewForm({
         void save();
       }}
     >
+      {(draft.recipe_count ?? 1) > 1 && (
+        <p role="alert" className="notice notice-warning">
+          {t("severalRecipes", { count: draft.recipe_count ?? 1 })}
+        </p>
+      )}
       <label className="field">
         {t("recipeTitle")}
         <input value={title} onChange={(event) => setTitle(event.target.value)} />

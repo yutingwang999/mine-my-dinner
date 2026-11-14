@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from minemydinner.constants import AMOUNT_TYPES, DISH_TYPES, LANGUAGES, ROLES, UNITS
 
@@ -31,3 +31,5 @@ class ExtractedRecipe(BaseModel):
     cookware: list[str]
     # Consumables such as plastic wrap or foil: a reminder, never checked when planning.
     supplies: list[str] = []
+    # How many distinct recipes the input holds; only the first is extracted. Never stored.
+    recipe_count: int = Field(default=1, ge=1)

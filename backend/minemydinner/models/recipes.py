@@ -54,6 +54,13 @@ class Ingredient(Base):
     name_en: Mapped[str | None] = mapped_column(Text, unique=True)
     aliases_zh: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, nullable=False)
     aliases_en: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, nullable=False)
+    # The user's own wordings for a built-in entry. Seeding never touches these.
+    user_aliases_zh: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default="{}", nullable=False
+    )
+    user_aliases_en: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default="{}", nullable=False
+    )
     category: Mapped[str] = mapped_column(Text, nullable=False)
     stock_mode: Mapped[str] = mapped_column(Text, nullable=False)
     # Empty means confirmed none. Null means unknown.

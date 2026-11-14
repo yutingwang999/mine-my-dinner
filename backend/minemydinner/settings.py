@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     gemini_embedding_model: str | None = None
     llm_monthly_cap_usd: Decimal = Decimal("20")
     extraction_log_max_rows: int = 500
+    # Cross-site and DNS-rebinding guard for the API (see main.py). Set these from the
+    # environment as JSON lists, e.g. ALLOWED_ORIGINS=["http://localhost:3000"].
+    allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
     # Saved screenshots. The data folder is git-ignored.
     image_dir: Path = REPO_ROOT / "backend" / "data" / "images"
 
