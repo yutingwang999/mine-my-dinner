@@ -110,6 +110,7 @@ def test_repository_config_lists_every_task_and_only_planning_is_essential():
         "image_understanding",
         "allergen_suggestions",
         "planning",
+        "planning_eval",
         "embeddings",
         "smoke",
     }
@@ -119,3 +120,12 @@ def test_repository_config_lists_every_task_and_only_planning_is_essential():
 def test_repository_config_sets_tool_options_for_openai_fallback():
     cfg = load_llm_config(REPO_CONFIG)
     assert cfg.models["openai"].tool_call_options == {"reasoning_effort": "none"}
+
+
+def test_repository_config_has_non_essential_planning_eval():
+    cfg = load_llm_config(REPO_CONFIG)
+    planning, evaluation = cfg.tasks["planning"], cfg.tasks["planning_eval"]
+    assert evaluation.essential is False
+    assert evaluation.candidates == planning.candidates
+    assert evaluation.requires == planning.requires
+    assert evaluation.timeout_seconds == planning.timeout_seconds

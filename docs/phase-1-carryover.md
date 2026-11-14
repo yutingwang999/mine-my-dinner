@@ -42,6 +42,7 @@ Seen in the user's first real planning runs: an empty inventory and only a plate
 - **Retries restart from nothing (rest of T1.4).** Each retry starts a fresh inner agent that only receives the violation list, so it re-reads the inventory and searches again. Either continue the previous attempt's conversation or pass a short summary of what it already found (candidate ids, missing items).
 - **Context grows every call.** Each call resends the whole history (33 messages by the last call of a retry), so token cost grows faster than the call count. The changes above reduce it; trimming old tool results is a further option.
 - **Measure it.** Report average model calls per run next to cost in the planning evaluation, and include a scenario where key cookware is not owned.
+- **Baseline (plan 1 Task 15, `plan_v1`, deepseek-flash, 7 fictional scenarios).** The six feasible scenarios passed on the first attempt with 6-10 model calls each (about $0.004-0.008 per run). The scenario without a wok failed as expected but took 31 calls ($0.035, 2 retries), and its closest plan was two soups with only H4 (composition) unmet: the model avoided the wok dishes, so the user is told about the dish count instead of the missing cookware. Overall: first and final pass rate 0.86, 0.29 retries, 10.3 calls, $0.064 in total, 11.3 s average latency.
 
 ## Minor findings from the final Phase 0 review, deferred
 

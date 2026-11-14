@@ -79,6 +79,13 @@ tasks:
     requires: [tool_calling]
     essential: true
     timeout_seconds: 60
+  # The planning evaluation script. Same models as planning, but counted and capped.
+  planning_eval:
+    primary: deepseek
+    fallback: openai
+    requires: [tool_calling]
+    essential: false
+    timeout_seconds: 60
   embeddings:
     primary: gemini_embedding
     requires: [embeddings]
