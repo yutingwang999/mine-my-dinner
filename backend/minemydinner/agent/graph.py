@@ -20,6 +20,7 @@ from minemydinner.agent.request import (
     get_request_style,
     load_prompt,
     needs_question,
+    request_problem,
     set_request_style,
 )
 from minemydinner.agent.state import ChatState
@@ -47,6 +48,11 @@ NO_PLAN_NOTE_EN = (
 )
 NO_PLAN_NOTE_ZH = "没有找到满足所有硬性规则的方案，所以这次不展示方案。下面是原因和可以调整的地方。"
 CLOSEST_NOTE_EN = "This is the closest plan I could find. Some rules are not met; see below."
+UNCLEAR_REPLY_EN = (
+    "I could not make sense of the number of dishes in that request, so I have not planned "
+    "anything. Tell me again how many of each kind you would like."
+)
+UNCLEAR_REPLY_ZH = "我没能理解这次要几道菜，所以没有出方案。请再告诉我每一类各要几道。"
 CLOSEST_NOTE_ZH = "这是我能找到的最接近的方案，有些规则没有满足，详见下方。"
 
 
@@ -184,7 +190,10 @@ def _next_actions(spec: dict) -> list[str]:
     actions = []
     if spec["mode"] == "fridge_only":
         actions.append("switch_to_shopping")
-    if spec["dishes"] + spec["soups"] > 1:
+    counted = sum(
+        spec.get(name, 0) for name in ("dishes", "soups", "staples", "desserts", "snacks")
+    )
+    if counted > 1:
         actions.append("fewer_dishes")
     if spec["time_limit_min"] is not None:
         actions.append("drop_time_limit")
@@ -221,12 +230,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         return {"request": result.parsed.model_dump()}
 
+    def unclear(state: ChatState) -> dict:
+        reply = UNCLEAR_REPLY_ZH if _zh(state.get("locale", "en")) else UNCLEAR_REPLY_EN
+        return {"messages": [AIMessage(reply)]}
+
     def after_parse(state: ChatState) -> str:
+        parsed = ParsedRequest.model_validate(state["request"])
+        if request_problem(parsed):
+            # A contradiction is asked about whatever the style, once per new user message.
+            if len(state["messages"]) > state.get("problem_asked_at", -1):
+                return "ask_question"
+            return "unclear"
         with deps.session_factory() as session:
             style = get_request_style(session)
         if style is None:
             return "ask_style"
-        parsed = ParsedRequest.model_validate(state["request"])
         if not state.get("asked_question") and needs_question(parsed, style):
             return "ask_question"
         return "load_context"
@@ -243,9 +261,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return {}
 
     def ask_question(state: ChatState) -> dict:
-        fields = needs_question(ParsedRequest.model_validate(state["request"]), "ask_first")
-        answer = interrupt({"kind": "question", "fields": fields})
-        update: dict[str, Any] = {"asked_question": True}
+        parsed = ParsedRequest.model_validate(state["request"])
+        problem = request_problem(parsed)
+        update: dict[str, Any] = {}
+        if problem:
+            answer = interrupt({"kind": "question", "fields": ["composition"], "problem": problem})
+            update["problem_asked_at"] = len(state["messages"])
+        else:
+            # Only the ask-first question is limited to once per request.
+            update["asked_question"] = True
+            fields = needs_question(parsed, "ask_first")
+            answer = interrupt({"kind": "question", "fields": fields})
         if isinstance(answer, str) and answer.strip():
             update["messages"] = [HumanMessage(answer)]
         return update
@@ -260,7 +286,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         request = {
             "messages": [deps.client.prepare_text(t) for t in _current_request(state["messages"])],
             "parsed": map_strings(parsed.model_dump(), deps.client.prepare_text),
-            "spec": spec.model_dump(),
+            # The spec carries the named ingredients, which may hold a replaced name.
+            "spec": map_strings(spec.model_dump(), deps.client.prepare_text),
             "headcount": headcount,
             "locale": state.get("locale", "en"),
         }
@@ -303,8 +330,20 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         ]
         if parsed.get("query"):
             lines.append(f"The user feels like: {parsed['query']}")
+        counts = [
+            f"{name.replace('_', ' ')}: {spec[name]}"
+            for name in ("meat_dishes", "vegetable_dishes", "staples", "desserts", "snacks")
+            if spec.get(name)
+        ]
+        if counts:
+            suffix = " (the split counts are minimums)" if spec.get("split_is_minimum") else ""
+            lines.append(f"Also: {', '.join(counts)}{suffix}")
         if parsed.get("must_use"):
-            lines.append(f"Must use: {', '.join(parsed['must_use'])}")
+            lines.append(f"Must use in at least one dish: {', '.join(parsed['must_use'])}")
+        if parsed.get("all_use"):
+            lines.append(f"Every dish must use: {', '.join(parsed['all_use'])}")
+        if parsed.get("prefer_use"):
+            lines.append(f"Prefer using: {', '.join(parsed['prefer_use'])}")
         if parsed.get("exclude_recent_days"):
             lines.append(f"Exclude dishes from the last {parsed['exclude_recent_days']} days")
         lines.append("Diners' dietary limits:")
@@ -494,13 +533,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     builder.add_node("parse_request", parse_request)
     builder.add_node("ask_style", ask_style)
     builder.add_node("ask_question", ask_question)
+    builder.add_node("unclear", unclear)
     builder.add_node("load_context", load_context)
     builder.add_node("planner", planner)
     builder.add_node("validate_plan", check_plan, destinations=("planner", "present_plan"))
     builder.add_node("present_plan", present_plan)
     builder.add_edge(START, "route_intent")
     builder.add_conditional_edges("route_intent", choose, ["parse_request", "other"])
-    gates = ["ask_style", "ask_question", "load_context"]
+    gates = ["ask_style", "ask_question", "load_context", "unclear"]
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")
@@ -508,4 +548,5 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     builder.add_edge("planner", "validate_plan")
     builder.add_edge("present_plan", END)
     builder.add_edge("other", END)
+    builder.add_edge("unclear", END)
     return builder.compile(checkpointer=checkpointer)

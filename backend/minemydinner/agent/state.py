@@ -17,6 +17,8 @@ class ChatState(TypedDict):
     # Set when the user skipped the request-style question in this conversation.
     # Set once an ask-first question was asked for the current request.
     asked_question: bool
+    # Message count when a contradiction question was last asked; a new message re-enables it.
+    problem_asked_at: int
     run_id: int | None
     proposal: dict | None
     validation: dict | None

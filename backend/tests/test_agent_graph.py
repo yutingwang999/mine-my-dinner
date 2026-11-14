@@ -18,6 +18,7 @@ from minemydinner.agent.graph import (
     OTHER_REPLY_EN,
     OTHER_REPLY_ZH,
     GraphDeps,
+    _next_actions,
     build_graph,
 )
 from minemydinner.agent.records import PlanningRecorder
@@ -180,6 +181,48 @@ def test_ask_first_does_not_ask_twice_for_one_request(graph_env, veg):
     assert out["__interrupt__"][0].value["fields"] == ["mode", "composition"]
     out = resume(graph_env, "whatever")
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
+
+
+def test_contradiction_interrupts_with_its_problem(graph_env, veg):
+    # The fixture's style is plan_then_adjust: contradictions are asked regardless of style.
+    contradiction = {"dishes": 2, "meat_dishes": 3}
+    out = plan(graph_env, "两个菜，三个荤菜", parse=contradiction)
+    expected = {"kind": "question", "fields": ["composition"], "problem": "split_exceeds_total"}
+    assert [i.value for i in out["__interrupt__"]] == [expected]
+    # Answered with another contradiction: asked again, once for the new message.
+    out = resume(graph_env, "三个荤菜", parse=contradiction)
+    assert [i.value for i in out["__interrupt__"]] == [expected]
+    fixed = {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1}
+    graph_env.model.replies = [final_proposal([veg.id])]
+    out = resume(graph_env, "一荤一素", parse=fixed)
+    assert "__interrupt__" not in out
+    assert out["current_plan"]["spec"]["meat_dishes"] == 1
+
+
+def test_ask_first_still_asks_the_mode_after_a_contradiction_is_fixed(graph_env, veg):
+    set_request_style(graph_env.session, "ask_first")
+    out = plan(graph_env, "两个菜，三个荤菜", parse={"dishes": 2, "meat_dishes": 3})
+    assert out["__interrupt__"][0].value["problem"] == "split_exceeds_total"
+    fixed = {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1}
+    out = resume(graph_env, "两个菜，一荤一素", parse=fixed)
+    assert [i.value for i in out["__interrupt__"]] == [{"kind": "question", "fields": ["mode"]}]
+
+
+def test_contradiction_with_an_empty_answer_does_not_loop(graph_env):
+    out = plan(graph_env, "thirteen dishes", parse={"dishes": 13})
+    assert out["__interrupt__"][0].value["problem"] == "too_many"
+    out = resume(graph_env, "")
+    assert "__interrupt__" not in out
+    assert out["messages"][-1].type == "ai"
+
+
+def test_next_actions_count_every_category():
+    spec = {
+        "mode": "shopping", "dishes": 0, "soups": 0, "staples": 1, "desserts": 1,
+        "snacks": 0, "time_limit_min": None,
+    }
+    assert _next_actions(spec) == ["fewer_dishes"]
+    assert _next_actions({**spec, "desserts": 0}) == []
 
 
 def test_failed_validation_retries_with_errors(graph_env, veg, meat):

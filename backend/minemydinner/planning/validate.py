@@ -22,6 +22,7 @@ EXPIRY_SOON_DAYS = 3
 LOW_RATING = 2
 TOTAL_TIME_FACTOR = 1.5
 COUNTED_DISH_TYPES = ("meat dish", "vegetable dish")
+MAX_TOTAL_COUNT = 12
 
 
 class PlanSpec(BaseModel):
@@ -29,11 +30,24 @@ class PlanSpec(BaseModel):
     dishes: int = Field(ge=0)
     soups: int = Field(ge=0)
     time_limit_min: int | None = None
+    # A split of `dishes` (meat plus vegetable); None means that side is not constrained.
+    meat_dishes: int | None = Field(default=None, ge=0)
+    vegetable_dishes: int | None = Field(default=None, ge=0)
+    # True when a named split is below the dish total: the split counts are minimums.
+    split_is_minimum: bool = False
+    staples: int = Field(default=0, ge=0)
+    desserts: int = Field(default=0, ge=0)
+    snacks: int = Field(default=0, ge=0)
+    # Named ingredients, copied from the parsed request (design 5.1).
+    must_use: list[str] = Field(default_factory=list)
+    all_use: list[str] = Field(default_factory=list)
+    prefer_use: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _at_least_one_dish(self) -> "PlanSpec":
-        if self.dishes + self.soups < 1:
-            raise ValueError("A plan needs at least one dish or soup")
+    def _total_in_range(self) -> "PlanSpec":
+        total = self.dishes + self.soups + self.staples + self.desserts + self.snacks
+        if not 1 <= total <= MAX_TOTAL_COUNT:
+            raise ValueError(f"A plan needs between 1 and {MAX_TOTAL_COUNT} dishes in total")
         return self
 
 
