@@ -1,0 +1,834 @@
+{
+  "run_id": "20261115T014229Z-plan2a-shortlist-vectors",
+  "started_at": "2026-11-15T01:42:29.960929+00:00",
+  "finished_at": "2026-11-15T01:43:43.293774+00:00",
+  "conditions": {
+    "git_commit": "bf443047a1466e459cf7d2a7c76391bfdf722265",
+    "scenarios_file": {
+      "path": "backend/eval_data/planning/scenarios_plan2a.yaml",
+      "sha256": "a7dadce563e3d2b0573d6217cee8848fe9ea0ab79a2a903045cc151fc8ee880a"
+    },
+    "library_file": {
+      "path": "backend/eval_data/planning/library_extended.yaml",
+      "sha256": "808bfa212054d50d6dd91c2d8a696c76f9e632b9966db56ce052c91ca6eeb4c4"
+    },
+    "prompt_version": "route_v2+parse_v2+planner_v3",
+    "prompt_versions": {
+      "route": "route_v2",
+      "parse": "parse_v2",
+      "planner": "planner_v3"
+    },
+    "prompt_files": {
+      "route_v2.md": "185ac1705066ba4b7a42da2f3a73959ee37b6673e010a47bbdf463310e7d3cb5",
+      "parse_v2.md": "7171a38e2842371b521a5ea02db5ca9d6cc302ec46df011fb6bbd2c627ef6b86",
+      "planner_v3.md": "d5d0b5e78b93896d9f154d9919c192a8fa5c545ae46d38cc1e1ccd3f74da474c"
+    },
+    "tools_version": "f8e0a9e09f6e",
+    "flags": {
+      "no_shortlist": false,
+      "with_embeddings": true
+    },
+    "constants": {
+      "MODEL_CALL_LIMIT": 6,
+      "TOOL_CALL_LIMIT": 10,
+      "PLANNER_INPUT_TOKEN_BUDGET": 32000,
+      "SHORTLIST_MIN_PER_CATEGORY": 5,
+      "SHORTLIST_MARGIN": 3,
+      "SHORTLIST_SAME_MAIN": 2
+    },
+    "models": {
+      "planning_eval": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "input_usd_per_mtok": "0.3",
+            "cached_input_usd_per_mtok": "0.006",
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "1.2"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-6-luna",
+            "input_usd_per_mtok": "0.1",
+            "cached_input_usd_per_mtok": "0.01",
+            "cache_write_usd_per_mtok": "0.125",
+            "output_usd_per_mtok": "0.5"
+          }
+        ]
+      },
+      "embeddings": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "google_genai",
+            "model": "gemini-embedding-001",
+            "input_usd_per_mtok": "0.15",
+            "cached_input_usd_per_mtok": null,
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "0"
+          }
+        ]
+      },
+      "prices_updated": "2026-11-14"
+    }
+  },
+  "timing": {
+    "total_seconds": 73.3
+  },
+  "metrics": {
+    "basis": "model_time_ms: sum of the scenario's model-call latencies; wall_ms: scenario start to finish (database and tool time included); per_call: individual planning_eval model calls. Groups: all and expect_plan/expect_stop (by the scenario's expect_plan); check-only scenarios are in no group. Aggregates compare only within the same scenario set; compare same-named scenarios across different sets.",
+    "checks": "1/1",
+    "groups": {
+      "all": {
+        "scenarios": 18,
+        "outcomes": {
+          "first_pass_rate": 0.6666666666666666,
+          "final_pass_rate": 0.6666666666666666,
+          "as_expected": "18/18",
+          "avg_retries": 0.0
+        },
+        "calls": {
+          "model_calls": 49,
+          "avg_model_calls": 2.7222222222222223,
+          "max_model_calls": 4,
+          "embedding_calls": {
+            "library": 23,
+            "scenarios": 1,
+            "total": 24
+          }
+        },
+        "tokens": {
+          "input": 90438,
+          "cached": 80637,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 5024,
+            "cached": 4480,
+            "written": 0
+          },
+          "cache_hit_rate": 0.89162741325549,
+          "max_call_input": 3609
+        },
+        "cost": {
+          "cache_aware_usd": "0.007517",
+          "uncached_usd": "0.0312246",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000418",
+            "uncached_usd": "0.001735"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 3253,
+            "p50": 3426,
+            "p95": 5401,
+            "max": 5401
+          },
+          "model_time_ms": {
+            "avg": 3050,
+            "p50": 3137,
+            "p95": 5159
+          },
+          "per_call_ms": {
+            "avg": 1120,
+            "p50": 1091,
+            "p95": 1541
+          }
+        }
+      },
+      "expect_plan": {
+        "scenarios": 12,
+        "outcomes": {
+          "first_pass_rate": 1.0,
+          "final_pass_rate": 1.0,
+          "as_expected": "12/12",
+          "avg_retries": 0.0
+        },
+        "calls": {
+          "model_calls": 37,
+          "avg_model_calls": 3.0833333333333335,
+          "max_model_calls": 4,
+          "embedding_calls": {
+            "scenarios": 1
+          }
+        },
+        "tokens": {
+          "input": 72626,
+          "cached": 65277,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 6052,
+            "cached": 5440,
+            "written": 0
+          },
+          "cache_hit_rate": 0.898810343403189,
+          "max_call_input": 3609
+        },
+        "cost": {
+          "cache_aware_usd": "0.005779",
+          "uncached_usd": "0.0249702",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000482",
+            "uncached_usd": "0.002081"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 3698,
+            "p50": 3569,
+            "p95": 5401,
+            "max": 5401
+          },
+          "model_time_ms": {
+            "avg": 3443,
+            "p50": 3237,
+            "p95": 5159
+          },
+          "per_call_ms": {
+            "avg": 1117,
+            "p50": 1094,
+            "p95": 1541
+          }
+        }
+      },
+      "expect_stop": {
+        "scenarios": 6,
+        "outcomes": {
+          "first_pass_rate": 0.0,
+          "final_pass_rate": 0.0,
+          "as_expected": "6/6",
+          "avg_retries": 0.0
+        },
+        "calls": {
+          "model_calls": 12,
+          "avg_model_calls": 2.0,
+          "max_model_calls": 2,
+          "embedding_calls": {
+            "scenarios": 0
+          }
+        },
+        "tokens": {
+          "input": 17812,
+          "cached": 15360,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 2969,
+            "cached": 2560,
+            "written": 0
+          },
+          "cache_hit_rate": 0.8623399955086458,
+          "max_call_input": 2592
+        },
+        "cost": {
+          "cache_aware_usd": "0.001738",
+          "uncached_usd": "0.0062544",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000290",
+            "uncached_usd": "0.001042"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 2364,
+            "p50": 1983,
+            "p95": 3642,
+            "max": 3642
+          },
+          "model_time_ms": {
+            "avg": 2263,
+            "p50": 1881,
+            "p95": 3530
+          },
+          "per_call_ms": {
+            "avg": 1132,
+            "p50": 965,
+            "p95": 2565
+          }
+        }
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000260",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 2967,
+      "cached_input_tokens": 2560,
+      "max_call_input_tokens": 2589,
+      "uncached_cost": "0.0010125",
+      "reasons": [
+        "empty_inventory"
+      ],
+      "next_actions": [
+        "switch_to_shopping",
+        "update_inventory"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "d6d23954-a53e-4cc6-ae61-63880c44699f",
+      "planning_run_id": 4316,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3642,
+      "name": "empty_fridge_fridge_only",
+      "model_time_ms": 3530
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000280",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 2967,
+      "cached_input_tokens": 2560,
+      "max_call_input_tokens": 2589,
+      "uncached_cost": "0.0010329",
+      "reasons": [
+        "not_enough_dishes"
+      ],
+      "next_actions": [
+        "switch_to_shopping",
+        "fewer_dishes",
+        "update_inventory"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "a10b7c15-0551-450b-8ea0-c7b3663d1998",
+      "planning_run_id": 4317,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 2450,
+      "name": "fridge_only_one_of_two_dishes",
+      "model_time_ms": 2362
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000304",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 2973,
+      "cached_input_tokens": 2560,
+      "max_call_input_tokens": 2592,
+      "uncached_cost": "0.0010563",
+      "reasons": [
+        "time_limit"
+      ],
+      "next_actions": [
+        "drop_time_limit"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "fb32d2e2-f021-416d-9f5d-0978a3db7251",
+      "planning_run_id": 4318,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 2218,
+      "name": "time_limit_no_dish_meets",
+      "model_time_ms": 2123
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000478",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5546,
+      "cached_input_tokens": 4992,
+      "max_call_input_tokens": 2590,
+      "uncached_cost": "0.0019458",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "5cc2b3fb-be56-4e6e-95c4-383c9de222a4",
+      "planning_run_id": 4319,
+      "titles": [
+        "青椒肉丝",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3990,
+      "name": "one_meat_one_vegetable",
+      "model_time_ms": 3771
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000810",
+      "model_calls": 4,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9872,
+      "cached_input_tokens": 9088,
+      "max_call_input_tokens": 3609,
+      "uncached_cost": "0.0034824",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "5e339070-ac68-465e-8f27-344dfae6be9c",
+      "planning_run_id": 4320,
+      "titles": [
+        "香煎鸡腿",
+        "宫保鸡丁",
+        "鸡蛋饼",
+        "白煮蛋",
+        "红烧茄子",
+        "麻婆豆腐",
+        "清炒小白菜",
+        "番茄炒蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 5401,
+      "name": "eight_dishes_two_meat",
+      "model_time_ms": 5159
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000304",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 2969,
+      "cached_input_tokens": 2560,
+      "max_call_input_tokens": 2590,
+      "uncached_cost": "0.0010575",
+      "reasons": [
+        "not_enough_in_library"
+      ],
+      "next_actions": [
+        "fewer_dishes",
+        "relax_split",
+        "import_recipes"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "3606614c-fd4e-4eb8-9dbe-27428a070c32",
+      "planning_run_id": 4321,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 1940,
+      "name": "one_meat_one_vegetable_no_safe_meat",
+      "model_time_ms": 1835
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000306",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 2969,
+      "cached_input_tokens": 2560,
+      "max_call_input_tokens": 2590,
+      "uncached_cost": "0.0010587",
+      "reasons": [
+        "not_enough_dishes"
+      ],
+      "next_actions": [
+        "switch_to_shopping",
+        "fewer_dishes",
+        "relax_split",
+        "update_inventory"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "2f667afa-a34f-4f00-a817-c6339a11dd5b",
+      "planning_run_id": 4322,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 1983,
+      "name": "one_meat_one_vegetable_no_makeable_meat",
+      "model_time_ms": 1881
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000473",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5826,
+      "cached_input_tokens": 5248,
+      "max_call_input_tokens": 2855,
+      "uncached_cost": "0.0020154",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "4ddcd6b8-da95-49ef-b614-f32f6aa2b45a",
+      "planning_run_id": 4323,
+      "titles": [
+        "青椒肉丝",
+        "番茄炒蛋",
+        "番茄蛋花汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 3685,
+      "name": "rich_dinner_without_a_count",
+      "model_time_ms": 2830
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000451",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5732,
+      "cached_input_tokens": 5120,
+      "max_call_input_tokens": 2771,
+      "uncached_cost": "0.0019560",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "7c31b0b6-6411-421e-a25f-0144d58dd826",
+      "planning_run_id": 4324,
+      "titles": [
+        "青椒肉丝",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3439,
+      "name": "request_without_a_count",
+      "model_time_ms": 3237
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000459",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5745,
+      "cached_input_tokens": 5120,
+      "max_call_input_tokens": 2780,
+      "uncached_cost": "0.0019635",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "7f1de149-2e09-4bb2-b0cf-d5f452509e50",
+      "planning_run_id": 4325,
+      "titles": [
+        "青椒肉丝",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3642,
+      "name": "three_people_two_dishes",
+      "model_time_ms": 3446
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000409",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5517,
+      "cached_input_tokens": 4864,
+      "max_call_input_tokens": 2586,
+      "uncached_cost": "0.0018399",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "d2cf3757-9f03-4d95-9786-94e2aa5f0ab1",
+      "planning_run_id": 4326,
+      "titles": [
+        "番茄鸡蛋面"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3311,
+      "name": "just_a_bowl_of_noodles",
+      "model_time_ms": 3137
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000518",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5873,
+      "cached_input_tokens": 5248,
+      "max_call_input_tokens": 2894,
+      "uncached_cost": "0.0020607",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "aee3be1c-b16a-43ad-8fc3-7fca4238153f",
+      "planning_run_id": 4327,
+      "titles": [
+        "青椒肉丝",
+        "番茄炒蛋",
+        "番茄蛋花汤",
+        "蛋炒饭"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3116,
+      "name": "two_dishes_soup_and_fried_rice",
+      "model_time_ms": 2907
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0",
+      "model_calls": 0,
+      "note": "check-only: shortlist spread",
+      "expected_plan": true,
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "max_call_input_tokens": 0,
+      "uncached_cost": "0",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": true,
+      "thread_id": null,
+      "planning_run_id": null,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 0,
+      "name": "one_main_ingredient_dominates",
+      "model_time_ms": 0
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000427",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5615,
+      "cached_input_tokens": 4992,
+      "max_call_input_tokens": 2652,
+      "uncached_cost": "0.0018945",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "08afb7dd-fe1f-45cf-9d6c-8559e986e17a",
+      "planning_run_id": 4328,
+      "titles": [
+        "鸡蛋饼",
+        "嫩滑蒸蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3569,
+      "name": "two_dishes_compete_for_eggs",
+      "model_time_ms": 3378
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000436",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5609,
+      "cached_input_tokens": 4992,
+      "max_call_input_tokens": 2652,
+      "uncached_cost": "0.0019035",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "a1f9d9b7-6c18-4aef-ad07-fe501dc60bf1",
+      "planning_run_id": 4329,
+      "titles": [
+        "鸡蛋饼",
+        "嫩滑蒸蛋",
+        "煎荷包蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3631,
+      "name": "three_vegetable_dishes_only_eggs",
+      "model_time_ms": 3475
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000423",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5786,
+      "cached_input_tokens": 5245,
+      "max_call_input_tokens": 2819,
+      "uncached_cost": "0.0019650",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "f088ebab-6afa-421f-9fb4-77aa883d3a6c",
+      "planning_run_id": 4330,
+      "titles": [
+        "青椒肉丝",
+        "番茄炒蛋",
+        "鸡蛋饼"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3844,
+      "name": "prefer_eggs",
+      "model_time_ms": 3647
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000458",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5794,
+      "cached_input_tokens": 5248,
+      "max_call_input_tokens": 2823,
+      "uncached_cost": "0.0020010",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "5d2243fc-4473-49d5-86ed-997bda885a52",
+      "planning_run_id": 4331,
+      "titles": [
+        "青椒肉丝",
+        "番茄炒蛋",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3426,
+      "name": "must_use_eggs",
+      "model_time_ms": 3205
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000437",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 5711,
+      "cached_input_tokens": 5120,
+      "max_call_input_tokens": 2744,
+      "uncached_cost": "0.0019425",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "20c9e098-fd15-48f6-8556-f6afad046534",
+      "planning_run_id": 4332,
+      "titles": [
+        "番茄炒蛋",
+        "嫩滑蒸蛋",
+        "煎荷包蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3318,
+      "name": "all_dishes_with_eggs",
+      "model_time_ms": 3120
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000284",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 2967,
+      "cached_input_tokens": 2560,
+      "max_call_input_tokens": 2589,
+      "uncached_cost": "0.0010365",
+      "reasons": [
+        "not_enough_dishes",
+        "named_ingredient"
+      ],
+      "next_actions": [
+        "switch_to_shopping",
+        "fewer_dishes",
+        "relax_named",
+        "update_inventory",
+        "import_recipes"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "ca30da59-9162-4558-a76a-fd213294b3e5",
+      "planning_run_id": 4333,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 1950,
+      "name": "all_dishes_with_eggs_none_in_stock",
+      "model_time_ms": 1849
+    }
+  ]
+}
