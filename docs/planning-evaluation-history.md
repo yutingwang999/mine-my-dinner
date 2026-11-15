@@ -39,10 +39,12 @@ Columns: first pass and calls are over the 6 scenarios that expect a plan; cost,
 | 2 | 20261114T222651Z | yes | 6/7 | 6/6 | 3.67 | 6 | $0.0042 | $0.0161 | 0.86 | 2910 | 3.6 s | 5.7 s |
 | 3 | 20261114T234232Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0043 | $0.0128 | 0.79 | 3022 | 2.9 s | 4.1 s |
 | 3 | 20261114T234257Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0037 | $0.0128 | 0.85 | 3022 | 3.0 s | 4.4 s |
-| **4** | 20261115T003551Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0128 | 0.89 | 3022 | 3.2 s | 4.8 s |
-| **4** | 20261115T003618Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0128 | 0.89 | 3022 | 3.0 s | 4.4 s |
+| 4 | 20261115T003551Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0128 | 0.89 | 3022 | 3.2 s | 4.8 s |
+| 4 | 20261115T003618Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0128 | 0.89 | 3022 | 3.0 s | 4.4 s |
 | 5 (reverted) | 20261115T013859Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0037 | $0.0128 | 0.84 | 3022 | 3.4 s | 5.7 s |
 | 5 (reverted) | 20261115T013928Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0127 | 0.89 | 3022 | 3.3 s | 4.8 s |
+| **6** | 20261115T040226Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0046 | $0.0146 | 0.79 | 3493 | 3.5 s | 4.9 s |
+| **6** | 20261115T040255Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0033 | $0.0147 | 0.90 | 3493 | 3.4 s | 5.5 s |
 
 ## Comparison: plan 2a set (18 scored scenarios, 12 expect a plan, plus 1 check-only)
 
@@ -54,14 +56,24 @@ Same columns. "Over 5" names the scenarios that used more than 5 calls.
 | 2 | 20261114T222835Z | yes | 17/18 | 12/12 | 3.58 | 7 | $0.0091 | $0.0376 | 0.89 | 3859 | 2.9 s | 6.9 s | all_dishes_with_eggs (7 calls) |
 | 3 | 20261114T234332Z | no | 17/18 | 11/12 | 3.50 | 8 | $0.0102 | $0.0378 | 0.87 | 3895 | 3.1 s | 9.5 s | eight_dishes_two_meat (failed all 3 attempts) |
 | 3 | 20261114T234435Z | yes | 18/18 | 12/12 | 3.08 | 4 | $0.0078 | $0.0314 | 0.89 | 3514 | 2.8 s | 4.3 s | — |
-| **4** | 20261115T003653Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0078 | $0.0314 | 0.89 | 3609 | 2.9 s | 5.0 s | — |
-| **4** | 20261115T003755Z | yes | 17/18 | 12/12 | 3.50 | 7 | $0.0086 | $0.0365 | 0.90 | 3609 | 3.2 s | 7.5 s | all_dishes_with_eggs (7 calls) |
+| 4 | 20261115T003653Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0078 | $0.0314 | 0.89 | 3609 | 2.9 s | 5.0 s | — |
+| 4 | 20261115T003755Z | yes | 17/18 | 12/12 | 3.50 | 7 | $0.0086 | $0.0365 | 0.90 | 3609 | 3.2 s | 7.5 s | all_dishes_with_eggs (7 calls) |
 | 5 (reverted) | 20261115T014004Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0077 | $0.0313 | 0.89 | 3609 | 3.0 s | 5.0 s | — |
 | 5 (reverted) | 20261115T014105Z | yes | 17/18 | 12/12 | 3.42 | 7 | $0.0086 | $0.0355 | 0.90 | 3609 | 3.4 s | 9.1 s | three_vegetable_dishes_only_eggs (7 calls) |
 | 5 (reverted) | 20261115T014229Z | yes | 18/18 | 12/12 | 3.08 | 4 | $0.0075 | $0.0312 | 0.89 | 3609 | 3.1 s | 5.4 s | — |
 | 5 (reverted) | 20261115T014347Z | yes | 18/18 | 12/12 | 3.17 | 5 | $0.0079 | $0.0326 | 0.89 | 3730 | 3.0 s | 6.7 s | — |
+| **6** | 20261115T040333Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0081 | $0.0363 | 0.90 | 3658 | 3.0 s | 5.6 s | — |
+| **6** | 20261115T040434Z | yes | 18/18 | 12/12 | 3.17 | 4 | $0.0081 | $0.0372 | 0.91 | 3602 | 3.0 s | 4.6 s | — |
 
 Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient_dominates`) passed in every plan 2a run.
+
+## Comparison: counts set (10 scenarios, 8 expect a plan)
+
+`scenarios_counts.yaml` with `library_extended.yaml`, added in round 6: meat and vegetable bounds, the implied side, and the next-action buttons' messages. These scenarios took no part in tuning. The two button scenarios (`relax_split_button`, `relax_named_button`) send two user messages, so their calls count both turns (route and parse twice); they count as plan scenarios.
+
+| Round | Run | Vectors | As expected | First pass | Avg calls | Max calls | Cost (cache-aware) | Cost (uncached) | Cache hit | Largest call (tokens) | Model time avg | Wall p95 | Not as expected |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **6** | 20261115T040549Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0059 | $0.0238 | 0.88 | 3510 | 3.7 s | 6.1 s | — |
 
 ## Rounds
 
@@ -93,7 +105,7 @@ Bold rounds in the tables hold the results of record for the current code.
 - **Result:** no scenario went over 5 calls through extra searches; the three that had done so in round 2 took 3-4 calls. A new failure exposed a bug: `eight_dishes_two_meat` failed all three attempts, because the retry message told the planner the user wanted "0 vegetable dishes" (an unnamed split side printed as 0), and the request summary never stated the implied 6.
 - **Decision:** fix the wording of counts; also record the route and parse calls.
 
-### Round 4 — implied split side and route/parse records (2026-11-15, `e0401c2`) — results of record
+### Round 4 — implied split side and route/parse records (2026-11-15, `e0401c2`)
 
 - **Changed:** the request summary, retry message, and plan card state the implied side of an exact one-sided split ("2 meat dishes, 6 vegetable dishes") and never print an unnamed side as 0; a minimum split gives the unnamed side no number. Route and parse model calls are now recorded as events on the planning run (input, structured output, provider, served model), so `results.jsonl` holds every model call. No prompt or tool change.
 - **Runs:** all four.
@@ -104,10 +116,17 @@ Bold rounds in the tables hold the results of record for the current code.
 - **Changed:** when no split is named and one side (meat or vegetable) has no fitting recipe, the request summary added "No meat dish fits this request, so every dish is a vegetable dish. Do not search for meat dishes." (or the vegetable mirror).
 - **Runs:** all four, plus the plan 2a set with vectors twice more.
 - **Result:** `all_dishes_with_eggs` took 3 calls in all four plan 2a runs. But `three_vegetable_dishes_only_eggs` went to 7 calls in one run for a different reason: it searched for green vegetables because it did not see egg dishes as real vegetable dishes. Over the six runs, 1 of 60 plan scenarios went over 5 calls.
-- **Decision (user):** revert this change. It answered one evaluation scenario, and each such line closes only one of the model's reasons for searching. Stop tuning; judge model calls by the average (3.0-3.5 per plan scenario, against about 4) and treat a single scenario over 5 as a warning. After the revert the code is the same as round 4, so round 4's runs are the results of record.
+- **Decision (user):** revert this change. It answered one evaluation scenario, and each such line closes only one of the model's reasons for searching. Stop tuning; judge model calls by the average (3.0-3.5 per plan scenario, against about 4) and treat a single scenario over 5 as a warning. After the revert the code was the same as round 4, so round 4's runs were the results of record until round 6.
 
-### Status after round 5
+### Round 6 — meat and vegetable bounds (2026-11-15, `fe6ed93`) — results of record
 
-Against the criteria, on the round 4 runs: first pass 6/6 and 12/12; average calls 3.0-3.5 per plan scenario; every infeasible scenario stopped within 2 calls with the expected reasons and next actions; uncached cost $0.0128 on the baseline set against $0.064, and model time 3.0-3.2 s against 11.3 s; largest call 3,609 tokens against the 32,000 budget; every plan 2a scenario as expected apart from the call-count warning. The call limits (`MODEL_CALL_LIMIT` 6, `TOOL_CALL_LIMIT` 10 per attempt) were never reached: the most planner calls in one attempt was 5.
+- **Changed:** plan 2a Task 11 (design 5.11). `parse_v3` reads "至少" / "最多" on meat and vegetable counts and the next-action buttons' messages; each side gets a range used by validation, the feasibility check, the shortlist, and every text; the feasibility check now covers the side the user did not name; a default total is clamped to the stated bounds; contradictions ask with `split_conflicts_total`. The evaluation runner gained two-message scenarios, a range expectation, and saves every planning run of a thread. New scenario file `scenarios_counts.yaml`. Prompts `route_v2+parse_v3+planner_v3`; tools unchanged.
+- **Runs:** the four usual runs and the counts set once (no vectors).
+- **Result:** every run as expected: baseline 7/7 twice, plan 2a 18/18 twice, counts 10/10; first pass 6/6, 12/12, 8/8. No scenario over 5 calls; average calls per plan scenario 3.0-3.2 (3.5 in the counts set, where the two button scenarios take 5 calls over two turns). In the counts set, "8个菜，2个荤菜" with 5 makeable vegetable dishes stopped at once with `not_enough_dishes` and `relax_split`, and "8个菜，至少2个荤菜" with the same stock planned 3 meat and 5 vegetable dishes. Both button conversations ended with a plan on the second turn.
+- **Cost:** the uncached cost on the baseline set rose from $0.0128 to $0.0146 and the largest call from 3,022 to 3,493 tokens, because `parse_v3` is a longer prompt (the parse call is the largest). The cache-aware cost stayed between $0.003 and $0.005.
+
+### Status after round 6
+
+Against the criteria, on the round 6 runs: first pass 6/6, 12/12 and 8/8; average calls 3.0-3.5 per plan scenario; every infeasible scenario stopped within 2 calls with the expected reasons and next actions; uncached cost $0.0146 on the baseline set against $0.064, and model time 3.4-3.5 s against 11.3 s; largest call 3,658 tokens against the 32,000 budget; every scenario of all three sets as expected, with no scenario over 5 calls in this round. The call limits (`MODEL_CALL_LIMIT` 6, `TOOL_CALL_LIMIT` 10 per attempt) were never reached in any round: the most planner calls in one attempt was 5 (round 4).
 
 Known pattern to watch: when the shortlist is complete but the model is unhappy with it (no meat dish to balance the meal, egg dishes as the only "vegetable dishes"), it sometimes ignores the instruction not to search. It costs calls, not correctness.
