@@ -149,7 +149,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The "must use" shortlist test asserts the outcome without isolating the "must use" protection; the retry-wording test now checks only the dish part.
 - A long line in `llm/smoke.py`, an obscure condition in `tests/fakes.py`, and single quotes in migration `0007`.
 - The plan card's list of known next actions (`KNOWN_ACTIONS` in `PlanCard.tsx`) repeats the `NextAction` type by hand; a typed record would catch drift at compile time.
-- `tests/test_planning_shortlist.py` has a line over 100 characters (complete-marker test).
+- `tests/test_planning_shortlist.py` (complete-marker test) and `tests/test_agent_graph.py` (empty-side summary tests) have lines over 100 characters.
 - The package-data test (`test_package_data_glob_matches_every_prompt_file`) uses `fnmatch`, whose `*` also crosses `/`, so a too-broad glob would still pass; it does not build a wheel.
 
 ## Minor findings from the final Phase 0 review, deferred

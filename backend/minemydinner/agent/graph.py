@@ -467,6 +467,33 @@ def _split_text(spec: dict) -> str:
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
 
 
+NO_MEAT_LINE = (
+    "No meat dish fits this request, so every dish is a vegetable dish. "
+    "Do not search for meat dishes."
+)
+NO_VEGETABLE_LINE = (
+    "No vegetable dish fits this request, so every dish is a meat dish. "
+    "Do not search for vegetable dishes."
+)
+
+
+def empty_side_line(
+    spec: dict, entries: dict[str, list[ShortlistEntry]] | None, complete: Collection[str]
+) -> str | None:
+    """A summary line when no split is named and exactly one of the meat and vegetable
+    dish types is complete with no candidates while the other has some; else None."""
+    if entries is None or not spec.get("dishes"):
+        return None
+    if spec.get("meat_dishes") is not None or spec.get("vegetable_dishes") is not None:
+        return None
+    meat, vegetable = entries.get("meat dish", []), entries.get("vegetable dish", [])
+    if "meat dish" in complete and not meat and vegetable:
+        return NO_MEAT_LINE
+    if "vegetable dish" in complete and not vegetable and meat:
+        return NO_VEGETABLE_LINE
+    return None
+
+
 def _merge_notes(notes: dict | None, titles: list[str], paused: bool) -> dict:
     """Search notes with `titles` added (once each) and `paused` or-ed in."""
     notes = notes or {}
@@ -637,7 +664,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         )
         return Command(update={"shortfalls": dumped}, goto="present_plan")
 
-    def request_summary(state: ChatState, preferences: list[str]) -> str:
+    def request_summary(
+        state: ChatState, preferences: list[str], after_split: str | None = None
+    ) -> str:
         spec, parsed = state["spec"], state["request"]
         lines = [
             f"Reply locale: {state.get('locale', 'en')}",
@@ -645,6 +674,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             f"Headcount: {state['constraints']['headcount']}",
             f"Dishes (meat plus vegetable): {spec['dishes']}",
             f"Split: {_split_text(spec)}",
+            *([after_split] if after_split else []),
             f"Soups: {spec['soups']}",
             f"Staple foods: {spec.get('staples', 0)}, desserts: {spec.get('desserts', 0)}, "
             f"snacks: {spec.get('snacks', 0)}",
@@ -713,7 +743,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             ctx = load_planning_context(session, constraints)
             if opening is None:
                 # Built once per run and stored, so every attempt sends the same bytes.
-                summary = request_summary(state, meal_preferences(session, ctx))
+                preferences = meal_preferences(session, ctx)
                 entries = None
                 complete: frozenset[str] = frozenset()
                 if deps.use_shortlist:
@@ -726,6 +756,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     notes = _merge_notes(
                         notes, found.left_out_unknown_allergens, found.semantic_paused
                     )
+                summary = request_summary(
+                    state, preferences, empty_side_line(state["spec"], entries, complete)
+                )
                 opening = planner_opening(entries, summary, complete)
                 update["planner_opening"] = opening
                 update["shortlist_ids"] = [

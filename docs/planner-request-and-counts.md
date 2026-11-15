@@ -62,6 +62,8 @@ An unnamed side is never written as 0. The three places:
 
 The "plan has" side always reports what the plan contains.
 
+**A fourth case: an empty side.** When no split is named, the meal needs dishes, the shortlist is in use, and exactly one of "meat dish" and "vegetable dish" is complete with no candidates while the other has some, the summary adds one line after `Split:`: "No meat dish fits this request, so every dish is a vegetable dish. Do not search for meat dishes." (or the vegetable mirror). Example: "做三个菜，全做鸡蛋" in fridge-only mode has five egg vegetable dishes and no egg meat dish; before this line the planner still searched meat dishes three times. Nothing is added in any other case (`empty_side_line` in `agent/graph.py`).
+
 **Why the derived number lives only in the text.** The parsed request and the spec keep only what the user said. Storing a derived "6 vegetable dishes" as if the user had said it would mix stated and inferred values: the contradiction question and the minimum rule depend on knowing which sides were named. For "三个菜，一荤一素" no exact vegetable number exists at all.
 
 ## 5. Examples

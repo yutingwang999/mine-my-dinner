@@ -179,6 +179,8 @@ A new function in `minemydinner/planning/` builds the shortlist from the parsed 
 
 **Complete marker (decided during Task 10 tuning):** per dish type, the shortlist records whether it kept every recipe the fetch returned (`complete`, also true for none); the first message gives each type as `{"complete": bool, "candidates": [...]}`, and the planner prompt says not to search a complete type, so a request the shortlist already answers needs no search call.
 
+**Empty side line (decided during Task 10 tuning):** with no split named, when exactly one of meat dish and vegetable dish is complete and empty while the other has candidates, the request summary adds a line saying every dish is of the other kind and not to search the empty kind.
+
 The shortlist goes into the planner's first message as compact JSON, before the request summary (data first, the task last; Section 5.7). The planner prompt (`planner.md` v2) says: choose from the shortlist when it fits; search for more only when it does not; check details only when needed; final answer is `PlanProposal` as before.
 
 ### 5.5 Validation change
