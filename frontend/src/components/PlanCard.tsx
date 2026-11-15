@@ -12,6 +12,8 @@ type Props = {
   /** Called with the chosen next action; the buttons are disabled while `busy`. */
   onAction?: (action: NextAction) => void;
   busy?: boolean;
+  /** False for an older plan: every action button and link action is disabled. */
+  actionable?: boolean;
 };
 
 const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
@@ -158,7 +160,7 @@ function warningText(
   }
 }
 
-export function PlanCard({ plan, onAction, busy = false }: Props) {
+export function PlanCard({ plan, onAction, busy = false, actionable = true }: Props) {
   const t = useTranslations("chat.plan");
   const tWarning = useTranslations("chat.warning");
   const tAction = useTranslations("chat.action");
@@ -246,11 +248,17 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
           {actions.map((action) => {
             const href = LINK_ACTIONS[action];
             return href ? (
-              <Link key={action} href={`/${locale}${href}`}>
-                {tAction(action)}
-              </Link>
+              actionable ? (
+                <Link key={action} href={`/${locale}${href}`}>
+                  {tAction(action)}
+                </Link>
+              ) : (
+                <span key={action} aria-disabled="true" className="hint">
+                  {tAction(action)}
+                </span>
+              )
             ) : (
-              <button key={action} type="button" disabled={busy} onClick={() => onAction?.(action)}>
+              <button key={action} type="button" disabled={busy || !actionable} onClick={() => onAction?.(action)}>
                 {tAction(action)}
               </button>
             );

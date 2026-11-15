@@ -361,4 +361,16 @@ describe("PlanCard unknown actions", () => {
     );
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Fewer dishes"]);
   });
+
+  it("disables every action when it is not actionable", () => {
+    renderWithProviders(
+      <PlanCard
+        actionable={false}
+        plan={plan({ passed: false, next_actions: ["fewer_dishes", "update_inventory"] })}
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Fewer dishes" })).toBeDisabled();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
 });

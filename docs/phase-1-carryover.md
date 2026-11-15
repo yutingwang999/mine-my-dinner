@@ -76,6 +76,7 @@ Task-review and final-review findings that were judged safe to defer. None block
 
 ### Chat API and page (plan 2 or T1.9)
 
+- **Typing while the request-style choice is pending drops the question** (found in the chat page redesign, Task 2 review; pre-existing). When the first-use "ask first / plan then adjust" choice waits and the user types a message instead of pressing a button, the run clears the pending question and no item records it. Either keep the choice visible until answered, or record it like other questions.
 - **No guard against concurrent requests on one thread** (two messages, or a message and a resume). Acceptable for one user; add a per-thread lock before anything multi-user.
 - **A new message while a question is pending starts a fresh run** and drops the pending question. Decide whether to block it (409) or keep allowing it.
 - **Progress events fire when a node finishes,** so nothing shows during the first model call. A start-of-node signal would need another stream mode.

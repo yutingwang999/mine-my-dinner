@@ -138,7 +138,8 @@ describe("ChatPage", () => {
       locale: "en",
     });
     expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")).toHaveLength(1);
-    expect(screen.queryByText(/whether to cook only from the fridge/)).toBeNull();
+    // The question stays in place after it is answered.
+    expect(screen.getAllByText(/whether to cook only from the fridge/)).toHaveLength(1);
   });
 
   it("restores the conversation and a pending question after reload", async () => {
@@ -406,6 +407,105 @@ describe("ChatPage", () => {
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/check the actual ingredients for allergens/)).toBeInTheDocument();
     expect(screen.getByText(/whether to cook only from the fridge/)).toBeInTheDocument();
+  });
+
+  const twoPlans = {
+    items: [
+      { type: "user", text: "dinner" },
+      { type: "assistant", id: "a1", text: "First plan.", plan: plan({ next_actions: ["fewer_dishes"] }) },
+      { type: "user", text: "more" },
+      { type: "assistant", id: "a2", text: "Second plan.", plan: plan({ next_actions: ["switch_to_shopping"] }) },
+    ],
+    messages: [],
+    current_plan: plan(),
+    pending: null,
+  };
+
+  it("shows each reply with its own card and only the newest is actionable", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({ "GET /api/chat/threads/t5": () => twoPlans });
+    expect(await screen.findByText("Second plan.")).toBeInTheDocument();
+    expect(screen.getAllByText(/check the actual ingredients for allergens/)).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Fewer dishes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow shopping" })).toBeEnabled();
+  });
+
+  it("keeps the newest card actionable after a later reply without a plan", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({
+      "GET /api/chat/threads/t5": () => twoPlans,
+      "POST /api/chat/threads/t5/messages": () =>
+        stream(frame("message", { role: "assistant", text: "Just chatting." }), DONE),
+    });
+    await screen.findByText("Second plan.");
+    await send("thanks");
+    expect(await screen.findByText("Just chatting.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow shopping" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Fewer dishes" })).toBeDisabled();
+  });
+
+  it("disables the newest card while a question is pending", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({ "GET /api/chat/threads/t5": () => ({ ...twoPlans, pending: { kind: "question", fields: ["mode"] } }) });
+    await screen.findByText(/whether to cook only from the fridge/);
+    expect(screen.getByRole("button", { name: "Allow shopping" })).toBeDisabled();
+  });
+
+  it("disables the newest card while a run is busy", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({
+      "GET /api/chat/threads/t5": () => twoPlans,
+      "POST /api/chat/threads/t5/messages": () => new Promise(() => {}) as never,
+    });
+    await screen.findByText("Second plan.");
+    await send("again");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow shopping" })).toBeDisabled());
+  });
+
+  it("renders a streamed plan with no message as a card-only reply", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () => stream(frame("plan", plan({ next_actions: ["fewer_dishes"] })), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByRole("button", { name: "Fewer dishes" })).toBeEnabled();
+    expect(screen.getAllByRole("listitem").filter((li) => li.className.includes("chat-assistant"))).toHaveLength(1);
+  });
+
+  it("shows the plan of an old thread as a card at the end, actionable", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t6");
+    setup({
+      "GET /api/chat/threads/t6": () => ({
+        messages: [
+          { role: "user", text: "dinner" },
+          { role: "assistant", text: "Old reply." },
+        ],
+        current_plan: plan({ next_actions: ["fewer_dishes"] }),
+        pending: null,
+      }),
+    });
+    expect(await screen.findByRole("button", { name: "Fewer dishes" })).toBeEnabled();
+    const items = screen.getAllByRole("listitem").filter((li) => li.className.includes("chat-message"));
+    expect(items[items.length - 1]).toContainElement(screen.getByRole("button", { name: "Fewer dishes" }));
+  });
+
+  it("shows a pending question as an assistant item and keeps it after the answer", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t7");
+    setup({
+      "GET /api/chat/threads/t7": () => ({
+        items: [{ type: "user", text: "dinner" }],
+        messages: [],
+        current_plan: null,
+        pending: { kind: "question", fields: ["mode"] },
+      }),
+      "POST /api/chat/threads/t7/resume": () => stream(frame("message", { role: "assistant", text: "Thanks." }), DONE),
+    });
+    const hint = await screen.findByText(/whether to cook only from the fridge/);
+    expect(hint.closest("li")).toHaveClass("chat-assistant");
+    await send("yes");
+    expect(await screen.findByText("Thanks.")).toBeInTheDocument();
+    const texts = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(texts[1]).toMatch(/whether to cook only from the fridge/);
+    expect(texts[2]).toMatch(/yes/);
   });
 
   it("renders the same first markup as the server when a thread is remembered", () => {

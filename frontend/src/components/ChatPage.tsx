@@ -1,15 +1,12 @@
 "use client";
 
-import { useFormatter, useLocale, useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
-import { PlanCard } from "@/components/PlanCard";
-import { RequestStylePrompt } from "@/components/RequestStylePrompt";
+import { MessageList } from "@/components/MessageList";
 import { ApiError } from "@/lib/api";
 import {
   type ChatEvent,
-  type ChatMessage,
-  type ChatPlan,
   getRequestStyle,
   loadThread,
   type Locale,
@@ -24,13 +21,19 @@ import {
   startThread,
   storedThreadId,
   storeThreadId,
+  type ThreadItem,
 } from "@/lib/chat";
-import { useErrorText } from "@/lib/errors";
 
 /** The actions that are buttons sending a fixed message; the others are links. */
 type FixedAction = Exclude<NextAction, "update_inventory" | "register_cookware" | "import_recipes">;
 
-type Seen = { plan: boolean; pending: boolean; failed: boolean };
+type Seen = {
+  plan: boolean;
+  pending: boolean;
+  failed: boolean;
+  /** The assistant item this run appended last; a `plan` event attaches to it. */
+  assistant: ThreadItem | null;
+};
 
 const STYLES = ["ask_first", "plan_then_adjust"] as const;
 
@@ -63,15 +66,12 @@ function RequestStyleSetting({
 
 export function ChatPage() {
   const t = useTranslations("chat");
-  const format = useFormatter();
-  const errorText = useErrorText();
   const locale = useLocale() as Locale;
   const threadRef = useRef<string | null>(null);
   // Starts false so the first client render matches the server; the effect below sets it.
   const [loading, setLoading] = useState(false);
   const [style, setStyle] = useState<RequestStyle | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [plan, setPlan] = useState<ChatPlan | null>(null);
+  const [items, setItems] = useState<ThreadItem[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [step, setStep] = useState<string | null>(null);
   const [streaming, setStreaming] = useState("");
@@ -92,8 +92,7 @@ export function ChatPage() {
       .then((state) => {
         if (!active) return;
         threadRef.current = id;
-        setMessages(state.messages);
-        setPlan(state.current_plan ? normalizePlan(state.current_plan) : null);
+        setItems(state.items);
         setPending(state.pending);
       })
       .catch((caught) => {
@@ -138,12 +137,26 @@ export function ChatPage() {
         break;
       case "message":
         setStreaming("");
-        setMessages((current) => [...current, { role: "assistant", text: event.data.text }]);
+        {
+          const item: ThreadItem = { type: "assistant", id: null, text: event.data.text, plan: null };
+          seen.assistant = item;
+          setItems((current) => [...current, item]);
+        }
         break;
-      case "plan":
+      case "plan": {
         seen.plan = true;
-        setPlan(normalizePlan(event.data));
+        const plan = normalizePlan(event.data);
+        const old = seen.assistant;
+        const next: ThreadItem =
+          old?.type === "assistant"
+            ? { ...old, plan }
+            : { type: "assistant", id: null, text: "", plan };
+        seen.assistant = next;
+        setItems((current) =>
+          old && current.includes(old) ? current.map((item) => (item === old ? next : item)) : [...current, next],
+        );
         break;
+      }
       case "interrupt":
         seen.pending = true;
         setPending(event.data);
@@ -155,13 +168,13 @@ export function ChatPage() {
     }
   }
 
-  async function run(start: (threadId: string) => Promise<Response>) {
-    const seen: Seen = { plan: false, pending: false, failed: false };
-    const previous = { plan, pending };
+  /** `answered` is the question this run answers: it joins the conversation, and leaves again if the run fails. */
+  async function run(start: (threadId: string) => Promise<Response>, answered: ThreadItem | null = null) {
+    const seen: Seen = { plan: false, pending: false, failed: false, assistant: null };
+    const previous = { pending };
     setBusy(true);
     setError(null);
     setPending(null);
-    setPlan(null);
     setStep(null);
     setStreaming("");
     try {
@@ -177,8 +190,10 @@ export function ChatPage() {
     } finally {
       // A failed run keeps what was on screen, so the next answer still resumes.
       if (seen.failed) {
-        if (!seen.plan) setPlan(previous.plan);
-        if (!seen.pending) setPending(previous.pending);
+        if (!seen.pending) {
+          setPending(previous.pending);
+          if (answered) setItems((current) => current.filter((item) => item !== answered));
+        }
       }
       setBusy(false);
       setStep(null);
@@ -188,8 +203,9 @@ export function ChatPage() {
 
   function submit(text: string) {
     const answering = pending?.kind === "question";
-    setMessages((current) => [...current, { role: "user", text }]);
-    return run((id) => (answering ? resume(id, text, locale) : sendMessage(id, text, locale)));
+    const answered: ThreadItem | null = answering && pending ? { type: "question", value: pending } : null;
+    setItems((current) => [...current, ...(answered ? [answered] : []), { type: "user", text }]);
+    return run((id) => (answering ? resume(id, text, locale) : sendMessage(id, text, locale)), answered);
   }
 
   function onSubmit(event: FormEvent) {
@@ -203,30 +219,19 @@ export function ChatPage() {
   function chooseStyle(value: RequestStyle | null) {
     // Skipping saves "plan then adjust" on the server (design 6.2), so the setting shows it.
     setStyle(value ?? "plan_then_adjust");
-    void run((id) => resume(id, value, locale));
+    const answered: ThreadItem | null = pending ? { type: "question", value: pending } : null;
+    if (answered) setItems((current) => [...current, answered]);
+    void run((id) => resume(id, value, locale), answered);
   }
 
   function newConversation() {
     threadRef.current = null;
     storeThreadId(null);
-    setMessages([]);
-    setPlan(null);
+    setItems([]);
     setPending(null);
     setError(null);
     setDraft("");
   }
-
-  const hint =
-    pending?.kind === "question" && pending.problem && t.has(`problem.${pending.problem}`)
-      ? t(`problem.${pending.problem}`)
-      : pending?.kind === "question"
-      ? t("question.hint", {
-          fields: format.list(
-            pending.fields.map((field) => (t.has(`question.${field}`) ? t(`question.${field}`) : field)),
-            { type: "disjunction" },
-          ),
-        })
-      : null;
 
   return (
     <div className="chat">
@@ -237,34 +242,17 @@ export function ChatPage() {
         </button>
       </div>
       {loading && <p className="hint">{t("loading")}</p>}
-      <ul className="chat-log" aria-live="polite">
-        {messages.map((message, index) => (
-          <li key={index} className={`chat-message chat-${message.role}`}>
-            <strong>{t(message.role === "user" ? "you" : "assistant")}</strong>
-            <p>{message.text}</p>
-          </li>
-        ))}
-        {streaming && (
-          <li className="chat-message chat-assistant">
-            <strong>{t("assistant")}</strong>
-            <p>{streaming}</p>
-          </li>
-        )}
-      </ul>
-      {step && t.has(`progress.${step}`) && (
-        <p role="status" className="hint">
-          {t(`progress.${step}`)}
-        </p>
-      )}
-      {plan && <PlanCard plan={plan} busy={busy} onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))} />}
-      {pending?.kind === "request_style" && <RequestStylePrompt busy={busy} onChoose={chooseStyle} />}
-      {error !== null && (
-        <p role="alert" className="notice notice-warning">
-          {errorText(error)}
-        </p>
-      )}
+      <MessageList
+        items={items}
+        pending={pending}
+        streaming={streaming}
+        step={step}
+        error={error}
+        busy={busy}
+        onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))}
+        onChooseStyle={chooseStyle}
+      />
       <form className="chat-form" onSubmit={onSubmit}>
-        {hint && <p className="notice notice-info">{hint}</p>}
         <label className="stack-field">
           {t("inputLabel")}
           <input
