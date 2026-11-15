@@ -179,8 +179,6 @@ A new function in `minemydinner/planning/` builds the shortlist from the parsed 
 
 **Complete marker (decided during Task 10 tuning):** per dish type, the shortlist records whether it kept every recipe the fetch returned (`complete`, also true for none); the first message gives each type as `{"complete": bool, "candidates": [...]}`, and the planner prompt says not to search a complete type, so a request the shortlist already answers needs no search call.
 
-**Empty side line (decided during Task 10 tuning):** with no split named, when exactly one of meat dish and vegetable dish is complete and empty while the other has candidates, the request summary adds a line saying every dish is of the other kind and not to search the empty kind.
-
 The shortlist goes into the planner's first message as compact JSON, before the request summary (data first, the task last; Section 5.7). The planner prompt (`planner.md` v2) says: choose from the shortlist when it fits; search for more only when it does not; check details only when needed; final answer is `PlanProposal` as before.
 
 ### 5.5 Validation change
@@ -247,7 +245,7 @@ Today `llm_calls.cost_estimate` prices every input token at the full rate and `m
 
 ### 5.9 Success criteria (measured on the test database, current prompts `route_v2+parse_v2+planner_v3`, against the plan 1 baseline)
 
-- Feasible scenarios: first-attempt pass rate at least the baseline (6/6 of the original feasible ones), average planner calls about 2 (total calls per run at most 5 including intent and parsing).
+- Feasible scenarios: first-attempt pass rate at least the baseline (6/6 of the original feasible ones), average planner calls about 2 (about 4 calls per run including intent and parsing). Calls are judged by the average over the scenarios that expect a plan; a single scenario over 5 calls is a warning, not a failure (decided with the user after the Task 10 tuning rounds; see `docs/planning-evaluation-history.md`).
 - Each infeasible scenario ends within 8 model calls with the right reason and next actions; empty inventory within 3. The 8-call bound also covers requests that reach the planner and then fail validation.
 - Paid evaluation runs: one full run after implementation (and, if constants are tuned, one confirming rerun), each approved by the user before it starts.
 - Total cost and average latency below the baseline ($0.064 and 11.3 s for the original 7 scenarios). The baseline was priced without cache discounts; the comparison uses the same uncached pricing for both runs (computed from token counts), and the cache-aware cost is reported next to it.

@@ -144,3 +144,5 @@ How to read the metrics in `summary.json`:
 - Metrics come in three groups: `all`, `expect_plan` (scenarios that should end with a plan), and `expect_stop` (scenarios that should stop early with a reason). Check-only scenarios are in no group; their pass count is `metrics.checks`.
 - Compare aggregates only between runs of the same scenario set. When the sets differ, compare same-named scenarios.
 
+After every evaluation, add a round to `docs/planning-evaluation-history.md`: what changed since the previous round, the runs made, and a row per run in its comparison tables.
+
