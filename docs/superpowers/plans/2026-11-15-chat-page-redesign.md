@@ -87,6 +87,8 @@ git commit -m "feat: chat shows each reply with its own plan card and keeps ques
 
 ### Task 3: Layout, composer, request-style switch, welcome state, and home page
 
+As built, the layout changed further during the user's browser checks; the design (Sections 5.2 and 5.6) records the final behaviour.
+
 **Files:**
 - Create: `frontend/src/components/Composer.tsx`, `frontend/src/components/RequestStyleSwitch.tsx`, `frontend/src/components/ChatWelcome.tsx`
 - Modify: `frontend/src/components/ChatPage.tsx` (remove the top dropdown and top "new conversation"), `frontend/src/app/[locale]/page.tsx` (renders the chat), `frontend/src/app/[locale]/chat/page.tsx` (redirects to `/[locale]`), `frontend/src/components/MainNav.tsx` (drop the separate chat link), `frontend/src/app/globals.css`, `frontend/messages/en.json`, `frontend/messages/zh.json`
@@ -112,6 +114,8 @@ git commit -m "feat: chat page layout with bottom composer, request-style switch
 ```
 
 ### Task 3b: Read-only recipe detail in the plan card and the library (design 5.6)
+
+As built, the layout changed further during the user's browser checks; the design (Sections 5.2 and 5.6) records the final behaviour.
 
 **Files:**
 - Create: `frontend/src/components/RecipeDetail.tsx`, `frontend/src/app/[locale]/library/[id]/page.tsx`

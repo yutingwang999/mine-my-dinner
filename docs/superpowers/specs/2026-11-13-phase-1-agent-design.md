@@ -167,7 +167,7 @@ Deferred minors from the final Phase 0 review that change extraction results, so
 
 - `_log` in `llm/client.py` has no error handling, so a failed `llm_calls` write discards a paid result: fix in step 2 while extracting the shared call core.
 - `GET /api/recipes` N+1 loading: use `selectinload` in step 2 alongside `search_recipes`.
-- Read-only recipe detail view (the user's addition): the library shows only the source; structured ingredients appear only in the edit form, and users do not think to click Edit. Build a read-only detail view (ingredients, cookware, time and source, steps summary) in step 9, shared with the chat plan card's "view dish".
+- Read-only recipe detail view (the user's addition): the library shows only the source; structured ingredients appear only in the edit form, and users do not think to click Edit. Build a read-only detail view (ingredients, cookware, time and source, steps summary) in step 9, shared with the chat plan card's "view dish". Built early, in the chat page redesign (2026-11-15; `docs/superpowers/specs/2026-11-15-chat-page-redesign-design.md`, Section 5.6).
 - T1.6 also deletes a recipe's Store notes when the recipe is deleted, and cleans up saved plans when a friend is deleted (7.6).
 - T1.9's delete-friend dialog (built in Phase 0 Task 7) gains the conversation warning and link.
 
