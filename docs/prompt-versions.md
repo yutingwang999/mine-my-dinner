@@ -32,3 +32,17 @@ Records that say `plan_v1` or `plan_v2` keep that label.
 | --- | --- |
 | `route_v2+parse_v2+planner_v3` | `planner_v3` adds the complete marker to the planner's shortlist rules. |
 | `route_v2+parse_v3+planner_v3` (current) | `parse_v3` adds `meat_bound` and `vegetable_bound` ("至少" / "最多" on a meat or vegetable count), reads "at least" or "at most" on other categories as that number in `range_fields`, and gives examples for the messages the next-action buttons send ("荤素都行", "不一定要用指定的食材") after a plan (design 5.11). The planner prompt is unchanged: the request summary states the ranges in words. |
+
+## Recipe extraction
+
+`PROMPT_VERSION` in `backend/minemydinner/extraction/extractor.py` names the current file; each saved review writes it to `extraction_logs.prompt_version`.
+
+| Version | Change |
+| --- | --- |
+| `extract_v1` | The Phase 0 prompt. It was edited in place several times during the Phase 0 import, each time with the user's approval, while `extraction_logs` was still empty. The 134 logs in the real database (as of 2026-11-15) all use it. |
+| `extract_v2` (current) | Adds `recipe_count`: the number of distinct recipes in the input (at least 1; only the first is extracted; variations of one recipe count as one), so the review can warn when several recipes were pasted together. Adds an example with two recipes pasted together. Commit `d8a6271`, 2026-11-13; the same commit tightened the amount guard in `postprocess.py`, which is code, not prompt. No saved review has used it yet (2026-11-15). |
+
+## Prompts without a version yet
+
+- **Allergen suggestions** (`backend/minemydinner/extraction/allergen_suggest.py`, task `allergen_suggestions`). The prompt is a constant in the code, not a file, and no record names it: a suggestion is never stored, only the allergens the user confirms, and the model call leaves a `llm_calls` usage row without a prompt version. The import and dictionary experience plan changes this prompt (it adds the category and stock mode); that change moves it to a file (`allergen_suggest_v1.md`) under the same rule. See `docs/phase-1-carryover.md`.
+
