@@ -1,4 +1,5 @@
-import json
+﻿import json
+import uuid
 from collections.abc import Collection
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
@@ -593,29 +594,38 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return "ask_question"
         return "load_context"
 
+    def _question(state: ChatState, value: dict) -> dict:
+        # For display only: `at` is the message count when the question was asked.
+        return {"at": len(state["messages"]), "value": value}
+
     def ask_style(state: ChatState) -> dict:
-        value = interrupt({"kind": "request_style"})
+        asked = {"kind": "request_style"}
+        value = interrupt(asked)
+        record = {"questions": [*(state.get("questions") or []), _question(state, asked)]}
         if value in REQUEST_STYLES:
             with deps.session_factory() as session:
                 set_request_style(session, value)
-            return {}
+            return record
         # Skipped: the question is asked once, and skipping means plan then adjust (design 6.2).
         with deps.session_factory() as session:
             set_request_style(session, "plan_then_adjust")
-        return {}
+        return record
 
     def ask_question(state: ChatState) -> dict:
         parsed = ParsedRequest.model_validate(state["request"])
         problem = request_problem(parsed)
         update: dict[str, Any] = {}
         if problem:
-            answer = interrupt({"kind": "question", "fields": ["composition"], "problem": problem})
+            asked = {"kind": "question", "fields": ["composition"], "problem": problem}
+            answer = interrupt(asked)
             update["problem_asked_at"] = len(state["messages"])
         else:
             # Only the ask-first question is limited to once per request.
             update["asked_question"] = True
             fields = needs_question(parsed, "ask_first")
-            answer = interrupt({"kind": "question", "fields": fields})
+            asked = {"kind": "question", "fields": fields}
+            answer = interrupt(asked)
+        update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
         if isinstance(answer, str) and answer.strip():
             update["messages"] = [HumanMessage(answer)]
         return update
@@ -992,10 +1002,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # The record keeps the replaced form; the state keeps the restored one.
             final_plan=map_strings(plan, deps.client.prepare_text),
         )
+        reply_id = str(uuid.uuid4())
         return {
             "current_plan": plan,
             "plan_versions": [*(state.get("plan_versions") or []), plan],
-            "messages": [AIMessage(note)],
+            "reply_plans": {**(state.get("reply_plans") or {}), reply_id: plan},
+            "messages": [AIMessage(note, id=reply_id)],
         }
 
     builder = StateGraph(ChatState)

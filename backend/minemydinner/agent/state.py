@@ -43,3 +43,7 @@ class ChatState(TypedDict):
     retries: int
     current_plan: dict | None
     plan_versions: list[dict]
+    # Display only, never sent to a model: each plan by the id of the assistant reply it
+    # belongs to, and the questions the assistant asked ({"at": message count, "value": dict}).
+    reply_plans: dict[str, dict]
+    questions: list[dict]
