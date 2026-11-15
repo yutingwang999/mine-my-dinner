@@ -96,6 +96,8 @@ How the meat and vegetable split combines with the dish total:
 | "三个菜，一荤一素" (named split below the total) | dishes 3, meat 1, vegetable 1 | the total wins; the named counts become minimums (at least 1 meat and 1 vegetable) |
 | "两个菜，三个荤菜" (named split above the total) | contradiction | `parse_request` interrupts and asks (design 6.2: genuine contradictions always interrupt) |
 
+"At least" and "at most" on one side, and the ranges every step uses, are in Section 5.11 (added after Task 10).
+
 `dishes` counts meat and vegetable dishes only, as H4 does today; soups, staples, desserts, and snacks are separate. When no dish total is stated, `dishes` is the sum of the named meat and vegetable counts. All counts together are capped at 12; a larger request interrupts and asks, treating it as a likely slip.
 
 **The card shows what was understood, not only what was assumed.** `current_plan` carries the stated values next to `defaults_used`, and the card renders two lines: "As you asked: 8 dishes (2 meat), fridge only" and, only when something was assumed, "Assumed: 1 person, 2 dishes and 1 soup. Say if that's wrong." A misparse is then visible at a glance and corrected in one sentence.
@@ -220,6 +222,62 @@ Today `llm_calls.cost_estimate` prices every input token at the full rate and `m
 - **Length tiers** are noted in the catalog (gpt-6-luna doubles above 272K input tokens; gemini-3.8-flash prices double from 2027-01-01); the 32,000-token budget stays far below any tier.
 - **Guard the budget.** A config test asserts that `PLANNER_INPUT_TOKEN_BUDGET` is below, with margin (at most half), the `context_window` of every candidate of the `planning` and `planning_eval` tasks, so changing a model cannot silently break the guard.
 - **Report it.** The planning evaluation prints, per scenario and overall, the cache hit rate (cached input ÷ total input) and the largest single-call input tokens. The `llm_calls` stats used elsewhere include cached tokens.
+
+### 5.11 Meat and vegetable bounds (added after Task 10, decided with the user)
+
+**Why.** Section 5.1 knows two kinds of split: exact counts, and both sides named below the total (read as minimums). "8个菜，至少2个荤菜" loses "at least" and becomes exactly 2 meat and 6 vegetable dishes; "三个菜，最多一个素菜" becomes exactly 1 vegetable dish. In fridge-only mode with 3 makeable meat and 5 makeable vegetable dishes, "8个菜，至少2个荤菜" then reaches the planner, fails H4 on every attempt, and ends with no plan, although 3 meat and 5 vegetable dishes meet the request. A second gap shows in the same case with "8个菜，2个荤菜": the feasibility check compares the named side and the dish total but not the implied side (8 − 2 = 6 vegetable dishes), so it lets an impossible request through to three failing attempts instead of stopping early.
+
+**Scope (decided by the user).** Only the meat and vegetable pair gets bounds, because the dish total limits them. For soups, staple foods, desserts, and snacks, "至少一个汤" or "最多一个主食" is read as that number and listed as assumed (as a range taken at its lower end is today). Vague phrases ("多来点荤菜", "以素为主") stay a query term with no number. Questions written by the model are out of scope (`docs/phase-1-carryover.md`).
+
+**Parsing (`parse_v3`; `parse_v2` stays unchanged).** `ParsedRequest` gains `meat_bound` and `vegetable_bound`, each `"exact" | "at_least" | "at_most"`, used only when the matching count is set (`"exact"` when the user gives a plain number). Other categories with "至少" / "最多" put the number in the count and the field name in `range_fields`. Examples in `parse_v3.md`:
+
+| The user says | Parsed |
+|---|---|
+| 8个菜，至少2个荤菜 | dishes 8, meat 2 at_least |
+| 三个菜，最多一个素菜 | dishes 3, vegetable 1 at_most |
+| 四个菜，至少一个荤菜，素菜最多两个 | dishes 4, meat 1 at_least, vegetable 2 at_most |
+| 三个菜，不要素菜 / 三个菜，全是荤菜 | dishes 3, vegetable 0 exact |
+| 三个人，最多一个素菜 | headcount 3, vegetable 1 at_most (no total) |
+| 至少一个汤 | soups 1, range_fields [soups] |
+| 一荤一素 … then the next message 荤素都行 (the `relax_split` button) | dishes 2, no meat or vegetable count (the split is dropped, the total kept) |
+| 三个菜，至少一个荤菜 … then 荤素都行 | dishes 3, no meat or vegetable count |
+| 全做鸡蛋 … then 不一定要用指定的食材 (the `relax_named` button) | all_use empty, prefer_use [鸡蛋] |
+
+The last three rows are what the next-action buttons send (Section 5.3). `parse_v2` has no example for them, so whether a button actually changes the request depends on the model; `parse_v3` adds them, and tests cover the parse of a conversation that ends with each button's message.
+
+**One range per side.** `PlanSpec` replaces `split_is_minimum` with `meat_bound` and `vegetable_bound` next to the existing counts. One function turns the spec into a range `[low, high]` per side, and every later step uses it. With total `T`, a named side gives: exact `n` → `[n, n]`; at least `n` → `[n, T]`; at most `n` → `[0, n]`; unnamed → `[0, T]`. Then each side is tightened by the other, because meat plus vegetable dishes equal `T`: `meat_low = max(meat_low, T − veg_high)`, `meat_high = min(meat_high, T − veg_low)`, and the same for vegetables. So "三个菜，最多一个素菜" gives vegetables `[0, 1]` and meat `[2, 3]`. The existing rule stays: both sides named exactly with a sum below the total become at least.
+
+**The dish total.**
+
+- A stated total is used as is.
+- No total and every named side exact: the total is the sum of the named counts, as today ("一荤一素" → 2; "两个荤菜" → 2).
+- No total and a side named "at least" or "at most" (decided by the user): the total is the headcount default number of dishes (design 6.2), raised to the sum of the lower bounds if that is larger, and listed as assumed. Soups are not added: a count was stated, so unstated categories stay 0 (Section 5.1). Both request styles do this; "ask first" does not ask for the total in this case.
+- A side whose range is empty after tightening (low above high), such as "两个菜，至少三个荤菜" or "三个菜，最多一个荤菜，最多一个素菜", is a contradiction: `request_problem` reports it and the existing composition question asks the user to restate the counts, whatever the style.
+
+**Every step reads the ranges.**
+
+- **Validation (H4):** meat dishes within the meat range, vegetable dishes within the vegetable range, and their sum equal to the total. The finding's detail carries the ranges.
+- **Feasibility check:** with `available` per side (safe recipes, or makeable ones in fridge-only mode), it reports a side as short when `available < low` for that side, including a side the user did not name ("By the current fridge you can make 5 vegetable dishes; this meal needs 6"). It reports the dish total as short when `min(meat_high, meat_available) + min(veg_high, veg_available) < T`. This closes the second gap above.
+- **Next actions:** `relax_split` is offered whenever the user named a meat or vegetable count and a meat or vegetable side, named or implied, is short.
+- **Shortlist:** each side needs `high` dishes; a side with `high` 0 is not shortlisted.
+- **Words (request summary, retry message, plan card, reason text):** one phrase per side from its range: `low = high` → "6 vegetable dishes"; `low > 0` and `high < T` → "2 to 3 meat dishes"; `low > 0` → "at least 2 meat dishes"; `high < T` → "at most 1 vegetable dish"; otherwise nothing. Chinese: "6 道素菜", "2 到 3 道荤菜", "至少 2 道荤菜", "最多 1 道素菜". The request summary line "Every count is exact unless it says at least" becomes "Every count is exact unless it says at least, at most, or a range". The plan card's "As you asked" line shows the user's own bound ("8 dishes (at least 2 meat)", "3 dishes (at most 1 vegetable)"). The two differ on purpose (decided with the user): the model reads the tightened ranges, which are stricter and clearer, while the user reads their own words. For "四个菜，至少一个荤菜，素菜最多两个" the summary says "at least 2 meat dishes, at most 2 vegetable dishes" and the card says "4 dishes (at least 1 meat, at most 2 vegetable)".
+- **Old records:** a saved plan whose spec has `split_is_minimum` and no bounds is read as both named sides "at least" when the flag is true, otherwise exact (the frontend's `normalizePlan` and any backend reader of old specs).
+
+**Versions.** The prompts become `route_v2+parse_v3+planner_v3`; the planner prompt is unchanged because the request summary states the ranges in words. The planner's tools are unchanged.
+
+**Evaluation.** A new scenario file, `backend/eval_data/planning/scenarios_counts.yaml` with `library_extended.yaml`, so the plan 2a set stays comparable across rounds. These scenarios took no part in the Task 10 tuning. The runner gains a range expectation for meat and vegetable counts. Scenarios:
+
+| Request | Mode and stock | Expected |
+|---|---|---|
+| 8个菜，至少2个荤菜 | fridge-only; makeable: 3 meat, 5 vegetable | a plan of 8 dishes with at least 2 meat |
+| 8个菜，2个荤菜 | the same | early stop: 5 vegetable dishes available, 6 needed; `relax_split` offered |
+| 三个菜，最多一个素菜 | shopping | a plan of 3 dishes with at most 1 vegetable |
+| 三个菜，最多一个素菜 | fridge-only; makeable: 1 meat, 4 vegetable | early stop: 1 meat dish available, at least 2 needed |
+| 三个菜，不要素菜 | shopping | 3 meat dishes |
+| 四个菜，至少一个荤菜，素菜最多两个 | shopping | 4 dishes, at least 1 meat, at most 2 vegetable |
+| 三个人，最多一个素菜 | shopping | the default 2 dishes stated as assumed, at most 1 vegetable, no soup |
+
+Two more scenarios check the buttons' messages, as a conversation of two user messages if the runner supports it (otherwise by a paid parse-only test or unit tests with a fake model): "一荤一素，只用冰箱里的" with no makeable meat dish, then "荤素都行" (expect a plan of 2 dishes in any mix); and "全做鸡蛋" with no eggs in stock, then "不一定要用指定的食材" (expect a plan, with eggs preferred, not required). A contradiction ("三个菜，最多一个荤菜，最多一个素菜") is covered by unit tests if the runner cannot check a question interrupt. The round goes into `docs/planning-evaluation-history.md`, noting the new file.
 
 ### 5.8 Evaluation additions
 

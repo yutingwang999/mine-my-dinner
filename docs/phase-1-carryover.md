@@ -56,6 +56,7 @@ Task-review and final-review findings that were judged safe to defer. None block
 - **`check_recipes` treats nonexistent recipe ids as safe.** Every caller checks existence today (H5, the tools' known-id check, search), so it is safe in practice; keep it that way or make the function report unknown ids.
 - **S3 calls `date.today()` inline.** Pass `today` as a parameter; tests near midnight can flake.
 - **S1 and S6 skip optional lines, and S1 reports per line rather than per ingredient.** Plan 2a makes S1 sum per ingredient across the plan's dishes (warning only).
+- **Clarifying questions written by the model (not planned in Phase 1).** Today every question to the user is decided by code and asked with a fixed form (request style, mode, dish count under "ask first", contradictions, diner selection, unconfirmed diners, saving a friend's rule); the model only parses. Vague requests that no code rule turns into numbers ("多来点荤菜", "清淡点", "像上次那样") might benefit from a question. A possible shape: the parse marks what it is unsure about, and code still decides whether to ask, how often per turn, and in what words. Needs its own design (when it may ask, limits per turn, wording, evaluation); keep allergy and diet questions code-driven.
 
 ### Shopping list (T1.5)
 

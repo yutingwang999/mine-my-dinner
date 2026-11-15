@@ -496,3 +496,46 @@ git commit -m "docs: plan 2a evaluation result against the plan 1 baseline"
 ```
 
 - [ ] **Step 7: Checkpoint.** The user plans a real meal on their own instance (after `alembic upgrade head` for `0007` and a backend restart) and notes anything that feels wrong; findings go into `docs/phase-1-carryover.md` for plan 2b.
+
+The Task 10 checkpoint (Step 7) moves after Task 11, so the user tries real meals on the final 2a code.
+
+### Task 11: Meat and vegetable bounds (design 5.11)
+
+Added after Task 10 with the user. Design 5.11 is the requirement; this task fixes names, files, and tests.
+
+**Files:**
+- Create: `backend/minemydinner/agent/prompts/parse_v3.md` (copy of `parse_v2.md` plus the bound fields and the examples in design 5.11, including the three button messages)
+- Modify: `backend/minemydinner/agent/request.py` (`ParsedRequest`, `PROMPT_VERSIONS["parse"] = "parse_v3"`, `apply_defaults`, `request_problem`)
+- Modify: `backend/minemydinner/planning/validate.py` (`PlanSpec`, `_h4`), `backend/minemydinner/planning/composition.py` (ranges, shortfall, gap), `backend/minemydinner/planning/feasibility.py`, `backend/minemydinner/planning/shortlist.py` (`needed_by_dish_type`), `backend/minemydinner/agent/graph.py` (summary, retry text, card text, reason text, next actions)
+- Modify: `frontend/src/lib/chat.ts` (`normalizePlan`, spec type, problem type), `frontend/src/components/PlanCard.tsx` ("As you asked"), `frontend/messages/en.json`, `frontend/messages/zh.json`
+- Modify: `backend/minemydinner/evaluation/planning.py` (range expectation; two-message scenarios if feasible)
+- Create: `backend/eval_data/planning/scenarios_counts.yaml`
+- Modify docs: `docs/planner-request-and-counts.md`, `docs/planner-feasibility-check.md`, `docs/prompt-versions.md` (parse_v3), `docs/phase-1-carryover.md` (remove the items this task resolves)
+- Tests: `backend/tests/test_agent_request.py`, `test_planning_composition.py`, `test_validate_plan.py`, `test_planning_feasibility.py`, `test_planning_shortlist.py`, `test_agent_graph.py`, `test_planning_eval.py`; frontend `PlanCard` and `chat` tests (run with PowerShell)
+
+**Interfaces:**
+- `Bound = Literal["exact", "at_least", "at_most"]`. `ParsedRequest.meat_bound: Bound | None`, `ParsedRequest.vegetable_bound: Bound | None` (None when the matching count is None; a set count with no bound means "exact").
+- `PlanSpec.meat_bound`, `PlanSpec.vegetable_bound` (same type); `PlanSpec.split_is_minimum` is removed. The existing "both named exactly, sum below the total" rule sets both bounds to `"at_least"`.
+- `side_ranges(spec: PlanSpec) -> dict[str, tuple[int, int]]` in `planning/composition.py`, keys `"meat_dishes"` and `"vegetable_dishes"`, tightened against the total as in design 5.11. Validation, feasibility, shortlist, and every text use it; nothing else computes ranges.
+- `dish_total(parsed: ParsedRequest, headcount: int) -> int` in `agent/request.py`, shared by `apply_defaults` and `request_problem`, following design 5.11 "The dish total".
+- `request_problem` returns `"split_conflicts_total"` when any side range is empty (this includes today's sum-above-total case); `"too_many"` as today. The frontend keeps the `split_exceeds_total` message for interrupts already saved in checkpoints and adds `split_conflicts_total` ("荤菜和素菜的数量要求和总菜数对不上。请重新告诉我各自的数量。" / "The meat and vegetable counts do not fit the total number of dishes. Tell me the counts again.").
+- `side_phrase(low: int, high: int, total: int, category: str, zh: bool) -> str | None` in `agent/graph.py`, the wording rule of design 5.11.
+- Old specs: a spec dict with `split_is_minimum` and no bounds reads as `"at_least"` for named sides when true, else `"exact"` (backend reader of stored specs and frontend `normalizePlan`).
+
+- [ ] **Step 1: Ranges and totals (failing tests first).** In `test_planning_composition.py` / `test_agent_request.py`:
+  - `side_ranges`: "8, meat 2 exact" → meat (2, 2), vegetable (6, 6); "8, meat 2 at_least" → (2, 8), (0, 6); "3, vegetable 1 at_most" → meat (2, 3), vegetable (0, 1); "4, meat 1 at_least, vegetable 2 at_most" → meat (2, 4), vegetable (0, 2); "3, vegetable 0 exact" → meat (3, 3), vegetable (0, 0); "3, meat 1 + vegetable 1 below the total" → (1, 2), (1, 2); no split → (0, T), (0, T).
+  - `dish_total`: a stated total is kept; "一荤一素" → 2; headcount 3 + vegetable 1 at_most, no total → 2 (default) and "dishes" in `defaults_used`; headcount 1 + meat 2 at_least, no total → 2 (raised to the lower bounds); no soup is added in either case.
+  - `request_problem`: "两个菜，至少三个荤菜", "三个菜，最多一个荤菜，最多一个素菜", and "两个菜，三个荤菜" → `"split_conflicts_total"`.
+  - "至少一个汤", parsed as soups 1 with `range_fields ["soups"]` → soups 1, "soups" in `defaults_used`.
+- [ ] **Step 2: Implement** `Bound`, the fields, `dish_total`, `side_ranges`, `request_problem`, `apply_defaults`, and `parse_v3.md`; switch `PROMPT_VERSIONS["parse"]`.
+- [ ] **Step 3: Validation, feasibility, shortlist (failing tests first).**
+  - H4, "3, vegetable 1 at_most": 2 meat + 1 vegetable passes, 3 meat passes, 1 meat + 2 vegetable fails with both ranges in the detail. The closest-attempt gap counts the distance outside each range.
+  - Feasibility, fridge-only with 3 makeable meat and 5 makeable vegetable dishes: "8, meat 2 exact" → `not_enough_dishes` for vegetable dishes, needed 6, available 5, with `relax_split` among the next actions; "8, meat 2 at_least" → passes. No split, "8", with 3 meat + 4 vegetable makeable → short on the dish total (7 of 8). "3, vegetable 1 at_most" with 1 makeable meat dish → meat short, at least 2 needed.
+  - Shortlist: "3, vegetable 1 at_most" → meat needs 3, vegetable 1; "3, vegetable 0 exact" → no vegetable dish type.
+- [ ] **Step 4: Implement** the readers of `side_ranges`, and remove every use of `split_is_minimum` outside the old-spec reader.
+- [ ] **Step 5: Words (failing tests first).** `side_phrase` for each rule in both languages. The request summary for "3, vegetable 1 at_most" contains `Split: at least 2 meat dishes, at most 1 vegetable dish` and the line `Every count is exact unless it says at least, at most, or a range`. For "4, meat 1 at_least, vegetable 2 at_most" the summary says "at least 2 meat dishes, at most 2 vegetable dishes" while the card's "As you asked" shows the user's own bounds. Retry and card H4 texts use the same phrases and never print an unnamed side as 0; reason text says "at least" for a lower bound that is not exact. Then implement.
+- [ ] **Step 6: Frontend.** `normalizePlan` reads old specs (with `split_is_minimum`) as in the Interfaces block; "As you asked" shows "8 dishes (at least 2 meat)" / "8 道菜（至少 2 道荤菜）" and "at most"; the new problem message. Tests: an old spec renders as before; each bound renders in both languages. Run the frontend tests and lint with PowerShell.
+- [ ] **Step 7: Evaluation.** Add a range expectation (`expect_count_range: {meat_dishes: [2, 8]}`) to the runner. Create `scenarios_counts.yaml` with the seven scenarios of design 5.11 (stock chosen from `library_extended.yaml` so the makeable counts match the table) and the two button-message scenarios (two user messages if the runner can support it with a small change; otherwise unit tests with a fake model that check the parse of the conversation; the report says which). Each plan scenario has `max_model_calls: 5`; each early stop states the expected reason, numbers, and next actions.
+- [ ] **Step 8: Docs.** `docs/planner-request-and-counts.md` (Sections 2-6: bounds, ranges, the examples above, the gaps closed), `docs/planner-feasibility-check.md` (implied side and dish-total rule), `docs/prompt-versions.md` (parse_v3), carryover (remove the one-sided "at least" item and the parse_v2 "relax_named" example gap).
+- [ ] **Step 9: Full backend and frontend suites.**
+- [ ] **Step 10: User commit**, then the paid evaluation (user approval): the four usual runs and `scenarios_counts.yaml` once. Add round 6 to `docs/planning-evaluation-history.md`, noting the new scenario file; the plan 2a set's numbers stay comparable.
