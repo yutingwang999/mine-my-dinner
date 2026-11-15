@@ -87,9 +87,14 @@ Today the home page shows only the app name and tagline, and the chat lives at `
 - **Opening the site continues the last conversation** (Claude's call, open to change by the user): with no list of past conversations, starting a new one on every visit would hide the previous conversation for good. "New conversation" starts a fresh one. When a history list is added later, opening on a new conversation (as ChatGPT does) can be reconsidered.
 - The welcome texts and example requests are in `messages/en.json` and `messages/zh.json`.
 
-### 5.5 Open: the reply text that comes with a plan
+### 5.5 The reply text that comes with a plan (decided by the user)
 
-The reply shown with a plan is the planner model's own note, unchecked; in the plan 2a checkpoint it miscounted the dishes and suggested a dish outside the plan. How the reply should be written (code, a stricter prompt, a check, or a mix) is still open and is decided while planning this redesign; see `docs/phase-1-carryover.md` ("The assistant's reply text after a plan…"). The user found a fully code-written reply too rigid.
+The reply shown with a plan is the planner model's `note`, unchecked; in the plan 2a checkpoint it miscounted the dishes ("3 道荤菜……实际为荤 4 道") and suggested a dish outside the plan. The user found a fully code-written reply too rigid and chose to **change only the prompt**, then measure which model writes the note most reliably.
+
+- **`planner_v4`** (a new planner prompt version; only the note rules change): the note is one sentence with one practical tip (which dish to start first, which takes longest, how the dishes go together); it does not count or list the plan's dishes (the card shows them); it names no dish outside the plan and suggests no swaps; it is in the reply locale and makes no allergy safety claims (as today). The `PlanProposal` schema stays the same, so the tool version is unchanged.
+- **Automatic note checks in the planning evaluation**, per scenario and per run: names a library dish that is not in the plan; counts dishes (a number next to 道/菜/dish words, or 荤/素 counts); more than one sentence; wrong reply language (existing check). Reported in `summary.json` (counts and rates, no model text) and in the git-ignored `results.jsonl` (the note itself).
+- **Model comparison.** The evaluation gains `--planning-model <catalog name>`, which runs the whole `planning_eval` task (route, parse, planner) on that model and records it in `summary.json`. All five tool-calling catalog models are compared — deepseek-flash (current), deepseek-v4-pro, gpt-6-luna, gemini-3.5-flash-lite, gemini-3.8-flash — on the plan 2a and counts scenario sets, three runs each, so stability shows. Because the whole chain changes, the comparison reports planning results (as expected, first pass, calls, cost, time) next to the note checks. Paid runs need the user's approval with the expected cost.
+- **The user rates the notes.** After the automatic checks, the notes of every run are exported for review: model, run, scenario, the plan's dishes, the note, and the automatic flags, with empty columns for the user's judgement (quality, and whether anything appears that should not). Model text stays out of Git. The user decides which model plans from the combined result; switching the default planning model is a separate, approved change.
 
 ## 6. Left to the builder
 
