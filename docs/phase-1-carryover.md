@@ -128,6 +128,8 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 
 ### Planning logic
 
+- **A feasibility stop on a retry drops the closest attempt** (`graph.py`, final 2a review). The re-check before a retry can only differ from the first when stock or the library changes during the run; if that ever happens, the earlier closest attempt (`best`) is replaced by the stop. Prefer showing `best` if this case starts to matter (diner changes in 2b, inventory tools).
+- **Skipping the contradiction question costs one extra parse call**: an empty answer goes back to `parse_request`, which calls the model again before reaching `unclear` (final 2a review). Rare path.
 - **Named ingredient stocked at count 0.** The quick "is it at home" test reads every named ingredient leniently (as a seasoning), so a non-seasoning such as eggs at count 0 passes that test. The per-recipe check still stops the request, with "only 0 dishes with 鸡蛋 can be made" instead of "no 鸡蛋 in the fridge". Passing the ingredient's real role would give the plainer wording.
 - **A recipe with no ingredient lines counts as makeable**, so it also keeps the empty-fridge reason from appearing.
 - **`uses_expiring` lists optional lines** in search hits and the shortlist.
@@ -147,6 +149,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 
 - Provider-prefixed cache fields (such as OpenAI's `priority_cache_read`) are not read; the app uses the Standard tier.
 - Cache counts that a provider does not report are stored as 0 rather than null (priced as uncached either way).
+- When OpenAI reports no `cache_creation` count, written tokens are priced at the input rate rather than the cache-write rate (gpt-6-luna: $0.10 instead of $0.125 per million): a small underestimate, on the fallback model only (final 2a review).
 
 ### Evaluation
 
@@ -167,6 +170,8 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - A long line in `llm/smoke.py`, an obscure condition in `tests/fakes.py`, and single quotes in migration `0007`.
 - The plan card's list of known next actions (`KNOWN_ACTIONS` in `PlanCard.tsx`) repeats the `NextAction` type by hand; a typed record would catch drift at compile time.
 - `tests/test_planning_shortlist.py` has a line over 100 characters (complete-marker test).
+- `COUNTED_DISH_TYPES` in `planning/composition.py` spells out the meat and vegetable categories instead of reusing `SPLIT_CATEGORIES` (cosmetic; final 2a fix wave re-review).
+- The per-run query-embedding cache drops other runs' entries when a run starts, so two conversations planning at the same moment may each embed a query once more than needed (final 2a fix wave; correctness unaffected).
 - The package-data test (`test_package_data_glob_matches_every_prompt_file`) uses `fnmatch`, whose `*` also crosses `/`, so a too-broad glob would still pass; it does not build a wheel.
 
 ## Minor findings from the final Phase 0 review, deferred

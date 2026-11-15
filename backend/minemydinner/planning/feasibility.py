@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from minemydinner.extraction.normalize import match_ingredient
 from minemydinner.planning.composition import (
-    CATEGORY_OF_DISH_TYPE,
+    DISH_TYPE_OF_CATEGORY,
     required_counts,
     side_ranges,
 )
@@ -32,7 +32,6 @@ REASONS = (
     "named_ingredient",
 )
 
-_DISH_TYPE_OF_CATEGORY = {category: dish_type for dish_type, category in CATEGORY_OF_DISH_TYPE.items()}
 _SINGLE_CATEGORIES = ("soups", "staples", "desserts", "snacks")
 _SIDES = ("meat_dishes", "vegetable_dishes")
 
@@ -84,17 +83,17 @@ def _units(spec: PlanSpec) -> list[_Unit]:
     units: list[_Unit] = []
     for category in _SINGLE_CATEGORIES:
         if required[category] >= 1:
-            units.append(_Unit(category, (_DISH_TYPE_OF_CATEGORY[category],), required[category]))
+            units.append(_Unit(category, (DISH_TYPE_OF_CATEGORY[category],), required[category]))
     if spec.dishes >= 1:
         ranges = side_ranges(spec)
         for side in _SIDES:
             low, high = ranges[side]
             if low >= 1:
                 units.append(
-                    _Unit(side, (_DISH_TYPE_OF_CATEGORY[side],), low, minimum=low < high)
+                    _Unit(side, (DISH_TYPE_OF_CATEGORY[side],), low, minimum=low < high)
                 )
         caps = tuple(
-            (_DISH_TYPE_OF_CATEGORY[side], ranges[side][1])
+            (DISH_TYPE_OF_CATEGORY[side], ranges[side][1])
             for side in _SIDES
             if ranges[side][1] >= 1
         )

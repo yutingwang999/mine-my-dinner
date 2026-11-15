@@ -23,6 +23,9 @@ CATEGORY_OF_DISH_TYPE = {
     "dessert": "desserts",
     "snack": "snacks",
 }
+DISH_TYPE_OF_CATEGORY = {category: dish_type for dish_type, category in CATEGORY_OF_DISH_TYPE.items()}
+# The dish types that count toward the dish total (the meat and vegetable dishes).
+COUNTED_DISH_TYPES = tuple(DISH_TYPE_OF_CATEGORY[category] for category in ("meat_dishes", "vegetable_dishes"))
 SPLIT_CATEGORIES = ("meat_dishes", "vegetable_dishes")
 # How a named meat or vegetable count binds (design 5.11).
 Bound = Literal["exact", "at_least", "at_most"]

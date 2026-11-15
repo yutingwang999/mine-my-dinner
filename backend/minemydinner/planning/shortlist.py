@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import RecipeIngredient
 from minemydinner.planning.composition import (
-    CATEGORY_OF_DISH_TYPE,
+    DISH_TYPE_OF_CATEGORY,
     required_counts,
     side_ranges,
 )
@@ -34,7 +34,6 @@ SHORTLIST_MIN_PER_CATEGORY = 5
 SHORTLIST_MARGIN = 3
 SHORTLIST_SAME_MAIN = 2
 
-DISH_TYPE_OF_CATEGORY = {category: dish_type for dish_type, category in CATEGORY_OF_DISH_TYPE.items()}
 SINGLE_CATEGORIES = ("soups", "staples", "desserts", "snacks")
 
 

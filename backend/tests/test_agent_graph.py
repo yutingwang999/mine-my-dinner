@@ -1287,3 +1287,50 @@ def test_cookware_and_time_reasons_name_the_dish_type(reason, category, en, zh):
              "ingredient": None}
     assert reason_text(short, "shopping", "en") == en
     assert reason_text(short, "shopping", "zh") == zh
+
+
+class ParseFailsOnce(ScriptedChatModel):
+    """Answers the router, then raises on the first parse call."""
+
+    fail_parse = True
+
+    def with_structured_output(self, schema: type, include_raw: bool = False):
+        if schema.__name__ == "ParsedRequest" and self.fail_parse:
+            self.fail_parse = False
+            raise RuntimeError("parse down")
+        return super().with_structured_output(schema, include_raw)
+
+
+def test_failed_turn_does_not_leak_calls_into_the_next_run(tmp_path, session, seeded, veg):
+    model = ParseFailsOnce(structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]})
+    env = make_graph_env(tmp_path, session, model=model)
+    with pytest.raises(Exception):
+        env.graph.invoke({"messages": [HumanMessage("dinner")], "locale": "en"}, env.config)
+    env.model.replies = [final_proposal([veg.id])]
+    env.graph.invoke({"messages": [HumanMessage("dinner again")], "locale": "en"}, env.config)
+    steps = [e["step"] for e in run_record(env).events if e["kind"] == "model_call"]
+    assert steps == ["route", "parse", "planner"]
+
+
+def test_query_vectors_of_a_failed_run_are_dropped_by_the_next_run(
+    tmp_path, session, seeded, veg, monkeypatch
+):
+    from minemydinner.agent import graph as graph_module
+
+    env = make_graph_env(tmp_path, session, embeddings=FakeEmbeddings())
+    real = graph_module.check_feasibility
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("feasibility re-check down")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(graph_module, "check_feasibility", flaky)
+    replies = [tool_call("search_recipes", {"query": "清淡"}), final_proposal([999999])]
+    with pytest.raises(RuntimeError):
+        plan(env, "清淡的", parse={"dishes": 1, "query": "清淡"}, replies=replies)
+    assert len(env.deps.run_query_vectors) == 1
+    plan(env, "清淡的", parse={"dishes": 1, "query": "清淡"}, replies=[final_proposal([veg.id])])
+    assert env.deps.run_query_vectors == {}

@@ -548,10 +548,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return {
             "intent": result.parsed.intent,
             "asked_question": False,
-            "model_calls": [
-                *(state.get("model_calls") or []),
-                _model_call_event(deps.client, "route", messages, result),
-            ],
+            # A new turn starts the buffer fresh, so events left by a turn that failed
+            # before load_context are never recorded under this run.
+            "model_calls": [_model_call_event(deps.client, "route", messages, result)],
         }
 
     def other(state: ChatState) -> dict:
@@ -644,6 +643,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             tools_version=TOOLS_VERSION,
             has_temporary_guests=False,
         )
+        # Bound the cache: a run that failed after its planner started (for example in a
+        # validation or feasibility re-check) never reached present_plan, so drop every
+        # other run's vectors when a new run starts.
+        for stale in [r for r in deps.run_query_vectors if r != run_id]:
+            del deps.run_query_vectors[stale]
         # The route and parse calls made before the run existed, in call order.
         for event in state.get("model_calls") or []:
             deps.recorder.add_event(run_id, event)

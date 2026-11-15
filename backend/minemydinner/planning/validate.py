@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from minemydinner.models import Rating, Recipe
 from minemydinner.planning.composition import (
     CATEGORY_OF_DISH_TYPE,
+    COUNTED_DISH_TYPES,
     Bound,
     count_categories,
     outside,
@@ -31,7 +32,6 @@ from minemydinner.planning.stock import compute_missing, missing_cookware
 EXPIRY_SOON_DAYS = 3
 LOW_RATING = 2
 TOTAL_TIME_FACTOR = 1.5
-COUNTED_DISH_TYPES = ("meat dish", "vegetable dish")
 MAX_TOTAL_COUNT = 12
 
 

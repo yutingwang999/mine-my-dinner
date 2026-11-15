@@ -358,3 +358,23 @@ def test_no_vegetable_dishes_needs_every_dish_meat(session, seeded):
     plan = spec(mode="fridge_only", dishes=3, vegetable_dishes=0, vegetable_bound="exact")
     found = check(session, plan)
     assert found == [Shortfall("not_enough_dishes", "meat_dishes", 3, 2)]
+
+
+def test_allergy_blocked_recipe_is_not_available(session, seeded):
+    from tests.planningfakes import rule, self_diner
+
+    me = self_diner(session)
+    rule(session, me.id, "allergy", allergen="egg")
+    make_recipe(session, "番茄炒蛋", dish_type="meat dish", lines=[L("鸡蛋", role="main")])
+    found = check_feasibility(session, ctx_for(session, me.id), spec(dishes=1, meat_dishes=1))
+    assert Shortfall("not_enough_in_library", "meat_dishes", 1, 0) in found
+
+
+def test_recipe_left_out_for_unknown_allergens_is_not_available(session, seeded):
+    from tests.planningfakes import rule, self_diner
+
+    me = self_diner(session)
+    rule(session, me.id, "allergy", allergen="egg")
+    make_recipe(session, "神秘肉", dish_type="meat dish", lines=[L("某种酱", linked=False)])
+    found = check_feasibility(session, ctx_for(session, me.id), spec(dishes=1, meat_dishes=1))
+    assert Shortfall("not_enough_in_library", "meat_dishes", 1, 0) in found
