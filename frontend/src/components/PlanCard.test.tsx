@@ -308,6 +308,36 @@ describe("PlanCard what was asked, reasons, and links", () => {
     }
   });
 
+  it("puts asked and assumed lines in their own block after the dish list, with the notice inside the card", () => {
+    const { container } = renderWithProviders(
+      <PlanCard plan={plan({ defaults_used: ["headcount"], spec: spec({ dishes: 2 }) })} />,
+    );
+    const card = container.querySelector(".plan-card") as HTMLElement;
+    const list = card.querySelector("ul.card-list") as HTMLElement;
+    const conditions = card.querySelector(".plan-conditions") as HTMLElement;
+    expect(list.compareDocumentPosition(conditions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(conditions).toContainElement(screen.getByText(/As you asked/));
+    expect(conditions).toContainElement(screen.getByText(/Assumed:/));
+    expect(list).not.toContainElement(screen.getByText(/As you asked/));
+    const notice = within(card).getByText(/check the actual ingredients for allergens/);
+    expect(notice).toHaveAttribute("role", "note");
+  });
+
+  it("joins the asked and assumed lines with a Chinese comma in Chinese", () => {
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard
+          plan={plan({
+            defaults_used: ["headcount", "soups"],
+            spec: spec({ mode: "fridge_only", dishes: 3, soups: 1, time_limit_min: 20 }),
+          })}
+        />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByText("按你的要求：3 道菜，只用冰箱现有食材，20 分钟内。")).toBeInTheDocument();
+    expect(screen.getByText(/我假设了：1 人，1 道汤。/)).toBeInTheDocument();
+  });
+
   it("shows a named side when the dish total was assumed", () => {
     renderWithProviders(
       <PlanCard

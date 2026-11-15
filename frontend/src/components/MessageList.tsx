@@ -46,13 +46,13 @@ export function MessageList({ items, pending, streaming, step, error, busy, onAc
   });
 
   return (
-    <>
+    <div className="chat-thread">
       <ul className="chat-log" aria-live="polite">
         {items.map((item, index) => {
           if (item.type === "user") {
             return (
               <li key={index} className="chat-message chat-user">
-                <strong>{t("you")}</strong>
+                <strong className="sr-only">{t("you")}</strong>
                 <p>{item.text}</p>
               </li>
             );
@@ -60,14 +60,14 @@ export function MessageList({ items, pending, streaming, step, error, busy, onAc
           if (item.type === "question") {
             return (
               <li key={index} className="chat-message chat-assistant">
-                <strong>{t("assistant")}</strong>
+                <strong className="sr-only">{t("assistant")}</strong>
                 <p>{item.value.kind === "request_style" ? tStyle("title") : questionText(item.value)}</p>
               </li>
             );
           }
           return (
             <li key={index} className="chat-message chat-assistant">
-              <strong>{t("assistant")}</strong>
+              <strong className="sr-only">{t("assistant")}</strong>
               {item.text && <p>{item.text}</p>}
               {item.plan && (
                 <PlanCard
@@ -80,25 +80,26 @@ export function MessageList({ items, pending, streaming, step, error, busy, onAc
             </li>
           );
         })}
-        {streaming && (
-          <li className="chat-message chat-assistant">
-            <strong>{t("assistant")}</strong>
-            <p>{streaming}</p>
-          </li>
-        )}
         {pending?.kind === "question" && (
           <li className="chat-message chat-assistant">
-            <strong>{t("assistant")}</strong>
+            <strong className="sr-only">{t("assistant")}</strong>
             <p>{questionText(pending)}</p>
           </li>
         )}
         {pending?.kind === "request_style" && (
           <li className="chat-message chat-assistant">
-            <strong>{t("assistant")}</strong>
+            <strong className="sr-only">{t("assistant")}</strong>
             <RequestStylePrompt busy={busy} onChoose={onChooseStyle} />
           </li>
         )}
       </ul>
+      {/* Outside the live log: partial text must not be announced; the final message is. */}
+      {streaming && (
+        <div className="chat-message chat-assistant" aria-live="off">
+          <strong className="sr-only">{t("assistant")}</strong>
+          <p>{streaming}</p>
+        </div>
+      )}
       {step && t.has(`progress.${step}`) && (
         <p role="status" className="chat-message chat-assistant hint">
           {t(`progress.${step}`)}
@@ -109,6 +110,6 @@ export function MessageList({ items, pending, streaming, step, error, busy, onAc
           {errorText(error)}
         </p>
       )}
-    </>
+    </div>
   );
 }

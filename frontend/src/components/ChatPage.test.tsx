@@ -329,45 +329,147 @@ describe("ChatPage", () => {
     expect(window.localStorage.getItem(THREAD_KEY)).toBeNull();
   });
 
-  it("changes the request-style setting", async () => {
+  const styleSwitch = () => screen.findByRole("switch", { name: "Ask me first when details are missing" });
+
+  it("shows the saved request style on the switch and saves a toggle at once", async () => {
     setup({
       "GET /api/preferences/request-style": () => ({ value: "ask_first" }),
       "PUT /api/preferences/request-style": (body) => body,
     });
-    const select = await screen.findByRole("combobox", { name: "When details are missing" });
-    await waitFor(() => expect(select).toHaveValue("ask_first"));
-    await userEvent.selectOptions(select, "plan_then_adjust");
+    const toggle = await styleSwitch();
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    await userEvent.click(toggle);
     await waitFor(() => expect(callsTo(calls, "PUT", "/api/preferences/request-style")).toHaveLength(1));
     expect(callsTo(calls, "PUT", "/api/preferences/request-style")[0].body).toEqual({
       value: "plan_then_adjust",
     });
-    await waitFor(() => expect(select).toHaveValue("plan_then_adjust"));
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
   });
 
-  it("updates the setting when the request-style prompt is answered", async () => {
+  it("moves the switch when the request-style prompt is answered", async () => {
     setup({
       "POST /api/chat/threads/t1/messages": () =>
         stream(frame("interrupt", { kind: "request_style" }), DONE),
       "POST /api/chat/threads/t1/resume": () => stream(DONE),
     });
-    const select = await screen.findByRole("combobox", { name: "When details are missing" });
-    expect(select).toHaveValue("");
+    const toggle = await styleSwitch();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
     await send("dinner");
-    await userEvent.click(await screen.findByRole("button", { name: "Plan, then I adjust" }));
-    await waitFor(() => expect(select).toHaveValue("plan_then_adjust"));
+    await userEvent.click(await screen.findByRole("button", { name: "Ask me first" }));
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
   });
 
-  it("shows plan then adjust in the setting when the prompt is skipped", async () => {
+  it("shows the switch off when the prompt is skipped", async () => {
     setup({
+      "GET /api/preferences/request-style": () => ({ value: "ask_first" }),
       "POST /api/chat/threads/t1/messages": () =>
         stream(frame("interrupt", { kind: "request_style" }), DONE),
       "POST /api/chat/threads/t1/resume": () => stream(DONE),
     });
-    const select = await screen.findByRole("combobox", { name: "When details are missing" });
+    const toggle = await styleSwitch();
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
     await send("dinner");
     await userEvent.click(await screen.findByRole("button", { name: "Skip" }));
     await waitFor(() => expect(callsTo(calls, "POST", "/api/chat/threads/t1/resume")).toHaveLength(1));
-    await waitFor(() => expect(select).toHaveValue("plan_then_adjust"));
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
+  });
+
+  it("removes the pushed question and restores the prompt when a request-style choice fails", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t9");
+    setup({
+      "GET /api/chat/threads/t9": () => ({
+        items: [{ type: "user", text: "dinner" }],
+        messages: [],
+        current_plan: null,
+        pending: { kind: "request_style" },
+      }),
+      "POST /api/chat/threads/t9/resume": () => reply(500, { code: "internal" }),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Ask me first" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    // One copy of the question: the restored prompt, not the pushed item as well.
+    expect(screen.getAllByText(/When you leave details out/)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Skip" })).toBeEnabled();
+  });
+
+  it("shows the welcome state for an empty conversation and an example fills the input only", async () => {
+    setup();
+    expect(await screen.findByRole("heading", { name: "MineMyDinner" })).toBeInTheDocument();
+    expect(screen.getByText(/Dig tonight's dinner out/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Dinner for three, and shopping is fine" }));
+    expect(screen.getByRole("textbox", { name: "Your message" })).toHaveValue("Dinner for three, and shopping is fine");
+    expect(callsTo(calls, "POST", "/api/chat/threads")).toHaveLength(0);
+    expect(calls.some((call) => call.path.endsWith("/messages"))).toBe(false);
+  });
+
+  it("does not flash the welcome while a stored thread is loading", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t9");
+    setup({ "GET /api/chat/threads/t9": () => new Promise(() => {}) as never });
+    await screen.findByText("Loading the conversation…");
+    expect(screen.queryByRole("heading", { name: "MineMyDinner" })).toBeNull();
+  });
+
+  it("reverts the switch when a request-style choice fails", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t9");
+    setup({
+      "GET /api/chat/threads/t9": () => ({
+        items: [{ type: "user", text: "dinner" }],
+        messages: [],
+        current_plan: null,
+        pending: { kind: "request_style" },
+      }),
+      "POST /api/chat/threads/t9/resume": () => reply(500, { code: "internal" }),
+    });
+    const toggle = await styleSwitch();
+    await userEvent.click(await screen.findByRole("button", { name: "Ask me first" }));
+    await screen.findByRole("alert");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("leaves the welcome state after the first message and returns after a new conversation", async () => {
+    setup({ "POST /api/chat/threads/t1/messages": () => stream(frame("message", { role: "assistant", text: "Hi." }), DONE) });
+    await send("hello");
+    expect(await screen.findByText("Hi.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "MineMyDinner" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    expect(screen.getByRole("heading", { name: "MineMyDinner" })).toBeInTheDocument();
+  });
+
+  it("sends with Enter and not with Shift+Enter", async () => {
+    setup({ "POST /api/chat/threads/t1/messages": () => stream(DONE) });
+    const box = screen.getByRole("textbox", { name: "Your message" });
+    await userEvent.type(box, "line one{Shift>}{Enter}{/Shift}line two");
+    expect(box).toHaveValue("line one\nline two");
+    expect(calls.some((call) => call.path.endsWith("/messages"))).toBe(false);
+    await userEvent.type(box, "{Enter}");
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")[0].body).toEqual({
+      text: "line one\nline two",
+      locale: "en",
+    });
+  });
+
+  it("keeps partial streaming text out of the live log", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              controller = c;
+              c.enqueue(encoder.encode(frame("token", { text: "Partial" })));
+            },
+          }),
+        ),
+    });
+    await send("hi");
+    const partial = await screen.findByText("Partial");
+    expect(partial.closest("[aria-live=polite]")).toBeNull();
+    controller.enqueue(encoder.encode(frame("message", { role: "assistant", text: "Final" }) + DONE));
+    controller.close();
+    const final = await screen.findByText("Final");
+    expect(final.closest("[aria-live=polite]")).not.toBeNull();
   });
 
   it("keeps the plan and the pending question when a run fails with an error event", async () => {

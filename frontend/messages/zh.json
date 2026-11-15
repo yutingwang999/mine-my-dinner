@@ -12,8 +12,7 @@
   },
   "nav": {
     "label": "主导航",
-    "home": "首页",
-    "chat": "对话",
+    "home": "首页",
     "import": "导入",
     "review": "审核",
     "library": "菜谱库",
@@ -404,8 +403,12 @@
       "askFirst": "先问我",
       "planThenAdjust": "先出方案，我再调整",
       "skip": "跳过",
-      "settingLabel": "信息不全时",
-      "unset": "尚未选择"
+      "switchLabel": "信息不全时先问我"
+    },
+    "welcome": {
+      "fridge": "两菜一汤，只用冰箱里的",
+      "shopping": "三个人吃，可以买菜",
+      "quick": "做个快手菜，20 分钟内"
     },
     "question": {
       "hint": "要规划这一餐，请告诉我{fields}。你的下一条消息会作为回答。",
@@ -433,6 +436,7 @@
       "warnings": "需要注意",
       "unmet": "未满足",
       "nextActions": "你可以调整",
+      "listSeparator": "，",
       "assumed": "我假设了：{list}。不对请告诉我。",
       "assumedHeadcount": "{count} 人",
       "assumedDishes": "{count} 道菜",

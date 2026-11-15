@@ -76,6 +76,7 @@ Task-review and final-review findings that were judged safe to defer. None block
 
 ### Chat API and page (plan 2 or T1.9)
 
+- **Where the language switch lives (T1.9b, decided with the user to postpone).** Today "中文 / English" sits in the top navigation on every page; switching mid-conversation makes later replies use the new language while earlier ones stay, so a conversation can mix languages. Language is a set-once preference, so options for the site-wide pass: (A) keep it on every page but quieter (a small "中 / EN" in a corner or the footer); (B) move it into a settings menu (for example ⚙ top right, which could also hold the request style). A chat note "later replies will be in English" after a mid-conversation switch was considered and not added for now.
 - **Typing while the request-style choice is pending drops the question** (found in the chat page redesign, Task 2 review; pre-existing). When the first-use "ask first / plan then adjust" choice waits and the user types a message instead of pressing a button, the run clears the pending question and no item records it. Either keep the choice visible until answered, or record it like other questions.
 - **No guard against concurrent requests on one thread** (two messages, or a message and a resume). Acceptable for one user; add a per-thread lock before anything multi-user.
 - **A new message while a question is pending starts a fresh run** and drops the pending question. Decide whether to block it (409) or keep allowing it.

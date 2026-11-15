@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useFormatter, useLocale, useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { AllergenNotice } from "@/components/AllergenNotice";
@@ -25,7 +25,6 @@ const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
 /** What the user stated: the spec fields that were not filled by a default. */
 function Asked({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.plan");
-  const format = useFormatter();
   const { spec, defaults_used: defaults } = plan;
   const stated = (name: string) => !defaults.includes(name);
   const items: string[] = [];
@@ -71,12 +70,11 @@ function Asked({ plan }: { plan: ChatPlan }) {
     if (list.length > 0) items.push(t(key, { list: list.join(", ") }));
   }
   if (items.length === 0) return null;
-  return <p className="hint">{t("asked", { list: format.list(items, { type: "unit" }) })}</p>;
+  return <p className="hint">{t("asked", { list: items.join(t("listSeparator")) })}</p>;
 }
 
 function Assumed({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.plan");
-  const format = useFormatter();
   const parts: string[] = [];
   if (plan.defaults_used.includes("headcount")) {
     parts.push(t("assumedHeadcount", { count: plan.headcount }));
@@ -108,7 +106,7 @@ function Assumed({ plan }: { plan: ChatPlan }) {
     parts.push(t(plan.spec.mode === "shopping" ? "assumedShopping" : "assumedFridgeOnly"));
   }
   if (parts.length === 0) return null;
-  return <p className="hint">{t("assumed", { list: format.list(parts, { type: "unit" }) })}</p>;
+  return <p className="hint">{t("assumed", { list: parts.join(t("listSeparator")) })}</p>;
 }
 
 function unitLabel(tUnit: ReturnType<typeof useTranslations>, unit: string): string {
@@ -204,6 +202,11 @@ export function PlanCard({ plan, onAction, busy = false, actionable = true }: Pr
           })}
         </ul>
       )}
+      {/* What was asked and assumed: its own block, not part of the last dish. */}
+      <div className="plan-conditions">
+        <Asked plan={plan} />
+        <Assumed plan={plan} />
+      </div>
       {plan.servings_notes.map((note) => (
         <p key={note.recipe_id} className="hint">
           {t("servingsNote", {
@@ -265,8 +268,6 @@ export function PlanCard({ plan, onAction, busy = false, actionable = true }: Pr
           })}
         </div>
       )}
-      <Asked plan={plan} />
-      <Assumed plan={plan} />
       {plan.left_out_unknown_allergens.length > 0 && (
         <div>
           <p className="hint">{t("leftOut", { count: plan.left_out_unknown_allergens.length })}</p>

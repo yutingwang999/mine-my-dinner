@@ -1,21 +1,11 @@
-import { useTranslations } from "next-intl";
-import { setRequestLocale } from "next-intl/server";
-import { use } from "react";
-
-import { ChatPage } from "@/components/ChatPage";
+import { redirect } from "@/i18n/navigation";
 
 type Props = {
   params: Promise<{ locale: string }>;
 };
 
-export default function ChatRoute({ params }: Props) {
-  setRequestLocale(use(params).locale);
-  const t = useTranslations("chat");
-
-  return (
-    <>
-      <h1>{t("title")}</h1>
-      <ChatPage />
-    </>
-  );
+/** The chat lives at the home page; this keeps old links working. */
+export default async function ChatRoute({ params }: Props) {
+  const { locale } = await params;
+  redirect({ href: "/", locale });
 }

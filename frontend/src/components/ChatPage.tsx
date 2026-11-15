@@ -1,9 +1,12 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { ChatWelcome } from "@/components/ChatWelcome";
+import { Composer } from "@/components/Composer";
 import { MessageList } from "@/components/MessageList";
+import { RequestStyleSwitch } from "@/components/RequestStyleSwitch";
 import { ApiError } from "@/lib/api";
 import {
   type ChatEvent,
@@ -27,6 +30,9 @@ import {
 /** The actions that are buttons sending a fixed message; the others are links. */
 type FixedAction = Exclude<NextAction, "update_inventory" | "register_cookware" | "import_recipes">;
 
+/** Closer than this to the bottom counts as "at the bottom" for following new items. */
+const NEAR_BOTTOM_PX = 80;
+
 type Seen = {
   plan: boolean;
   pending: boolean;
@@ -35,41 +41,14 @@ type Seen = {
   assistant: ThreadItem | null;
 };
 
-const STYLES = ["ask_first", "plan_then_adjust"] as const;
-
-function RequestStyleSetting({
-  value,
-  onChange,
-}: {
-  value: RequestStyle | null;
-  onChange: (value: RequestStyle) => void;
-}) {
-  const t = useTranslations("chat.requestStyle");
-  return (
-    <label className="mini-field">
-      {t("settingLabel")}
-      <select value={value ?? ""} onChange={(event) => onChange(event.target.value as RequestStyle)}>
-        {value === null && (
-          <option value="" disabled>
-            {t("unset")}
-          </option>
-        )}
-        {STYLES.map((style) => (
-          <option key={style} value={style}>
-            {t(style === "ask_first" ? "askFirst" : "planThenAdjust")}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
 export function ChatPage() {
   const t = useTranslations("chat");
   const locale = useLocale() as Locale;
   const threadRef = useRef<string | null>(null);
   // Starts false so the first client render matches the server; the effect below sets it.
   const [loading, setLoading] = useState(false);
+  // False until the stored-thread check has run, so the welcome does not flash before a load starts.
+  const [ready, setReady] = useState(false);
   const [style, setStyle] = useState<RequestStyle | null>(null);
   const [items, setItems] = useState<ThreadItem[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -78,15 +57,37 @@ export function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [draft, setDraft] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // Follow the newest item, unless the user scrolled up to read.
+  const followRef = useRef(true);
+
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (box && followRef.current) box.scrollTop = box.scrollHeight;
+  }, [items, pending, step, streaming, error, loading]);
+
+  function onScroll() {
+    const box = scrollRef.current;
+    if (box) followRef.current = box.scrollHeight - box.scrollTop - box.clientHeight <= NEAR_BOTTOM_PX;
+  }
 
   useEffect(() => {
     const id = storedThreadId();
-    if (id === null) return;
     let active = true;
-    // Deferred so the effect body itself sets no state.
+    if (id === null) {
+      // Deferred so the effect body itself sets no state.
+      Promise.resolve().then(() => active && setReady(true));
+      return () => {
+        active = false;
+      };
+    }
     Promise.resolve()
       .then(() => {
-        if (active) setLoading(true);
+        if (active) {
+          setLoading(true);
+          setReady(true);
+        }
         return loadThread(id);
       })
       .then((state) => {
@@ -169,7 +170,10 @@ export function ChatPage() {
   }
 
   /** `answered` is the question this run answers: it joins the conversation, and leaves again if the run fails. */
-  async function run(start: (threadId: string) => Promise<Response>, answered: ThreadItem | null = null) {
+  async function run(
+    start: (threadId: string) => Promise<Response>,
+    answered: ThreadItem | null = null,
+  ): Promise<boolean> {
     const seen: Seen = { plan: false, pending: false, failed: false, assistant: null };
     const previous = { pending };
     setBusy(true);
@@ -199,6 +203,7 @@ export function ChatPage() {
       setStep(null);
       setStreaming("");
     }
+    return !seen.failed;
   }
 
   function submit(text: string) {
@@ -208,24 +213,28 @@ export function ChatPage() {
     return run((id) => (answering ? resume(id, text, locale) : sendMessage(id, text, locale)), answered);
   }
 
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  function send() {
     const text = draft.trim();
     if (!text || busy || loading) return;
     setDraft("");
+    followRef.current = true;
     void submit(text);
   }
 
   function chooseStyle(value: RequestStyle | null) {
     // Skipping saves "plan then adjust" on the server (design 6.2), so the setting shows it.
+    const previousStyle = style;
     setStyle(value ?? "plan_then_adjust");
     const answered: ThreadItem | null = pending ? { type: "question", value: pending } : null;
     if (answered) setItems((current) => [...current, answered]);
-    void run((id) => resume(id, value, locale), answered);
+    void run((id) => resume(id, value, locale), answered).then((ok) => {
+      if (!ok) setStyle(previousStyle);
+    });
   }
 
   function newConversation() {
     threadRef.current = null;
+    followRef.current = true;
     storeThreadId(null);
     setItems([]);
     setPending(null);
@@ -233,40 +242,42 @@ export function ChatPage() {
     setDraft("");
   }
 
+  const welcome = ready && items.length === 0 && pending === null && !loading;
+
   return (
     <div className="chat">
-      <div className="actions">
-        <RequestStyleSetting value={style} onChange={changeStyle} />
-        <button type="button" disabled={busy} onClick={newConversation}>
-          {t("newConversation")}
-        </button>
-      </div>
-      {loading && <p className="hint">{t("loading")}</p>}
-      <MessageList
-        items={items}
-        pending={pending}
-        streaming={streaming}
-        step={step}
-        error={error}
-        busy={busy}
-        onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))}
-        onChooseStyle={chooseStyle}
-      />
-      <form className="chat-form" onSubmit={onSubmit}>
-        <label className="stack-field">
-          {t("inputLabel")}
-          <input
-            value={draft}
-            maxLength={4000}
-            placeholder={t("inputPlaceholder")}
-            onChange={(event) => setDraft(event.target.value)}
+      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+        {!welcome && <h1 className="sr-only">{t("title")}</h1>}
+        {loading && <p className="hint">{t("loading")}</p>}
+        {welcome && (
+          <ChatWelcome
+            onPick={(text) => {
+              setDraft(text);
+              inputRef.current?.focus();
+            }}
           />
-        </label>
-        <button type="submit" disabled={busy || loading || draft.trim() === ""}>
-          {t("send")}
-        </button>
+        )}
+        <MessageList
+          items={items}
+          pending={pending}
+          streaming={streaming}
+          step={step}
+          error={error}
+          busy={busy}
+          onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))}
+          onChooseStyle={chooseStyle}
+        />
+      </div>
+      <div className="chat-bottom">
+        <Composer busy={busy || loading} onSend={send} value={draft} onChange={setDraft} textareaRef={inputRef} />
+        <div className="chat-tools">
+          <RequestStyleSwitch value={style} onChange={changeStyle} />
+          <button type="button" className="composer-action" disabled={busy} onClick={newConversation}>
+            {t("newConversation")}
+          </button>
+        </div>
         <p className="hint">{t("providerNotice")}</p>
-      </form>
+      </div>
     </div>
   );
 }

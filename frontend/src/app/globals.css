@@ -7,6 +7,8 @@
   --accent: #2f6f4f;
   --accent-text: #ffffff;
   --control: #ffffff;
+  /* Chat bubbles: soft green for the user; assistant text has no bubble. */
+  --bubble-user: color-mix(in srgb, var(--accent) 15%, var(--background));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,7 +21,8 @@
     --accent: #5fae86;
     --accent-text: #0f1a14;
     --control: #242424;
-  }
+    --bubble-user: color-mix(in srgb, var(--accent) 25%, var(--background));
+    }
 }
 
 html {
@@ -665,19 +668,70 @@ fieldset.supplies {
   list-style: none;
 }
 
-/* Chat page */
+/* Chat page: messages scroll, the composer stays at the bottom of the viewport. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+body:has(.chat) {
+  height: 100dvh;
+}
+
+/* The page area is full width, so the scrollbar sits at the window edge. */
+.site-main:has(.chat) {
+  max-width: none;
+  padding-inline: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0.75rem;
+}
+
 .chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+/* Full-width scroll container; the conversation is centred inside its usable width.
+   The scrollbar gutter is reserved on both edges so the column stays centred. */
+.chat-scroll {
+  scrollbar-gutter: stable both-edges;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  max-width: 48rem;
+}
+
+/* Same column as the composer area below: 48rem of content plus the side gutter. */
+.chat-thread,
+.chat-scroll > .hint {
+  width: 100%;
+  max-width: 51rem;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .chat-log {
   list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  display: contents;
 }
 
 .chat-message {
@@ -685,23 +739,194 @@ fieldset.supplies {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.5rem 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-message p {
+  white-space: pre-wrap;
 }
 
 .chat-user {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--bubble-user);
+  border-color: transparent;
+}
+
+/* Assistant items are left bubbles as wide as the user's; notices keep their own look. */
+.chat-assistant {
+  align-self: flex-start;
+  max-width: 80%;
+  min-width: 0;
+}
+
+/* Assistant text sits on the page background; only the user's items are bubbles. */
+.chat-assistant:not(.notice) {
+  background: none;
+  border-color: transparent;
+  padding-inline: 0;
+}
+
+/* A speaker change leaves a wider gap (0.5rem flex gap + 1rem); the same speaker keeps 0.5rem.
+   The progress line, streaming text and error notice sit after the list, so the
+   second selector reaches them from a list that ends with a user item. */
+.chat-user + .chat-assistant,
+.chat-assistant + .chat-user,
+.chat-log:has(> .chat-user:last-child) ~ .chat-assistant {
+  margin-top: 1rem;
+}
+
+/* A plan card sits inside the bubble and follows its width. */
+.chat-assistant .card {
+  margin-bottom: 0;
+  max-width: 100%;
+}
+
+.chat-assistant p + .card {
+  margin-top: 0.5rem;
+}
+
+.chat-welcome {
+  margin: auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+}
+
+.chat-welcome h1 {
+  margin-bottom: 0;
+}
+
+.chat-examples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+/* Two columns shared by the composer row and the tools row, so the buttons line up. */
+.chat-bottom {
+  width: 100%;
+  max-width: 51rem;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.5rem;
+  row-gap: 0.4rem;
+  padding-top: 0.25rem;
+}
+
+.chat-bottom > .hint {
+  grid-column: 1 / -1;
+}
+
+.composer,
+.chat-tools {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.composer {
+  align-items: end;
+}
+
+.composer-action {
+  min-width: 5.5rem;
+  height: 2.5rem;
+  white-space: nowrap;
+}
+
+/* The new-conversation button is the light one; Send keeps the filled submit style. */
+.composer-action[type="button"] {
+  background: transparent;
+}
+
+.composer textarea {
+  min-height: 2.5rem;
+  resize: none;
+  max-height: 8rem;
+  overflow-y: auto;
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: inherit;
+}
+
+.chat-tools {
+  align-items: center;
+}
+
+.style-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.switch {
+  position: relative;
+  width: 2.5rem;
+  height: 1.4rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--border);
+  cursor: pointer;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
   border-color: var(--accent);
 }
 
-.chat-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  align-items: flex-start;
+.switch-knob {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+  transition: left 0.15s;
 }
 
-.chat-form > .stack-field {
-  align-self: stretch;
+.switch[aria-checked="true"] .switch-knob {
+  left: calc(100% - 1.05rem - 2px);
 }
 
 .plan-dish {
   padding: 0.25rem 0;
+}
+
+/* Plan card: what was asked and assumed, then the allergen notice as a quiet footer. */
+.plan-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.plan-conditions:empty {
+  display: none;
+}
+
+.plan-card .allergen-notice {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  font-size: 0.875rem;
+  color: var(--muted);
 }
