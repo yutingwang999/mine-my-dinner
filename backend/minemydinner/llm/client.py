@@ -38,6 +38,10 @@ class StructuredResult[T: BaseModel]:
     # The configured name and the model ID, such as "gemini:gemini-3.5-flash-lite".
     model_name: str
     fallback_used: bool
+    # The provider key of the model that answered, and the model name the provider reports
+    # having served (None when it reports none). Recorded in planning records.
+    provider: str | None = None
+    served_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,14 @@ def _estimate_cost(model: ModelConfig, usage: dict[str, int]) -> Decimal:
     return spent / TOKENS_PER_MILLION
 
 
+def served_model_name(reply: Any) -> str | None:
+    """The provider-reported model name (langchain-openai, -deepseek, and -google-genai all
+    use `model_name` in the response metadata), or None."""
+    metadata = getattr(reply, "response_metadata", None) or {}
+    value = metadata.get("model_name") or metadata.get("model")
+    return str(value) if value else None
+
+
 class LLMClient:
     """Calls models by task, with failover, a monthly cap, and a log of every call."""
 
@@ -158,12 +170,15 @@ class LLMClient:
         self, task: str, messages: list[BaseMessage], schema: type[T]
     ) -> StructuredResult[T]:
         prepared = self.prepare_messages(messages)
+        used: dict[str, str | None] = {}
 
         def attempt(
             model: ModelConfig, chat_model: BaseChatModel
         ) -> tuple[T, dict[str, int] | None]:
             runnable = chat_model.with_structured_output(schema, include_raw=True)
             output = runnable.invoke(prepared)
+            used["provider"] = model.provider
+            used["served_model"] = served_model_name(output["raw"])
             usage = normalize_usage(output["raw"].usage_metadata)
             try:
                 if output["parsing_error"] is not None:
@@ -176,7 +191,13 @@ class LLMClient:
                 raise AttemptError(str(error), usage) from error
 
         outcome = self.run_task(task, attempt)
-        return StructuredResult(outcome.value, outcome.model_name, outcome.fallback_used)
+        return StructuredResult(
+            outcome.value,
+            outcome.model_name,
+            outcome.fallback_used,
+            used.get("provider"),
+            used.get("served_model"),
+        )
 
     def prepare_messages(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]:
         """Apply the pre-hooks to a copy of the messages."""

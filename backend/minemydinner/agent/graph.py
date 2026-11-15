@@ -11,6 +11,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
@@ -74,6 +75,21 @@ class Intent(BaseModel):
     intent: Literal["plan", "other"]
 
 
+def _model_call_event(client: Any, step: str, messages: list, result: Any) -> dict:
+    """A route or parse call as a planning-record event, in the planner's `model_call` shape.
+    Every string goes through the pre-hooks, so saved nicknames are recorded as codes."""
+    return {
+        "kind": "model_call",
+        "step": step,
+        "model_name": result.model_name,
+        "provider": getattr(result, "provider", None),
+        "fallback_used": result.fallback_used,
+        "served_model": getattr(result, "served_model", None),
+        "messages": [dump_message(m) for m in client.prepare_messages(messages)],
+        "response": map_strings(result.parsed.model_dump(), client.prepare_text),
+    }
+
+
 @dataclass
 class GraphDeps:
     session_factory: Any
@@ -132,14 +148,37 @@ CATEGORY_WORDS = {
 }
 
 
-def _counts_text(counts: dict, detail: dict, zh: bool) -> str:
+def _with_implied_side(named: dict, dishes: int | None, minimum: bool) -> dict:
+    """The meat and vegetable counts the user wants. When exactly one side is named and the
+    split is exact, the other side is the rest of the dishes; a minimum implies no number."""
+    counts = {c: named[c] for c in _SIDE_CATEGORIES if named.get(c) is not None}
+    if len(counts) == 1 and not minimum and dishes is not None:
+        (side,) = counts
+        other = next(c for c in _SIDE_CATEGORIES if c != side)
+        counts[other] = max(dishes - counts[side], 0)
+    return {c: counts[c] for c in _SIDE_CATEGORIES if c in counts}
+
+
+def _counts_text(counts: dict, detail: dict, zh: bool, wanted: bool = False) -> str:
     """The counts of the categories that matter, in plain words: those the plan asks for
-    or contains, plus a named meat or vegetable count. A 0 nobody asked for is left out."""
+    or contains, plus a named meat or vegetable count. A 0 nobody asked for is left out.
+    With `wanted`, `counts` is what the user asked for: an unnamed meat or vegetable side
+    shows the number the exact split implies, or nothing for a minimum, never a made-up 0."""
     required, present = detail["required"], detail["present"]
+    if wanted:
+        counts = {
+            **{k: v for k, v in counts.items() if k not in _SIDE_CATEGORIES},
+            **_with_implied_side(required, required.get("dishes"), bool(detail["minimum"])),
+        }
+        required = counts
     parts = []
     for category, (one, many, cn) in CATEGORY_WORDS.items():
         named_split = category in required and category.endswith("_dishes")
-        if required.get(category, 0) or present.get(category, 0) or named_split:
+        if wanted and category in _SIDE_CATEGORIES:
+            include = category in counts
+        else:
+            include = bool(required.get(category, 0) or present.get(category, 0) or named_split)
+        if include:
             n = counts.get(category, 0)
             parts.append(f"{n} {cn}" if zh else f"{n} {one if n == 1 else many}")
     return ("，" if zh else ", ").join(parts)
@@ -185,7 +224,7 @@ def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
     if code == "H4":
         return (
             f"The plan has {_counts_text(detail['present'], detail, False)}; "
-            f"the user wants {_counts_text(detail['required'], detail, False)}"
+            f"the user wants {_counts_text(detail['required'], detail, False, wanted=True)}"
             f"{_minimum_note(detail, False)}."
         )
     if code == "H7":
@@ -225,7 +264,7 @@ def _unmet_for_user(finding: dict, titles: dict[int, str], locale: str) -> str:
         return f"{title}: missing cookware ({names})"
     if code == "H4":
         present = _counts_text(detail["present"], detail, zh)
-        wanted = _counts_text(detail["required"], detail, zh)
+        wanted = _counts_text(detail["required"], detail, zh, wanted=True)
         note = _minimum_note(detail, zh)
         if zh:
             return f"方案有 {present}，要求是 {wanted}{note}"
@@ -422,11 +461,9 @@ def planner_opening(
 
 
 def _split_text(spec: dict) -> str:
-    sides = [
-        _count_phrase(spec[side], side, False, bool(spec.get("split_is_minimum")))
-        for side in _SIDE_CATEGORIES
-        if spec.get(side) is not None
-    ]
+    minimum = bool(spec.get("split_is_minimum"))
+    counts = _with_implied_side(spec, spec.get("dishes"), minimum)
+    sides = [_count_phrase(n, side, False, minimum) for side, n in counts.items()]
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
 
 
@@ -458,10 +495,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
         # Each new message is a new request, which may be asked about once.
-        return {"intent": result.parsed.intent, "asked_question": False}
+        return {
+            "intent": result.parsed.intent,
+            "asked_question": False,
+            "model_calls": [
+                *(state.get("model_calls") or []),
+                _model_call_event(deps.client, "route", messages, result),
+            ],
+        }
 
     def other(state: ChatState) -> dict:
-        return {"messages": [AIMessage(other_reply(state.get("locale", "en")))]}
+        # The turn ends without planning, so its route call is not recorded anywhere.
+        return {
+            "messages": [AIMessage(other_reply(state.get("locale", "en")))],
+            "model_calls": [],
+        }
 
     def choose(state: ChatState) -> str:
         return "parse_request" if state["intent"] == "plan" else "other"
@@ -469,11 +517,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def parse_request(state: ChatState) -> dict:
         messages = [SystemMessage(load_prompt("parse")), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
-        return {"request": result.parsed.model_dump()}
+        return {
+            "request": result.parsed.model_dump(),
+            "model_calls": [
+                *(state.get("model_calls") or []),
+                _model_call_event(deps.client, "parse", messages, result),
+            ],
+        }
 
     def unclear(state: ChatState) -> dict:
         reply = UNCLEAR_REPLY_ZH if _zh(state.get("locale", "en")) else UNCLEAR_REPLY_EN
-        return {"messages": [AIMessage(reply)]}
+        return {"messages": [AIMessage(reply)], "model_calls": []}
 
     def after_parse(state: ChatState) -> str:
         parsed = ParsedRequest.model_validate(state["request"])
@@ -540,7 +594,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             tools_version=TOOLS_VERSION,
             has_temporary_guests=False,
         )
+        # The route and parse calls made before the run existed, in call order.
+        for event in state.get("model_calls") or []:
+            deps.recorder.add_event(run_id, event)
         return {
+            "model_calls": [],
             "spec": spec.model_dump(),
             "constraints": {
                 "diner_ids": list(constraints.diner_ids),

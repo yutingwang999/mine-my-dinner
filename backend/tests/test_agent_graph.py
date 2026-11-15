@@ -136,6 +136,11 @@ def resume(env: GraphEnv, value, parse: dict | None = None) -> dict:
     return env.graph.invoke(Command(resume=value), env.config)
 
 
+def planning_events(record: PlanningRun) -> list[dict]:
+    """The run's events after the route and parse calls recorded at its start."""
+    return [e for e in record.events if e.get("step") not in ("route", "parse")]
+
+
 def run_record(env: GraphEnv) -> PlanningRun:
     env.session.expire_all()
     return env.session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
@@ -307,8 +312,8 @@ def test_feasibility_event_is_recorded_and_run_finished(graph_env, session):
     _early_stop_env(graph_env, session)
     out = plan(graph_env, "dinner")
     record = run_record(graph_env)
-    assert [e["kind"] for e in record.events] == ["feasibility"]
-    assert record.events[0]["shortfalls"] == [
+    assert [e["kind"] for e in planning_events(record)] == ["feasibility"]
+    assert planning_events(record)[0]["shortfalls"] == [
         {"reason": "empty_inventory", "category": None, "needed": None, "available": None,
          "ingredient": None, "minimum": False, "absent_from_stock": False}
     ]
@@ -423,7 +428,7 @@ def test_feasibility_is_rechecked_before_a_retry(graph_env, veg, monkeypatch):
     assert [r["reason"] for r in current["reasons"]] == ["time_limit"]
     assert out["retries"] == 1
     record = run_record(graph_env)
-    assert [e["kind"] for e in record.events] == [
+    assert [e["kind"] for e in planning_events(record)] == [
         "model_call", "validation", "feasibility",
     ]
     assert record.final_passed is False and record.first_passed is False
@@ -433,7 +438,7 @@ def test_feasible_request_reaches_the_planner(graph_env, veg):
     out = plan(graph_env, "dinner", replies=[final_proposal([veg.id])])
     assert len(planner_requests(graph_env)) == 1
     assert out["current_plan"]["passed"] is True and out["current_plan"]["reasons"] == []
-    assert [e["kind"] for e in run_record(graph_env).events] == ["model_call", "validation"]
+    assert [e["kind"] for e in planning_events(run_record(graph_env))] == ["model_call", "validation"]
 
 
 def test_failed_validation_retries_with_errors(graph_env, veg, meat):
@@ -441,13 +446,13 @@ def test_failed_validation_retries_with_errors(graph_env, veg, meat):
     out = plan(graph_env, "two dishes please", parse={"dishes": 2}, replies=replies)
     assert out["retries"] == 1 and out["current_plan"]["passed"]
     record = run_record(graph_env)
-    assert [e["kind"] for e in record.events] == [
+    assert [e["kind"] for e in planning_events(record)] == [
         "model_call",
         "validation",
         "model_call",
         "validation",
     ]
-    assert "H4" in record.events[1]["result"]["violations"][0]["code"]
+    assert "H4" in planning_events(record)[1]["result"]["violations"][0]["code"]
     assert record.retries == 1 and record.first_passed is False and record.final_passed is True
     retry_request = planner_requests(graph_env)[1]
     assert "the user wants 2 dishes" in retry_request and str(veg.id) in retry_request
@@ -720,7 +725,7 @@ def planner_calls(env: GraphEnv) -> list[list]:
 
 
 def recorded_model_calls(env: GraphEnv) -> list[dict]:
-    return [e for e in run_record(env).events if e["kind"] == "model_call"]
+    return [e for e in run_record(env).events if e.get("step") == "planner"]
 
 
 def shortlist_line(opening: str) -> str:
@@ -879,7 +884,7 @@ def test_typical_request_needs_one_planner_call(graph_env_shortlist_fits):
     out = plan(env, "一荤一素一汤", parse=parse)
     assert out["current_plan"]["passed"] and out["retries"] == 0
     assert len(planner_calls(env)) == 1
-    assert [e["kind"] for e in run_record(env).events] == ["model_call", "validation"]
+    assert [e["kind"] for e in planning_events(run_record(env))] == ["model_call", "validation"]
 
 
 def test_one_query_vector_cache_per_run(tmp_path, session, seeded, veg):
@@ -954,3 +959,180 @@ def test_search_tool_filters_and_ranks_with_the_named_ingredients(tmp_path, sess
     assert out["current_plan"]["passed"]
     (search,) = [e for e in run_record(env).events if e["kind"] == "tool_call"]
     assert [hit["id"] for hit in search["result"]["hits"]] == [egg.id]
+
+
+# ---- split counts wording and recorded route/parse calls (Task 10 fix 3) ----
+
+
+def _h4(required: dict, present: dict, minimum: bool = False) -> dict:
+    return {
+        "code": "H4",
+        "recipe_id": None,
+        "detail": {"required": required, "present": present, "minimum": minimum},
+    }
+
+
+def test_exact_one_sided_split_states_the_implied_side():
+    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+
+    h4 = _h4(
+        {"dishes": 8, "soups": 0, "meat_dishes": 2},
+        {"dishes": 8, "soups": 0, "meat_dishes": 3, "vegetable_dishes": 5},
+    )
+    text = _violation_for_model(h4, {})
+    assert text == (
+        "The plan has 8 dishes, 3 meat dishes, 5 vegetable dishes; "
+        "the user wants 8 dishes, 2 meat dishes, 6 vegetable dishes."
+    )
+    assert "0 vegetable dishes" not in text
+    assert "6 道素菜" in _unmet_for_user(h4, {}, "zh")
+    assert "要求是 8 道菜，2 道荤菜，6 道素菜" in _unmet_for_user(h4, {}, "zh")
+    assert "8 dishes, 2 meat dishes, 6 vegetable dishes were asked for" in _unmet_for_user(
+        h4, {}, "en"
+    )
+
+
+def test_exact_vegetable_only_split_implies_the_meat_side():
+    from minemydinner.agent.graph import _violation_for_model
+
+    h4 = _h4({"dishes": 5, "vegetable_dishes": 2}, {"dishes": 5, "meat_dishes": 5})
+    assert "the user wants 5 dishes, 3 meat dishes, 2 vegetable dishes." in _violation_for_model(
+        h4, {}
+    )
+
+
+def test_minimum_split_leaves_the_unnamed_side_out():
+    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+
+    h4 = _h4(
+        {"dishes": 3, "meat_dishes": 2},
+        {"dishes": 3, "meat_dishes": 1, "vegetable_dishes": 2},
+        minimum=True,
+    )
+    text = _violation_for_model(h4, {})
+    assert text.endswith(
+        "the user wants 3 dishes, 2 meat dishes (the meat and vegetable counts are minimums)."
+    )
+    zh = _unmet_for_user(h4, {}, "zh")
+    assert zh.endswith("要求是 3 道菜，2 道荤菜（荤菜和素菜的数量是最少要求）")
+
+
+def test_both_sides_named_keeps_its_wording():
+    from minemydinner.agent.graph import _violation_for_model
+
+    h4 = _h4(
+        {"dishes": 4, "meat_dishes": 1, "vegetable_dishes": 3},
+        {"dishes": 4, "meat_dishes": 2, "vegetable_dishes": 2},
+    )
+    assert _violation_for_model(h4, {}).endswith(
+        "the user wants 4 dishes, 1 meat dish, 3 vegetable dishes."
+    )
+
+
+def test_request_summary_split_line():
+    from minemydinner.agent.graph import _split_text
+
+    assert _split_text({"dishes": 8, "meat_dishes": 2}) == "2 meat dishes, 6 vegetable dishes"
+    assert _split_text({"dishes": 4, "vegetable_dishes": 1}) == "3 meat dishes, 1 vegetable dish"
+    assert _split_text(
+        {"dishes": 8, "meat_dishes": 2, "split_is_minimum": True}
+    ) == "at least 2 meat dishes"
+    assert _split_text({"dishes": 4, "meat_dishes": 1, "vegetable_dishes": 3}) == (
+        "1 meat dish, 3 vegetable dishes"
+    )
+    assert _split_text({"dishes": 4}) == "none (any mix of meat and vegetable dishes)"
+
+
+def test_one_sided_split_retry_names_the_implied_side(graph_env, veg, meat):
+    replies = [final_proposal([veg.id]), final_proposal([veg.id, meat.id])]
+    plan(
+        graph_env,
+        "2 dishes, 1 of them meat",
+        parse={"dishes": 2, "meat_dishes": 1},
+        replies=replies,
+    )
+    retry = planner_requests(graph_env)[1]
+    assert "the user wants 2 dishes, 1 meat dish, 1 vegetable dish" in retry
+    assert "0 vegetable dishes" not in retry
+    assert "Split: 1 meat dish, 1 vegetable dish" in planner_requests(graph_env)[0]
+
+
+def test_planning_records_route_parse_then_planner_events(graph_env, veg):
+    plan(graph_env, "dinner", replies=[final_proposal([veg.id])])
+    events = run_record(graph_env).events
+    calls = [e for e in events if e["kind"] == "model_call"]
+    assert [e["step"] for e in calls] == ["route", "parse", "planner"]
+    assert [e["kind"] for e in events[:3]] == ["model_call"] * 3
+    route, parse, _ = calls
+    assert route["messages"][0]["type"] == "system" and route["messages"][-1]["content"] == "dinner"
+    assert route["response"] == {"intent": "plan"}
+    assert parse["messages"][-1]["content"] == "dinner" and parse["response"]["mode"] is None
+    assert route["model_name"] and route["fallback_used"] is False
+    assert route["provider"] == "agent_primary" and route["served_model"] is None
+
+
+def test_question_then_answer_records_both_parse_calls(graph_env, veg):
+    set_request_style(graph_env.session, "ask_first")
+    plan(graph_env, "dinner", replies=[final_proposal([veg.id])])
+    resume(graph_env, "whatever")
+    steps = [e["step"] for e in run_record(graph_env).events if e["kind"] == "model_call"]
+    assert steps == ["route", "parse", "parse", "planner"]
+
+
+def test_non_planning_message_records_nothing(graph_env):
+    graph_env.model.structured["Intent"] = [{"intent": "other"}]
+    before = len(graph_env.session.scalars(select(PlanningRun)).all())
+    out = graph_env.graph.invoke(
+        {"messages": [HumanMessage("hi")], "locale": "en"}, graph_env.config
+    )
+    assert out["messages"][-1].content == OTHER_REPLY_EN
+    graph_env.session.expire_all()
+    assert len(graph_env.session.scalars(select(PlanningRun)).all()) == before
+
+
+def test_nickname_is_replaced_in_recorded_route_and_parse(tmp_path, session, seeded):
+    set_request_style(session, "plan_then_adjust")
+    stock(session, "小白菜", level="plenty")
+    dish = make_recipe(session, "清炒白菜", "vegetable dish", [L("小白菜")])
+    model = ScriptedChatModel(
+        replies=[final_proposal([dish.id])],
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "ParsedRequest": [{"query": "what 小李 likes", "prefer_use": ["小李酱"]}],
+        },
+    )
+    factory = rollback_session_factory(session)
+    client = make_llm_client(
+        tmp_path, factory, model,
+        pre_hooks=[lambda t: t.replace("小李", "Diner 2")],
+        post_hooks=[lambda t: t.replace("Diner 2", "小李")],
+    )
+    graph = build_graph(GraphDeps(factory, client, PlanningRecorder(factory)), InMemorySaver())
+    graph.invoke({"messages": [HumanMessage("dinner 小李 likes")], "locale": "en"}, thread("nick"))
+    session.expire_all()
+    record = session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
+    early = [e for e in record.events if e.get("step") in ("route", "parse")]
+    assert len(early) == 2
+    dumped = json.dumps(early, ensure_ascii=False)
+    assert "小李" not in dumped and "dinner Diner 2 likes" in dumped
+    assert early[1]["response"]["query"] == "what Diner 2 likes"
+
+
+def test_buffered_calls_are_plain_and_cleared_after_the_run_starts(graph_env, veg):
+    out = plan(graph_env, "dinner", replies=[final_proposal([veg.id])])
+    assert out["model_calls"] == []
+    json.dumps(graph_env.graph.get_state(graph_env.config).values["model_calls"])
+
+
+def test_non_planning_turn_does_not_leak_calls_into_the_next_run(graph_env, veg):
+    graph_env.model.structured["Intent"] = [{"intent": "other"}, {"intent": "plan"}]
+    out = graph_env.graph.invoke(
+        {"messages": [HumanMessage("hi")], "locale": "en"}, graph_env.config
+    )
+    assert out["model_calls"] == []
+    graph_env.model.replies = [final_proposal([veg.id])]
+    graph_env.graph.invoke(
+        {"messages": [HumanMessage("dinner")], "locale": "en"}, graph_env.config
+    )
+    steps = [e["step"] for e in run_record(graph_env).events if e["kind"] == "model_call"]
+    assert steps == ["route", "parse", "planner"]

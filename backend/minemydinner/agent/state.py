@@ -19,6 +19,9 @@ class ChatState(TypedDict):
     asked_question: bool
     # Message count when a contradiction question was last asked; a new message re-enables it.
     problem_asked_at: int
+    # Route and parse calls (planning-record events) waiting for the planning run to exist;
+    # written when it starts, then cleared.
+    model_calls: list[dict]
     run_id: int | None
     proposal: dict | None
     validation: dict | None

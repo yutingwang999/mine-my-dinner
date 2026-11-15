@@ -122,7 +122,9 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 ### Parsing and wording
 
 - `parse_v2.md` has no example of moving "must use" names to "prefer" after "the named ingredients are optional", and no example of a soup range.
+- **"At least" on one side of a split** ("8个菜，至少2个荤菜") has no rule: the parse prompt has no example, and `split_is_minimum` is set only when both sides are named below the total, so it is read as exactly 2 meat dishes. Decide whether a one-sided minimum is needed (a parsed flag plus a parse example; a new parse prompt version). See `docs/planner-request-and-counts.md`, Section 6.
 - `_counts_text` would produce an empty clause if a spec required no dishes and no soups; unreachable while every spec needs at least one dish in total.
+- The implied side of an exact one-sided split is `dishes − named side`, floored at 0; a request with fewer dishes than the named side would print "0 vegetable dishes". The contradiction question catches that request first, so it is unreachable today.
 - The planner's request summary prints an explicit "0 vegetable dishes" when a split names one side as 0, and states "Every count is exact unless it says at least". Both are new model-facing wording to watch in the evaluation.
 - The shortlist header line (`SHORTLIST_HEADER` in `graph.py`) still says only "JSON keyed by dish type"; the `complete` marker is explained in `planner_v3.md` alone. A type marked complete that holds fewer dishes than needed gets no extra hint (the feasibility check stops that case first today).
 
@@ -136,8 +138,11 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The planning evaluation's data is committed in `backend/eval_data/planning/` (fictional, hand-written; moved there from the git-ignored `data/eval/planning/` during plan 2a): `library.yaml` and `scenarios_baseline.yaml` are plan 1's 15 dishes and 7 scenarios, kept unchanged for like-for-like comparison with its baseline; `library_extended.yaml` (23 dishes) and `scenarios_plan2a.yaml` (19 scenarios) test plan 2a's features. Keep the baseline pair unchanged in later plans, or record a new baseline when it must change. Planning scenarios derived from real use stay in `backend/data/`, outside Git.
 - "No invented numbers" for vague requests is checked through the default counts; whether the reply's wording invents numbers is still read by hand. The quality of a plan (balance, "清淡", "丰盛") is read by hand until the T1.10 judge-model metric exists.
 - The reply-language check removes recipe titles and then looks for Chinese characters: an English reply quoting a Chinese ingredient name would fail it, and a mostly English reply with any Chinese word would pass a Chinese check.
-- Evaluation run records: intent and parse calls record no events, so only planner calls carry the provider-reported model name (`served_model`); a `--results-dir` inside the repository but outside `runs/` leaves untracked files that block the next run (a safe refusal).
+- Evaluation run records: route and parse calls are recorded as `model_call` events (with `step`) only when the conversation reaches planning; a conversation that never plans keeps only its `llm_calls` usage rows. A `--results-dir` inside the repository but outside `runs/` leaves untracked files that block the next run (a safe refusal).
 - The time-limit scenario relies on snack dishes with stated times, because the feasibility check never blocks dishes whose time is estimated.
+- **Cost basis for comparisons.** From plan 2a on, compare runs by the cache-aware cost. The uncached cost exists only to compare with plan 1's baseline ($0.064), whose records had no cache fields. Both are estimates (reported tokens × catalog prices); DeepSeek's cached price in the catalog is the peak-hour price, so off-peak bills are lower. Match against the provider's billing page when real spend matters.
+- **Prompt file hashes depend on line endings.** `summary.json` hashes the prompt files as they are on disk; a Windows checkout (CRLF) and a Linux checkout (LF) of the same commit give different hashes. Hash with normalized line endings if runs are compared across machines.
+- **`tools_version` is one hash over all tools.** When it changes between two runs, finding which tool changed means comparing `tools.json`; a per-tool hash in `summary.json` would show it directly. Tool behavior changes that keep the schema are identified only by the git commit.
 
 ### Tests and cleanup
 

@@ -135,7 +135,7 @@ Each run writes a folder `backend/eval_data/planning/runs/<run id>/`, where the 
 
 - `summary.json` (committed): conditions (commit, data file hashes, the prompt version label, the version of each prompt and the SHA-256 of each prompt file in use, the tool version, models and prices, settings; see `docs/prompt-versions.md`), metrics by area, and each scenario's metrics. It holds no model text.
 - `prompts/` and `tools.json` (committed): only the prompt files in use, under their versioned names, and the model-facing tool definitions the run used.
-- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. Keep a private copy outside Git if the run matters.
+- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. The record's events include the route and parse model calls (`step` is `route`, `parse` or `planner`) as well as the planner's; the metrics in `summary.json` count `llm_calls` rows and are not affected by these events. Keep a private copy outside Git if the run matters.
 
 How to read the metrics in `summary.json`:
 

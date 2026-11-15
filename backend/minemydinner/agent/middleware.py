@@ -17,7 +17,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.llm.client import LLMClient, map_strings, normalize_usage
+from minemydinner.llm.client import LLMClient, map_strings, normalize_usage, served_model_name
 from minemydinner.llm.config import ModelConfig
 
 
@@ -54,14 +54,6 @@ def _usage(response: ModelResponse) -> dict[str, int] | None:
         if isinstance(message, AIMessage):
             return normalize_usage(message.usage_metadata)
     return None
-
-
-def _served_model(reply: AIMessage | None) -> str | None:
-    """The provider-reported model name (langchain-openai, -deepseek, and -google-genai all
-    use `model_name` in the response metadata), or None."""
-    metadata = reply.response_metadata if reply is not None else {}
-    value = (metadata or {}).get("model_name") or (metadata or {}).get("model")
-    return str(value) if value else None
 
 
 def _json_or_text(content: Any) -> Any:
@@ -120,11 +112,12 @@ class CallLayerMiddleware(AgentMiddleware):
                 run_id,
                 {
                     "kind": "model_call",
+                    "step": "planner",
                     "model_name": outcome.model_name,
                     "provider": used["provider"],
                     "fallback_used": outcome.fallback_used,
                     # The model name the provider reports having served, if it reports one.
-                    "served_model": _served_model(reply),
+                    "served_model": served_model_name(reply),
                     "messages": [dump_message(m) for m in sent],
                     "response": {
                         "content": reply.content if reply else None,
