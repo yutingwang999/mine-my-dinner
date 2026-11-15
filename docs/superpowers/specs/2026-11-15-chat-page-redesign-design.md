@@ -87,6 +87,10 @@ Today the home page shows only the app name and tagline, and the chat lives at `
 - **Opening the site continues the last conversation** (Claude's call, open to change by the user): with no list of past conversations, starting a new one on every visit would hide the previous conversation for good. "New conversation" starts a fresh one. When a history list is added later, opening on a new conversation (as ChatGPT does) can be reconsidered.
 - The welcome texts and example requests are in `messages/en.json` and `messages/zh.json`.
 
+### 5.5 Open: the reply text that comes with a plan
+
+The reply shown with a plan is the planner model's own note, unchecked; in the plan 2a checkpoint it miscounted the dishes and suggested a dish outside the plan. How the reply should be written (code, a stricter prompt, a check, or a mix) is still open and is decided while planning this redesign; see `docs/phase-1-carryover.md` ("The assistant's reply text after a plan…"). The user found a fully code-written reply too rigid.
+
 ## 6. Left to the builder
 
 - Exact colours, spacing, and the switch's look, within the site's existing style.
