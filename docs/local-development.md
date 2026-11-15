@@ -114,6 +114,7 @@ The planning evaluation runs fictional scenarios against the test database with 
 
 - `scenarios_baseline.yaml` with `library.yaml`: the fixed baseline set, kept unchanged so results compare across plans.
 - `scenarios_plan2a.yaml` with `library_extended.yaml`: scenarios for the planner-efficiency features.
+- `scenarios_counts.yaml` with `library_extended.yaml`: meat and vegetable bounds ("至少" / "最多"), the implied side, and the next-action buttons' messages (added in plan 2a Task 11; these scenarios took no part in earlier tuning). A scenario with `follow_up` sends a second user message on the same thread; the second turn is the one scored, and `expect_first_reasons` checks why the first turn stopped.
 
 Run from `backend/`, with `DATABASE_URL` pointing at the test database (the script refuses the main database and a non-empty test database):
 
@@ -135,7 +136,7 @@ Each run writes a folder `backend/eval_data/planning/runs/<run id>/`, where the 
 
 - `summary.json` (committed): conditions (commit, data file hashes, the prompt version label, the version of each prompt and the SHA-256 of each prompt file in use, the tool version, models and prices, settings; see `docs/prompt-versions.md`), metrics by area, and each scenario's metrics. It holds no model text.
 - `prompts/` and `tools.json` (committed): only the prompt files in use, under their versioned names, and the model-facing tool definitions the run used.
-- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. The record's events include the route and parse model calls (`step` is `route`, `parse` or `planner`) as well as the planner's; the metrics in `summary.json` count `llm_calls` rows and are not affected by these events. Keep a private copy outside Git if the run matters.
+- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. The record's events include the route and parse model calls (`step` is `route`, `parse` or `planner`) as well as the planner's; the metrics in `summary.json` count `llm_calls` rows and are not affected by these events. `planning_runs` lists every planning run on the scenario's thread in order (two for a `follow_up` scenario); `planning_run` is the last one. Keep a private copy outside Git if the run matters.
 
 How to read the metrics in `summary.json`:
 

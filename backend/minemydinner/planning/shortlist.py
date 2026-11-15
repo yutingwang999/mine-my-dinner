@@ -17,7 +17,11 @@ from sqlalchemy.orm import Session
 
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import RecipeIngredient
-from minemydinner.planning.composition import CATEGORY_OF_DISH_TYPE, required_counts
+from minemydinner.planning.composition import (
+    CATEGORY_OF_DISH_TYPE,
+    required_counts,
+    side_ranges,
+)
 from minemydinner.planning.context import PlanningContext
 from minemydinner.planning.named import line_uses_clause, recipes_using
 from minemydinner.planning.search import RecipeHit, search_recipes
@@ -68,20 +72,14 @@ class ShortlistEntry:
 def needed_by_dish_type(spec: "PlanSpec") -> dict[str, int]:
     """How many dishes of each type the plan may need; types needing none are left out.
 
-    A meat or vegetable side named exactly needs that many; otherwise a side may take the
-    dish total less the other side's named count (the whole total when nothing is named),
-    so a split naming one side as the whole total shortlists only that side."""
+    A meat or vegetable side needs the high end of its range (design 5.11), so a side whose
+    range is [0, 0] ("两个荤菜", "不要素菜") is not shortlisted."""
     required = required_counts(spec)
     needed: dict[str, int] = {}
     if spec.dishes >= 1:
-        for side, other in (("meat_dishes", "vegetable_dishes"), ("vegetable_dishes", "meat_dishes")):
-            named = required.get(side)
-            if named is not None and not spec.split_is_minimum:
-                count = named
-            else:
-                count = spec.dishes - (required.get(other) or 0)
-            if count >= 1:
-                needed[DISH_TYPE_OF_CATEGORY[side]] = count
+        for side, (_, high) in side_ranges(spec).items():
+            if high >= 1:
+                needed[DISH_TYPE_OF_CATEGORY[side]] = high
     for category in SINGLE_CATEGORIES:
         if required[category] >= 1:
             needed[DISH_TYPE_OF_CATEGORY[category]] = required[category]

@@ -8,11 +8,13 @@ from minemydinner.agent.request import (
     ParsedRequest,
     apply_defaults,
     default_composition,
+    dish_total,
     load_prompt,
     needs_question,
     prompt_files,
     request_problem,
 )
+from minemydinner.planning.composition import side_ranges
 from minemydinner.planning.validate import PlanSpec
 
 
@@ -33,7 +35,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v2+parse_v2+planner_v3"
+    assert PROMPT_VERSION == "route_v2+parse_v3+planner_v3"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -96,26 +98,40 @@ def test_defaults_apply_only_when_no_count_was_stated(request_, spec_counts, def
 def test_split_without_total_sets_the_total():
     spec, _, defaults_used = apply_defaults(P(headcount=2, meat_dishes=2, mode="shopping"))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (2, 2, None)
-    assert spec.split_is_minimum is False and spec.soups == 0 and defaults_used == []
+    assert (spec.meat_bound, spec.vegetable_bound) == ("exact", None)
+    assert spec.soups == 0 and defaults_used == []
     spec, _, _ = apply_defaults(P(meat_dishes=1, vegetable_dishes=1))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (2, 1, 1)
+    assert (spec.meat_bound, spec.vegetable_bound) == ("exact", "exact")
 
 
 def test_split_inside_the_total_stays_exact():
     spec, _, _ = apply_defaults(P(dishes=8, meat_dishes=2))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (8, 2, None)
-    assert spec.split_is_minimum is False
+    assert (spec.meat_bound, spec.vegetable_bound) == ("exact", None)
 
 
 def test_named_split_below_the_total_becomes_minimums():
     spec, _, _ = apply_defaults(P(dishes=3, meat_dishes=1, vegetable_dishes=1))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (3, 1, 1)
-    assert spec.split_is_minimum is True
+    assert (spec.meat_bound, spec.vegetable_bound) == ("at_least", "at_least")
+
+
+def test_parsed_bounds_reach_the_spec():
+    spec, _, _ = apply_defaults(P(dishes=8, meat_dishes=2, meat_bound="at_least"))
+    assert (spec.meat_dishes, spec.meat_bound, spec.vegetable_bound) == (2, "at_least", None)
+    spec, _, _ = apply_defaults(
+        P(dishes=4, meat_dishes=1, meat_bound="at_least", vegetable_dishes=2, vegetable_bound="at_most")
+    )
+    assert (spec.meat_bound, spec.vegetable_bound) == ("at_least", "at_most")
+    # A bound without its count is ignored.
+    spec, _, _ = apply_defaults(P(dishes=3, meat_bound="at_most"))
+    assert (spec.meat_dishes, spec.meat_bound) == (None, None)
 
 
 def test_split_above_the_total_is_a_problem():
-    assert request_problem(P(dishes=2, meat_dishes=3)) == "split_exceeds_total"
-    assert request_problem(P(dishes=2, meat_dishes=2, vegetable_dishes=1)) == "split_exceeds_total"
+    assert request_problem(P(dishes=2, meat_dishes=3)) == "split_conflicts_total"
+    assert request_problem(P(dishes=2, meat_dishes=2, vegetable_dishes=1)) == "split_conflicts_total"
     assert request_problem(P(dishes=2, meat_dishes=1, vegetable_dishes=1)) is None
     assert request_problem(P(dishes=3, meat_dishes=1, vegetable_dishes=1)) is None
     assert request_problem(P(meat_dishes=2)) is None
@@ -198,7 +214,7 @@ def test_zero_total_fallback_drops_the_stated_split():
         P(headcount=2, dishes=0, meat_dishes=0, vegetable_dishes=0, mode="shopping")
     )
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (2, None, None)
-    assert spec.split_is_minimum is False
+    assert (spec.meat_bound, spec.vegetable_bound) == (None, None)
 
 
 def test_range_fields_of_unstated_counts_are_ignored():
@@ -206,3 +222,141 @@ def test_range_fields_of_unstated_counts_are_ignored():
         P(headcount=2, dishes=2, mode="shopping", range_fields=["soups", "dishes"])
     )
     assert defaults_used == ["dishes"]
+
+
+# ---- design 5.11: bounds, the dish total, and contradictions ----
+
+
+def test_dish_total_keeps_a_stated_total():
+    assert dish_total(P(dishes=8, meat_dishes=2, meat_bound="at_least"), 1) == 8
+    assert dish_total(P(dishes=3, vegetable_dishes=1, vegetable_bound="at_most"), 5) == 3
+
+
+def test_dish_total_of_an_exact_split_is_its_sum():
+    # "一荤一素"
+    assert dish_total(P(meat_dishes=1, vegetable_dishes=1), 4) == 2
+    assert dish_total(P(meat_dishes=1, meat_bound="exact", vegetable_dishes=1), 4) == 2
+    # "两个荤菜"
+    assert dish_total(P(meat_dishes=2), 1) == 2
+
+
+def test_dish_total_with_a_bound_and_no_total_uses_the_headcount():
+    # "三个人，最多一个素菜": the default 2 dishes, assumed, no soup added.
+    request = P(headcount=3, vegetable_dishes=1, vegetable_bound="at_most", mode="shopping")
+    assert dish_total(request, 3) == 2
+    spec, _, defaults_used = apply_defaults(request)
+    assert (spec.dishes, spec.soups) == (2, 0)
+    assert (spec.vegetable_dishes, spec.vegetable_bound) == (1, "at_most")
+    assert defaults_used == ["dishes"]
+
+
+def test_dish_total_is_raised_to_the_lower_bounds():
+    request = P(headcount=1, meat_dishes=2, meat_bound="at_least", mode="shopping")
+    assert dish_total(request, 1) == 2
+    spec, _, defaults_used = apply_defaults(request)
+    assert (spec.dishes, spec.soups, spec.meat_dishes) == (2, 0, 2)
+    assert defaults_used == ["dishes"]
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        # 两个菜，至少三个荤菜
+        P(dishes=2, meat_dishes=3, meat_bound="at_least"),
+        # 三个菜，最多一个荤菜，最多一个素菜
+        P(
+            dishes=3,
+            meat_dishes=1,
+            meat_bound="at_most",
+            vegetable_dishes=1,
+            vegetable_bound="at_most",
+        ),
+        # 两个菜，三个荤菜
+        P(dishes=2, meat_dishes=3, meat_bound="exact"),
+    ],
+)
+def test_an_empty_side_range_is_a_conflict(request_):
+    assert request_problem(request_) == "split_conflicts_total"
+
+
+def test_bounds_inside_the_total_are_no_problem():
+    assert request_problem(P(dishes=8, meat_dishes=2, meat_bound="at_least")) is None
+    assert request_problem(P(dishes=3, vegetable_dishes=1, vegetable_bound="at_most")) is None
+    assert request_problem(P(dishes=3, vegetable_dishes=0, vegetable_bound="exact")) is None
+    assert request_problem(P(headcount=3, vegetable_dishes=1, vegetable_bound="at_most")) is None
+
+
+def test_at_least_one_soup_is_one_soup_assumed():
+    # "至少一个汤"
+    spec, _, defaults_used = apply_defaults(P(soups=1, range_fields=["soups"]))
+    assert (spec.soups, spec.dishes) == (1, 0)
+    assert "soups" in defaults_used
+
+
+def test_old_spec_with_split_is_minimum_reads_as_bounds():
+    old = PlanSpec.model_validate(
+        {"mode": "shopping", "dishes": 3, "soups": 0, "meat_dishes": 1, "vegetable_dishes": 1,
+         "split_is_minimum": True}
+    )
+    assert (old.meat_bound, old.vegetable_bound) == ("at_least", "at_least")
+    exact = PlanSpec.model_validate(
+        {"mode": "shopping", "dishes": 8, "soups": 0, "meat_dishes": 2, "split_is_minimum": False}
+    )
+    assert (exact.meat_bound, exact.vegetable_bound) == ("exact", None)
+
+
+def test_dish_total_is_lowered_to_the_upper_bounds():
+    # 五个人，最多一个荤菜，最多一个素菜: the default 3 dishes is lowered to 2.
+    request = P(
+        headcount=5,
+        meat_dishes=1,
+        meat_bound="at_most",
+        vegetable_dishes=1,
+        vegetable_bound="at_most",
+        mode="shopping",
+    )
+    assert dish_total(request, 5) == 2
+    assert request_problem(request) is None
+    spec, _, defaults_used = apply_defaults(request)
+    assert (spec.dishes, spec.soups) == (2, 0)
+    assert side_ranges(spec) == {"meat_dishes": (1, 1), "vegetable_dishes": (1, 1)}
+    assert defaults_used == ["dishes"]
+
+
+def test_dish_total_with_one_upper_bound_is_not_lowered():
+    # 五个人，最多一个素菜: the meat side has no upper bound, so the default 3 stays.
+    request = P(headcount=5, vegetable_dishes=1, vegetable_bound="at_most")
+    assert dish_total(request, 5) == 3
+    # An exact side and an at-least side: no upper bound on the second.
+    request = P(headcount=5, meat_dishes=1, vegetable_dishes=1, vegetable_bound="at_least")
+    assert dish_total(request, 5) == 3
+
+
+def test_an_exact_side_counts_as_an_upper_bound():
+    request = P(headcount=5, meat_dishes=1, vegetable_dishes=1, vegetable_bound="at_most")
+    assert dish_total(request, 5) == 2
+
+
+def test_a_stated_total_is_never_clamped():
+    # 三个菜，最多一个荤菜，最多一个素菜 stays a contradiction.
+    request = P(
+        dishes=3,
+        meat_dishes=1,
+        meat_bound="at_most",
+        vegetable_dishes=1,
+        vegetable_bound="at_most",
+    )
+    assert dish_total(request, 5) == 3
+    assert request_problem(request) == "split_conflicts_total"
+
+
+def test_both_sides_at_most_zero_is_a_contradiction():
+    request = P(
+        headcount=3,
+        meat_dishes=0,
+        meat_bound="at_most",
+        vegetable_dishes=0,
+        vegetable_bound="at_most",
+    )
+    assert dish_total(request, 3) == 2
+    assert request_problem(request) == "split_conflicts_total"

@@ -1,0 +1,119 @@
+# Meat and vegetable bounds (design 5.11). Run with library_extended.yaml. Kept apart from
+# scenarios_plan2a.yaml so that set stays comparable across rounds; none of these took part
+# in the Task 10 tuning.
+#
+# Makeable dishes per stock (library_extended.yaml; 盐, 食用油, 水, 糖, 酱油, 醋 are always in
+# stock):
+# - fridge_3_meat_5_veg: meat 青椒肉丝, 红烧排骨, 清蒸鲈鱼; vegetable 蒜蓉西兰花 and the four
+#   egg dishes (12 eggs, 3 each, so no S1 warning).
+# - fridge_1_meat_4_veg: meat 青椒肉丝; vegetable the four egg dishes.
+# - fridge_greens_only: vegetable 蒜蓉西兰花, 清炒小白菜; no meat dish, no egg.
+scenarios:
+  - name: eight_dishes_at_least_two_meat_fridge
+    request: 8个菜，至少2个荤菜，只用冰箱里现有的食材。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: plenty, 排骨: plenty, 姜: plenty, 鲈鱼: plenty, 葱: plenty, 鸡蛋: 12, 西兰花: plenty, 蒜: plenty}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {dishes: 8, soups: 0}
+    expect_count_range: {meat_dishes: [2, 8]}
+    expect_not_assumed: [dishes, soups]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: 3 meat and 5 vegetable dishes can be made, and at least 2 meat dishes are asked for, so a plan of all 8 makeable dishes meets it (before bounds, this failed H4 on every attempt).
+  - name: eight_dishes_two_meat_fridge
+    request: 8个菜，2个荤菜，只用冰箱里现有的食材。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: plenty, 排骨: plenty, 姜: plenty, 鲈鱼: plenty, 葱: plenty, 鸡蛋: 12, 西兰花: plenty, 蒜: plenty}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_plan: false
+    expect_reasons: [not_enough_dishes]
+    expect_reason_detail: [{reason: not_enough_dishes, category: vegetable_dishes, needed: 6, available: 5}]
+    expect_next_actions: [switch_to_shopping, relax_split, update_inventory]
+    max_model_calls: 3
+    expect: Exactly 2 meat dishes leaves 6 vegetable dishes, and only 5 can be made. Early stop with not_enough_dishes for vegetable dishes (6 needed, 5 available); relax_split is offered. The planner never runs.
+  - name: three_dishes_at_most_one_vegetable_shopping
+    request: 三个菜，最多一个素菜，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {dishes: 3, soups: 0}
+    expect_count_range: {meat_dishes: [2, 3], vegetable_dishes: [0, 1]}
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: A plan of 3 dishes with at most 1 vegetable dish, so at least 2 meat dishes.
+  - name: three_dishes_at_most_one_vegetable_fridge
+    request: 三个菜，最多一个素菜，只用冰箱里现有的食材。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: plenty, 鸡蛋: 12}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_plan: false
+    expect_reasons: [not_enough_dishes]
+    expect_reason_detail: [{reason: not_enough_dishes, category: meat_dishes, needed: 2, available: 1}]
+    expect_next_actions: [switch_to_shopping, relax_split, update_inventory]
+    max_model_calls: 3
+    expect: At most 1 vegetable dish means at least 2 meat dishes, and only 1 can be made. Early stop with not_enough_dishes for meat dishes (at least 2 needed, 1 available); relax_split is offered.
+  - name: three_dishes_no_vegetable_shopping
+    request: 三个菜，不要素菜，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {dishes: 3, meat_dishes: 3, vegetable_dishes: 0, soups: 0}
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: 3 meat dishes and no vegetable dish (vegetable 0 exact).
+  - name: four_dishes_meat_and_vegetable_bounds_shopping
+    request: 四个菜，至少一个荤菜，素菜最多两个，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {dishes: 4, soups: 0}
+    expect_count_range: {meat_dishes: [1, 4], vegetable_dishes: [0, 2]}
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: 4 dishes, at least 1 meat and at most 2 vegetable dishes (the summary states at least 2 meat dishes, which the vegetable bound implies).
+  - name: three_people_at_most_one_vegetable_shopping
+    request: 我们三个人吃，最多一个素菜，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {dishes: 2, soups: 0}
+    expect_count_range: {vegetable_dishes: [0, 1]}
+    expect_assumed: [dishes]
+    expect_not_assumed: [soups]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: No dish total is stated, so the headcount default of 2 dishes applies and is stated as assumed; at most 1 vegetable dish; no soup, because a count was stated.
+  - name: five_people_at_most_one_each_shopping
+    request: 我们五个人吃，最多一个荤菜，最多一个素菜，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {dishes: 2, meat_dishes: 1, vegetable_dishes: 1, soups: 0}
+    expect_assumed: [dishes]
+    expect_not_assumed: [soups]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: No dish total is stated and both sides have an upper bound, so the headcount default of 3 dishes is lowered to 2 and stated as assumed; 1 meat and 1 vegetable dish, no soup, and no question about the total.
+  # ---- next-action buttons: two user messages on one thread ----
+  - name: relax_split_button
+    request: 我一个人吃，一荤一素，只用冰箱里的。
+    follow_up: 荤素都行
+    locale: zh
+    inventory: {小白菜: plenty, 西兰花: plenty, 蒜: plenty}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_first_reasons: [not_enough_dishes]
+    expect_counts: {dishes: 2, soups: 0}
+    expect_spec: {dishes: 2, meat_dishes: null, vegetable_dishes: null, meat_bound: null, vegetable_bound: null}
+    max_model_calls: 7
+    expect: No meat dish can be made, so the first message stops early. The relax_split button's message drops the split and keeps the total of 2, so the second message plans the two makeable vegetable dishes. Model calls count both turns (2 for the early stop, at most 5 for the plan).
+  - name: relax_named_button
+    request: 我一个人吃，全做鸡蛋，只用冰箱里的。
+    follow_up: 不一定要用指定的食材
+    locale: zh
+    inventory: {小白菜: plenty, 西兰花: plenty, 蒜: plenty}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_first_reasons: [named_ingredient]
+    expect_counts: {dishes: 1, soups: 0}
+    expect_spec: {all_use: [], must_use: [], prefer_use: [鸡蛋]}
+    max_model_calls: 7
+    expect: No eggs in the fridge, so the first message stops early (named_ingredient). The relax_named button's message moves the eggs to prefer_use, and the second message plans one makeable dish without eggs. Model calls count both turns.

@@ -99,8 +99,26 @@ def test_quota_grows_with_the_needed_count(session, seeded):
         ({"dishes": 2, "meat_dishes": 2}, {"meat dish": 2}),
         ({"dishes": 3, "meat_dishes": 1}, {"meat dish": 1, "vegetable dish": 2}),
         (
-            {"dishes": 3, "meat_dishes": 1, "vegetable_dishes": 1, "split_is_minimum": True},
+            {
+                "dishes": 3,
+                "meat_dishes": 1,
+                "vegetable_dishes": 1,
+                "meat_bound": "at_least",
+                "vegetable_bound": "at_least",
+            },
             {"meat dish": 2, "vegetable dish": 2},
+        ),
+        # 三个菜，最多一个素菜: meat [2, 3], vegetable [0, 1].
+        (
+            {"dishes": 3, "vegetable_dishes": 1, "vegetable_bound": "at_most"},
+            {"meat dish": 3, "vegetable dish": 1},
+        ),
+        # 三个菜，不要素菜: no vegetable dish type at all.
+        ({"dishes": 3, "vegetable_dishes": 0, "vegetable_bound": "exact"}, {"meat dish": 3}),
+        # 8个菜，至少2个荤菜: meat [2, 8], vegetable [0, 6].
+        (
+            {"dishes": 8, "meat_dishes": 2, "meat_bound": "at_least"},
+            {"meat dish": 8, "vegetable dish": 6},
         ),
         ({"staples": 1}, {"staple food": 1}),
         ({"desserts": 1, "snacks": 2}, {"dessert": 1, "snack": 2}),

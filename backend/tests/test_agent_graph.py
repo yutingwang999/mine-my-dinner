@@ -203,7 +203,7 @@ def test_contradiction_interrupts_with_its_problem(graph_env, veg):
     # The fixture's style is plan_then_adjust: contradictions are asked regardless of style.
     contradiction = {"dishes": 2, "meat_dishes": 3}
     out = plan(graph_env, "两个菜，三个荤菜", parse=contradiction)
-    expected = {"kind": "question", "fields": ["composition"], "problem": "split_exceeds_total"}
+    expected = {"kind": "question", "fields": ["composition"], "problem": "split_conflicts_total"}
     assert [i.value for i in out["__interrupt__"]] == [expected]
     # Answered with another contradiction: asked again, once for the new message.
     out = resume(graph_env, "三个荤菜", parse=contradiction)
@@ -218,7 +218,7 @@ def test_contradiction_interrupts_with_its_problem(graph_env, veg):
 def test_ask_first_still_asks_the_mode_after_a_contradiction_is_fixed(graph_env, veg):
     set_request_style(graph_env.session, "ask_first")
     out = plan(graph_env, "两个菜，三个荤菜", parse={"dishes": 2, "meat_dishes": 3})
-    assert out["__interrupt__"][0].value["problem"] == "split_exceeds_total"
+    assert out["__interrupt__"][0].value["problem"] == "split_conflicts_total"
     fixed = {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1}
     out = resume(graph_env, "两个菜，一荤一素", parse=fixed)
     assert [i.value for i in out["__interrupt__"]] == [{"kind": "question", "fields": ["mode"]}]
@@ -654,21 +654,23 @@ def test_closest_attempt_breaks_ties_by_composition_gap(graph_env, session):
 def test_h4_and_h7_wording_for_the_model_and_the_user():
     from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
 
+    # 3 dishes, at least 2 meat dishes (meat [2, 3], vegetable [0, 1]).
     h4 = {
         "code": "H4",
         "recipe_id": None,
         "detail": {
-            "required": {"dishes": 3, "soups": 0, "meat_dishes": 1},
-            "present": {"dishes": 2, "soups": 1, "meat_dishes": 0},
-            "minimum": True,
+            "required": {"dishes": 3, "soups": 0},
+            "present": {"dishes": 2, "soups": 1, "meat_dishes": 0, "vegetable_dishes": 2},
+            "ranges": {"meat_dishes": [2, 3], "vegetable_dishes": [0, 1]},
         },
     }
     assert _violation_for_model(h4, {}) == (
-        "The plan has 2 dishes, 1 soup, 0 meat dishes; the user wants 3 dishes, 0 soups, "
-        "1 meat dish (the meat and vegetable counts are minimums)."
+        "The plan has 2 dishes, 1 soup, 0 meat dishes, 2 vegetable dishes; the user wants "
+        "3 dishes, 0 soups, at least 2 meat dishes, at most 1 vegetable dish."
     )
-    assert "方案有 2 道菜，1 道汤，0 道荤菜" in _unmet_for_user(h4, {}, "zh")
-    assert "(the meat and vegetable counts are minimums)" in _unmet_for_user(h4, {}, "en")
+    assert _unmet_for_user(h4, {}, "zh") == (
+        "方案有 2 道菜，1 道汤，0 道荤菜，2 道素菜，要求是 3 道菜，0 道汤，至少 2 道荤菜，最多 1 道素菜"
+    )
     h7 = {
         "code": "H7",
         "recipe_id": None,
@@ -801,7 +803,8 @@ def test_summary_states_counts_split_minimum_and_other_categories(
     out = plan(env, "dinner", parse=parse, replies=[final_proposal([veg.id])])
     opening = out["planner_opening"]
     assert "Dishes (meat plus vegetable): 3" in opening
-    assert "Split: at least 1 meat dish, at least 1 vegetable dish" in opening
+    assert "Split: 1 to 2 meat dishes, 1 to 2 vegetable dishes" in opening
+    assert "Every count is exact unless it says at least, at most, or a range." in opening
     assert "Soups: 1" in opening
     assert "Staple foods: 1, desserts: 0, snacks: 0" in opening
     assert "Must use in at least one dish: 猪肉" in opening
@@ -965,10 +968,23 @@ def test_search_tool_filters_and_ranks_with_the_named_ingredients(tmp_path, sess
 
 
 def _h4(required: dict, present: dict, minimum: bool = False) -> dict:
+    """An H4 finding as saved before ranges existed: named sides in `required`."""
     return {
         "code": "H4",
         "recipe_id": None,
         "detail": {"required": required, "present": present, "minimum": minimum},
+    }
+
+
+def _h4_ranges(dishes: int, present: dict, meat: list[int], vegetable: list[int]) -> dict:
+    return {
+        "code": "H4",
+        "recipe_id": None,
+        "detail": {
+            "required": {"dishes": dishes, "soups": 0, "staples": 0, "desserts": 0, "snacks": 0},
+            "present": present,
+            "ranges": {"meat_dishes": meat, "vegetable_dishes": vegetable},
+        },
     }
 
 
@@ -1001,7 +1017,7 @@ def test_exact_vegetable_only_split_implies_the_meat_side():
     )
 
 
-def test_minimum_split_leaves_the_unnamed_side_out():
+def test_old_minimum_finding_states_the_tightened_ranges():
     from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
 
     h4 = _h4(
@@ -1011,10 +1027,70 @@ def test_minimum_split_leaves_the_unnamed_side_out():
     )
     text = _violation_for_model(h4, {})
     assert text.endswith(
-        "the user wants 3 dishes, 2 meat dishes (the meat and vegetable counts are minimums)."
+        "the user wants 3 dishes, at least 2 meat dishes, at most 1 vegetable dish."
     )
     zh = _unmet_for_user(h4, {}, "zh")
-    assert zh.endswith("要求是 3 道菜，2 道荤菜（荤菜和素菜的数量是最少要求）")
+    assert zh.endswith("要求是 3 道菜，至少 2 道荤菜，最多 1 道素菜")
+
+
+def test_an_unconstrained_side_is_never_printed():
+    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+
+    # 8 dishes, at least 2 meat: the vegetable side is [0, 6], stated as at most 6.
+    h4 = _h4_ranges(8, {"dishes": 7, "meat_dishes": 1, "vegetable_dishes": 6}, [2, 8], [0, 6])
+    assert _violation_for_model(h4, {}).endswith(
+        "the user wants 8 dishes, at least 2 meat dishes, at most 6 vegetable dishes."
+    )
+    # No split at all: neither side is printed, as wanted or as present 0.
+    plain = _h4_ranges(2, {"dishes": 1, "meat_dishes": 1, "vegetable_dishes": 0}, [0, 2], [0, 2])
+    assert _violation_for_model(plain, {}) == (
+        "The plan has 1 dish, 1 meat dish; the user wants 2 dishes."
+    )
+    assert _unmet_for_user(plain, {}, "en") == (
+        "The plan has 1 dish, 1 meat dish; 2 dishes were asked for"
+    )
+    assert "0" not in _unmet_for_user(plain, {}, "zh")
+
+
+def test_range_wording_in_retry_and_card():
+    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+
+    # 4 dishes, at least 1 meat, at most 2 vegetable: meat [2, 4], vegetable [0, 2].
+    h4 = _h4_ranges(4, {"dishes": 4, "meat_dishes": 1, "vegetable_dishes": 3}, [2, 4], [0, 2])
+    assert _violation_for_model(h4, {}) == (
+        "The plan has 4 dishes, 1 meat dish, 3 vegetable dishes; the user wants 4 dishes, "
+        "at least 2 meat dishes, at most 2 vegetable dishes."
+    )
+    assert _unmet_for_user(h4, {}, "zh") == (
+        "方案有 4 道菜，1 道荤菜，3 道素菜，要求是 4 道菜，至少 2 道荤菜，最多 2 道素菜"
+    )
+    # Both named below a total of 4: 1 to 3 of each.
+    both = _h4_ranges(4, {"dishes": 4, "meat_dishes": 0, "vegetable_dishes": 4}, [1, 3], [1, 3])
+    assert _unmet_for_user(both, {}, "en").endswith(
+        "4 dishes, 1 to 3 meat dishes, 1 to 3 vegetable dishes were asked for"
+    )
+
+
+@pytest.mark.parametrize(
+    "low, high, total, category, en, zh",
+    [
+        (6, 6, 8, "vegetable_dishes", "6 vegetable dishes", "6 道素菜"),
+        (1, 1, 2, "meat_dishes", "1 meat dish", "1 道荤菜"),
+        (0, 0, 3, "vegetable_dishes", "0 vegetable dishes", "0 道素菜"),
+        (2, 3, 4, "meat_dishes", "2 to 3 meat dishes", "2 到 3 道荤菜"),
+        (2, 8, 8, "meat_dishes", "at least 2 meat dishes", "至少 2 道荤菜"),
+        (1, 3, 3, "meat_dishes", "at least 1 meat dish", "至少 1 道荤菜"),
+        (0, 1, 3, "vegetable_dishes", "at most 1 vegetable dish", "最多 1 道素菜"),
+        (0, 2, 4, "vegetable_dishes", "at most 2 vegetable dishes", "最多 2 道素菜"),
+        (0, 5, 5, "meat_dishes", None, None),
+        (0, 0, 0, "meat_dishes", None, None),
+    ],
+)
+def test_side_phrase(low, high, total, category, en, zh):
+    from minemydinner.agent.graph import side_phrase
+
+    assert side_phrase(low, high, total, category, False) == en
+    assert side_phrase(low, high, total, category, True) == zh
 
 
 def test_both_sides_named_keeps_its_wording():
@@ -1032,15 +1108,63 @@ def test_both_sides_named_keeps_its_wording():
 def test_request_summary_split_line():
     from minemydinner.agent.graph import _split_text
 
-    assert _split_text({"dishes": 8, "meat_dishes": 2}) == "2 meat dishes, 6 vegetable dishes"
-    assert _split_text({"dishes": 4, "vegetable_dishes": 1}) == "3 meat dishes, 1 vegetable dish"
-    assert _split_text(
-        {"dishes": 8, "meat_dishes": 2, "split_is_minimum": True}
-    ) == "at least 2 meat dishes"
-    assert _split_text({"dishes": 4, "meat_dishes": 1, "vegetable_dishes": 3}) == (
-        "1 meat dish, 3 vegetable dishes"
+    def split(**values):
+        return _split_text({"mode": "shopping", "soups": 0, **values})
+
+    assert split(dishes=8, meat_dishes=2) == "2 meat dishes, 6 vegetable dishes"
+    assert split(dishes=4, vegetable_dishes=1) == "3 meat dishes, 1 vegetable dish"
+    assert split(dishes=8, meat_dishes=2, meat_bound="at_least") == (
+        "at least 2 meat dishes, at most 6 vegetable dishes"
     )
-    assert _split_text({"dishes": 4}) == "none (any mix of meat and vegetable dishes)"
+    # A spec saved before bounds existed.
+    assert split(dishes=8, meat_dishes=2, split_is_minimum=True) == (
+        "at least 2 meat dishes, at most 6 vegetable dishes"
+    )
+    assert split(dishes=4, meat_dishes=1, vegetable_dishes=3) == "1 meat dish, 3 vegetable dishes"
+    assert split(dishes=3, vegetable_dishes=1, vegetable_bound="at_most") == (
+        "at least 2 meat dishes, at most 1 vegetable dish"
+    )
+    assert split(
+        dishes=4, meat_dishes=1, meat_bound="at_least", vegetable_dishes=2, vegetable_bound="at_most"
+    ) == "at least 2 meat dishes, at most 2 vegetable dishes"
+    assert split(dishes=3, vegetable_dishes=0, vegetable_bound="exact") == (
+        "3 meat dishes, 0 vegetable dishes"
+    )
+    assert split(dishes=4) == "none (any mix of meat and vegetable dishes)"
+    assert split(dishes=0, soups=1) == "none (any mix of meat and vegetable dishes)"
+
+
+def test_summary_for_at_most_one_vegetable(graph_env, session, veg, meat):
+    for i in range(2):
+        make_recipe(session, f"肉{i}", "meat dish")
+    parse = {"mode": "shopping", "dishes": 3, "vegetable_dishes": 1, "vegetable_bound": "at_most"}
+    plan(graph_env, "三个菜，最多一个素菜", parse=parse, replies=[final_proposal([veg.id])])
+    opening = planner_requests(graph_env)[0]
+    assert "Split: at least 2 meat dishes, at most 1 vegetable dish" in opening
+    assert "Every count is exact unless it says at least, at most, or a range" in opening
+
+
+def test_reason_text_for_an_implied_side():
+    exact = {"reason": "not_enough_dishes", "category": "vegetable_dishes", "needed": 6,
+             "available": 5, "ingredient": None, "minimum": False}
+    assert reason_text(exact, "fridge_only", "en") == (
+        "By the current fridge you can make 5 vegetable dishes; this meal needs 6 vegetable dishes"
+    )
+    at_least = {**exact, "category": "meat_dishes", "needed": 2, "available": 1, "minimum": True}
+    assert reason_text(at_least, "fridge_only", "zh") == (
+        "按冰箱现有的食材只能做 1 道荤菜，这餐需要 至少 2 道荤菜"
+    )
+
+
+def test_relax_split_for_a_short_implied_side():
+    spec = {"mode": "fridge_only", "dishes": 8, "soups": 0, "meat_dishes": 2}
+    actions = next_actions(spec, ["not_enough_dishes"], [], ["vegetable_dishes"])
+    assert "relax_split" in actions
+    # Only the dish total short: relaxing the split would not help.
+    assert "relax_split" not in next_actions(spec, ["not_enough_dishes"], [], ["dishes"])
+    # Nothing named: no split to relax.
+    plain = {"mode": "fridge_only", "dishes": 8, "soups": 0}
+    assert "relax_split" not in next_actions(plain, ["not_enough_dishes"], [], ["vegetable_dishes"])
 
 
 def test_one_sided_split_retry_names_the_implied_side(graph_env, veg, meat):
@@ -1136,3 +1260,30 @@ def test_non_planning_turn_does_not_leak_calls_into_the_next_run(graph_env, veg)
     )
     steps = [e["step"] for e in run_record(graph_env).events if e["kind"] == "model_call"]
     assert steps == ["route", "parse", "planner"]
+
+
+@pytest.mark.parametrize(
+    "reason, category, en, zh",
+    [
+        ("no_cookware", "vegetable_dishes",
+         "None of your vegetable dishes can be made with the cookware you have",
+         "你的素菜都用不了现有的厨具"),
+        ("no_cookware", "soups",
+         "None of your soups can be made with the cookware you have", "你的汤都用不了现有的厨具"),
+        ("time_limit", "meat_dishes", "None of your meat dishes fits the time limit",
+         "你的荤菜都不符合时间限制"),
+        ("time_limit", "staples", "None of your staple foods fits the time limit",
+         "你的主食都不符合时间限制"),
+        ("no_cookware", "dishes", "None of your recipes can be made with the cookware you have",
+         "你的菜谱里没有一道能用你现有的厨具做出来"),
+        ("no_cookware", None, "None of your recipes can be made with the cookware you have",
+         "你的菜谱里没有一道能用你现有的厨具做出来"),
+        ("time_limit", None, "None of your recipes fits the time limit",
+         "你的菜谱里没有一道符合时间限制"),
+    ],
+)
+def test_cookware_and_time_reasons_name_the_dish_type(reason, category, en, zh):
+    short = {"reason": reason, "category": category, "needed": 1, "available": 0,
+             "ingredient": None}
+    assert reason_text(short, "shopping", "en") == en
+    assert reason_text(short, "shopping", "zh") == zh

@@ -19,6 +19,9 @@ export type PlanFinding = {
 };
 
 /** The `current_plan` the planning graph presents (backend agent/graph.py present_plan). */
+/** How a named meat or vegetable count binds (design 5.11). */
+export type Bound = "exact" | "at_least" | "at_most";
+
 export type ChatPlan = {
   recipes: {
     id: number;
@@ -41,7 +44,9 @@ export type ChatPlan = {
     soups: number;
     meat_dishes: number | null;
     vegetable_dishes: number | null;
-    split_is_minimum: boolean;
+    /** How a named side binds; null when that side is not named. */
+    meat_bound: Bound | null;
+    vegetable_bound: Bound | null;
     staples: number;
     desserts: number;
     snacks: number;
@@ -59,7 +64,12 @@ export type ChatPlan = {
 
 export type Pending =
   | { kind: "request_style" }
-  | { kind: "question"; fields: string[]; problem?: "split_exceeds_total" | "too_many" };
+  | {
+      kind: "question";
+      fields: string[];
+      // split_exceeds_total stays for questions saved before split_conflicts_total existed.
+      problem?: "split_conflicts_total" | "split_exceeds_total" | "too_many";
+    };
 
 export type ChatMessage = { role: "user" | "assistant"; text: string };
 
@@ -214,8 +224,16 @@ export const KNOWN_ACTIONS: readonly NextAction[] = [
  * current shape. An old S1 warning (one recipe, no `parts`) gets one part from it.
  */
 export function normalizePlan(raw: ChatPlan): ChatPlan {
-  const old = raw as unknown as Partial<ChatPlan> & { spec?: Partial<ChatPlan["spec"]> };
-  const spec: Partial<ChatPlan["spec"]> = old.spec ?? {};
+  const old = raw as unknown as Partial<ChatPlan> & {
+    spec?: Partial<ChatPlan["spec"]> & { split_is_minimum?: boolean };
+  };
+  const spec: Partial<ChatPlan["spec"]> & { split_is_minimum?: boolean } = old.spec ?? {};
+  const meat_dishes = spec.meat_dishes ?? null;
+  const vegetable_dishes = spec.vegetable_dishes ?? null;
+  // A spec saved before bounds existed: split_is_minimum made both named sides "at least".
+  const oldBound: Bound = spec.split_is_minimum ? "at_least" : "exact";
+  const bound = (count: number | null, value: Bound | null | undefined): Bound | null =>
+    count === null ? null : (value ?? oldBound);
   return {
     ...raw,
     recipes: old.recipes ?? [],
@@ -239,9 +257,10 @@ export function normalizePlan(raw: ChatPlan): ChatPlan {
       mode: spec.mode ?? "fridge_only",
       dishes: spec.dishes ?? 0,
       soups: spec.soups ?? 0,
-      meat_dishes: spec.meat_dishes ?? null,
-      vegetable_dishes: spec.vegetable_dishes ?? null,
-      split_is_minimum: spec.split_is_minimum ?? false,
+      meat_dishes,
+      vegetable_dishes,
+      meat_bound: bound(meat_dishes, spec.meat_bound),
+      vegetable_bound: bound(vegetable_dishes, spec.vegetable_bound),
       staples: spec.staples ?? 0,
       desserts: spec.desserts ?? 0,
       snacks: spec.snacks ?? 0,

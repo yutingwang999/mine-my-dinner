@@ -233,7 +233,16 @@ describe("PlanCard what was asked, reasons, and links", () => {
   it("shows 'at least' for a minimum split", () => {
     const { unmount } = renderWithProviders(
       <PlanCard
-        plan={plan({ defaults_used: ["mode"], spec: spec({ dishes: 4, meat_dishes: 1, vegetable_dishes: 1, split_is_minimum: true }) })}
+        plan={plan({
+          defaults_used: ["mode"],
+          spec: spec({
+            dishes: 4,
+            meat_dishes: 1,
+            vegetable_dishes: 1,
+            meat_bound: "at_least",
+            vegetable_bound: "at_least",
+          }),
+        })}
       />,
     );
     expect(
@@ -241,9 +250,76 @@ describe("PlanCard what was asked, reasons, and links", () => {
     ).toBeInTheDocument();
     unmount();
     renderWithProviders(
-      <PlanCard plan={plan({ defaults_used: ["mode"], spec: spec({ dishes: 2, meat_dishes: 1, vegetable_dishes: 1 }) })} />,
+      <PlanCard
+        plan={plan({
+          defaults_used: ["mode"],
+          spec: spec({ dishes: 2, meat_dishes: 1, vegetable_dishes: 1, meat_bound: "exact", vegetable_bound: "exact" }),
+        })}
+      />,
     );
     expect(screen.getByText("As you asked: 2 dishes (1 meat dish, 1 vegetable dish).")).toBeInTheDocument();
+  });
+
+  it("shows the user's own bounds in both languages", () => {
+    const atLeast = plan({
+      defaults_used: ["mode"],
+      spec: spec({ dishes: 8, meat_dishes: 2, meat_bound: "at_least" }),
+    });
+    const both = plan({
+      defaults_used: ["mode"],
+      spec: spec({
+        dishes: 4,
+        meat_dishes: 1,
+        meat_bound: "at_least",
+        vegetable_dishes: 2,
+        vegetable_bound: "at_most",
+      }),
+    });
+    const atMost = plan({
+      defaults_used: ["mode"],
+      spec: spec({ dishes: 3, vegetable_dishes: 1, vegetable_bound: "at_most" }),
+    });
+    const none = plan({
+      defaults_used: ["mode"],
+      spec: spec({ dishes: 3, vegetable_dishes: 0, vegetable_bound: "exact" }),
+    });
+    for (const [card, text] of [
+      [atLeast, "As you asked: 8 dishes (at least 2 meat dishes)."],
+      [both, "As you asked: 4 dishes (at least 1 meat dish, at most 2 vegetable dishes)."],
+      [atMost, "As you asked: 3 dishes (at most 1 vegetable dish)."],
+      [none, "As you asked: 3 dishes (0 vegetable dishes)."],
+    ] as const) {
+      const { unmount } = renderWithProviders(<PlanCard plan={card} />);
+      expect(screen.getByText(text)).toBeInTheDocument();
+      unmount();
+    }
+    for (const [card, text] of [
+      [atLeast, "按你的要求：8 道菜（至少 2 道荤菜）。"],
+      [both, "按你的要求：4 道菜（至少 1 道荤菜、最多 2 道素菜）。"],
+      [atMost, "按你的要求：3 道菜（最多 1 道素菜）。"],
+    ] as const) {
+      const { unmount } = render(
+        <NextIntlClientProvider locale="zh" messages={zh}>
+          <PlanCard plan={card} />
+        </NextIntlClientProvider>,
+      );
+      expect(screen.getByText(text)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("shows a named side when the dish total was assumed", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          defaults_used: ["dishes"],
+          headcount: 3,
+          spec: spec({ mode: "shopping", dishes: 2, vegetable_dishes: 1, vegetable_bound: "at_most" }),
+        })}
+      />,
+    );
+    expect(screen.getByText("As you asked: at most 1 vegetable dish, shopping allowed.")).toBeInTheDocument();
+    expect(screen.getByText(/Assumed: 2 dishes/)).toBeInTheDocument();
   });
 
   it("renders the S1 warning with each dish's part", () => {

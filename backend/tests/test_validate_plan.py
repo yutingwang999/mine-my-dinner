@@ -194,7 +194,7 @@ def test_h4_counts_dishes_and_soups(session, seeded):
         "snacks": 0,
     }
     assert v.detail["present"]["dishes"] == 1 and v.detail["present"]["soups"] == 1
-    assert v.detail["minimum"] is False
+    assert v.detail["ranges"] == {"meat_dishes": [0, 2], "vegetable_dishes": [0, 2]}
 
 
 def test_staple_dish_does_not_count_as_a_dish(session, seeded):
@@ -226,7 +226,7 @@ def test_h4_named_split_is_exact(session, seeded):
     plan = spec(dishes=2, meat_dishes=1, vegetable_dishes=1)
     assert not h4(run(session, ctx_for(session), [meat, v1], plan))
     (v,) = h4(run(session, ctx_for(session), [v1, v2], plan))
-    assert v.detail["required"]["meat_dishes"] == 1
+    assert v.detail["ranges"] == {"meat_dishes": [1, 1], "vegetable_dishes": [1, 1]}
     assert v.detail["present"]["vegetable_dishes"] == 2
 
 
@@ -234,10 +234,40 @@ def test_h4_minimum_split_counts_only_shortfall(session, seeded):
     meat = make_recipe(session, "肉", dish_type="meat dish")
     v1 = make_recipe(session, "菜1")
     v2 = make_recipe(session, "菜2")
-    plan = spec(dishes=3, meat_dishes=1, vegetable_dishes=1, split_is_minimum=True)
+    plan = spec(
+        dishes=3,
+        meat_dishes=1,
+        vegetable_dishes=1,
+        meat_bound="at_least",
+        vegetable_bound="at_least",
+    )
     assert not h4(run(session, ctx_for(session), [meat, v1, v2], plan))
     (v,) = h4(run(session, ctx_for(session), [v1, v2, make_recipe(session, "菜3")], plan))
-    assert v.detail["minimum"] is True
+    assert v.detail["ranges"] == {"meat_dishes": [1, 2], "vegetable_dishes": [1, 2]}
+
+
+def test_h4_at_most_one_vegetable(session, seeded):
+    # 3 dishes, at most 1 vegetable dish: meat [2, 3], vegetable [0, 1].
+    m1, m2, m3 = (make_recipe(session, f"肉{i}", dish_type="meat dish") for i in range(3))
+    v1, v2 = make_recipe(session, "菜1"), make_recipe(session, "菜2")
+    plan = spec(dishes=3, vegetable_dishes=1, vegetable_bound="at_most")
+    ctx = ctx_for(session)
+    assert not h4(run(session, ctx, [m1, m2, v1], plan))
+    assert not h4(run(session, ctx, [m1, m2, m3], plan))
+    (v,) = h4(run(session, ctx, [m1, v1, v2], plan))
+    assert v.detail["ranges"] == {"meat_dishes": [2, 3], "vegetable_dishes": [0, 1]}
+    json.dumps(v.detail)
+
+
+def test_h4_at_least_two_meat(session, seeded):
+    m1, m2, m3 = (make_recipe(session, f"肉{i}", dish_type="meat dish") for i in range(3))
+    vegs = [make_recipe(session, f"菜{i}") for i in range(6)]
+    plan = spec(dishes=8, meat_dishes=2, meat_bound="at_least")
+    ctx = ctx_for(session)
+    assert not h4(run(session, ctx, [m1, m2, m3, *vegs[:5]], plan))
+    assert not h4(run(session, ctx, [m1, m2, *vegs], plan))
+    (v,) = h4(run(session, ctx, [m1, *vegs, make_recipe(session, "菜7")], plan))
+    assert v.detail["ranges"] == {"meat_dishes": [2, 8], "vegetable_dishes": [0, 6]}
 
 
 def test_other_type_is_never_counted(session, seeded):

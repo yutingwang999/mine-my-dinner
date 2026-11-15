@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { type ChatEvent, readEvents, sendMessage, storedThreadId, storeThreadId } from "@/lib/chat";
+import {
+  type ChatEvent,
+  type ChatPlan,
+  normalizePlan,
+  readEvents,
+  sendMessage,
+  storedThreadId,
+  storeThreadId,
+} from "@/lib/chat";
+import { plan } from "@/test/chatFixtures";
 
 async function collect(response: Response): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
@@ -75,5 +84,38 @@ describe("chat client", () => {
     vi.stubGlobal("localStorage", { getItem: blocked, setItem: blocked, removeItem: blocked });
     expect(storedThreadId()).toBeNull();
     expect(() => storeThreadId("abc")).not.toThrow();
+  });
+});
+
+describe("normalizePlan", () => {
+  function withSpec(spec: Record<string, unknown>): ChatPlan {
+    return { ...plan(), spec } as unknown as ChatPlan;
+  }
+
+  it("reads an old minimum split as 'at least' on each named side", () => {
+    const old = withSpec({ mode: "shopping", dishes: 3, soups: 0, meat_dishes: 1, vegetable_dishes: 1, split_is_minimum: true });
+    const { spec } = normalizePlan(old);
+    expect([spec.meat_bound, spec.vegetable_bound]).toEqual(["at_least", "at_least"]);
+    expect(spec).not.toHaveProperty("split_is_minimum");
+  });
+
+  it("reads an old exact split as exact and leaves an unnamed side unbound", () => {
+    const old = withSpec({ mode: "shopping", dishes: 8, soups: 0, meat_dishes: 2, split_is_minimum: false });
+    const { spec } = normalizePlan(old);
+    expect([spec.meat_bound, spec.vegetable_bound]).toEqual(["exact", null]);
+  });
+
+  it("keeps the bounds of a current spec", () => {
+    const current = withSpec({
+      mode: "shopping",
+      dishes: 3,
+      soups: 0,
+      meat_dishes: null,
+      vegetable_dishes: 1,
+      meat_bound: null,
+      vegetable_bound: "at_most",
+    });
+    const { spec } = normalizePlan(current);
+    expect([spec.meat_bound, spec.vegetable_bound]).toEqual([null, "at_most"]);
   });
 });

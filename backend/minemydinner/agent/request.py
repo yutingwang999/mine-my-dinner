@@ -9,12 +9,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from minemydinner.models import AppPreference
+from minemydinner.planning.composition import Bound, ranges_for
 from minemydinner.planning.context import MealConstraints
 from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
 # One version per prompt, so route, parse, and planner change independently. A version any
 # record has used is never edited; a change makes the next version of that prompt.
-PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v2", "planner": "planner_v3"}
+PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v3", "planner": "planner_v3"}
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -70,6 +71,20 @@ class ParsedRequest(BaseModel):
     )
     vegetable_dishes: int | None = Field(
         default=None, ge=0, description="Number of vegetable dishes, if the user names it."
+    )
+    meat_bound: Bound | None = Field(
+        default=None,
+        description=(
+            "How meat_dishes binds: exact for a plain number, at_least or at_most when the "
+            "user says so. Null when meat_dishes is null."
+        ),
+    )
+    vegetable_bound: Bound | None = Field(
+        default=None,
+        description=(
+            "How vegetable_dishes binds: exact for a plain number, at_least or at_most when "
+            "the user says so. Null when vegetable_dishes is null."
+        ),
     )
     staples: int | None = Field(
         default=None,
@@ -129,23 +144,75 @@ def default_composition(headcount: int) -> tuple[int, int]:
     return 3, 1
 
 
-def _dish_total(parsed: ParsedRequest) -> int:
-    """The dish total: the stated one, else the sum of the named meat and vegetable counts."""
+def _bound(count: int | None, bound: Bound | None) -> Bound | None:
+    """A named side's bound: a count with no bound is exact; no count has no bound."""
+    if count is None:
+        return None
+    return bound or "exact"
+
+
+def _has_bound_side(parsed: ParsedRequest) -> bool:
+    return any(
+        _bound(count, bound) in ("at_least", "at_most")
+        for count, bound in (
+            (parsed.meat_dishes, parsed.meat_bound),
+            (parsed.vegetable_dishes, parsed.vegetable_bound),
+        )
+    )
+
+
+def dish_total(parsed: ParsedRequest, headcount: int) -> int:
+    """The dish total (design 5.11): the stated one; with no total and a side named "at
+    least" or "at most", the headcount default, raised to the sum of the lower bounds and,
+    when both sides have an upper bound (exact or at most), lowered to the sum of the upper
+    bounds; otherwise the sum of the named counts ("一荤一素" is 2).
+
+    The total is never lowered to 0: with both sides at most 0 it stays at the default, so
+    request_problem reports the empty ranges as a contradiction."""
     if parsed.dishes is not None:
         return parsed.dishes
+    if _has_bound_side(parsed):
+        sides = [
+            (count, _bound(count, bound))
+            for count, bound in (
+                (parsed.meat_dishes, parsed.meat_bound),
+                (parsed.vegetable_dishes, parsed.vegetable_bound),
+            )
+        ]
+        lower = sum(count for count, bound in sides if count is not None and bound != "at_most")
+        total = max(default_composition(headcount)[0], lower)
+        if all(count is not None and bound != "at_least" for count, bound in sides):
+            upper = sum(count for count, _ in sides)
+            if upper >= 1:
+                total = min(total, upper)
+        return total
     return (parsed.meat_dishes or 0) + (parsed.vegetable_dishes or 0)
 
 
-def request_problem(parsed: ParsedRequest) -> Literal["split_exceeds_total", "too_many"] | None:
-    """A contradiction in the stated counts, which is always asked about (design 5.1)."""
-    split = (parsed.meat_dishes or 0) + (parsed.vegetable_dishes or 0)
-    if parsed.dishes is not None and split > parsed.dishes:
-        return "split_exceeds_total"
-    total = (
-        _dish_total(parsed) + (parsed.soups or 0) + (parsed.staples or 0)
+def _parsed_ranges(parsed: ParsedRequest, total: int) -> dict[str, tuple[int, int]]:
+    return ranges_for(
+        total,
+        parsed.meat_dishes,
+        _bound(parsed.meat_dishes, parsed.meat_bound),
+        parsed.vegetable_dishes,
+        _bound(parsed.vegetable_dishes, parsed.vegetable_bound),
+    )
+
+
+def request_problem(
+    parsed: ParsedRequest,
+) -> Literal["split_conflicts_total", "too_many"] | None:
+    """A contradiction in the stated counts, which is always asked about (design 5.1, 5.11):
+    a meat or vegetable range that comes out empty against the dish total, or more than
+    MAX_TOTAL_COUNT items in total."""
+    total = dish_total(parsed, parsed.headcount or 1)
+    if any(low > high for low, high in _parsed_ranges(parsed, total).values()):
+        return "split_conflicts_total"
+    everything = (
+        total + (parsed.soups or 0) + (parsed.staples or 0)
         + (parsed.desserts or 0) + (parsed.snacks or 0)
     )
-    if total > MAX_TOTAL_COUNT:
+    if everything > MAX_TOTAL_COUNT:
         return "too_many"
     return None
 
@@ -161,7 +228,8 @@ def apply_defaults(
     assumed fields: "headcount", the count fields in COUNT_FIELDS order, and "mode".
 
     Dishes and soups come from the headcount only when no count at all was stated; then an
-    unstated count is 0. A range taken at its lower end is reported as assumed too.
+    unstated count is 0. A range taken at its lower end is reported as assumed too, and so
+    is a dish total taken from the headcount for a side named "at least" or "at most".
 
     Only the self diner's rules are known in this plan; everyone else counts as an
     unconfirmed diner until diner selection exists, so S8 warns about them.
@@ -173,25 +241,30 @@ def apply_defaults(
     if headcount is None:
         headcount = 1
         assumed.add("headcount")
-    dishes = _dish_total(parsed)
+    dishes = dish_total(parsed, headcount)
+    if parsed.dishes is None and _has_bound_side(parsed):
+        # The total came from the headcount (design 5.11): it is assumed, soups are not added.
+        assumed.add("dishes")
     soups = parsed.soups or 0
     staples, desserts, snacks = parsed.staples or 0, parsed.desserts or 0, parsed.snacks or 0
     meat_dishes, vegetable_dishes = parsed.meat_dishes, parsed.vegetable_dishes
-    dishes_stated = parsed.dishes
+    meat_bound = _bound(meat_dishes, parsed.meat_bound)
+    vegetable_bound = _bound(vegetable_dishes, parsed.vegetable_bound)
     if not _stated_counts(parsed) or dishes + soups + staples + desserts + snacks == 0:
         # Nothing was stated, or the user stated only zeros: a meal needs at least one dish.
         dishes, soups = default_composition(headcount)
         staples = desserts = snacks = 0
         # The stated zeros are dropped with the rest, so no split rides on the default total.
-        meat_dishes = vegetable_dishes = dishes_stated = None
+        meat_dishes = vegetable_dishes = meat_bound = vegetable_bound = None
         assumed.update(("dishes", "soups"))
-    split = (meat_dishes or 0) + (vegetable_dishes or 0)
-    named_split_below_total = (
-        dishes_stated is not None
-        and meat_dishes is not None
+    if (
+        meat_dishes is not None
         and vegetable_dishes is not None
-        and split < dishes_stated
-    )
+        and meat_bound == vegetable_bound == "exact"
+        and meat_dishes + vegetable_dishes < dishes
+    ):
+        # Both sides named exactly below the total: the total wins, the sides are minimums.
+        meat_bound = vegetable_bound = "at_least"
     mode = parsed.mode
     if mode is None:
         mode = "fridge_only"
@@ -205,7 +278,8 @@ def apply_defaults(
         time_limit_min=parsed.time_limit_min,
         meat_dishes=meat_dishes,
         vegetable_dishes=vegetable_dishes,
-        split_is_minimum=named_split_below_total,
+        meat_bound=meat_bound,
+        vegetable_bound=vegetable_bound,
         staples=staples,
         desserts=desserts,
         snacks=snacks,

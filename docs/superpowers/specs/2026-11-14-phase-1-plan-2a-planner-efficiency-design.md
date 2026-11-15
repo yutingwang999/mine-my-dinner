@@ -137,7 +137,7 @@ How each reason is decided (Claude's calls, from the builder check):
 
 - A recipe is **makeable from stock** when `compute_missing` reports no missing non-optional line for it, counting always-in-stock items as stock and a choice group as satisfied by any one member. This reuses the existing stock code, so the check and H1 agree.
 - The check covers the **whole library** for each needed category (the library is small); it does not depend on the shortlist cut.
-- `not_enough_in_library` and `not_enough_dishes` compare, per needed category, a count of distinct recipes with the number required (meat and vegetable counts when named, otherwise the counted-dish total across both, and soups). Named counts that the parse marked as minimums are compared as minimums. `not_enough_in_library` counts safe recipes in the library in any mode; `not_enough_dishes` counts recipes makeable from stock, fridge-only only. Shared stock between two dishes is not modelled; that case passes through to the planner and validation.
+- `not_enough_in_library` and `not_enough_dishes` compare, per needed category, a count of distinct recipes with the number required (meat and vegetable counts when named, otherwise the counted-dish total across both, and soups). Named counts that the parse marked as minimums are compared as minimums. `not_enough_in_library` counts safe recipes in the library in any mode; `not_enough_dishes` counts recipes makeable from stock, fridge-only only. Shared stock between two dishes is not modelled; that case passes through to the planner and validation. Since Task 11, each side (named or implied) is compared from its range, and the dish total against the sides' upper bounds (Section 5.11).
 - The reason text states both numbers per short category: what the meal needs and what is available ("By the current fridge you can make 0 meat dishes; this meal needs 1").
 - `no_cookware` and `time_limit` hold when some needed category has no recipe that fits the owned cookware, or the time limit with a firm time source.
 - When several reasons hold, all are reported in the listed order, and the next actions are their union.
@@ -185,7 +185,7 @@ The shortlist goes into the planner's first message as compact JSON, before the 
 
 ### 5.5 Validation change
 
-H4 checks every category count in the spec: dishes (meat plus vegetable) and soups as today, and staples, desserts, and snacks exactly as stated (0 when not stated, so an unrequested staple or dessert fails H4 just as an extra soup does today). When `meat_dishes` or `vegetable_dishes` is set, H4 also checks them: exactly that many, or at least that many when the parse marked them as minimums (named split below the total, Section 5.1). Recipes of type "other" are not counted. The S5 warning ("all dishes are the same type") stays for requests without a split.
+H4 checks every category count in the spec: dishes (meat plus vegetable) and soups as today, and staples, desserts, and snacks exactly as stated (0 when not stated, so an unrequested staple or dessert fails H4 just as an extra soup does today). When `meat_dishes` or `vegetable_dishes` is set, H4 also checks them: exactly that many, or at least that many when the parse marked them as minimums (named split below the total, Section 5.1). Since Task 11, H4 checks each side against its range instead (Section 5.11). Recipes of type "other" are not counted. The S5 warning ("all dishes are the same type") stays for requests without a split.
 
 **H7, named ingredients (new hard constraint, decided with the user).** For each `must_use` ingredient, at least one dish in the plan uses it; for each `all_use` ingredient, every counted dish uses it (recipes of type "other" are ignored). "Uses" follows the rule in Section 5.1. The finding names the ingredient, the rule, and the dishes without it. H7 is not a safety rule, so a plan failing only H7 can be shown as the closest attempt with the unmet rule stated.
 
@@ -193,7 +193,7 @@ H4 checks every category count in the spec: dishes (meat plus vegetable) and sou
 
 **Choosing the closest attempt (decided with the user).** When no attempt passes and the plan shown is the closest attempt (design 6.3; attempts with H2 or H5 are never candidates), attempts are compared by the number of violations, then, on a tie, by the composition gap: the sum over every counted category of |required − present| (for a minimum, only the shortfall counts). With "3 meat, 3 vegetable", an attempt with 2 meat and 3 vegetable dishes is closer than one with 1 meat and 3 vegetable dishes, although each has one H4 violation. A remaining tie goes to the later attempt, as today.
 
-`PlanSpec` gains the new count fields and a flag for minimums; the rule "dishes plus soups at least 1" becomes "all counts together at least 1", and all counts together are at most 12.
+`PlanSpec` gains the new count fields and a flag for minimums (replaced by per-side bounds in Task 11, Section 5.11); the rule "dishes plus soups at least 1" becomes "all counts together at least 1", and all counts together are at most 12.
 
 ### 5.6 Expansion and tools
 
@@ -251,7 +251,7 @@ The last three rows are what the next-action buttons send (Section 5.3). `parse_
 
 - A stated total is used as is.
 - No total and every named side exact: the total is the sum of the named counts, as today ("一荤一素" → 2; "两个荤菜" → 2).
-- No total and a side named "at least" or "at most" (decided by the user): the total is the headcount default number of dishes (design 6.2), raised to the sum of the lower bounds if that is larger, and listed as assumed. Soups are not added: a count was stated, so unstated categories stay 0 (Section 5.1). Both request styles do this; "ask first" does not ask for the total in this case.
+- No total and a side named "at least" or "at most" (decided by the user): the total is the headcount default number of dishes (design 6.2), raised to the sum of the lower bounds if that is larger, lowered to the sum of the upper bounds if that is smaller (only when both sides have an upper bound; decided with the user during the Task 11 review, so "五个人，最多一个荤菜，最多一个素菜" plans 2 dishes instead of asking about a total the user never gave), and listed as assumed. Soups are not added: a count was stated, so unstated categories stay 0 (Section 5.1). Both request styles do this; "ask first" does not ask for the total in this case.
 - A side whose range is empty after tightening (low above high), such as "两个菜，至少三个荤菜" or "三个菜，最多一个荤菜，最多一个素菜", is a contradiction: `request_problem` reports it and the existing composition question asks the user to restate the counts, whatever the style.
 
 **Every step reads the ranges.**
@@ -301,7 +301,7 @@ Two more scenarios check the buttons' messages, as a conversation of two user me
 - Each scenario may state expected `reason` and expected next actions; the runner checks them.
 - The "no wok" scenario now expects `no_cookware` (or H3 in `unmet`), not H4.
 
-### 5.9 Success criteria (measured on the test database, current prompts `route_v2+parse_v2+planner_v3`, against the plan 1 baseline)
+### 5.9 Success criteria (measured on the test database against the plan 1 baseline; the prompts and commit of each run are in `docs/planning-evaluation-history.md`)
 
 - Feasible scenarios: first-attempt pass rate at least the baseline (6/6 of the original feasible ones), average planner calls about 2 (about 4 calls per run including intent and parsing). Calls are judged by the average over the scenarios that expect a plan; a single scenario over 5 calls is a warning, not a failure (decided with the user after the Task 10 tuning rounds; see `docs/planning-evaluation-history.md`).
 - Each infeasible scenario ends within 8 model calls with the right reason and next actions; empty inventory within 3. The 8-call bound also covers requests that reach the planner and then fail validation.

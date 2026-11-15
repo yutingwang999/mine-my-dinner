@@ -28,7 +28,7 @@ from minemydinner.agent.request import (
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
-from minemydinner.planning.composition import composition_gap
+from minemydinner.planning.composition import composition_gap, ranges_for, side_ranges
 from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
 from minemydinner.planning.feasibility import Shortfall, check_feasibility
 from minemydinner.planning.inventory import meal_preferences
@@ -148,48 +148,77 @@ CATEGORY_WORDS = {
 }
 
 
-def _with_implied_side(named: dict, dishes: int | None, minimum: bool) -> dict:
-    """The meat and vegetable counts the user wants. When exactly one side is named and the
-    split is exact, the other side is the rest of the dishes; a minimum implies no number."""
-    counts = {c: named[c] for c in _SIDE_CATEGORIES if named.get(c) is not None}
-    if len(counts) == 1 and not minimum and dishes is not None:
-        (side,) = counts
-        other = next(c for c in _SIDE_CATEGORIES if c != side)
-        counts[other] = max(dishes - counts[side], 0)
-    return {c: counts[c] for c in _SIDE_CATEGORIES if c in counts}
+def side_phrase(low: int, high: int, total: int, category: str, zh: bool) -> str | None:
+    """One meat or vegetable side in words, from its range against the dish total (design
+    5.11): "6 vegetable dishes", "2 to 3 meat dishes", "at least 2 meat dishes", "at most 1
+    vegetable dish", or None when the side is not constrained."""
+    one, many, cn = CATEGORY_WORDS[category]
+
+    def en(n: int) -> str:
+        return f"{n} {one if n == 1 else many}"
+
+    if total <= 0:
+        return None
+    if low == high:
+        return f"{low} {cn}" if zh else en(low)
+    if low > 0 and high < total:
+        return f"{low} 到 {high} {cn}" if zh else f"{low} to {high} {many}"
+    if low > 0:
+        return f"至少 {low} {cn}" if zh else f"at least {en(low)}"
+    if high < total:
+        return f"最多 {high} {cn}" if zh else f"at most {en(high)}"
+    return None
 
 
-def _counts_text(counts: dict, detail: dict, zh: bool, wanted: bool = False) -> str:
-    """The counts of the categories that matter, in plain words: those the plan asks for
-    or contains, plus a named meat or vegetable count. A 0 nobody asked for is left out.
-    With `wanted`, `counts` is what the user asked for: an unnamed meat or vegetable side
-    shows the number the exact split implies, or nothing for a minimum, never a made-up 0."""
+def _side_phrases(ranges: dict, total: int, zh: bool) -> dict[str, str]:
+    """The phrase of each constrained side, in meat-then-vegetable order."""
+    phrases = {}
+    for side in _SIDE_CATEGORIES:
+        low, high = ranges[side]
+        phrase = side_phrase(low, high, total, side, zh)
+        if phrase is not None:
+            phrases[side] = phrase
+    return phrases
+
+
+def _detail_ranges(detail: dict) -> dict[str, tuple[int, int]]:
+    """The side ranges of an H4 finding. A finding saved before ranges existed carries the
+    named sides in `required` and a `minimum` flag instead."""
+    if "ranges" in detail:
+        return {side: (low, high) for side, (low, high) in detail["ranges"].items()}
+    required = detail["required"]
+    bound = "at_least" if detail.get("minimum") else "exact"
+    return ranges_for(
+        required.get("dishes", 0),
+        required.get("meat_dishes"),
+        bound,
+        required.get("vegetable_dishes"),
+        bound,
+    )
+
+
+def _counts_text(detail: dict, zh: bool, wanted: bool = False) -> str:
+    """The counts of an H4 finding in plain words. Without `wanted`, what the plan has: the
+    categories asked for or present, and a constrained side. With `wanted`, what the user
+    asked for: exact counts as numbers, each constrained side as its range phrase, and an
+    unconstrained side not at all, never as a made-up 0."""
     required, present = detail["required"], detail["present"]
-    if wanted:
-        counts = {
-            **{k: v for k, v in counts.items() if k not in _SIDE_CATEGORIES},
-            **_with_implied_side(required, required.get("dishes"), bool(detail["minimum"])),
-        }
-        required = counts
+    total = required.get("dishes", 0)
+    phrases = _side_phrases(_detail_ranges(detail), total, zh)
     parts = []
     for category, (one, many, cn) in CATEGORY_WORDS.items():
-        named_split = category in required and category.endswith("_dishes")
         if wanted and category in _SIDE_CATEGORIES:
-            include = category in counts
+            if category in phrases:
+                parts.append(phrases[category])
+            continue
+        if category in _SIDE_CATEGORIES:
+            include = bool(present.get(category, 0)) or category in phrases
         else:
-            include = bool(required.get(category, 0) or present.get(category, 0) or named_split)
+            include = bool(required.get(category, 0) or present.get(category, 0))
         if include:
-            n = counts.get(category, 0)
+            n = (required if wanted else present).get(category, 0)
             parts.append(f"{n} {cn}" if zh else f"{n} {one if n == 1 else many}")
     return ("，" if zh else ", ").join(parts)
-
-
-def _minimum_note(detail: dict, zh: bool) -> str:
-    if not detail["minimum"]:
-        return ""
-    if zh:
-        return "（荤菜和素菜的数量是最少要求）"
-    return " (the meat and vegetable counts are minimums)"
 
 
 def _composition_gap_of(spec: PlanSpec, validation: dict) -> int:
@@ -223,9 +252,8 @@ def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
         return f"Recipe {recipe_id}: needs cookware the household lacks: {lacking}."
     if code == "H4":
         return (
-            f"The plan has {_counts_text(detail['present'], detail, False)}; "
-            f"the user wants {_counts_text(detail['required'], detail, False, wanted=True)}"
-            f"{_minimum_note(detail, False)}."
+            f"The plan has {_counts_text(detail, False)}; "
+            f"the user wants {_counts_text(detail, False, wanted=True)}."
         )
     if code == "H7":
         ids = ", ".join(str(i) for i in detail["recipes_without"])
@@ -263,12 +291,11 @@ def _unmet_for_user(finding: dict, titles: dict[int, str], locale: str) -> str:
             return f"{title}：缺少厨具（{names}）"
         return f"{title}: missing cookware ({names})"
     if code == "H4":
-        present = _counts_text(detail["present"], detail, zh)
-        wanted = _counts_text(detail["required"], detail, zh, wanted=True)
-        note = _minimum_note(detail, zh)
+        present = _counts_text(detail, zh)
+        wanted = _counts_text(detail, zh, wanted=True)
         if zh:
-            return f"方案有 {present}，要求是 {wanted}{note}"
-        return f"The plan has {present}; {wanted} were asked for{note}"
+            return f"方案有 {present}，要求是 {wanted}"
+        return f"The plan has {present}; {wanted} were asked for"
     if code == "H7":
         lacking = ("、" if zh else ", ").join(
             f"“{titles[i]}”" if zh else f'"{titles[i]}"'
@@ -303,6 +330,17 @@ def _no_plan_reason(code: str, locale: str) -> str:
     return "The proposed dishes were not all from your recipe library"
 
 
+# A dish type in a sentence about all of them: (English plural, Chinese).
+CATEGORY_KIND = {
+    "meat_dishes": ("meat dishes", "荤菜"),
+    "vegetable_dishes": ("vegetable dishes", "素菜"),
+    "soups": ("soups", "汤"),
+    "staples": ("staple foods", "主食"),
+    "desserts": ("desserts", "甜品"),
+    "snacks": ("snacks", "小吃"),
+}
+
+
 def _count_phrase(n: int | None, category: str, zh: bool, minimum: bool = False) -> str:
     one, many, cn = CATEGORY_WORDS[category]
     if zh:
@@ -321,11 +359,22 @@ def reason_text(shortfall: dict, mode: str, locale: str) -> str:
     minimum = bool(shortfall.get("minimum"))
     if reason == "empty_inventory":
         return "冰箱里没有可以用来做菜的食材" if zh else "There is nothing in the fridge to cook with"
+    # A category names the dish type ("None of your vegetable dishes ..."); the combined
+    # "dishes" line and no category keep the generic sentence.
+    kind = CATEGORY_KIND.get(category or "")
     if reason == "no_cookware":
+        if kind:
+            return f"你的{kind[1]}都用不了现有的厨具" if zh else (
+                f"None of your {kind[0]} can be made with the cookware you have"
+            )
         if zh:
             return "你的菜谱里没有一道能用你现有的厨具做出来"
         return "None of your recipes can be made with the cookware you have"
     if reason == "time_limit":
+        if kind:
+            return f"你的{kind[1]}都不符合时间限制" if zh else (
+                f"None of your {kind[0]} fits the time limit"
+            )
         return "你的菜谱里没有一道符合时间限制" if zh else "None of your recipes fits the time limit"
     if reason == "not_enough_dishes":
         have = _count_phrase(available, category, zh)
@@ -461,9 +510,10 @@ def planner_opening(
 
 
 def _split_text(spec: dict) -> str:
-    minimum = bool(spec.get("split_is_minimum"))
-    counts = _with_implied_side(spec, spec.get("dishes"), minimum)
-    sides = [_count_phrase(n, side, False, minimum) for side, n in counts.items()]
+    """The meat and vegetable sides for the request summary, from their tightened ranges
+    (design 5.11). A spec saved before bounds existed is read by PlanSpec."""
+    parsed = PlanSpec.model_validate(spec)
+    sides = _side_phrases(side_ranges(parsed), parsed.dishes, False).values()
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
 
 
@@ -648,7 +698,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             f"Soups: {spec['soups']}",
             f"Staple foods: {spec.get('staples', 0)}, desserts: {spec.get('desserts', 0)}, "
             f"snacks: {spec.get('snacks', 0)}",
-            "Every count is exact unless it says at least.",
+            "Every count is exact unless it says at least, at most, or a range.",
             f"Time limit: {spec['time_limit_min'] or 'none'}"
             + (" minutes" if spec["time_limit_min"] else ""),
             f"Filled by default: {', '.join(state['defaults_used']) or 'nothing'}",

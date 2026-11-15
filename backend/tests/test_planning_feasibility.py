@@ -119,8 +119,8 @@ def test_minimum_split_compares_as_minimum(session, seeded):
     make_recipe(session, "炒青菜", dish_type="vegetable dish")
     make_recipe(session, "炒青菜二", dish_type="vegetable dish")
     # At least one meat dish among three: two vegetable dishes may fill the rest.
-    assert check(session, spec(dishes=3, meat_dishes=1, split_is_minimum=True)) == []
-    found = check(session, spec(dishes=4, meat_dishes=1, split_is_minimum=True))
+    assert check(session, spec(dishes=3, meat_dishes=1, meat_bound="at_least")) == []
+    found = check(session, spec(dishes=4, meat_dishes=1, meat_bound="at_least"))
     assert found == [Shortfall("not_enough_in_library", "dishes", 4, 3)]
 
 
@@ -202,7 +202,8 @@ def test_combined_named_dishes_shortfall_keeps_other_reasons(session, seeded):
         session,
         spec(mode="fridge_only", dishes=3, meat_dishes=1, vegetable_dishes=1, all_use=["鸡蛋"]),
     )
-    assert Shortfall("named_ingredient", "vegetable_dishes", 1, 0, "鸡蛋") in found
+    # Both sides named below the total are minimums (at least 1 each).
+    assert Shortfall("named_ingredient", "vegetable_dishes", 1, 0, "鸡蛋", minimum=True) in found
     assert Shortfall("not_enough_dishes", "dishes", 3, 2) in found
     assert not any(s.reason == "named_ingredient" and s.category == "dishes" for s in found)
 
@@ -254,7 +255,7 @@ def test_empty_fridge_one_makeable_but_two_needed(session, seeded):
 
 def test_split_minimum_marks_side_shortfalls_as_minimum(session, seeded):
     make_recipe(session, "炒青菜", dish_type="vegetable dish")
-    found = check(session, spec(dishes=2, meat_dishes=1, split_is_minimum=True))
+    found = check(session, spec(dishes=2, meat_dishes=1, meat_bound="at_least"))
     meat = [s for s in found if s.category == "meat_dishes"]
     assert meat and all(s.minimum for s in meat)
     exact = check(session, spec(dishes=1, meat_dishes=1))
@@ -295,3 +296,65 @@ def test_fridge_only_with_nothing_makeable_judges_time_on_every_safe_recipe(sess
     )
     found = check(session, spec(mode="fridge_only", soups=1, time_limit_min=30))
     assert reasons(found) == ["not_enough_dishes", "time_limit"]
+
+
+# ---- design 5.11: the implied side and the dish total ----
+
+
+def _fridge_with(session, meat: int, vegetable: int, unmakeable: int = 2):
+    """`meat` and `vegetable` dishes makeable from stock (eggs), plus a few of each type that
+    need chicken, which is not in stock."""
+    stock(session, "鸡蛋", count=30)
+    for i in range(meat):
+        make_recipe(session, f"蛋肉{i}", dish_type="meat dish", lines=[L("鸡蛋", role="main")])
+    for i in range(vegetable):
+        make_recipe(session, f"蛋菜{i}", dish_type="vegetable dish", lines=[L("鸡蛋", role="main")])
+    for i in range(unmakeable):
+        for dish_type in ("meat dish", "vegetable dish"):
+            make_recipe(
+                session, f"鸡{dish_type}{i}", dish_type=dish_type, lines=[L("鸡胸肉", role="main")]
+            )
+
+
+def test_exact_one_sided_split_checks_the_implied_side(session, seeded):
+    # 8 dishes, exactly 2 meat: 6 vegetable dishes are needed, 5 can be made.
+    _fridge_with(session, meat=3, vegetable=5)
+    found = check(session, spec(mode="fridge_only", dishes=8, meat_dishes=2, meat_bound="exact"))
+    assert found == [Shortfall("not_enough_dishes", "vegetable_dishes", 6, 5)]
+
+
+def test_at_least_one_side_passes_when_the_mix_fits(session, seeded):
+    # 8 dishes, at least 2 meat: 3 meat and 5 vegetable dishes meet it.
+    _fridge_with(session, meat=3, vegetable=5)
+    plan = spec(mode="fridge_only", dishes=8, meat_dishes=2, meat_bound="at_least")
+    assert check(session, plan) == []
+
+
+def test_dish_total_short_without_a_split(session, seeded):
+    _fridge_with(session, meat=3, vegetable=4)
+    found = check(session, spec(mode="fridge_only", dishes=8))
+    assert found == [Shortfall("not_enough_dishes", "dishes", 8, 7)]
+
+
+def test_dish_total_counts_each_side_only_up_to_its_range(session, seeded):
+    # 4 dishes, at most 1 vegetable: 2 meat + 5 vegetable makeable, but only 1 vegetable
+    # counts, so 3 of 4. The meat side (at least 3) reports it, so the total line is dropped.
+    _fridge_with(session, meat=2, vegetable=5)
+    plan = spec(mode="fridge_only", dishes=4, vegetable_dishes=1, vegetable_bound="at_most")
+    found = check(session, plan)
+    assert found == [Shortfall("not_enough_dishes", "meat_dishes", 3, 2, minimum=True)]
+
+
+def test_at_most_one_vegetable_needs_at_least_two_meat(session, seeded):
+    # 3 dishes, at most 1 vegetable dish, with 1 makeable meat dish: meat short, at least 2.
+    _fridge_with(session, meat=1, vegetable=4)
+    plan = spec(mode="fridge_only", dishes=3, vegetable_dishes=1, vegetable_bound="at_most")
+    found = check(session, plan)
+    assert found == [Shortfall("not_enough_dishes", "meat_dishes", 2, 1, minimum=True)]
+
+
+def test_no_vegetable_dishes_needs_every_dish_meat(session, seeded):
+    _fridge_with(session, meat=2, vegetable=5)
+    plan = spec(mode="fridge_only", dishes=3, vegetable_dishes=0, vegetable_bound="exact")
+    found = check(session, plan)
+    assert found == [Shortfall("not_enough_dishes", "meat_dishes", 3, 2)]

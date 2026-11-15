@@ -7,12 +7,16 @@ firm time fits any time limit, and a `must_use` name the dictionary does not kno
 stock check.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
 from minemydinner.extraction.normalize import match_ingredient
-from minemydinner.planning.composition import CATEGORY_OF_DISH_TYPE, required_counts
+from minemydinner.planning.composition import (
+    CATEGORY_OF_DISH_TYPE,
+    required_counts,
+    side_ranges,
+)
 from minemydinner.planning.context import PlanningContext
 from minemydinner.planning.named import recipes_using
 from minemydinner.planning.search import FIRM_TIME_SOURCES, RecipeHit, search_recipes
@@ -35,8 +39,9 @@ _SIDES = ("meat_dishes", "vegetable_dishes")
 
 @dataclass(frozen=True)
 class Shortfall:
-    """One reason the request cannot be met. `category` is a key of required_counts, or
-    "dishes" for meat and vegetable dishes combined, or None when no category applies.
+    """One reason the request cannot be met. `category` is a key of required_counts
+    ("dishes" being meat and vegetable dishes combined), a meat or vegetable side, or None
+    when no category applies.
     `ingredient` is set for named_ingredient (all names joined by ", " when several)."""
 
     reason: str
@@ -44,7 +49,7 @@ class Shortfall:
     needed: int | None
     available: int | None
     ingredient: str | None = None
-    # True when the needed count was parsed as a minimum ("at least").
+    # True when the needed count is the low end of a range, not an exact count ("at least").
     minimum: bool = False
     # named_ingredient in fridge-only mode: the ingredient is not in stock at all.
     absent_from_stock: bool = False
@@ -55,22 +60,46 @@ class _Unit:
     category: str
     dish_types: tuple[str, ...]
     needed: int
+    # True when `needed` is the low end of a range rather than an exact count.
+    minimum: bool = False
+    # The dish total only: per dish type, the most dishes of that type the plan may hold.
+    caps: tuple[tuple[str, int], ...] = ()
+
+    def count(self, hits: list[RecipeHit]) -> int:
+        """How many of `hits` this unit can use: all of them, or for the dish total, each
+        type up to its cap."""
+        if not self.caps:
+            return len(hits)
+        return sum(
+            min(cap, sum(hit.dish_type == dish_type for hit in hits))
+            for dish_type, cap in self.caps
+        )
 
 
 def _units(spec: PlanSpec) -> list[_Unit]:
+    """What the check compares (design 5.11): each exact category, each meat or vegetable
+    side whose range starts above 0 (named or implied), and the dish total, which counts
+    each side only up to the high end of its range."""
     required = required_counts(spec)
     units: list[_Unit] = []
     for category in _SINGLE_CATEGORIES:
         if required[category] >= 1:
             units.append(_Unit(category, (_DISH_TYPE_OF_CATEGORY[category],), required[category]))
-    # Named sides are checked on their own (a minimum compares the same way); the dish total
-    # is checked across both types so an unnamed side can take the rest.
-    for side in _SIDES:
-        if required.get(side, 0) >= 1:
-            units.append(_Unit(side, (_DISH_TYPE_OF_CATEGORY[side],), required[side]))
     if spec.dishes >= 1:
+        ranges = side_ranges(spec)
+        for side in _SIDES:
+            low, high = ranges[side]
+            if low >= 1:
+                units.append(
+                    _Unit(side, (_DISH_TYPE_OF_CATEGORY[side],), low, minimum=low < high)
+                )
+        caps = tuple(
+            (_DISH_TYPE_OF_CATEGORY[side], ranges[side][1])
+            for side in _SIDES
+            if ranges[side][1] >= 1
+        )
         units.append(
-            _Unit("dishes", tuple(_DISH_TYPE_OF_CATEGORY[side] for side in _SIDES), spec.dishes)
+            _Unit("dishes", tuple(dish_type for dish_type, _ in caps), spec.dishes, caps=caps)
         )
     return units
 
@@ -112,18 +141,34 @@ def check_feasibility(session: Session, ctx: PlanningContext, spec: PlanSpec) ->
 
     for unit in units:
         safe = pool(unit)
-        if len(safe) < unit.needed:
-            found.append(Shortfall("not_enough_in_library", unit.category, unit.needed, len(safe)))
+        if unit.count(safe) < unit.needed:
+            found.append(
+                Shortfall(
+                    "not_enough_in_library",
+                    unit.category,
+                    unit.needed,
+                    unit.count(safe),
+                    minimum=unit.minimum,
+                )
+            )
         elif stock_checks:
             makeable = pool(unit, makeable_only=True)
-            if len(makeable) < unit.needed:
+            if unit.count(makeable) < unit.needed:
                 found.append(
-                    Shortfall("not_enough_dishes", unit.category, unit.needed, len(makeable))
+                    Shortfall(
+                        "not_enough_dishes",
+                        unit.category,
+                        unit.needed,
+                        unit.count(makeable),
+                        minimum=unit.minimum,
+                    )
                 )
         if not safe:
             continue
         if not any(not hit.missing_cookware for hit in safe):
-            found.append(Shortfall("no_cookware", unit.category, unit.needed, 0))
+            found.append(
+                Shortfall("no_cookware", unit.category, unit.needed, 0, minimum=unit.minimum)
+            )
         # In fridge-only mode only makeable recipes reach the shortlist and search, so the
         # time limit is judged on them. With none makeable (already not_enough_dishes), it
         # is judged on every safe recipe, so the user still learns that shopping alone
@@ -132,12 +177,12 @@ def check_feasibility(session: Session, ctx: PlanningContext, spec: PlanSpec) ->
         if spec.time_limit_min is not None and not any(
             _fits_time(hit, spec.time_limit_min) for hit in timed
         ):
-            found.append(Shortfall("time_limit", unit.category, unit.needed, 0))
+            found.append(
+                Shortfall("time_limit", unit.category, unit.needed, 0, minimum=unit.minimum)
+            )
 
     found = _drop_combined_duplicates(found)
     found.extend(_named_shortfalls(session, ctx, spec, units, pool, stock_checks))
-    if spec.split_is_minimum:
-        found = [replace(s, minimum=True) if s.category in _SIDES else s for s in found]
     return sorted(found, key=lambda shortfall: REASONS.index(shortfall.reason))
 
 
@@ -192,12 +237,21 @@ def _named_shortfalls(
         for unit in units:
             if not pool(unit):
                 continue  # nothing to count: a library shortfall, reported elsewhere
-            ids = {hit.id for hit in pool(unit, stock_checks)}
+            hits = pool(unit, stock_checks)
+            ids = {hit.id for hit in hits}
             for name in every:
                 ids = recipes_using(session, ctx, name, ids)
-            if len(ids) < unit.needed:
+            using = unit.count([hit for hit in hits if hit.id in ids])
+            if using < unit.needed:
                 found.append(
-                    Shortfall("named_ingredient", unit.category, unit.needed, len(ids), label)
+                    Shortfall(
+                        "named_ingredient",
+                        unit.category,
+                        unit.needed,
+                        using,
+                        label,
+                        minimum=unit.minimum,
+                    )
                 )
         side_named = any(
             s.reason == "named_ingredient" and s.category in _SIDES for s in found

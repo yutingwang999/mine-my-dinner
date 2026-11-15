@@ -6,7 +6,7 @@ ingredient add up across dishes, so validation, the shortlist, and the shopping 
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from minemydinner.models import Recipe
 from minemydinner.planning.context import PlanningContext
@@ -24,6 +24,8 @@ CATEGORY_OF_DISH_TYPE = {
     "snack": "snacks",
 }
 SPLIT_CATEGORIES = ("meat_dishes", "vegetable_dishes")
+# How a named meat or vegetable count binds (design 5.11).
+Bound = Literal["exact", "at_least", "at_most"]
 
 
 def count_categories(dish_types: Iterable[str]) -> dict[str, int]:
@@ -44,36 +46,80 @@ def count_categories(dish_types: Iterable[str]) -> dict[str, int]:
 
 
 def required_counts(spec: "PlanSpec") -> dict[str, int]:
-    """Every category the plan must match. A category nobody asked for is required as 0;
-    meat and vegetable counts appear only when named."""
-    required = {
+    """The categories the plan must match exactly. A category nobody asked for is required
+    as 0. The meat and vegetable sides are ranges (side_ranges), not exact counts."""
+    return {
         "dishes": spec.dishes,
         "soups": spec.soups,
         "staples": spec.staples,
         "desserts": spec.desserts,
         "snacks": spec.snacks,
     }
-    if spec.meat_dishes is not None:
-        required["meat_dishes"] = spec.meat_dishes
-    if spec.vegetable_dishes is not None:
-        required["vegetable_dishes"] = spec.vegetable_dishes
-    return required
 
 
-def category_shortfall(category: str, required: int, present: int, minimum: bool) -> int:
-    """How far one category is from its requirement. A named split that is a minimum
-    only counts a shortfall."""
-    if minimum and category in SPLIT_CATEGORIES:
-        return max(required - present, 0)
-    return abs(required - present)
+def ranges_for(
+    total: int,
+    meat: int | None,
+    meat_bound: Bound | None,
+    vegetable: int | None,
+    vegetable_bound: Bound | None,
+) -> dict[str, tuple[int, int]]:
+    """The range [low, high] of each side for a dish total and the named sides (design 5.11).
+
+    A named side gives exact n -> [n, n], at least n -> [n, T], at most n -> [0, n]; an
+    unnamed side is [0, T]. A count with no bound is exact. Both sides named exactly with a
+    sum below the total are minimums. Then each side is tightened by the other, because
+    meat plus vegetable dishes equal T. A range may come out empty (low above high): the
+    request contradicts its total."""
+    named = {"meat_dishes": (meat, meat_bound), "vegetable_dishes": (vegetable, vegetable_bound)}
+    bounds = {side: (bound or "exact") if n is not None else None for side, (n, bound) in named.items()}
+    if (
+        meat is not None
+        and vegetable is not None
+        and bounds["meat_dishes"] == bounds["vegetable_dishes"] == "exact"
+        and meat + vegetable < total
+    ):
+        bounds = {side: "at_least" for side in bounds}
+    raw: dict[str, tuple[int, int]] = {}
+    for side, (n, _) in named.items():
+        bound = bounds[side]
+        if n is None or bound is None:
+            raw[side] = (0, total)
+        elif bound == "exact":
+            raw[side] = (n, n)
+        elif bound == "at_least":
+            raw[side] = (n, total)
+        else:
+            raw[side] = (0, n)
+    (m_low, m_high), (v_low, v_high) = raw["meat_dishes"], raw["vegetable_dishes"]
+    return {
+        "meat_dishes": (max(m_low, total - v_high), min(m_high, total - v_low)),
+        "vegetable_dishes": (max(v_low, total - m_high), min(v_high, total - m_low)),
+    }
+
+
+def side_ranges(spec: "PlanSpec") -> dict[str, tuple[int, int]]:
+    """The meat and vegetable ranges of a spec. Validation, feasibility, the shortlist, and
+    every text read the sides from here; nothing else computes them."""
+    return ranges_for(
+        spec.dishes, spec.meat_dishes, spec.meat_bound, spec.vegetable_dishes, spec.vegetable_bound
+    )
+
+
+def outside(present: int, low: int, high: int) -> int:
+    """How far a count is outside [low, high]; 0 inside."""
+    return max(low - present, present - high, 0)
 
 
 def composition_gap(spec: "PlanSpec", present: dict[str, int]) -> int:
-    return sum(
-        category_shortfall(
-            category, required, present.get(category, 0), spec.split_is_minimum
-        )
+    """How far a plan's counts are from the spec: the distance from each exact count plus
+    the distance outside each side's range."""
+    exact = sum(
+        abs(required - present.get(category, 0))
         for category, required in required_counts(spec).items()
+    )
+    return exact + sum(
+        outside(present.get(side, 0), low, high) for side, (low, high) in side_ranges(spec).items()
     )
 
 

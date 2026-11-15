@@ -234,6 +234,18 @@ describe("ChatPage", () => {
     expect(await screen.findByText(/add up to more than the total/)).toBeInTheDocument();
   });
 
+  it("shows the conflict hint for counts that do not fit the total", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(
+          frame("interrupt", { kind: "question", fields: ["composition"], problem: "split_conflicts_total" }),
+          DONE,
+        ),
+    });
+    await send("dinner");
+    expect(await screen.findByText(/do not fit the total number of dishes/)).toBeInTheDocument();
+  });
+
   it("shows the too-many hint for a composition question", async () => {
     setup({
       "POST /api/chat/threads/t1/messages": () =>

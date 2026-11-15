@@ -27,22 +27,27 @@ function Asked({ plan }: { plan: ChatPlan }) {
   const { spec, defaults_used: defaults } = plan;
   const stated = (name: string) => !defaults.includes(name);
   const items: string[] = [];
-  const minimum = spec.split_is_minimum;
+  // The user's own bounds, not the tightened ranges the planner reads (design 5.11).
   const split: string[] = [];
   if (spec.meat_dishes != null && stated("meat_dishes")) {
-    split.push(t("askedMeat", { count: spec.meat_dishes, minimum: String(minimum) }));
+    split.push(t("askedMeat", { count: spec.meat_dishes, bound: spec.meat_bound ?? "exact" }));
   }
   if (spec.vegetable_dishes != null && stated("vegetable_dishes")) {
-    split.push(t("askedVegetable", { count: spec.vegetable_dishes, minimum: String(minimum) }));
+    split.push(
+      t("askedVegetable", { count: spec.vegetable_dishes, bound: spec.vegetable_bound ?? "exact" }),
+    );
   }
   // An old record's "composition" stood for both counts, so neither was stated.
   if (stated("dishes") && !defaults.includes("composition") && spec.dishes > 0) {
     const dishes = t("askedDishes", { count: spec.dishes });
     items.push(
       split.length > 0
-        ? t("askedDishesSplit", { dishes, split: format.list(split, { type: "unit" }) })
+        ? t("askedDishesSplit", { dishes, split: split.join(t("askedSplitSeparator")) })
         : dishes,
     );
+  } else {
+    // An assumed total ("三个人，最多一个素菜"): the named sides are still what the user said.
+    items.push(...split);
   }
   if (stated("soups") && !defaults.includes("composition") && spec.soups > 0) {
     items.push(t("askedSoups", { count: spec.soups }));

@@ -123,11 +123,8 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 
 ### Parsing and wording
 
-- `parse_v2.md` has no example of moving "must use" names to "prefer" after "the named ingredients are optional", and no example of a soup range.
-- **"At least" on one side of a split** ("8个菜，至少2个荤菜") has no rule: the parse prompt has no example, and `split_is_minimum` is set only when both sides are named below the total, so it is read as exactly 2 meat dishes. Decide whether a one-sided minimum is needed (a parsed flag plus a parse example; a new parse prompt version). See `docs/planner-request-and-counts.md`, Section 6.
 - `_counts_text` would produce an empty clause if a spec required no dishes and no soups; unreachable while every spec needs at least one dish in total.
-- The implied side of an exact one-sided split is `dishes − named side`, floored at 0; a request with fewer dishes than the named side would print "0 vegetable dishes". The contradiction question catches that request first, so it is unreachable today.
-- The planner's request summary prints an explicit "0 vegetable dishes" when a split names one side as 0, and states "Every count is exact unless it says at least". Both are new model-facing wording to watch in the evaluation.
+- The planner's request summary prints an explicit "0 vegetable dishes" when a side's range is `[0, 0]` ("两个荤菜", "不要素菜"), and states "Every count is exact unless it says at least, at most, or a range". Both are model-facing wording to watch in the evaluation.
 - The shortlist header line (`SHORTLIST_HEADER` in `graph.py`) still says only "JSON keyed by dish type"; the `complete` marker is explained in `planner_v3.md` alone. A type marked complete that holds fewer dishes than needed gets no extra hint (the feasibility check stops that case first today).
 
 ### Cost accounting

@@ -767,6 +767,7 @@ def test_the_planner_record_and_calls_reach_the_outcome(tmp_path, eval_db):
         eval_db, _client(tmp_path, eval_db, model), LIBRARY, [_scenario()], InMemorySaver()
     )
     run = outcome.record["planning_run"]
+    assert outcome.record["planning_runs"] == [run]
     assert run["thread_id"] == outcome.thread_id and run["events"]
     assert {c["task"] for c in outcome.record["llm_calls"]} == {"planning_eval"}
     assert len(outcome.record["llm_calls"]) == outcome.model_calls
@@ -835,3 +836,126 @@ def test_wall_ms_and_call_latencies_are_recorded(tmp_path, eval_db):
     assert outcome.wall_ms > 0
     assert len(outcome.call_latencies) == outcome.model_calls
     assert sum(outcome.call_latencies) == outcome.latency_ms
+
+
+# ---- design 5.11: count ranges, the spec, and a follow-up message ----
+
+
+def test_count_range_expectation():
+    plan = _plan(["m1", "m2", "v1"], ["meat dish", "meat dish", "vegetable dish"])
+    ok = _scenario(expect_count_range={"meat_dishes": [2, 3], "vegetable_dishes": [0, 1]})
+    assert _check(ok, plan) == []
+    bad = _scenario(expect_count_range={"meat_dishes": [3, 3], "vegetable_dishes": [0, 0]})
+    (failure,) = _check(bad, plan)
+    assert "meat_dishes" in failure and "vegetable_dishes" in failure
+
+
+def test_spec_expectation():
+    plan = {**_plan(["a"]), "spec": {"all_use": [], "prefer_use": ["鸡蛋"], "meat_dishes": None}}
+    ok = _scenario(expect_spec={"all_use": [], "prefer_use": ["鸡蛋"], "meat_dishes": None})
+    assert _check(ok, plan) == []
+    assert _check(_scenario(expect_spec={"all_use": ["鸡蛋"]}), plan) != []
+
+
+def test_first_reasons_are_checked_on_the_first_plan():
+    scenario = _scenario(follow_up="荤素都行", expect_first_reasons=["not_enough_dishes"])
+    first = _plan(reasons=["not_enough_dishes"])
+    assert check_expectations(scenario, _plan(["a"]), True, 5, first_plan=first) == []
+    assert check_expectations(scenario, _plan(["a"]), True, 5, first_plan=_plan()) != []
+
+
+def test_loader_reads_the_counts_scenarios():
+    path = Path(__file__).resolve().parents[1] / "eval_data" / "planning" / "scenarios_counts.yaml"
+    scenarios = load_scenarios(path)
+    names = {s.name for s in scenarios}
+    assert len(scenarios) == 10 and len(names) == 10
+    for scenario in scenarios:
+        assert scenario.max_model_calls is not None
+        if scenario.follow_up:
+            assert scenario.expect_first_reasons
+        elif scenario.expect_plan:
+            assert scenario.max_model_calls == 5
+        else:
+            assert scenario.expect_reason_detail and scenario.expect_next_actions
+
+
+def test_a_follow_up_message_runs_on_the_same_thread(tmp_path, eval_db):
+    """The button scenario: the first message stops early (no meat dish), the follow-up
+    drops the split, and the second plan is the one judged."""
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [
+        {"meat_dishes": 1, "vegetable_dishes": 1, "mode": "fridge_only"},
+        {"dishes": 1, "mode": "fridge_only"},
+    ]
+    scenario = _scenario(
+        "button",
+        request="一荤一素，只用冰箱里的",
+        follow_up="荤素都行",
+        expect_first_reasons=["not_enough_in_library"],
+        expect_spec={"meat_dishes": None, "vegetable_dishes": None, "dishes": 1},
+        expect_counts={"dishes": 1},
+        max_model_calls=7,
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, outcome.failures
+    assert outcome.final_passed
+    # Route and parse for the first message; route, parse, and planner for the second.
+    assert outcome.model_calls == 5
+    # The second parse read the whole conversation, ending with the button's message.
+    parse_calls = [m for m in model.sent if "extract the details" in str(m[0].content)]
+    texts = [str(m.content) for m in parse_calls[-1][1:]]
+    assert texts[0] == "一荤一素，只用冰箱里的" and texts[-1] == "荤素都行"
+    # Both turns' runs are saved in order; the single-run field is the judged (last) one.
+    first_run, second_run = outcome.record["planning_runs"]
+    assert first_run["id"] < second_run["id"]
+    assert outcome.record["planning_run"] == second_run
+    assert outcome.planning_run_id == second_run["id"]
+    (feasibility,) = [e for e in first_run["events"] if e["kind"] == "feasibility"]
+    assert [s["reason"] for s in feasibility["shortfalls"]] == ["not_enough_in_library"]
+    assert [r["reason"] for r in first_run["final_plan"]["reasons"]] == ["not_enough_in_library"]
+    assert first_run["final_passed"] is False and second_run["final_passed"] is True
+    _assert_clean(eval_db)
+
+
+def test_counts_scenarios_stock_gives_the_stated_feasibility(session):
+    """The fridge-only stock of scenarios_counts.yaml makes the dishes its comments state,
+    so each scenario's expectation follows from the request, not from the model."""
+    from minemydinner.evaluation.planning import read_library, reset_scenario_state
+    from minemydinner.models import Diner
+    from minemydinner.planning.context import MealConstraints, load_planning_context
+    from minemydinner.planning.feasibility import Shortfall, check_feasibility
+    from minemydinner.planning.validate import PlanSpec
+
+    folder = Path(__file__).resolve().parents[1] / "eval_data" / "planning"
+    seed_all(session)
+    session.flush()
+    load_library(session, read_library(folder / "library_extended.yaml"))
+    by_name = {s.name: s for s in load_scenarios(folder / "scenarios_counts.yaml")}
+
+    def check(name, **spec):
+        reset_scenario_state(session, by_name[name])
+        self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+        ctx = load_planning_context(session, MealConstraints(diner_ids=(self_id,)))
+        return check_feasibility(session, ctx, PlanSpec(mode="fridge_only", soups=0, **spec))
+
+    name = "eight_dishes_at_least_two_meat_fridge"
+    assert check(name, dishes=8, meat_dishes=2, meat_bound="at_least") == []
+    assert check(name, dishes=8) == []
+    assert check("eight_dishes_two_meat_fridge", dishes=8, meat_dishes=2) == [
+        Shortfall("not_enough_dishes", "vegetable_dishes", 6, 5)
+    ]
+    found = check(
+        "three_dishes_at_most_one_vegetable_fridge",
+        dishes=3,
+        vegetable_dishes=1,
+        vegetable_bound="at_most",
+    )
+    assert found == [Shortfall("not_enough_dishes", "meat_dishes", 2, 1, minimum=True)]
+    first = check("relax_split_button", dishes=2, meat_dishes=1, vegetable_dishes=1)
+    assert [(s.reason, s.category) for s in first] == [("not_enough_dishes", "meat_dishes")]
+    assert check("relax_split_button", dishes=2) == []
+    first = check("relax_named_button", dishes=1, all_use=["鸡蛋"])
+    assert [(s.reason, s.absent_from_stock) for s in first] == [("named_ingredient", True)]
+    assert check("relax_named_button", dishes=1, prefer_use=["鸡蛋"]) == []

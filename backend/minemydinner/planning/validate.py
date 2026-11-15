@@ -16,9 +16,11 @@ from sqlalchemy.orm import Session, selectinload
 from minemydinner.models import Rating, Recipe
 from minemydinner.planning.composition import (
     CATEGORY_OF_DISH_TYPE,
-    category_shortfall,
+    Bound,
     count_categories,
+    outside,
     required_counts,
+    side_ranges,
     sum_exact_amounts,
 )
 from minemydinner.planning.context import PlanningContext
@@ -38,11 +40,12 @@ class PlanSpec(BaseModel):
     dishes: int = Field(ge=0)
     soups: int = Field(ge=0)
     time_limit_min: int | None = None
-    # A split of `dishes` (meat plus vegetable); None means that side is not constrained.
+    # A split of `dishes` (meat plus vegetable); None means that side is not named. Each
+    # named side has a bound (None reads as exact); side_ranges turns them into ranges.
     meat_dishes: int | None = Field(default=None, ge=0)
     vegetable_dishes: int | None = Field(default=None, ge=0)
-    # True when a named split is below the dish total: the split counts are minimums.
-    split_is_minimum: bool = False
+    meat_bound: Bound | None = None
+    vegetable_bound: Bound | None = None
     staples: int = Field(default=0, ge=0)
     desserts: int = Field(default=0, ge=0)
     snacks: int = Field(default=0, ge=0)
@@ -50,6 +53,20 @@ class PlanSpec(BaseModel):
     must_use: list[str] = Field(default_factory=list)
     all_use: list[str] = Field(default_factory=list)
     prefer_use: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_old_split(cls, data: Any) -> Any:
+        """A spec saved before bounds existed carries `split_is_minimum`: true means both
+        named sides are "at least", false means exact (design 5.11, old records)."""
+        if not isinstance(data, dict) or "split_is_minimum" not in data:
+            return data
+        data = dict(data)
+        minimum = bool(data.pop("split_is_minimum"))
+        for side, bound in (("meat_dishes", "meat_bound"), ("vegetable_dishes", "vegetable_bound")):
+            if data.get(side) is not None and data.get(bound) is None:
+                data[bound] = "at_least" if minimum else "exact"
+        return data
 
     @model_validator(mode="after")
     def _total_in_range(self) -> "PlanSpec":
@@ -173,17 +190,23 @@ def _h3(session: Session, ctx: PlanningContext, ids: list[int]) -> list[Finding]
 
 
 def _h4(spec: PlanSpec, recipes: list[Recipe]) -> list[Finding]:
+    """Every exact count matches, and the meat and vegetable dishes are each within their
+    range (design 5.11). The detail carries both ranges."""
     present = count_categories(r.dish_type for r in recipes)
     required = required_counts(spec)
-    if all(
-        category_shortfall(c, need, present[c], spec.split_is_minimum) == 0
-        for c, need in required.items()
+    ranges = side_ranges(spec)
+    if all(present[c] == need for c, need in required.items()) and all(
+        outside(present[side], low, high) == 0 for side, (low, high) in ranges.items()
     ):
         return []
     return [
         Finding(
             code="H4",
-            detail={"required": required, "present": present, "minimum": spec.split_is_minimum},
+            detail={
+                "required": required,
+                "present": present,
+                "ranges": {side: [low, high] for side, (low, high) in ranges.items()},
+            },
         )
     ]
 

@@ -135,6 +135,10 @@ class Scenario:
     expect_next_actions: list[str] = field(default_factory=list)  # all must be offered
     expect_any_code: list[str] = field(default_factory=list)  # one of these reasons or unmet
     expect_counts: dict[str, int] = field(default_factory=dict)  # category counts shown
+    # Category counts shown within [low, high], both ends included ({meat_dishes: [2, 8]}).
+    expect_count_range: dict[str, list[int]] = field(default_factory=dict)
+    # Values the plan's spec must hold ({all_use: [], prefer_use: [鸡蛋]}; null for None).
+    expect_spec: dict[str, Any] = field(default_factory=dict)
     expect_titles_any: list[str] = field(default_factory=list)  # at least one shown title
     expect_titles_all: list[str] = field(default_factory=list)  # every shown title is listed
     expect_warnings: list[str] = field(default_factory=list)  # warning codes in the plan
@@ -152,6 +156,12 @@ class Scenario:
     expect_missing_nonempty: bool = False
     expect_locale_reply: str | None = None  # "zh" or "en", judged without recipe titles
     max_model_calls: int | None = None
+    # A second user message on the same thread after the first plan, such as the fixed
+    # message a next-action button sends. The expectations then judge the second plan, and
+    # model calls count both turns.
+    follow_up: str = ""
+    # Reasons the first message's plan must show (only with follow_up).
+    expect_first_reasons: list[str] = field(default_factory=list)
     # Check-only: build the shortlist for this many dishes (shopping mode) and assert that
     # no main ingredient dominates it. The model is not used and the planner not run.
     shortlist_spread: int | None = None
@@ -228,9 +238,11 @@ def check_expectations(
     first_passed: bool = True,
     reply: str = "",
     library_titles: Sequence[str] = (),
+    first_plan: dict[str, Any] | None = None,
 ) -> list[str]:
     """What did not match the scenario. `expect_plan` is always checked; the other
-    expectations only when the scenario states them. Pure."""
+    expectations only when the scenario states them. `first_plan` is the plan of the first
+    message when the scenario has a follow-up. Pure."""
     failures = []
     if passed != scenario.expect_plan:
         failures.append(f"plan passed={passed}, expected {scenario.expect_plan}")
@@ -258,6 +270,26 @@ def check_expectations(
         }
         if wrong:
             failures.append(f"counts (got, expected): {wrong}")
+    if scenario.expect_count_range:
+        counts = count_categories(r["dish_type"] for r in recipes)
+        outside = {
+            k: (counts.get(k, 0), [low, high])
+            for k, (low, high) in scenario.expect_count_range.items()
+            if not low <= counts.get(k, 0) <= high
+        }
+        if outside:
+            failures.append(f"counts outside range (got, range): {outside}")
+    spec = plan.get("spec") or {}
+    wrong_spec = {
+        k: (spec.get(k), v) for k, v in scenario.expect_spec.items() if spec.get(k) != v
+    }
+    if wrong_spec:
+        failures.append(f"spec (got, expected): {wrong_spec}")
+    if scenario.expect_first_reasons:
+        first = [r["reason"] for r in (first_plan or {}).get("reasons", [])]
+        missing = [r for r in scenario.expect_first_reasons if r not in first]
+        if missing:
+            failures.append(f"first message: missing reason {missing}; got {first}")
     titles = [r["title"] for r in recipes]
     if scenario.expect_titles_any and not set(titles) & set(scenario.expect_titles_any):
         failures.append(f"none of {scenario.expect_titles_any} shown; got {titles}")
@@ -536,6 +568,7 @@ def run_scenario(
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     note = ""
+    first_plan = None
     try:
         graph.invoke(
             {"messages": [HumanMessage(scenario.request)], "locale": scenario.locale}, config
@@ -543,6 +576,15 @@ def run_scenario(
         pending = graph.get_state(config).interrupts
         if pending:
             note = f"stopped at a question: {pending[0].value.get('kind')}"
+        elif scenario.follow_up:
+            first_plan = graph.get_state(config).values.get("current_plan")
+            graph.invoke(
+                {"messages": [HumanMessage(scenario.follow_up)], "locale": scenario.locale},
+                config,
+            )
+            pending = graph.get_state(config).interrupts
+            if pending:
+                note = f"stopped at a question after the follow-up: {pending[0].value.get('kind')}"
     except Exception as error:
         # Includes AllModelsFailed and MonthlyCapExceeded: record it and go on.
         note = f"failed: {type(error).__name__}"
@@ -550,9 +592,14 @@ def run_scenario(
     if note and state.get("run_id") is not None:
         recorder.fail(state["run_id"], state.get("retries") or 0)
     with factory() as session:
-        run = session.scalars(
-            select(PlanningRun).where(PlanningRun.thread_id == thread_id)
-        ).one_or_none()
+        # With a follow-up the thread has a run per message, in id order; the last one is
+        # judged, and every one is saved so a first-turn mismatch can be investigated.
+        runs = session.scalars(
+            select(PlanningRun)
+            .where(PlanningRun.thread_id == thread_id)
+            .order_by(PlanningRun.id)
+        ).all()
+        run = runs[-1] if runs else None
         all_rows = session.scalars(
             select(LlmCall).where(LlmCall.id > watermark).order_by(LlmCall.id)
         ).all()
@@ -560,6 +607,7 @@ def run_scenario(
         embedding_calls = sum(r.task == "embeddings" for r in all_rows)
         record = {
             "planning_run": _run_row(run),
+            "planning_runs": [_run_row(r) for r in runs],
             "llm_calls": [_call_row(r) for r in all_rows],
         }
     plan = state.get("current_plan")
@@ -574,7 +622,7 @@ def run_scenario(
         "",
     )
     failures = check_expectations(
-        scenario, plan, passed, len(rows), first_passed, reply, library_titles
+        scenario, plan, passed, len(rows), first_passed, reply, library_titles, first_plan
     )
     return RunOutcome(
         scenario=scenario.name,
