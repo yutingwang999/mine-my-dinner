@@ -415,7 +415,12 @@
     "action": {
       "switch_to_shopping": "允许购物",
       "fewer_dishes": "少做几道菜",
-      "drop_time_limit": "不限时间"
+      "drop_time_limit": "不限时间",
+      "relax_split": "荤素都行",
+      "relax_named": "指定食材可不用",
+      "update_inventory": "更新库存",
+      "register_cookware": "登记厨具",
+      "import_recipes": "导入更多菜谱"
     },
     "plan": {
       "title": "方案",
@@ -437,10 +442,32 @@
       "leftOut": "有 {count} 道菜因为含有过敏原未知的食材而被排除。",
       "showLeftOut": "查看是哪些菜",
       "leftOutTitles": "被排除的菜",
-      "semanticPaused": "按语义搜索暂时停用，结果可能没那么相关。按名称搜索仍可使用。"
+      "semanticPaused": "按语义搜索暂时停用，结果可能没那么相关。按名称搜索仍可使用。",
+      "asked": "按你的要求：{list}。",
+      "askedDishes": "{count} 道菜",
+      "askedDishesSplit": "{dishes}（{split}）",
+      "askedSplitSeparator": "、",
+      "askedMeat": "{bound, select, at_least {至少 } at_most {最多 } other {}}{count} 道荤菜",
+      "askedVegetable": "{bound, select, at_least {至少 } at_most {最多 } other {}}{count} 道素菜",
+      "askedSoups": "{count} 道汤",
+      "askedStaples": "{count} 道主食",
+      "askedDesserts": "{count} 道甜点",
+      "askedSnacks": "{count} 道小吃",
+      "askedFridgeOnly": "只用冰箱现有食材",
+      "askedShopping": "可以购物",
+      "askedTime": "{minutes} 分钟内",
+      "askedPrefer": "优先用：{list}",
+      "askedMust": "一定要用：{list}",
+      "askedAll": "每道都用：{list}",
+      "assumedStaples": "{count} 道主食",
+      "assumedDesserts": "{count} 道甜点",
+      "assumedSnacks": "{count} 道小吃",
+      "assumedMeat": "{count} 道荤菜",
+      "assumedVegetable": "{count} 道素菜",
+      "reasons": "做不出方案的原因"
     },
     "warning": {
-      "S1": "{title}：需要 {name} {needed} {unit}，你只有 {have} {unit}。",
+      "S1": "{name}：{parts}，共需 {needed} {unit}，库存 {have} {unit}。",
       "S2": "{title}：{line} 不符合某位用餐者的偏好。",
       "S3": "冰箱里有食材将在 {date} 过期，这份方案没有用到它。",
       "S4": "{title} 的评分较低（{score}）。",
@@ -452,6 +479,18 @@
       "S8diners": "另外 {count} 位用餐者的忌口未知，请自己核对。",
       "S8lines": "{title}：有些食材没有识别出来（{list}）。",
       "other": "{title}：请留意 {code}。"
+    },
+    "actionMessage": {
+      "switch_to_shopping": "允许购物",
+      "fewer_dishes": "少做几道菜",
+      "drop_time_limit": "不限时间",
+      "relax_split": "荤素都行",
+      "relax_named": "不一定要用指定的食材"
+    },
+    "problem": {
+      "split_conflicts_total": "荤菜和素菜的数量要求和总菜数对不上。请重新告诉我各自的数量。",
+      "split_exceeds_total": "荤菜和素菜的数量加起来超过了总菜数。请重新告诉我各自的数量。",
+      "too_many": "一次最多只能安排 12 道（所有种类合计）。请告诉我想做几道。"
     }
   }
 }

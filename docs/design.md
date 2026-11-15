@@ -60,7 +60,7 @@ Dig tonight's dinner out of your saved recipes and your fridge.
 | Languages | **Chinese and English**: switchable UI (such as next-intl); recipes in both languages; the ingredient dictionary holds Chinese and English names and aliases in both languages; each recipe records its original language |
 | Embeddings | **Always use Gemini embeddings** (`gemini-embedding-001`), which are multilingual and allow Chinese and English content to be searched across languages. There is no embedding-model failover; failed calls are retried or queued. The pgvector HNSW index limits `vector` columns to about 2000 dimensions, so set the output dimension to 768 or 1536 before creating tables (follow the official documentation). Changing models requires recomputing all vectors |
 | API costs | **Monthly cap**: set budget alerts on each provider. Code records the tokens, cost, and latency of each call in `llm_calls`, and stops non-essential calls once the monthly cap is exceeded |
-| Data storage | **No evaluation data or local development recipe data is uploaded to the Git repository.** It stays in the local database or in `data/`, which `.gitignore` excludes. Source text taken from other people's web pages or videos is limited in quantity and never published; prefer self-written or licensed content. The repository holds only evaluation scripts and code. The exception is small fictional data hand-written for unit tests, which does not come from real recipes |
+| Data storage | **No evaluation data or local development recipe data is uploaded to the Git repository.** It stays in the local database or in `data/`, which `.gitignore` excludes. Source text taken from other people's web pages or videos is limited in quantity and never published; prefer self-written or licensed content. The repository holds only evaluation scripts and code. The exceptions are small fictional data hand-written for unit tests, and the hand-written fictional planning evaluation scenarios and recipe library in `backend/eval_data/planning/` (committed so the planning baseline stays versioned and reproducible); neither comes from real recipes or real use. Planning scenarios derived from real use stay in `backend/data/` |
 
 ### 3.1 Multi-Model Design
 
@@ -512,7 +512,7 @@ Import confirmation shows the duration and its source. A changed duration become
 
 **Regression gate:** the gate runs manually on the local machine after changes to prompts, models, or graph structure, because it calls real models and has a cost.
 
-- Scripts and gate logic live in the repository. The evaluation set and baseline scores live in `data/`, with a private backup outside Git.
+- Scripts and gate logic live in the repository. The extraction evaluation set (from real recipes) and baseline scores live in `backend/data/`, with a private backup outside Git. The fictional planning scenarios live in the repository (`backend/eval_data/planning/`, see Section 3).
 - The script compares new scores with the baseline, allows a tolerance for normal model variation, reports pass or fail, and exits with a non-zero code on failure.
 - The baseline records the evaluation set's version or hash. If the set has changed, the script reports the difference instead of a pass or fail, and the user confirms a new baseline.
 - CI tests the score calculations and pass or fail logic with fictional data and mocked responses. This verifies the script, not model quality.

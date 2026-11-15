@@ -3,8 +3,12 @@
 # can pick another catalog ID. A model ID needs a catalog entry, so that its
 # price and capabilities are always known.
 #
-# Prices are USD per million tokens, from each provider's official pricing page.
-prices_updated: 2026-11-03
+# Prices are USD per million tokens, from each provider's official pricing page
+# (Standard tier). cached_input is the price of input read from the prompt cache;
+# cache_write is the price of input written to it (absent: no write charge, so
+# written tokens cost the input price). context_window is the maximum input tokens.
+# Gemini implicit caching is assumed to carry no storage charge.
+prices_updated: 2026-11-14
 
 catalog:
   gemini-3.5-flash-lite:
@@ -12,17 +16,26 @@ catalog:
     capabilities: [tool_calling, strict_json, images, video, speech_to_text]
     input_usd_per_mtok: 0.30
     output_usd_per_mtok: 2.50
-  # These prices rise to 1.50 and 7.50 on 2027-01-01.
+    cached_input_usd_per_mtok: 0.03
+    context_window: 1048576
+  # On 2027-01-01 these prices rise: input 1.50, cached input 0.15, output 7.50.
   gemini-3.8-flash:
     provider: google_genai
     capabilities: [tool_calling, strict_json, images, video, speech_to_text]
     input_usd_per_mtok: 0.75
     output_usd_per_mtok: 3.75
+    cached_input_usd_per_mtok: 0.075
+    context_window: 1048576
+  # Input above 272K tokens is billed at twice these rates; the planner budget stays far
+  # below that, so the standard rates are used. The window is the maximum input.
   gpt-6-luna:
     provider: openai
     capabilities: [tool_calling, strict_json, images]
     input_usd_per_mtok: 0.10
     output_usd_per_mtok: 0.50
+    cached_input_usd_per_mtok: 0.01
+    cache_write_usd_per_mtok: 0.125
+    context_window: 922000
     tool_call_options:
       reasoning_effort: none
   # DeepSeek charges half of these rates off-peak. The peak rate is used so the
@@ -33,6 +46,8 @@ catalog:
     capabilities: [tool_calling, images]
     input_usd_per_mtok: 0.30
     output_usd_per_mtok: 1.20
+    cached_input_usd_per_mtok: 0.006
+    context_window: 1000000
     # If thinking is ever enabled for planning, every later request must pass
     # reasoning_content back, or the API returns 400.
     options:
@@ -42,6 +57,8 @@ catalog:
     capabilities: [tool_calling]
     input_usd_per_mtok: 1.32
     output_usd_per_mtok: 3.96
+    cached_input_usd_per_mtok: 0.044
+    context_window: 1000000
     options:
       extra_body: {thinking: {type: disabled}}
   # Changing the embedding model requires recomputing every stored vector.

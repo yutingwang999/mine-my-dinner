@@ -1,6 +1,6 @@
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -38,6 +38,10 @@ class StructuredResult[T: BaseModel]:
     # The configured name and the model ID, such as "gemini:gemini-3.5-flash-lite".
     model_name: str
     fallback_used: bool
+    # The provider key of the model that answered, and the model name the provider reports
+    # having served (None when it reports none). Recorded in planning records.
+    provider: str | None = None
+    served_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,9 +75,51 @@ def map_strings(value: Any, transform: Callable[[str], str]) -> Any:
     return value
 
 
-def _estimate_cost(model: ModelConfig, input_tokens: int, output_tokens: int) -> Decimal:
-    spent = input_tokens * model.input_usd_per_mtok + output_tokens * model.output_usd_per_mtok
+def normalize_usage(usage: Mapping[str, Any] | None) -> dict[str, int] | None:
+    """Reduce LangChain usage_metadata to the four counts that llm_calls stores.
+
+    `input_tokens` is the total, cached and written tokens included. The cache counts
+    are 0 when the provider reports none, and never add up to more than the total.
+    """
+    if usage is None:
+        return None
+    total = usage.get("input_tokens") or 0
+    details = usage.get("input_token_details") or {}
+    read = min(details.get("cache_read") or 0, total)
+    written = min(details.get("cache_creation") or 0, total - read)
+    return {
+        "input_tokens": total,
+        "cached_input_tokens": read,
+        "cache_write_input_tokens": written,
+        "output_tokens": usage.get("output_tokens") or 0,
+    }
+
+
+def _estimate_cost(model: ModelConfig, usage: dict[str, int]) -> Decimal:
+    read = usage["cached_input_tokens"]
+    written = usage["cache_write_input_tokens"]
+    plain = usage["input_tokens"] - read - written
+    write_price = model.cache_write_usd_per_mtok
+    if write_price is None:
+        write_price = model.input_usd_per_mtok
+    cached_price = model.cached_input_usd_per_mtok
+    if cached_price is None:
+        cached_price = model.input_usd_per_mtok
+    spent = (
+        plain * model.input_usd_per_mtok
+        + written * write_price
+        + read * cached_price
+        + usage["output_tokens"] * model.output_usd_per_mtok
+    )
     return spent / TOKENS_PER_MILLION
+
+
+def served_model_name(reply: Any) -> str | None:
+    """The provider-reported model name (langchain-openai, -deepseek, and -google-genai all
+    use `model_name` in the response metadata), or None."""
+    metadata = getattr(reply, "response_metadata", None) or {}
+    value = metadata.get("model_name") or metadata.get("model")
+    return str(value) if value else None
 
 
 class LLMClient:
@@ -124,13 +170,16 @@ class LLMClient:
         self, task: str, messages: list[BaseMessage], schema: type[T]
     ) -> StructuredResult[T]:
         prepared = self.prepare_messages(messages)
+        used: dict[str, str | None] = {}
 
         def attempt(
             model: ModelConfig, chat_model: BaseChatModel
         ) -> tuple[T, dict[str, int] | None]:
             runnable = chat_model.with_structured_output(schema, include_raw=True)
             output = runnable.invoke(prepared)
-            usage = output["raw"].usage_metadata
+            used["provider"] = model.provider
+            used["served_model"] = served_model_name(output["raw"])
+            usage = normalize_usage(output["raw"].usage_metadata)
             try:
                 if output["parsing_error"] is not None:
                     raise output["parsing_error"]
@@ -142,7 +191,13 @@ class LLMClient:
                 raise AttemptError(str(error), usage) from error
 
         outcome = self.run_task(task, attempt)
-        return StructuredResult(outcome.value, outcome.model_name, outcome.fallback_used)
+        return StructuredResult(
+            outcome.value,
+            outcome.model_name,
+            outcome.fallback_used,
+            used.get("provider"),
+            used.get("served_model"),
+        )
 
     def prepare_messages(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]:
         """Apply the pre-hooks to a copy of the messages."""
@@ -164,7 +219,12 @@ class LLMClient:
         model = self.config.models[task_config.primary]
         prepared = [self._apply_pre_hooks(text) for text in texts]
         # The embedding API returns no usage, so tokens are estimated.
-        usage = {"input_tokens": sum(len(text) // 4 for text in prepared), "output_tokens": 0}
+        usage = {
+            "input_tokens": sum(len(text) // 4 for text in prepared),
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+        }
         started = time.perf_counter()
         try:
             embedder = build_embedding_model(model, task_config.timeout_seconds)
@@ -238,15 +298,15 @@ class LLMClient:
         fallback_used: bool,
     ) -> None:
         """Commit in a session of its own, so a business rollback keeps the record."""
-        input_tokens = usage["input_tokens"] if usage else None
-        output_tokens = usage["output_tokens"] if usage else None
         row = LlmCall(
             task=task,
             provider=model.provider,
             model=model.model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_estimate=_estimate_cost(model, input_tokens, output_tokens) if usage else None,
+            input_tokens=usage["input_tokens"] if usage else None,
+            cached_input_tokens=usage["cached_input_tokens"] if usage else None,
+            cache_write_input_tokens=usage["cache_write_input_tokens"] if usage else None,
+            output_tokens=usage["output_tokens"] if usage else None,
+            cost_estimate=_estimate_cost(model, usage) if usage else None,
             latency_ms=int((time.perf_counter() - started) * 1000),
             success=success,
             fallback_used=fallback_used,

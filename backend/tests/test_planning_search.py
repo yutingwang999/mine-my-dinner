@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -15,6 +15,7 @@ from tests.planningfakes import (
     over_cap_client,
     rule,
     self_diner,
+    stock,
     unit_vector,
 )
 from tests.recipefakes import by_zh, seeded  # noqa: F401
@@ -214,3 +215,159 @@ def test_text_fallback_splits_words_and_ranks_by_matches(session, seeded):
     make_recipe(session, "清炒", lines=[L("小白菜")])
     result = search_recipes(session, over_cap_client(), ctx_for(session), query="土豆 快手")
     assert ids(result) == [both.id, one.id]
+
+
+def test_dish_type_filter_and_exclude_ids(session, seeded, fake_embed):
+    soup_a = make_recipe(session, "番茄汤", dish_type="soup", lines=[L("番茄")])
+    soup_b = make_recipe(session, "豆腐汤", dish_type="soup", lines=[L("豆腐")])
+    make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    soups = search_recipes(session, fake_embed, ctx_for(session), dish_types=["soup"])
+    assert set(ids(soups)) == {soup_a.id, soup_b.id}
+    rest = search_recipes(
+        session, fake_embed, ctx_for(session), dish_types=["soup"], exclude_ids=[soup_a.id]
+    )
+    assert ids(rest) == [soup_b.id]
+
+
+def test_hits_carry_missing_items_and_cookware(session, seeded, fake_embed):
+    recipe = make_recipe(
+        session,
+        "番茄炒蛋",
+        lines=[
+            L("鸡蛋", role="main"),
+            L("番茄", role="main"),
+            L("盐", role="seasoning"),
+            L("小葱", optional=True),
+        ],
+        cookware=["炒锅"],
+    )
+    stock(session, "鸡蛋", count=4, expires_on=date.today() + timedelta(days=1))
+    stock(session, "土豆", count=2, expires_on=date.today() + timedelta(days=1))
+    stock(session, "豆腐", count=1, expires_on=date.today() + timedelta(days=30))
+    me = self_diner(session)
+    me.display_name = "Zhang Wei"
+    rule(session, me.id, "dislike", ingredient="番茄")
+    result = search_recipes(session, fake_embed, ctx_for(session, me.id))
+    hit = next(h for h in result.hits if h.id == recipe.id)
+    assert hit.missing == ["番茄"]
+    assert hit.missing_cookware == ["炒锅"]
+    assert hit.uses_expiring == ["鸡蛋"]
+    assert hit.dislikes == ["Diner 1: 番茄"]
+    assert "Zhang Wei" not in repr(result)
+
+
+def test_fewer_missing_ranks_first_after_relevance(session, seeded):
+    stock(session, "土豆", count=3)
+    stock(session, "鸡蛋", count=3)
+    two_missing = make_recipe(session, "土豆烧肉", lines=[L("土豆"), L("猪肉"), L("青椒")])
+    none_missing = make_recipe(session, "土豆炒蛋", lines=[L("土豆"), L("鸡蛋")])
+    one_missing = make_recipe(session, "土豆丝", lines=[L("土豆"), L("青椒")])
+    unmatched = make_recipe(session, "蒸蛋", lines=[L("鸡蛋")])
+    client = over_cap_client()
+    # No query: fewer missing lines first, then the usual rating and recency order.
+    plain = search_recipes(session, client, ctx_for(session))
+    assert ids(plain) == [unmatched.id, none_missing.id, one_missing.id, two_missing.id]
+    # A text query: the best match stays first; equal matches go by missing lines.
+    ranked = search_recipes(session, client, ctx_for(session), query="土豆 烧肉")
+    assert ids(ranked) == [two_missing.id, none_missing.id, one_missing.id]
+
+
+def test_ties_break_by_expiring_then_dislike(session, seeded, fake_embed):
+    stock(session, "鸡蛋", count=3, expires_on=date.today() + timedelta(days=2))
+    stock(session, "豆腐", count=3)
+    stock(session, "黄瓜", count=3)
+    # Created oldest first, so recency alone would give the reverse order.
+    expiring = make_recipe(session, "蒸蛋", lines=[L("鸡蛋")])
+    estimated = make_recipe(
+        session, "豆腐估计", lines=[L("豆腐")], time_min=10, time_source="estimated"
+    )
+    firm = make_recipe(session, "豆腐", lines=[L("豆腐")], time_min=10, time_source="stated")
+    disliked = make_recipe(session, "黄瓜", lines=[L("黄瓜")])
+    me = self_diner(session).id
+    rule(session, me, "dislike", ingredient="黄瓜")
+    ctx = ctx_for(session, me)
+    no_limit = search_recipes(session, fake_embed, ctx)
+    assert ids(no_limit) == [expiring.id, firm.id, estimated.id, disliked.id]
+    with_limit = search_recipes(session, fake_embed, ctx, max_time=30)
+    assert ids(with_limit) == [expiring.id, firm.id, estimated.id, disliked.id]
+
+
+def test_firm_time_breaks_ties_only_when_max_time_is_set(session, seeded, fake_embed):
+    firm = make_recipe(session, "豆腐甲", lines=[L("豆腐")], time_min=10, time_source="stated")
+    estimated = make_recipe(
+        session, "豆腐乙", lines=[L("豆腐")], time_min=10, time_source="estimated"
+    )
+    # Without max_time the newest comes first; with it, the firm time does.
+    assert ids(search_recipes(session, fake_embed, ctx_for(session))) == [estimated.id, firm.id]
+    limited = search_recipes(session, fake_embed, ctx_for(session), max_time=30)
+    assert ids(limited) == [firm.id, estimated.id]
+
+
+def test_prefer_use_ranks_right_after_relevance(session, seeded, fake_embed):
+    stock(session, "小白菜", count=3)
+    plain = make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    egg = make_recipe(session, "番茄炒蛋", lines=[L("鸡蛋"), L("番茄")])
+    result = search_recipes(session, fake_embed, ctx_for(session), prefer_use=["鸡蛋"])
+    assert ids(result) == [egg.id, plain.id]
+
+
+def test_repeated_query_is_embedded_once(session, seeded):
+    make_recipe(session, "近", lines=[L("小白菜")], embedding=unit_vector(0))
+    client = FakeEmbedClient(vector=unit_vector(0))
+    cache: dict[str, list[float]] = {}
+    for _ in range(2):
+        result = search_recipes(session, client, ctx_for(session), query="菜", query_vectors=cache)
+        assert result.hits and not result.semantic_paused
+    assert client.embedded == ["菜"]
+    assert list(cache) == ["菜"]
+    search_recipes(session, client, ctx_for(session), query="汤", query_vectors=cache)
+    assert client.embedded == ["菜", "汤"]
+
+
+def test_failed_embedding_is_not_cached(session, seeded):
+    make_recipe(session, "土豆丝", lines=[L("土豆")])
+    cache: dict[str, list[float]] = {}
+    search_recipes(session, over_cap_client(), ctx_for(session), query="土豆", query_vectors=cache)
+    assert cache == {}
+
+
+def test_hits_are_capped_at_twenty_by_default(session, seeded, fake_embed):
+    for i in range(23):
+        make_recipe(session, f"菜{i}", lines=[L("小白菜")])
+    assert len(search_recipes(session, fake_embed, ctx_for(session)).hits) == 20
+
+
+def test_search_query_count_does_not_grow_with_hits(session, seeded, count_queries):
+    def run(count: int) -> int:
+        for i in range(count):
+            make_recipe(
+                session,
+                f"菜{count}-{i}",
+                lines=[L("鸡蛋", role="main"), L("番茄")],
+                cookware=["炒锅"],
+                embedding=unit_vector(i),
+            )
+        ctx = ctx_for(session, self_diner(session).id)
+        with count_queries() as counter:
+            search_recipes(
+                session, FakeEmbedClient(), ctx, query="菜", prefer_use=["鸡蛋"]
+            )
+        return counter.count
+
+    stock(session, "鸡蛋", count=3, expires_on=date.today())
+    rule(session, self_diner(session).id, "dislike", ingredient="番茄")
+    few = run(2)
+    assert run(6) == few
+
+
+def test_makeable_only_drops_recipes_with_missing_lines(session, seeded):
+    stock(session, "豆腐", count=2)
+    near = make_recipe(session, "近", lines=[L("小白菜")], embedding=unit_vector(0))
+    far = make_recipe(
+        session, "远", lines=[L("豆腐"), L("小葱", optional=True)], embedding=unit_vector(5)
+    )
+    client = FakeEmbedClient(vector=unit_vector(0))
+    ctx = ctx_for(session)
+    assert ids(search_recipes(session, client, ctx, query="菜")) == [near.id, far.id]
+    only = search_recipes(session, client, ctx, query="菜", makeable_only=True)
+    assert ids(only) == [far.id]

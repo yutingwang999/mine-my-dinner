@@ -14,6 +14,7 @@ import {
   loadThread,
   type Locale,
   type NextAction,
+  normalizePlan,
   type Pending,
   putRequestStyle,
   readEvents,
@@ -25,6 +26,9 @@ import {
   storeThreadId,
 } from "@/lib/chat";
 import { useErrorText } from "@/lib/errors";
+
+/** The actions that are buttons sending a fixed message; the others are links. */
+type FixedAction = Exclude<NextAction, "update_inventory" | "register_cookware" | "import_recipes">;
 
 type Seen = { plan: boolean; pending: boolean; failed: boolean };
 
@@ -89,7 +93,7 @@ export function ChatPage() {
         if (!active) return;
         threadRef.current = id;
         setMessages(state.messages);
-        setPlan(state.current_plan);
+        setPlan(state.current_plan ? normalizePlan(state.current_plan) : null);
         setPending(state.pending);
       })
       .catch((caught) => {
@@ -138,7 +142,7 @@ export function ChatPage() {
         break;
       case "plan":
         seen.plan = true;
-        setPlan(event.data);
+        setPlan(normalizePlan(event.data));
         break;
       case "interrupt":
         seen.pending = true;
@@ -213,7 +217,9 @@ export function ChatPage() {
   }
 
   const hint =
-    pending?.kind === "question"
+    pending?.kind === "question" && pending.problem && t.has(`problem.${pending.problem}`)
+      ? t(`problem.${pending.problem}`)
+      : pending?.kind === "question"
       ? t("question.hint", {
           fields: format.list(
             pending.fields.map((field) => (t.has(`question.${field}`) ? t(`question.${field}`) : field)),
@@ -250,7 +256,7 @@ export function ChatPage() {
           {t(`progress.${step}`)}
         </p>
       )}
-      {plan && <PlanCard plan={plan} busy={busy} onAction={(action: NextAction) => submit(t(`action.${action}`))} />}
+      {plan && <PlanCard plan={plan} busy={busy} onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))} />}
       {pending?.kind === "request_style" && <RequestStylePrompt busy={busy} onChoose={chooseStyle} />}
       {error !== null && (
         <p role="alert" className="notice notice-warning">

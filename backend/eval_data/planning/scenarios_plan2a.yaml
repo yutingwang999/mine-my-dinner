@@ -1,0 +1,196 @@
+# Plan 2a scenarios. Run with library_extended.yaml.
+scenarios:
+  # ---- Plan 2a additions ----
+  - name: empty_fridge_fridge_only
+    request: 今晚我一个人吃，只用冰箱里现有的食材，做一个菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅]
+    expect_plan: false
+    expect_reasons: [empty_inventory]
+    expect_next_actions: [switch_to_shopping, update_inventory]
+    max_model_calls: 3
+    expect: Nothing in stock in fridge-only mode. No plan, the planner never runs, at most 3 model calls.
+  - name: fridge_only_one_of_two_dishes
+    request: 我们两个人吃，只用家里现有的食材，做两个菜。
+    locale: zh
+    inventory: {小白菜: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_plan: false
+    expect_reasons: [not_enough_dishes]
+    expect_next_actions: [switch_to_shopping]
+    max_model_calls: 8
+    expect_reason_detail: [{reason: not_enough_dishes, category: dishes, needed: 2, available: 1}]
+    expect: Only the greens dish can be made from stock, so two dishes are not possible. No plan.
+  - name: time_limit_no_dish_meets
+    request: 我一个人吃，只要一个小吃，十分钟内要做完，只用家里有的。
+    locale: zh
+    inventory: {面粉: plenty, 葱: plenty, 猪肉末: plenty}
+    cookware: [炒锅, 平底锅]
+    expect_plan: false
+    expect_reasons: [time_limit]
+    expect_next_actions: [drop_time_limit]
+    max_model_calls: 8
+    expect: Both snacks have stated times over 10 minutes (the estimated times of other dish types would not block). No plan, reason time_limit.
+  - name: one_meat_one_vegetable
+    request: 今晚两个人吃，一荤一素，只用家里现有的食材。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: 4, 小白菜: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_counts: {meat_dishes: 1, vegetable_dishes: 1, dishes: 2}
+    expect_titles_exact: [青椒肉丝, 清炒小白菜]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Exactly pork with green pepper and the greens (the only makeable meat and vegetable pair for this stock), so one meat dish and one vegetable dish.
+  - name: eight_dishes_two_meat
+    request: 我们八个人吃饭，8道菜，包含2个荤菜，可以去买食材。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_counts: {meat_dishes: 2, vegetable_dishes: 6, soups: 0}
+    expect_not_assumed: [soups, dishes]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Eight dishes, 2 meat and 6 vegetable, no soup. With a stated count, apply_defaults leaves unstated soups at 0 (not assumed), so the soup is expected to be absent rather than listed as assumed.
+  - name: one_meat_one_vegetable_no_safe_meat
+    request: 我们两个人吃，一荤一素，缺什么可以去买。
+    locale: zh
+    inventory: {小白菜: plenty, 蒜: plenty}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    rules:
+      - {type: allergy, allergen: soy}
+    expect_plan: false
+    expect_reasons: [not_enough_in_library]
+    expect_next_actions: [relax_split, import_recipes]
+    max_model_calls: 8
+    expect_reason_detail: [{reason: not_enough_in_library, category: meat_dishes, needed: 1, available: 0}]
+    expect: Every meat dish uses soy sauce, so none is safe. No plan, reason not_enough_in_library.
+  - name: one_meat_one_vegetable_no_makeable_meat
+    request: 我们两个人吃，一荤一素，只用家里现有的食材。
+    locale: zh
+    inventory: {小白菜: plenty, 蒜: plenty, 青椒: 4}
+    cookware: [炒锅, 砂锅, 蒸锅, 高压锅, 平底锅]
+    expect_plan: false
+    expect_reasons: [not_enough_dishes]
+    expect_next_actions: [switch_to_shopping, relax_split]
+    max_model_calls: 8
+    expect_reason_detail: [{reason: not_enough_dishes, category: meat_dishes, needed: 1, available: 0}]
+    expect: The library has meat dishes but none can be made from stock. No plan, reason not_enough_dishes.
+  - name: rich_dinner_without_a_count
+    request: 我们三个人，晚上想吃得丰盛点，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty, 豆腐: 2}
+    cookware: [炒锅, 汤锅]
+    expect_assumed: [dishes, soups]
+    expect_counts: {dishes: 2, soups: 1}
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: No count is stated, so the headcount-3 default applies (2 dishes and 1 soup) and is stated as assumed. No invented numbers in the reply.
+  - name: request_without_a_count
+    request: 今晚我们两个人吃饭，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty}
+    cookware: [炒锅, 汤锅]
+    expect_assumed: [dishes, soups]
+    expect_counts: {dishes: 2, soups: 0}
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: The headcount-2 default (2 dishes, no soup) is used and stated as assumed.
+  - name: three_people_two_dishes
+    request: 我们三个人吃，两个菜，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty}
+    cookware: [炒锅, 汤锅]
+    expect_counts: {dishes: 2, soups: 0}
+    expect_not_assumed: [dishes, soups]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Two dishes and no soup, both counts stated by the user (not assumed).
+  - name: just_a_bowl_of_noodles
+    request: 就吃碗面，只用家里现有的食材。
+    locale: zh
+    inventory: {面条: plenty, 小白菜: plenty, 番茄: 3, 鸡蛋: 6}
+    cookware: [炒锅, 汤锅]
+    expect_counts: {staples: 1, dishes: 0, soups: 0}
+    expect_titles_all: [清汤面, 番茄鸡蛋面]
+    expect_titles_none: [蛋炒饭]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: One staple, one of the two noodle dishes, and nothing else.
+  - name: two_dishes_soup_and_fried_rice
+    request: 两个人吃，两菜一汤，再加个蛋炒饭，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty, 大米: plenty, 葱: plenty}
+    cookware: [炒锅, 汤锅]
+    expect_counts: {dishes: 2, soups: 1, staples: 1}
+    expect_titles_include: [蛋炒饭]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Two dishes, one soup, and the fried rice as the staple.
+  - name: one_main_ingredient_dominates
+    request: 今晚做三个素菜，可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅]
+    shortlist_spread: 3
+    expect: Check-only (no model). Four vegetable dishes share eggs as their only main ingredient; the shortlist keeps at most two of them.
+  - name: two_dishes_compete_for_eggs
+    request: 今晚两个素菜，只用冰箱里现有的食材。
+    locale: zh
+    inventory: {鸡蛋: 4}
+    cookware: [炒锅]
+    expect_counts: {vegetable_dishes: 2}
+    expect_warnings: [S1]
+    expect_s1: [{name: 鸡蛋, needed: 6, have: 4}]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Only the four egg dishes are makeable, each needing 3 of the 4 eggs. Any two together need 6, so the plan carries the S1 warning with its parts.
+  - name: three_vegetable_dishes_only_eggs
+    request: 三道素菜，就用冰箱里的。
+    locale: zh
+    inventory: {鸡蛋: 12}
+    cookware: [炒锅]
+    expect_counts: {vegetable_dishes: 3}
+    expect_titles_all: [煎荷包蛋, 嫩滑蒸蛋, 白煮蛋, 鸡蛋饼]
+    expect_first_pass: true
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: The spread would keep two of the four egg dishes, but three must stay makeable in the shortlist. A passing plan with three egg dishes.
+  - name: prefer_eggs
+    request: 做三个菜，优先用鸡蛋，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_titles_any: [番茄炒蛋, 煎荷包蛋, 嫩滑蒸蛋, 白煮蛋, 鸡蛋饼]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Egg dishes ranked first, other dishes still offered; the plan has at least one egg dish.
+  - name: must_use_eggs
+    request: 做三个菜，这顿一定要用鸡蛋，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_titles_any: [番茄炒蛋, 煎荷包蛋, 嫩滑蒸蛋, 白煮蛋, 鸡蛋饼]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: At least one egg dish in the plan.
+  - name: all_dishes_with_eggs
+    request: 做三个菜，全做鸡蛋，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_titles_all: [番茄炒蛋, 煎荷包蛋, 嫩滑蒸蛋, 白煮蛋, 鸡蛋饼]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: Every dish in the plan uses eggs.
+  - name: all_dishes_with_eggs_none_in_stock
+    request: 做三个菜，全做鸡蛋，只用家里现有的食材。
+    locale: zh
+    inventory: {番茄: 3, 小白菜: plenty, 青椒: 4, 猪肉: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_plan: false
+    expect_reasons: [named_ingredient]
+    expect_next_actions: [relax_named]
+    max_model_calls: 8
+    expect_reason_detail: [{reason: named_ingredient, ingredient: 鸡蛋, absent_from_stock: true}]
+    expect: No eggs in stock in fridge-only mode. No plan, reason named_ingredient, with relax_named.

@@ -117,6 +117,7 @@ function RefList({
   title,
   hint,
   testId,
+  anchor,
   load,
   search,
   add,
@@ -125,6 +126,7 @@ function RefList({
   title: string;
   hint?: string;
   testId: string;
+  anchor?: string;
   load: () => Promise<EntryRef[]>;
   search: (q: string) => Promise<DictionaryEntry[]>;
   add: (id: number) => Promise<unknown>;
@@ -148,7 +150,7 @@ function RefList({
   }
 
   return (
-    <section className="card">
+    <section className="card" id={anchor}>
       <h2>{title}</h2>
       {hint && <p className="hint">{hint}</p>}
       {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
@@ -257,6 +259,7 @@ export function InventoryManager() {
       <RefList
         title={t("cookwareOwned")}
         testId="owned"
+        anchor="cookware"
         load={api.listOwnedCookware}
         search={api.searchCookware}
         add={api.addOwnedCookware}

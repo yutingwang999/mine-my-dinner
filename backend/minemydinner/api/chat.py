@@ -34,6 +34,7 @@ SSE_HEADERS = {"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "
 NODE_STEPS = {
     "parse_request": "parse",
     "load_context": "context",
+    "check_feasibility": "context",
     "validate_plan": "check",
     "present_plan": "present",
 }

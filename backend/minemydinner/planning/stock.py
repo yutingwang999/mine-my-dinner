@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from minemydinner.models import Recipe, RecipeCookware, RecipeIngredient
 from minemydinner.planning.context import PlanningContext
@@ -88,6 +88,7 @@ def missing_cookware(
     rows = session.scalars(
         select(RecipeCookware)
         .where(RecipeCookware.recipe_id.in_(recipe_ids))
+        .options(selectinload(RecipeCookware.cookware))
         .order_by(RecipeCookware.recipe_id, RecipeCookware.cookware_id)
     )
     for row in rows:

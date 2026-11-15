@@ -199,3 +199,9 @@ class FakePlanningLLM:
         self.calls.append((task, list(messages)))
         intent = self.intents.pop(0) if len(self.intents) > 1 else self.intents[0]
         return StructuredResult(schema(intent=intent), "fake:planning", False)
+
+    def prepare_messages(self, messages):
+        return list(messages)
+
+    def prepare_text(self, text):
+        return text

@@ -87,6 +87,14 @@ def chat_env_first_use(client, tmp_path, session, recipe):
     return install(tmp_path, session, plan_model(recipe), None)
 
 
+@pytest.fixture
+def chat_env_empty_fridge(client, tmp_path, session, seeded):
+    # A recipe that needs a fridge item nobody has stocked: the request stops before the planner.
+    make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
+    model = ScriptedChatModel(structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]})
+    return install(tmp_path, session, model, "plan_then_adjust")
+
+
 def new_thread(client) -> str:
     r = client.post("/api/chat/threads")
     assert r.status_code == 200
@@ -129,6 +137,19 @@ def test_message_streams_progress_plan_and_done(client, chat_env):
     # Planner internals are never sent.
     assert "token" not in names(events)
     assert "PlanProposal" not in json.dumps(events)
+
+
+def test_plan_event_carries_reasons_and_new_actions(client, chat_env_empty_fridge):
+    events = sse(post_message(client, new_thread(client), locale="en"))
+    plan = of(events, "plan")[0]
+    assert plan["passed"] is False and plan["recipes"] == []
+    assert [r["reason"] for r in plan["reasons"]] == ["empty_inventory"]
+    assert plan["reasons"][0]["text"] == "There is nothing in the fridge to cook with"
+    assert plan["next_actions"] == ["switch_to_shopping", "update_inventory"]
+    steps = [e["step"] for e in of(events, "progress")]
+    assert steps == ["parse", "context", "context", "present"]
+    assert not any("PlanProposal" in sent[0].content for sent in chat_env_empty_fridge.model.sent)
+    assert names(events)[-1] == "done"
 
 
 def test_streaming_events_arrive_through_the_origin_middleware(client, chat_env):

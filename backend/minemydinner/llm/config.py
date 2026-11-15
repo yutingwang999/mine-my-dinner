@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "models.yaml"
 
@@ -23,10 +23,23 @@ class CatalogEntry(BaseModel):
     capabilities: list[Capability]
     input_usd_per_mtok: Decimal = Field(ge=0)
     output_usd_per_mtok: Decimal = Field(ge=0)
+    # Required for chat models (a model without prompt caching repeats its input price).
+    cached_input_usd_per_mtok: Decimal | None = Field(default=None, ge=0)
+    # None means no write charge: written tokens are priced at the input rate.
+    cache_write_usd_per_mtok: Decimal | None = Field(default=None, ge=0)
+    # Maximum input tokens; required for chat models.
+    context_window: int | None = Field(default=None, gt=0)
     # Extra keyword arguments for the provider's chat model class.
     options: dict[str, Any] = {}
     # Extra model settings used only when tools are bound.
     tool_call_options: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def _chat_models_need_cache_price_and_window(self) -> "CatalogEntry":
+        if {"tool_calling", "strict_json"} & set(self.capabilities):
+            if self.cached_input_usd_per_mtok is None or self.context_window is None:
+                raise ValueError("a chat model needs cached_input_usd_per_mtok and context_window")
+        return self
 
 
 class ModelConfig(CatalogEntry):

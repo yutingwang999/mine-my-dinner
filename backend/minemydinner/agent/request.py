@@ -9,19 +9,42 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from minemydinner.models import AppPreference
+from minemydinner.planning.composition import Bound, ranges_for
 from minemydinner.planning.context import MealConstraints
-from minemydinner.planning.validate import PlanSpec
+from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
-PROMPT_VERSION = "plan_v1"
-PROMPT_DIR = Path(__file__).resolve().parent / "prompts" / PROMPT_VERSION
+# One version per prompt, so route, parse, and planner change independently. A version any
+# record has used is never edited; a change makes the next version of that prompt.
+PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v3", "planner": "planner_v3"}
+PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
+PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
 REQUEST_STYLE_KEY = "request_style"
 REQUEST_STYLES = ("ask_first", "plan_then_adjust")
 
+# Every count the user can state. "dishes" is meat plus vegetable dishes (design 5.1).
+COUNT_FIELDS = (
+    "dishes",
+    "soups",
+    "meat_dishes",
+    "vegetable_dishes",
+    "staples",
+    "desserts",
+    "snacks",
+)
+CountField = Literal[
+    "dishes", "soups", "meat_dishes", "vegetable_dishes", "staples", "desserts", "snacks"
+]
 
-def load_prompt(name: str) -> str:
-    """A prompt file of the current planning prompt version, such as "parse.md"."""
-    return (PROMPT_DIR / name).read_text(encoding="utf-8")
+
+def prompt_files() -> list[Path]:
+    """The prompt files in use, in the order of PROMPT_VERSIONS."""
+    return [PROMPT_DIR / f"{version}.md" for version in PROMPT_VERSIONS.values()]
+
+
+def load_prompt(kind: Literal["route", "parse", "planner"]) -> str:
+    """The current version of one prompt."""
+    return (PROMPT_DIR / f"{PROMPT_VERSIONS[kind]}.md").read_text(encoding="utf-8")
 
 
 class ParsedRequest(BaseModel):
@@ -34,9 +57,49 @@ class ParsedRequest(BaseModel):
         default=None, ge=1, description="How many people eat, the user included, if stated."
     )
     dishes: int | None = Field(
-        default=None, ge=0, description="Number of meat or vegetable dishes, if stated."
+        default=None,
+        ge=0,
+        description=(
+            "Total number of meat plus vegetable dishes, if stated. Soups, staples, desserts "
+            "and snacks are not part of it. Leave null when the user gives only a meat or "
+            "vegetable count without a total."
+        ),
     )
     soups: int | None = Field(default=None, ge=0, description="Number of soups, if stated.")
+    meat_dishes: int | None = Field(
+        default=None, ge=0, description="Number of meat dishes, if the user names it."
+    )
+    vegetable_dishes: int | None = Field(
+        default=None, ge=0, description="Number of vegetable dishes, if the user names it."
+    )
+    meat_bound: Bound | None = Field(
+        default=None,
+        description=(
+            "How meat_dishes binds: exact for a plain number, at_least or at_most when the "
+            "user says so. Null when meat_dishes is null."
+        ),
+    )
+    vegetable_bound: Bound | None = Field(
+        default=None,
+        description=(
+            "How vegetable_dishes binds: exact for a plain number, at_least or at_most when "
+            "the user says so. Null when vegetable_dishes is null."
+        ),
+    )
+    staples: int | None = Field(
+        default=None,
+        ge=0,
+        description="Number of staple foods (rice, noodles, fried rice, buns), if stated.",
+    )
+    desserts: int | None = Field(default=None, ge=0, description="Number of desserts, if stated.")
+    snacks: int | None = Field(default=None, ge=0, description="Number of snacks, if stated.")
+    range_fields: list[CountField] = Field(
+        default_factory=list,
+        description=(
+            "Count fields filled from the lower end of a range the user gave "
+            "(\"two or three dishes\" gives dishes 2 and lists dishes here)."
+        ),
+    )
     mode: Literal["fridge_only", "shopping"] | None = Field(
         default=None,
         description="fridge_only to cook only from what is at home; shopping when buying is fine.",
@@ -48,7 +111,22 @@ class ParsedRequest(BaseModel):
         default=None, description="What the user feels like eating, in their own words."
     )
     must_use: list[str] = Field(
-        default_factory=list, description="Ingredients the user wants to use up."
+        default_factory=list,
+        max_length=10,
+        description=(
+            "Ingredients the user insists on using in the meal: at least one dish must use "
+            "each of them."
+        ),
+    )
+    prefer_use: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Ingredients the user would like to use up or prefers; only a preference.",
+    )
+    all_use: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Ingredients that every dish of the meal must use.",
     )
     exclude_recent_days: int | None = Field(
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
@@ -66,38 +144,149 @@ def default_composition(headcount: int) -> tuple[int, int]:
     return 3, 1
 
 
+def _bound(count: int | None, bound: Bound | None) -> Bound | None:
+    """A named side's bound: a count with no bound is exact; no count has no bound."""
+    if count is None:
+        return None
+    return bound or "exact"
+
+
+def _has_bound_side(parsed: ParsedRequest) -> bool:
+    return any(
+        _bound(count, bound) in ("at_least", "at_most")
+        for count, bound in (
+            (parsed.meat_dishes, parsed.meat_bound),
+            (parsed.vegetable_dishes, parsed.vegetable_bound),
+        )
+    )
+
+
+def dish_total(parsed: ParsedRequest, headcount: int) -> int:
+    """The dish total (design 5.11): the stated one; with no total and a side named "at
+    least" or "at most", the headcount default, raised to the sum of the lower bounds and,
+    when both sides have an upper bound (exact or at most), lowered to the sum of the upper
+    bounds; otherwise the sum of the named counts ("一荤一素" is 2).
+
+    The total is never lowered to 0: with both sides at most 0 it stays at the default, so
+    request_problem reports the empty ranges as a contradiction."""
+    if parsed.dishes is not None:
+        return parsed.dishes
+    if _has_bound_side(parsed):
+        sides = [
+            (count, _bound(count, bound))
+            for count, bound in (
+                (parsed.meat_dishes, parsed.meat_bound),
+                (parsed.vegetable_dishes, parsed.vegetable_bound),
+            )
+        ]
+        lower = sum(count for count, bound in sides if count is not None and bound != "at_most")
+        total = max(default_composition(headcount)[0], lower)
+        if all(count is not None and bound != "at_least" for count, bound in sides):
+            upper = sum(count for count, _ in sides)
+            if upper >= 1:
+                total = min(total, upper)
+        return total
+    return (parsed.meat_dishes or 0) + (parsed.vegetable_dishes or 0)
+
+
+def _parsed_ranges(parsed: ParsedRequest, total: int) -> dict[str, tuple[int, int]]:
+    return ranges_for(
+        total,
+        parsed.meat_dishes,
+        _bound(parsed.meat_dishes, parsed.meat_bound),
+        parsed.vegetable_dishes,
+        _bound(parsed.vegetable_dishes, parsed.vegetable_bound),
+    )
+
+
+def request_problem(
+    parsed: ParsedRequest,
+) -> Literal["split_conflicts_total", "too_many"] | None:
+    """A contradiction in the stated counts, which is always asked about (design 5.1, 5.11):
+    a meat or vegetable range that comes out empty against the dish total, or more than
+    MAX_TOTAL_COUNT items in total."""
+    total = dish_total(parsed, parsed.headcount or 1)
+    if any(low > high for low, high in _parsed_ranges(parsed, total).values()):
+        return "split_conflicts_total"
+    everything = (
+        total + (parsed.soups or 0) + (parsed.staples or 0)
+        + (parsed.desserts or 0) + (parsed.snacks or 0)
+    )
+    if everything > MAX_TOTAL_COUNT:
+        return "too_many"
+    return None
+
+
+def _stated_counts(parsed: ParsedRequest) -> bool:
+    return any(getattr(parsed, name) is not None for name in COUNT_FIELDS)
+
+
 def apply_defaults(
     parsed: ParsedRequest, self_diner_id: int | None = None
 ) -> tuple[PlanSpec, MealConstraints, list[str]]:
-    """Fill unstated details. Returns the spec, the meal constraints, and the defaulted
-    fields among "headcount", "dishes", "soups", and "mode", in that order.
+    """Fill unstated details (design 5.1). Returns the spec, the meal constraints, and the
+    assumed fields: "headcount", the count fields in COUNT_FIELDS order, and "mode".
+
+    Dishes and soups come from the headcount only when no count at all was stated; then an
+    unstated count is 0. A range taken at its lower end is reported as assumed too, and so
+    is a dish total taken from the headcount for a side named "at least" or "at most".
 
     Only the self diner's rules are known in this plan; everyone else counts as an
     unconfirmed diner until diner selection exists, so S8 warns about them.
     """
-    defaults_used: list[str] = []
+    assumed: set[str] = {
+        name for name in parsed.range_fields if getattr(parsed, name) is not None
+    }
     headcount = parsed.headcount
     if headcount is None:
         headcount = 1
-        defaults_used.append("headcount")
-    dishes, soups = parsed.dishes, parsed.soups
-    default_dishes, default_soups = default_composition(headcount)
-    dishes_defaulted, soups_defaulted = dishes is None, soups is None
-    dishes = default_dishes if dishes is None else dishes
-    soups = default_soups if soups is None else soups
-    if dishes + soups == 0:
-        # A meal needs at least one dish; a stated 0 + 0 falls back to the default composition.
-        dishes, soups = default_dishes, default_soups
-        dishes_defaulted = soups_defaulted = True
-    if dishes_defaulted:
-        defaults_used.append("dishes")
-    if soups_defaulted:
-        defaults_used.append("soups")
+        assumed.add("headcount")
+    dishes = dish_total(parsed, headcount)
+    if parsed.dishes is None and _has_bound_side(parsed):
+        # The total came from the headcount (design 5.11): it is assumed, soups are not added.
+        assumed.add("dishes")
+    soups = parsed.soups or 0
+    staples, desserts, snacks = parsed.staples or 0, parsed.desserts or 0, parsed.snacks or 0
+    meat_dishes, vegetable_dishes = parsed.meat_dishes, parsed.vegetable_dishes
+    meat_bound = _bound(meat_dishes, parsed.meat_bound)
+    vegetable_bound = _bound(vegetable_dishes, parsed.vegetable_bound)
+    if not _stated_counts(parsed) or dishes + soups + staples + desserts + snacks == 0:
+        # Nothing was stated, or the user stated only zeros: a meal needs at least one dish.
+        dishes, soups = default_composition(headcount)
+        staples = desserts = snacks = 0
+        # The stated zeros are dropped with the rest, so no split rides on the default total.
+        meat_dishes = vegetable_dishes = meat_bound = vegetable_bound = None
+        assumed.update(("dishes", "soups"))
+    if (
+        meat_dishes is not None
+        and vegetable_dishes is not None
+        and meat_bound == vegetable_bound == "exact"
+        and meat_dishes + vegetable_dishes < dishes
+    ):
+        # Both sides named exactly below the total: the total wins, the sides are minimums.
+        meat_bound = vegetable_bound = "at_least"
     mode = parsed.mode
     if mode is None:
         mode = "fridge_only"
-        defaults_used.append("mode")
-    spec = PlanSpec(mode=mode, dishes=dishes, soups=soups, time_limit_min=parsed.time_limit_min)
+        assumed.add("mode")
+    ordered = ["headcount", *COUNT_FIELDS, "mode"]
+    defaults_used = [name for name in ordered if name in assumed]
+    spec = PlanSpec(
+        mode=mode,
+        dishes=dishes,
+        soups=soups,
+        time_limit_min=parsed.time_limit_min,
+        meat_dishes=meat_dishes,
+        vegetable_dishes=vegetable_dishes,
+        meat_bound=meat_bound,
+        vegetable_bound=vegetable_bound,
+        staples=staples,
+        desserts=desserts,
+        snacks=snacks,
+        must_use=parsed.must_use,
+        all_use=parsed.all_use,
+        prefer_use=parsed.prefer_use,
+    )
     constraints = MealConstraints(
         diner_ids=(self_diner_id,) if self_diner_id is not None else (),
         unconfirmed_diners=headcount - 1,
@@ -106,13 +295,14 @@ def apply_defaults(
 
 
 def needs_question(parsed: ParsedRequest, style: str | None) -> list[str]:
-    """With "ask first", the unstated details to ask about: the mode and the dish count."""
+    """With "ask first", the unstated details to ask about: the mode, and the composition
+    when no count was stated."""
     if style != "ask_first":
         return []
     fields = []
     if parsed.mode is None:
         fields.append("mode")
-    if parsed.dishes is None:
+    if not _stated_counts(parsed):
         fields.append("composition")
     return fields
 

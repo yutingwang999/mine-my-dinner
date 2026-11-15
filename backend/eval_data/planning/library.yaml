@@ -1,0 +1,161 @@
+# Fictional evaluation library. Not real recipes.
+dishes:
+  - title: 番茄炒蛋
+    dish_type: vegetable dish
+    time_min: 10
+    time_source: stated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 番茄, role: main}
+      - {name: 鸡蛋, role: main}
+      - {name: 盐, role: seasoning}
+      - {name: 食用油, role: seasoning}
+  - title: 青椒肉丝
+    dish_type: meat dish
+    time_min: 20
+    time_source: estimated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 猪肉, role: main}
+      - {name: 青椒, role: main}
+      - {name: 酱油, role: seasoning}
+      - {name: 食用油, role: seasoning}
+  - title: 宫保鸡丁
+    dish_type: meat dish
+    time_min: 25
+    time_source: stated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 鸡胸肉, role: main}
+      - {name: 花生, role: secondary}
+      - {name: 酱油, role: seasoning}
+      - {name: 醋, role: seasoning}
+  - title: 红烧排骨
+    dish_type: meat dish
+    time_min: 60
+    time_source: stated
+    servings: 3
+    cookware: [砂锅]
+    lines:
+      - {name: 排骨, role: main}
+      - {name: 姜, role: secondary}
+      - {name: 酱油, role: seasoning}
+      - {name: 糖, role: seasoning}
+  - title: 土豆炖牛腩
+    dish_type: meat dish
+    time_min: 50
+    time_source: estimated
+    servings: 3
+    cookware: [高压锅]
+    lines:
+      - {name: 牛腩, role: main}
+      - {name: 土豆, role: main}
+      - {name: 胡萝卜, role: secondary}
+      - {name: 酱油, role: seasoning}
+  - title: 蒜蓉西兰花
+    dish_type: vegetable dish
+    time_min: 10
+    time_source: estimated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 西兰花, role: main}
+      - {name: 蒜, role: secondary}
+      - {name: 盐, role: seasoning}
+  - title: 清炒小白菜
+    dish_type: vegetable dish
+    time_min: 8
+    time_source: stated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 小白菜, role: main}
+      - {name: 蒜, role: secondary}
+      - {name: 盐, role: seasoning}
+  - title: 麻婆豆腐
+    dish_type: vegetable dish
+    time_min: 20
+    time_source: stated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 豆腐, role: main}
+      - {name: 猪肉末, role: secondary}
+      - {name: 酱油, role: seasoning}
+  - title: 红烧茄子
+    dish_type: vegetable dish
+    time_min: 20
+    time_source: estimated
+    servings: 2
+    cookware: [炒锅]
+    lines:
+      - {name: 茄子, role: main}
+      - {name: 蒜, role: secondary}
+      - {name: 酱油, role: seasoning}
+  - title: 清蒸鲈鱼
+    dish_type: meat dish
+    time_min: 20
+    time_source: stated
+    servings: 2
+    cookware: [蒸锅]
+    lines:
+      - {name: 鲈鱼, role: main}
+      - {name: 姜, role: secondary}
+      - {name: 葱, role: secondary}
+      - {name: 酱油, role: seasoning}
+  - title: 番茄蛋花汤
+    dish_type: soup
+    time_min: 15
+    time_source: stated
+    servings: 2
+    cookware: [汤锅]
+    lines:
+      - {name: 番茄, role: main}
+      - {name: 鸡蛋, role: main}
+      - {name: 盐, role: seasoning}
+  - title: 冬瓜排骨汤
+    dish_type: soup
+    time_min: 60
+    time_source: stated
+    servings: 3
+    cookware: [汤锅]
+    lines:
+      - {name: 冬瓜, role: main}
+      - {name: 排骨, role: main}
+      - {name: 姜, role: secondary}
+      - {name: 盐, role: seasoning}
+  - title: 紫菜豆腐汤
+    dish_type: soup
+    time_min: 10
+    time_source: estimated
+    servings: 2
+    cookware: [汤锅]
+    lines:
+      - {name: 紫菜, role: main}
+      - {name: 嫩豆腐, role: main}
+      - {name: 盐, role: seasoning}
+  - title: 蛋炒饭
+    dish_type: staple food
+    time_min: 15
+    time_source: stated
+    servings: 1
+    cookware: [炒锅]
+    lines:
+      - {name: 大米, role: main}
+      - {name: 鸡蛋, role: main}
+      - {name: 葱, role: secondary}
+      - {name: 盐, role: seasoning}
+  # One line has no dictionary entry on purpose: it is an unknown allergen source.
+  - title: 香煎鸡腿
+    dish_type: meat dish
+    time_min: 30
+    time_source: stated
+    servings: 2
+    cookware: [平底锅]
+    lines:
+      - {name: 鸡腿, role: main}
+      - {name: 秘制腌料, role: secondary, linked: false}
+      - {name: 盐, role: seasoning}

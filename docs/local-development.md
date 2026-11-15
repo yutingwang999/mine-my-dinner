@@ -106,4 +106,44 @@ cd backend
 
 `export` writes every log that holds a user correction to a JSONL file. `run` reports ingredient F1, amount accuracy, amount type accuracy, fabrication rate, and valid JSON rate, plus each model's call count, success rate, cost per item, and latency from `llm_calls`.
 
-`data/` is listed in `.gitignore`. Keep exported files there, because evaluation data must never enter the repository.
+`data/` is listed in `.gitignore`. Keep exported files there, because evaluation data from real recipes must never enter the repository.
+
+### Planning evaluation
+
+The planning evaluation runs fictional scenarios against the test database with real models, so each run costs money; run it only on purpose. Its scenarios and fictional recipe libraries are hand-written and committed in `backend/eval_data/planning/`:
+
+- `scenarios_baseline.yaml` with `library.yaml`: the fixed baseline set, kept unchanged so results compare across plans.
+- `scenarios_plan2a.yaml` with `library_extended.yaml`: scenarios for the planner-efficiency features.
+- `scenarios_counts.yaml` with `library_extended.yaml`: meat and vegetable bounds ("至少" / "最多"), the implied side, and the next-action buttons' messages (added in plan 2a Task 11; these scenarios took no part in earlier tuning). A scenario with `follow_up` sends a second user message on the same thread; the second turn is the one scored, and `expect_first_reasons` checks why the first turn stopped.
+
+Run from `backend/`, with `DATABASE_URL` pointing at the test database (the script refuses the main database and a non-empty test database):
+
+```powershell
+cd backend
+$env:DATABASE_URL = (& $py -c "from minemydinner.settings import Settings; print(Settings().test_database_url)")
+& $py -m minemydinner.evaluation.planning --scenarios eval_data/planning/scenarios_baseline.yaml --library eval_data/planning/library.yaml
+Remove-Item Env:DATABASE_URL
+```
+
+Options:
+
+- `--no-shortlist` runs the planner without the code-built shortlist, for comparison.
+- `--with-embeddings` computes embeddings for the fictional recipes after loading them, so meaning-based search is tested too (a few cheap embedding calls, counted separately).
+
+The script refuses to start when the working tree has uncommitted changes (run folders excepted), so every run belongs to one commit.
+
+Each run writes a folder `backend/eval_data/planning/runs/<run id>/`, where the run id is `<UTC time>-<scenario set>-<shortlist|no-shortlist>-<vectors|no-vectors>`:
+
+- `summary.json` (committed): conditions (commit, data file hashes, the prompt version label, the version of each prompt and the SHA-256 of each prompt file in use, the tool version, models and prices, settings; see `docs/prompt-versions.md`), metrics by area, and each scenario's metrics. It holds no model text.
+- `prompts/` and `tools.json` (committed): only the prompt files in use, under their versioned names, and the model-facing tool definitions the run used.
+- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. The record's events include the route and parse model calls (`step` is `route`, `parse` or `planner`) as well as the planner's; the metrics in `summary.json` count `llm_calls` rows and are not affected by these events. `planning_runs` lists every planning run on the scenario's thread in order (two for a `follow_up` scenario); `planning_run` is the last one. Keep a private copy outside Git if the run matters.
+
+How to read the metrics in `summary.json`:
+
+- `model_time_ms` is the sum of one scenario's model-call latencies. `wall_ms` is the scenario from start to finish, with database and tool time included. `per_call_ms` covers the individual model calls (`planning_eval` task), not scenarios.
+- Latency is reported as avg, p50, and p95 (nearest rank); wall time also has the max. Cost and tokens have totals and per-scenario averages.
+- Metrics come in three groups: `all`, `expect_plan` (scenarios that should end with a plan), and `expect_stop` (scenarios that should stop early with a reason). Check-only scenarios are in no group; their pass count is `metrics.checks`.
+- Compare aggregates only between runs of the same scenario set. When the sets differ, compare same-named scenarios.
+
+After every evaluation, add a round to `docs/planning-evaluation-history.md`: what changed since the previous round, the runs made, and a row per run in its comparison tables.
+

@@ -12,6 +12,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
+from minemydinner.agent.budget import TokenBudgetMiddleware
 from minemydinner.agent.middleware import CallLayerMiddleware
 from minemydinner.agent.request import load_prompt
 from minemydinner.llm.registry import build_chat_model
@@ -20,8 +21,12 @@ from minemydinner.planning.tools import PLANNER_TOOLS, PlannerDeps, tools_versio
 if TYPE_CHECKING:
     from minemydinner.agent.graph import GraphDeps
 
-MODEL_CALL_LIMIT = 12
-TOOL_CALL_LIMIT = 20
+# The most input tokens one planner model call may carry; a call that reaches it ends the
+# attempt before the next call (TokenBudgetMiddleware).
+PLANNER_INPUT_TOKEN_BUDGET = 32000
+# Per attempt. With the shortlist in the opening a typical plan takes one model call.
+MODEL_CALL_LIMIT = 6
+TOOL_CALL_LIMIT = 10
 
 
 class PlanProposal(BaseModel):
@@ -48,9 +53,10 @@ def build_planner(deps: "GraphDeps") -> CompiledStateGraph:
     return create_agent(
         model=placeholder,
         tools=PLANNER_TOOLS,
-        system_prompt=load_prompt("planner.md"),
+        system_prompt=load_prompt("planner"),
         middleware=[
             CallLayerMiddleware(deps.client, deps.task, deps.recorder),
+            TokenBudgetMiddleware(PLANNER_INPUT_TOKEN_BUDGET, deps.recorder),
             ModelCallLimitMiddleware(run_limit=MODEL_CALL_LIMIT),
             ToolCallLimitMiddleware(run_limit=TOOL_CALL_LIMIT),
         ],
