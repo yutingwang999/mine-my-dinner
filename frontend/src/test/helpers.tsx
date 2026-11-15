@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { vi } from "vitest";
 
 import en from "../../messages/en.json";
-import type { RecipeDraft } from "@/lib/api";
+import type { IngredientLine, RecipeDraft, SavedRecipe } from "@/lib/api";
 import { DraftsProvider, useDrafts } from "@/lib/drafts";
 
 type Handler = (body: unknown, init: RequestInit, url: string) => unknown;
@@ -112,6 +112,46 @@ export function draft(fields: Partial<RecipeDraft> = {}): RecipeDraft {
       model_name: "gemini",
       prompt_version: "extract_v1",
     },
+    ...fields,
+  };
+}
+
+function line(fields: Partial<IngredientLine>): IngredientLine {
+  return {
+    raw: "",
+    name: "x",
+    amount: null,
+    unit: null,
+    amount_type: "missing",
+    role: "main",
+    optional: false,
+    choice_group: null,
+    ingredient_id: null,
+    ...fields,
+  };
+}
+
+export function savedRecipe(fields: Partial<SavedRecipe> = {}): SavedRecipe {
+  return {
+    ...draft(),
+    id: 1,
+    title: "番茄炒蛋",
+    source_url: "https://recipes.example/1",
+    cookware: [{ name: "炒锅", cookware_id: 3 }],
+    cookware_ids: [3],
+    source_text: "原文：番茄两个",
+    images: [],
+    embedded: true,
+    created_at: "2026-11-01T00:00:00Z",
+    ingredients: [
+      line({ name: "番茄", amount: 300, unit: "g", amount_type: "exact" }),
+      line({ name: "盐", amount_type: "vague" }),
+      line({ name: "秘制酱", amount_type: "missing" }),
+      line({ name: "碗", amount: 1, unit: null, amount_type: "spoon" }),
+      line({ name: "葱", amount_type: "vague", optional: true }),
+      line({ name: "白糖", amount: 5, unit: "g", amount_type: "exact", choice_group: 1 }),
+      line({ name: "蜂蜜", amount: 5, unit: "g", amount_type: "exact", choice_group: 1 }),
+    ],
     ...fields,
   };
 }

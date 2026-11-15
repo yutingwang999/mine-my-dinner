@@ -1,13 +1,13 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import zh from "../../messages/zh.json";
 
 import { PlanCard } from "@/components/PlanCard";
 import { plan, spec } from "@/test/chatFixtures";
-import { renderWithProviders } from "@/test/helpers";
+import { mockFetch, renderWithProviders, reply, savedRecipe } from "@/test/helpers";
 
 describe("PlanCard", () => {
   it("always shows the allergen notice with no way to close it", () => {
@@ -91,7 +91,7 @@ describe("PlanCard", () => {
       />,
     );
     expect(screen.getByText("葱花蛋: 1 ingredient missing (葱)")).toBeInTheDocument();
-    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+    expect(within(screen.getByRole("group")).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Allow shopping",
       "Fewer dishes",
       "No time limit",
@@ -389,7 +389,7 @@ describe("PlanCard unknown actions", () => {
     renderWithProviders(
       <PlanCard plan={plan({ next_actions: ["fewer_dishes", "brand_new" as never] })} />,
     );
-    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Fewer dishes"]);
+    expect(within(screen.getByRole("group")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Fewer dishes"]);
   });
 
   it("disables every action when it is not actionable", () => {
@@ -402,5 +402,66 @@ describe("PlanCard unknown actions", () => {
     );
     expect(screen.getByRole("button", { name: "Fewer dishes" })).toBeDisabled();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+});
+
+describe("PlanCard recipe detail", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("opens each panel from its own toggle, switches, closes, and fetches once", async () => {
+    const calls = mockFetch({ "GET /api/recipes/1": () => savedRecipe() });
+    renderWithProviders(<PlanCard plan={plan()} actionable={false} />);
+    const cook = screen.getByRole("button", { name: "How to cook" });
+    const original = screen.getByRole("button", { name: "Original text" });
+    expect(cook).toHaveAttribute("aria-expanded", "false");
+    expect(original).toHaveAttribute("aria-expanded", "false");
+    expect(cook).toHaveTextContent("How to cook ▾");
+    expect(original).toHaveTextContent("Original text ▾");
+
+    await userEvent.click(cook);
+    expect(await screen.findByText("鸡蛋炒熟后撒葱花。")).toBeInTheDocument();
+    expect(cook).toHaveAttribute("aria-expanded", "true");
+    expect(cook).toHaveTextContent("How to cook ▴");
+    expect(original).toHaveTextContent("Original text ▾");
+    expect(screen.queryByText(/Servings/)).toBeNull();
+    expect(screen.queryByText("原文：番茄两个")).toBeNull();
+
+    await userEvent.click(original);
+    expect(screen.getByText("原文：番茄两个")).toBeInTheDocument();
+    expect(screen.queryByText("鸡蛋炒熟后撒葱花。")).toBeNull();
+    expect(cook).toHaveAttribute("aria-expanded", "false");
+    expect(original).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(original);
+    expect(screen.queryByText("原文：番茄两个")).toBeNull();
+    expect(original).toHaveAttribute("aria-expanded", "false");
+    expect(calls.filter((call) => call.path === "/api/recipes/1")).toHaveLength(1);
+  });
+
+  it("opens the original text first and says when none was saved", async () => {
+    mockFetch({ "GET /api/recipes/1": () => savedRecipe({ source_text: null, source_url: null }) });
+    renderWithProviders(<PlanCard plan={plan()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Original text" }));
+    expect(await screen.findByText("No original text was saved.")).toBeInTheDocument();
+  });
+
+  it("marks the dish's missing ingredients in the detail", async () => {
+    mockFetch({ "GET /api/recipes/1": () => savedRecipe() });
+    renderWithProviders(<PlanCard plan={plan({ missing: { "1": ["番茄"] } })} />);
+    await userEvent.click(screen.getByRole("button", { name: "How to cook" }));
+    expect(await screen.findByText(/番茄.*300 g.*\(missing\)/)).toBeInTheDocument();
+  });
+
+  it("shows a notice when the fetch fails and retries", async () => {
+    let fail = true;
+    mockFetch({
+      "GET /api/recipes/1": () => (fail ? reply(500, { code: "unknown" }) : savedRecipe()),
+    });
+    renderWithProviders(<PlanCard plan={plan()} />);
+    await userEvent.click(screen.getByRole("button", { name: "How to cook" }));
+    expect(await screen.findByText(/The recipe could not be loaded/)).toBeInTheDocument();
+    fail = false;
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("鸡蛋炒熟后撒葱花。")).toBeInTheDocument();
   });
 });

@@ -96,6 +96,15 @@ The reply shown with a plan is the planner model's `note`, unchecked; in the pla
 - **Model comparison.** The evaluation gains `--planning-model <catalog name>`, which runs the whole `planning_eval` task (route, parse, planner) on that model and records it in `summary.json`. All five tool-calling catalog models are compared — deepseek-flash (current), deepseek-v4-pro, gpt-6-luna, gemini-3.5-flash-lite, gemini-3.8-flash — on the plan 2a and counts scenario sets, three runs each, so stability shows. Because the whole chain changes, the comparison reports planning results (as expected, first pass, calls, cost, time) next to the note checks. Paid runs need the user's approval with the expected cost.
 - **The user rates the notes.** After the automatic checks, the notes of every run are exported for review: model, run, scenario, the plan's dishes, the note, and the automatic flags, with empty columns for the user's judgement (quality, and whether anything appears that should not). Model text stays out of Git. The user decides which model plans from the combined result; switching the default planning model is a separate, approved change.
 
+### 5.6 Read-only recipe detail (brought forward from T1.9, decided by the user)
+
+While trying the redesigned page the user wanted to see how to cook a dish from the plan card. The Phase 1 design planned a read-only recipe detail view in T1.9, shared with the plan card's "view dish"; it is built now, in both places, with one component.
+
+- **One `RecipeDetail` component** shows a recipe read-only: ingredients with amounts as entered (amount and unit; "适量" for a vague amount; nothing for a missing one; choice groups shown as "任选其一"; optional lines marked), cookware, time and its source, servings, the steps summary, the source link, and the source text kept at import (collapsed by default).
+- **Plan card:** each dish gets a "查看做法" / "How to cook" toggle that expands the detail inline under the dish (compact) and collapses it again; the recipe is fetched on first open, with loading and error states. The dish's missing ingredients are marked in the ingredient list, matching the card's missing list. Viewing is not an action: it works on every card, including older, non-actionable ones.
+- **Recipe library:** each recipe gets a "查看" / "View" link to a new read-only page `/[locale]/library/[id]` with the full detail and a link back to the library and to edit.
+- The backend already serves a recipe (`GET /api/recipes/{id}`); no backend change.
+
 ## 6. Left to the builder
 
 - Exact colours, spacing, and the switch's look, within the site's existing style.

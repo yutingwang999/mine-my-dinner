@@ -1,53 +1,57 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
-import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { Pager } from "@/components/Pager";
-import { ReviewForm } from "@/components/ReviewForm";
-import { api, DISH_TYPES, imageUrl, type SavedRecipe } from "@/lib/api";
+import { RecipeToggles } from "@/components/RecipeToggles";
+import { Link, useRouter } from "@/i18n/navigation";
+import { api, DISH_TYPES } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 import { useLoad } from "@/lib/useLoad";
 
 const PAGE_SIZE = 20;
+
+/** The library's search state as a query string: q, type, and page (omitted when default). */
+function searchString(q: string, dishType: string, page: number): string {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (dishType) params.set("type", dishType);
+  if (page > 1) params.set("page", String(page));
+  return params.toString();
+}
 
 export function RecipeLibrary() {
   const t = useTranslations("library");
   const tCommon = useTranslations("common");
   const tDish = useTranslations("dishType");
   const errorText = useErrorText();
-  const [q, setQ] = useState("");
-  const [dishType, setDishType] = useState("");
-  const [page, setPage] = useState(1);
-  const [editing, setEditing] = useState<SavedRecipe | null>(null);
-  const [openSource, setOpenSource] = useState<number | null>(null);
-  const { data, error, reload } = useLoad(
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [q, setQ] = useState(() => searchParams.get("q") ?? "");
+  const [dishType, setDishType] = useState(() => searchParams.get("type") ?? "");
+  const [page, setPage] = useState(() => {
+    const value = Number(searchParams.get("page"));
+    return Number.isInteger(value) && value >= 1 ? value : 1;
+  });
+  const { data, error } = useLoad(
     () => api.listRecipes({ q, dish_type: dishType, page }),
     [q, dishType, page],
   );
 
-  if (editing !== null) {
-    return (
-      <section>
-        <h2>{t("editTitle", { title: editing.title })}</h2>
-        <ReviewForm
-          // Saved screenshots stay on the server; an edit uploads nothing new.
-          draft={{ ...editing, provenance: null, images: undefined }}
-          save={(write) => api.updateRecipe(editing.id, { ...write, provenance: null })}
-          onSaved={() => {
-            setEditing(null);
-            reload();
-          }}
-          actions={
-            <button type="button" onClick={() => setEditing(null)}>
-              {tCommon("cancel")}
-            </button>
-          }
-        />
-      </section>
+  const qs = searchString(q, dishType, page);
+  // Keep the address in step with the filters, replacing the entry so typing leaves no history.
+  useEffect(() => {
+    const current = searchString(
+      searchParams.get("q") ?? "",
+      searchParams.get("type") ?? "",
+      Number(searchParams.get("page")) || 1,
     );
-  }
+    if (current !== qs) router.replace(qs ? `/library?${qs}` : "/library");
+    // Only the filters drive the address; the router and params objects change every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qs]);
 
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
@@ -91,69 +95,29 @@ export function RecipeLibrary() {
       {data?.items.length === 0 && <p className="hint">{t("empty")}</p>}
       <ul className="row-list">
         {data?.items.map((recipe) => (
-          <li key={recipe.id} data-testid={`recipe-${recipe.id}`}>
-            <span className="row-main">
-              <strong>{recipe.title}</strong>
+          <li key={recipe.id} className="recipe-row" data-testid={`recipe-${recipe.id}`}>
+            <RecipeToggles
+              recipeId={recipe.id}
+              recipe={recipe}
+              title={
+                <Link
+                  className="recipe-title"
+                  href={`/library/${recipe.id}${qs ? `?from=${encodeURIComponent(qs)}` : ""}`}
+                >
+                  {recipe.title}
+                  <span aria-hidden="true"> ›</span>
+                </Link>
+              }
+            >
               <span className="hint">
                 {tDish(recipe.dish_type)}
                 {recipe.tags.length > 0 && ` · ${recipe.tags.join(", ")}`}
               </span>
-              {recipe.source_url && (
-                <a
-                  className="external-link"
-                  href={recipe.source_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {t("source")}
-                  <span aria-hidden="true"> ↗</span>
-                </a>
-              )}
               {recipe.supplies.length > 0 && (
                 <small className="hint">{t("supplies", { names: recipe.supplies.join(", ") })}</small>
               )}
-              {!recipe.embedded &&<small className="hint">{t("noEmbedding")}</small>}
-            </span>
-            <span className="actions">
-              {(recipe.source_text || recipe.images.length > 0) && (
-                <button
-                  type="button"
-                  aria-expanded={openSource === recipe.id}
-                  onClick={() => setOpenSource(openSource === recipe.id ? null : recipe.id)}
-                >
-                  {openSource === recipe.id ? t("hideSource") : t("showSource")}
-                </button>
-              )}
-              <button type="button" onClick={() => setEditing(recipe)}>
-                {tCommon("edit")}
-              </button>
-              <ConfirmDelete
-                name={recipe.title}
-                notice={t("deleteNotice")}
-                onDelete={async () => {
-                  await api.deleteRecipe(recipe.id);
-                  reload();
-                }}
-              />
-            </span>
-            {openSource === recipe.id && (
-              <div className="line-panel">
-                {recipe.source_text && <pre className="source-text">{recipe.source_text}</pre>}
-                {recipe.images.length > 0 && (
-                  <div className="screenshots">
-                    {recipe.images.map((image, index) => (
-                      <a key={image.file_name} href={imageUrl(image.file_name)} target="_blank" rel="noreferrer">
-                        {/* eslint-disable-next-line @next/next/no-img-element -- local files */}
-                        <img
-                          src={imageUrl(image.file_name)}
-                          alt={t("screenshotAlt", { number: index + 1 })}
-                        />
-                      </a>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+              {!recipe.embedded && <small className="hint">{t("noEmbedding")}</small>}
+            </RecipeToggles>
           </li>
         ))}
       </ul>

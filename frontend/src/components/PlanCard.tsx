@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { AllergenNotice } from "@/components/AllergenNotice";
+import { RecipeToggles } from "@/components/RecipeToggles";
 import { type ChatPlan, KNOWN_ACTIONS, type NextAction, type PlanFinding } from "@/lib/chat";
 
 type Props = {
@@ -185,18 +186,23 @@ export function PlanCard({ plan, onAction, busy = false, actionable = true }: Pr
             const cookware = plan.missing_cookware[String(recipe.id)] ?? [];
             return (
               <li key={recipe.id} className="plan-dish">
-                <strong>{recipe.title}</strong>
-                <p className="hint">
-                  {tDish(recipe.dish_type)} ·{" "}
-                  {recipe.time_min === null
-                    ? t("timeUnknown")
-                    : t("timeKnown", {
-                        minutes: recipe.time_min,
-                        source: recipe.time_source ? tSource(recipe.time_source) : "",
-                      })}
-                </p>
-                {missing.length > 0 && <p>{t("missingIngredients", { list: missing.join(", ") })}</p>}
-                {cookware.length > 0 && <p>{t("missingCookware", { list: cookware.join(", ") })}</p>}
+                <RecipeToggles
+                  recipeId={recipe.id}
+                  title={<strong>{recipe.title}</strong>}
+                  missing={missing}
+                >
+                  <p className="hint">
+                    {tDish(recipe.dish_type)} ·{" "}
+                    {recipe.time_min === null
+                      ? t("timeUnknown")
+                      : t("timeKnown", {
+                          minutes: recipe.time_min,
+                          source: recipe.time_source ? tSource(recipe.time_source) : "",
+                        })}
+                  </p>
+                  {missing.length > 0 && <p>{t("missingIngredients", { list: missing.join(", ") })}</p>}
+                  {cookware.length > 0 && <p>{t("missingCookware", { list: cookware.join(", ") })}</p>}
+                </RecipeToggles>
               </li>
             );
           })}

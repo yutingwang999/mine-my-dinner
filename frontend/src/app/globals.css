@@ -673,9 +673,19 @@ fieldset.supplies {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
+  clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: nowrap;
+  border: 0;
+}
+
+/* The chat page never scrolls the document; .chat-scroll is its only scroller. */
+html:has(.chat),
+body:has(.chat) {
+  overflow: hidden;
 }
 
 body:has(.chat) {
@@ -705,6 +715,7 @@ body:has(.chat) {
 /* Full-width scroll container; the conversation is centred inside its usable width.
    The scrollbar gutter is reserved on both edges so the column stays centred. */
 .chat-scroll {
+  position: relative;
   scrollbar-gutter: stable both-edges;
   flex: 1;
   min-height: 0;
@@ -929,4 +940,227 @@ body:has(.chat) {
   background: none;
   font-size: 0.875rem;
   color: var(--muted);
+}
+
+/* Read-only recipe detail: inside a plan card it takes the card's width, no more. */
+.recipe-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  overflow-wrap: anywhere;
+}
+
+.recipe-detail h3 {
+  margin: 0.25rem 0 0;
+  font-size: 0.95rem;
+}
+
+.recipe-detail p {
+  margin: 0;
+}
+
+.recipe-ingredients {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.recipe-ingredients .is-missing {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.recipe-detail .source-text {
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+}
+
+.dish-recipe {
+  margin-top: 0.3rem;
+}
+
+.dish-recipe > button {
+  margin-bottom: 0.2rem;
+}
+
+.recipe-page-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.recipe-page .recipe-detail {
+  background: var(--card);
+}
+
+/* Plan card dish: the title with its two toggles on the right. */
+.dish-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.dish-toggles {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.dish-source {
+  margin: 0.4rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  overflow-wrap: anywhere;
+}
+
+/* An open dish toggle looks pressed. */
+.dish-toggles button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, var(--control));
+  border-color: var(--accent);
+}
+
+/* Library rows: the dish title is the link to the detail page. */
+.row-list > li.recipe-row {
+  display: block;
+  padding-inline: 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.row-list > li.recipe-row:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, var(--card));
+}
+
+.recipe-row .dish-head > a.recipe-title {
+  color: var(--accent);
+  font-weight: 700;
+  border-radius: 4px;
+}
+
+.recipe-row .dish-head > a.recipe-title:hover,
+.recipe-row .dish-head > a.recipe-title:focus-visible {
+  text-decoration: underline;
+}
+
+.recipe-row .dish-head > a.recipe-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.recipe-row > .hint,
+.recipe-row > small {
+  display: block;
+}
+
+/* Dish toggles read as buttons on a white card: a faint neutral fill and a subtle border. */
+.dish-toggles button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--card));
+  border-color: color-mix(in srgb, var(--foreground) 22%, var(--card));
+}
+
+.dish-toggles button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, var(--card));
+  border-color: var(--accent);
+}
+
+.recipe-page-actions {
+  margin-left: auto;
+}
+
+.source-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.source-panel p {
+  margin: 0;
+}
+
+/* One frame for both dish panels, so switching only changes the content inside. */
+.dish-panel {
+  min-width: 0;
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  overflow-wrap: anywhere;
+}
+
+.dish-panel .recipe-detail.compact {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.dish-panel .source-text {
+  margin: 0;
+}
+
+/* Detail page: the recipe and the original text are two sections with the same frame and gap. */
+.recipe-page .recipe-detail {
+  margin-top: 0.75rem;
+}
+
+/* Compact secondary toggles, centred on the title line with clear space below. */
+.dish-head {
+  min-height: 1.75rem;
+  margin-bottom: 0.3rem;
+}
+
+.dish-toggles button {
+  height: 1.75rem;
+  padding: 0 0.6rem;
+  font-size: 0.875rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Detail header: the title and the edit and delete buttons share a row, centred on the title. */
+.recipe-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.recipe-page-header {
+  margin-bottom: 1rem;
+}
+
+.recipe-page-header h1 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.recipe-page-actions {
+  margin-left: auto;
+  align-items: center;
+}
+
+.recipe-page-actions button {
+  height: 1.75rem;
+  padding: 0 0.6rem;
+  font-size: 0.875rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.recipe-page-actions > button:not(:first-child) {
+  color: color-mix(in srgb, #d64545 75%, var(--foreground));
 }

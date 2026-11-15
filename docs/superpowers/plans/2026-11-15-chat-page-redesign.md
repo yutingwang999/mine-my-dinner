@@ -111,6 +111,31 @@ git add frontend
 git commit -m "feat: chat page layout with bottom composer, request-style switch, welcome state, and the chat as home page"
 ```
 
+### Task 3b: Read-only recipe detail in the plan card and the library (design 5.6)
+
+**Files:**
+- Create: `frontend/src/components/RecipeDetail.tsx`, `frontend/src/app/[locale]/library/[id]/page.tsx`
+- Modify: `frontend/src/lib/api.ts` (`getRecipe`), `frontend/src/components/PlanCard.tsx`, `frontend/src/components/RecipeLibrary.tsx`, `frontend/src/app/globals.css`, `frontend/messages/en.json`, `frontend/messages/zh.json`
+- Test: new `RecipeDetail.test.tsx`, `PlanCard.test.tsx`, the library tests, a test for the detail route
+
+**Interfaces:**
+- `api.getRecipe(id: number): Promise<SavedRecipe>` calling `GET /api/recipes/{id}`.
+- `RecipeDetail({ recipe, compact, missing }: { recipe: SavedRecipe; compact?: boolean; missing?: string[] })`: ingredients (amount and unit label as in the review form's labels; vague → "适量"/"to taste"; missing → no amount; household measure → the number and "家用量具"; choice groups as one "任选其一" line; optional lines marked), cookware, time with its source, servings, steps summary, source link (`source_url`, opens in a new tab), and the stored source text behind a collapsed toggle; names in `missing` are marked. `compact` hides servings and shows the source text toggle only.
+- `PlanCard`: each dish has a toggle button "查看做法" / "How to cook" with `aria-expanded`; first open calls `getRecipe` and shows a loading line, then `RecipeDetail compact` with the dish's names from `plan.missing[id]`; an error shows a short notice with retry. It works whatever `actionable` is.
+- Library: each recipe row gets a "查看" / "View" link to `/[locale]/library/[id]`; that page loads the recipe, shows `RecipeDetail` (not compact), a back link to the library, and an edit link (to the library with that recipe in the edit form, or the existing edit flow).
+
+- [ ] **Step 1: Write the failing tests** — `RecipeDetail` renders amounts ("300 克", "适量", household "1 家用量具"), a choice group as one "任选其一" line, marks a missing ingredient, shows the steps summary and a source link, and keeps the source text collapsed until toggled; the plan card toggle fetches once, shows the detail, collapses, and works on a non-actionable card; a failed fetch shows the notice and retries; the library row links to the detail route; the detail route renders the recipe and a 404 shows a not-found message.
+- [ ] **Step 2: Run them to see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run frontend tests, lint, and build** (build only when port 3000 is free).
+- [ ] **Step 5: User check** in the browser (plan card toggle on a few dishes; library view page).
+- [ ] **Step 6: User commit**
+
+```powershell
+git add frontend
+git commit -m "feat: read-only recipe detail in the plan card and the recipe library"
+```
+
 ### Task 4: `planner_v4` note rules, note checks, model override, and notes review export
 
 **Files:**
