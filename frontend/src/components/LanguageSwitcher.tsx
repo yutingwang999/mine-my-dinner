@@ -1,7 +1,8 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 import { Link, usePathname, useRouter } from "@/i18n/navigation";
 import { routing } from "@/i18n/routing";
@@ -15,11 +16,27 @@ type Target = (typeof routing.locales)[number];
  * are queued, the switch asks inline first.
  */
 export function LanguageSwitcher() {
+  // useSearchParams needs a Suspense boundary on prerendered pages; until it resolves,
+  // the same links show without the query, so the switcher is never blank.
+  return (
+    <Suspense fallback={<Switcher search="" />}>
+      <SwitcherWithQuery />
+    </Suspense>
+  );
+}
+
+function SwitcherWithQuery() {
+  return <Switcher search={useSearchParams().toString()} />;
+}
+
+function Switcher({ search }: { search: string }) {
   const t = useTranslations("language");
   const common = useTranslations("common");
   const locale = useLocale();
   const pathname = usePathname();
   const router = useRouter();
+  // Keep the query (tab, search, page) across the switch.
+  const hrefWithQuery = search ? `${pathname}?${search}` : pathname;
   const { drafts } = useDrafts();
   const [confirming, setConfirming] = useState<Target | null>(null);
 
@@ -28,7 +45,7 @@ export function LanguageSwitcher() {
       {routing.locales.map((target) => (
         <Link
           key={target}
-          href={pathname}
+          href={hrefWithQuery}
           locale={target}
           aria-current={target === locale ? "true" : undefined}
           onClick={(event) => {
@@ -47,7 +64,7 @@ export function LanguageSwitcher() {
           <button
             type="button"
             className="btn-danger-solid"
-            onClick={() => router.push(pathname, { locale: confirming })}
+            onClick={() => router.push(hrefWithQuery, { locale: confirming })}
           >
             {t("switchAnyway")}
           </button>

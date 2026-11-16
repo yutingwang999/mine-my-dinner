@@ -182,7 +182,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The per-run query-embedding cache drops other runs' entries when a run starts, so two conversations planning at the same moment may each embed a query once more than needed (final 2a fix wave; correctness unaffected).
 - The package-data test (`test_package_data_glob_matches_every_prompt_file`) uses `fnmatch`, whose `*` also crosses `/`, so a too-broad glob would still pass; it does not build a wheel.
 
-## Deferred from the import and dictionary plan (in progress; updated after each task)
+## Deferred from the import and dictionary plan
 
 - `create_recipe(...)` call in `backend/minemydinner/api/recipes.py` is a little over 100 characters (Task 1 review).
 - The built-in `Ingredient(...)` test setup is repeated in `test_recipe_save.py`, `test_recipes_manage.py`, and `test_personal_aliases.py`; a shared helper in `tests/recipefakes.py` would remove it (Task 1 review).
@@ -195,7 +195,14 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - UI consistency (Task 5c review): the chip-layout test checks class names only (jsdom cannot test wrapping); a field whose value happens to equal the suggestion shows the "suggested" badge; the people add-rule row relies on `display: contents` for the search bar, so check it with a screen reader.
 - Amount controls (Task 6 review): an extracted line can disagree with itself (marked vague but carrying a number, or exact without one); the row shows it as extracted and saving normalises it (number kept with the derived type, or saved as not stated). `AmountProblem` is now a single-case object that could be a boolean.
 
-- Task 5c (buttons and alignment): not verified in a browser, so every visual item awaits the user check (control height 2.25rem, chips, native file button, import card actions, diner card). Library pager already sat inside the card, so it is unchanged. Secondary buttons rely on the plain `button` default; only primary, danger, and compact toggles carry a class.
+- Task 5c (buttons and alignment): every page was measured in a browser and checked by the user. Secondary buttons rely on the plain `button` default; only primary, danger, and compact toggles carry a class.
+- Page state (Task 5b): after deleting the last row on a page the page state stays and the display clamps, so adding a row later jumps back to the stored page.
+- Tab counts show (0) while their lists load.
+- Switching tabs closes open forms and panels and clears unsaved input.
+- An old `#cookware` link briefly shows the stock tab before switching.
+- Reopening the unknown-list confirm panel calls the suggestion model again.
+- The narrow-width layout of the new panels was checked by reading the CSS, not on a phone.
+- `RecipeOut.alias_conflicts` appears as `[]` in every GET and list response though it only means something in the PUT reply; a separate `UpdatedRecipe` model would keep GET clean (final review).
 
 ## Minor findings from the final Phase 0 review, deferred
 

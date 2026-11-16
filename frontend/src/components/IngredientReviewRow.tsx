@@ -65,11 +65,15 @@ function CreateIngredient({
   line,
   lang,
   onCreated,
+  onLinkExisting,
   onCancel,
 }: {
   line: ReviewLine;
   lang: Lang;
+  /** Links the line to the entry this form just created. */
   onCreated: (id: number, name: string) => void;
+  /** Links the line to an entry that already exists, which counts as a link by hand. */
+  onLinkExisting: (id: number, name: string) => void;
   onCancel: () => void;
 }) {
   const t = useTranslations("entry");
@@ -141,7 +145,7 @@ function CreateIngredient({
       {owner && (
         <div className="notice notice-warning actions">
           <span>{t("ownedName", { term: owner.term, entry: owner.entry })}</span>
-          <button type="button" onClick={() => onCreated(owner.id, owner.entry)}>
+          <button type="button" onClick={() => onLinkExisting(owner.id, owner.entry)}>
             {t("linkToEntry", { entry: owner.entry })}
           </button>
           <Link href="/dictionary" target="_blank">
@@ -167,7 +171,7 @@ function CreateIngredient({
       </button>
       {error && <p role="alert">{errorText(error)}</p>}
       {ownerId !== null && (
-        <button type="button" onClick={() => onCreated(ownerId, String(error?.body.term ?? ""))}>
+        <button type="button" onClick={() => onLinkExisting(ownerId, String(error?.body.term ?? ""))}>
           {t("linkToOwner")}
         </button>
       )}
@@ -196,7 +200,7 @@ export function IngredientReviewRow({
   const locale = useLocale();
   const [mode, setMode] = useState<Mode>("idle");
   // The link before "Change link", so the change can be undone.
-  const [previous, setPrevious] = useState<{ id: number; name: string } | null>(null);
+  const [previous, setPrevious] = useState<{ id: number; name: string; linkedByHand: boolean; rememberLink: boolean } | null>(null);
   // After the user renames a linked line, the dictionary entry that new name is, if any.
   const [nameEdited, setNameEdited] = useState(false);
   const [named, setNamed] = useState<{ name: string; id: number; entry: string } | null>(null);
@@ -245,7 +249,7 @@ export function IngredientReviewRow({
     setMode("idle");
   }
 
-  // 适量 and 没写 are two ways to say there is no number; each one clears the number and unit.
+  // The Unspecified and Not-stated toggles are two ways to say there is no number; each one clears the number and unit.
   function toggleNoNumber(type: "vague" | "missing") {
     if (line.amount_type === type) {
       // Released: the amount stays empty and neither toggle is pressed.
@@ -277,24 +281,24 @@ export function IngredientReviewRow({
     >
       <div className="line-raw">
         <span>
-        <span
-          className="drag-handle"
-          aria-label={dragLabel}
-          title={dragLabel}
-          draggable
-          onDragStart={(event) => {
-            // Firefox starts an HTML5 drag only when the event carries data; the custom
-            // type also marks this drag as ours.
-            event.dataTransfer.setData("application/x-mmd-line", String(line.key));
-            event.dataTransfer.effectAllowed = "move";
-            onDragStart();
-          }}
-          onDragEnd={onDragEnd}
-        >
-          ⠿ {t("drag")}
-        </span>{" "}
-        {t("raw")}: {line.added ? t("addedByYou") : line.raw}
-      </span>
+          <span
+            className="drag-handle"
+            aria-label={dragLabel}
+            title={dragLabel}
+            draggable
+            onDragStart={(event) => {
+              // Firefox starts an HTML5 drag only when the event carries data; the custom
+              // type also marks this drag as ours.
+              event.dataTransfer.setData("application/x-mmd-line", String(line.key));
+              event.dataTransfer.effectAllowed = "move";
+              onDragStart();
+            }}
+            onDragEnd={onDragEnd}
+          >
+            ⠿ {t("drag")}
+          </span>{" "}
+          {t("raw")}: {line.added ? t("addedByYou") : line.raw}
+        </span>
         <span className="line-actions">
           {onUngroup && (
             <button type="button" className="compact" onClick={onUngroup}>
@@ -334,52 +338,52 @@ export function IngredientReviewRow({
           />
         </label>
         <span className="unit-wrap" data-slot="unit">
-        <label className="mini-field">
-          {t("unit")}
-          <select
-            // A unit means nothing without a number, and the save drops it.
-            disabled={line.amount === null}
-            value={line.unit ?? ""}
-            onChange={(event) => {
-              const unit = (event.target.value || null) as Unit | null;
-              update({ unit, amount_type: typeForUnit(unit) });
-            }}
-          >
-            <option
-              value=""
-              title={line.amount === null ? undefined : tReview("unitHouseholdTitle")}
+          <label className="mini-field">
+            {t("unit")}
+            <select
+              // A unit means nothing without a number, and the save drops it.
+              disabled={line.amount === null}
+              value={line.unit ?? ""}
+              onChange={(event) => {
+                const unit = (event.target.value || null) as Unit | null;
+                update({ unit, amount_type: typeForUnit(unit) });
+              }}
             >
-              {line.amount === null ? tUnit("none") : tReview("unitHousehold")}
-            </option>
-            {UNITS.map((value) => (
-              <option key={value} value={value}>
-                {tUnit(value)}
+              <option
+                value=""
+                title={line.amount === null ? undefined : tReview("unitHouseholdTitle")}
+              >
+                {line.amount === null ? tUnit("none") : tReview("unitHousehold")}
               </option>
-            ))}
-          </select>
-        </label>
-        {line.amount !== null && line.unit === null && (
-          <small className="unit-hint">{tReview("unitHouseholdHint")}</small>
-        )}
+              {UNITS.map((value) => (
+                <option key={value} value={value}>
+                  {tUnit(value)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {line.amount !== null && line.unit === null && (
+            <small className="unit-hint">{tReview("unitHouseholdHint")}</small>
+          )}
         </span>
         <div className="mini-field" data-slot="toggles">
           {t("amountMode")}
-        <div className="segmented" role="group" aria-label={t("amountMode")}>
-          <button
-            type="button"
-            aria-pressed={line.amount_type === "vague"}
-            onClick={() => toggleNoNumber("vague")}
-          >
-            {tReview("amountVague")}
-          </button>
-          <button
-            type="button"
-            aria-pressed={line.amount_type === "missing"}
-            onClick={() => toggleNoNumber("missing")}
-          >
-            {tReview("amountMissing")}
-          </button>
-        </div>
+          <div className="segmented" role="group" aria-label={t("amountMode")}>
+            <button
+              type="button"
+              aria-pressed={line.amount_type === "vague"}
+              onClick={() => toggleNoNumber("vague")}
+            >
+              {tReview("amountVague")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={line.amount_type === "missing"}
+              onClick={() => toggleNoNumber("missing")}
+            >
+              {tReview("amountMissing")}
+            </button>
+          </div>
         </div>
         {/* Always rendered, so the columns after it keep their place when there is no number. */}
         <span className="mini-field amount-kind" data-slot="type">
@@ -424,7 +428,12 @@ export function IngredientReviewRow({
                 type="button"
                 onClick={() => {
                   const name = line.linkedName ?? line.name;
-                  setPrevious({ id: line.ingredient_id as number, name });
+                  setPrevious({
+                    id: line.ingredient_id as number,
+                    name,
+                    linkedByHand: line.linkedByHand,
+                    rememberLink: line.rememberLink,
+                  });
                   update({ ingredient_id: null, linkedName: null, touched: true, linkedByHand: false });
                 }}
               >
@@ -456,7 +465,18 @@ export function IngredientReviewRow({
             <strong>{t("unmatched")}</strong>
             <span className="dish-toggles">
               {previous && (
-                <button type="button" onClick={() => link(previous.id, previous.name)}>
+                <button type="button" onClick={() => {
+                    update({
+                      ingredient_id: previous.id,
+                      linkedName: previous.name,
+                      skipped: false,
+                      touched: true,
+                      linkedByHand: previous.linkedByHand,
+                      rememberLink: previous.rememberLink,
+                    });
+                    setPrevious(null);
+                    setMode("idle");
+                  }}>
                   {t("undoUnlink")}
                 </button>
               )}
@@ -519,6 +539,7 @@ export function IngredientReviewRow({
             line={line}
             lang={lang}
             onCreated={link}
+            onLinkExisting={(id, name) => link(id, name, true)}
             onCancel={() => setMode("idle")}
           />
         </div>

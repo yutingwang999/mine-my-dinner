@@ -1118,14 +1118,14 @@ describe("review: remembering links", () => {
     );
     await save();
     expect(await screen.findByDisplayValue("下一道")).toBeInTheDocument();
-    expect(screen.getByText("Not remembered, already an alias of another entry: 西蓝花")).toBeInTheDocument();
+    expect(screen.getByText("Not remembered, already a name or alias of another entry: 西蓝花")).toBeInTheDocument();
   });
 
   it("shows the alias conflict notice on the empty-queue page", async () => {
     setup({ "POST /api/recipes": () => reply(201, { id: 1, alias_conflicts: ["西蓝花"] }) });
     await save();
     await screen.findByText("There are no drafts to review.");
-    expect(screen.getByText("Not remembered, already an alias of another entry: 西蓝花")).toBeInTheDocument();
+    expect(screen.getByText("Not remembered, already a name or alias of another entry: 西蓝花")).toBeInTheDocument();
   });
 
   it("warns before unload only while drafts are queued", async () => {
@@ -1139,6 +1139,20 @@ describe("review: remembering links", () => {
     const after = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(after);
     expect(after.defaultPrevented).toBe(false);
+  });
+});
+
+describe("review: undoing a link change", () => {
+  it("restores a hand link with its remember choice", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    await linkBroccoli();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Remember this link" }));
+    const target = within(screen.getByTestId("row-西蓝花"));
+    await userEvent.click(target.getByRole("button", { name: "Change link" }));
+    expect(target.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await userEvent.click(target.getByRole("button", { name: "Undo change" }));
+    expect(target.getByText("Linked to broccoli")).toBeInTheDocument();
+    expect(target.getByRole("checkbox", { name: "Remember this link" })).not.toBeChecked();
   });
 });
 
@@ -1171,9 +1185,10 @@ describe("review: owned names in the create form", () => {
     await openCreate();
     await userEvent.click(await screen.findByRole("button", { name: "Link to \"broccoli\"" }));
     expect(within(row("秘制酱")).getByText("Linked to broccoli")).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    // A link to an existing entry is a link by hand, so the user may remember it.
+    expect(within(row("秘制酱")).getByRole("checkbox", { name: "Remember this link" })).toBeChecked();
     await save();
-    expect(ingredientsSent()[1]).toMatchObject({ ingredient_id: 9, remember_link: false });
+    expect(ingredientsSent()[1]).toMatchObject({ ingredient_id: 9, remember_link: true });
   });
 
   it("shows no notice for an unowned name", async () => {

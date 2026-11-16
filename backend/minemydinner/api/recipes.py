@@ -49,7 +49,6 @@ from minemydinner.settings import Settings, get_settings
 router = APIRouter(prefix="/api/recipes")
 images_router = APIRouter(prefix="/api/images")
 
-# Query values arrive as text, so the Literal needs them as numbers first.
 PAGE_SIZE = 20  # the default; a request may choose 10, 20, 50, or 100
 
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -179,6 +178,7 @@ def list_recipes(
     q: str | None = None,
     dish_type: Literal[*DISH_TYPES] | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
+    # Query values arrive as text, so the Literal needs them as numbers first.
     page_size: Annotated[Literal[10, 20, 50, 100], BeforeValidator(int)] = PAGE_SIZE,
 ) -> RecipePage:
     """Text search on title, tags, and ingredient names, with no model call."""

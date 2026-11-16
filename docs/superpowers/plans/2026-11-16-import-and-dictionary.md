@@ -107,6 +107,7 @@ git commit -m "feat: match a draft's names again and link an unknown name to an 
 - Produces: `Suggestion(allergens: list[str], category: str | None, stock_mode: str | None)` and `suggest_entry(client: LLMClient, name: str) -> Suggestion | None` (None when no model is available). Invalid category or stock mode values become None; unlisted allergens are dropped (as today). `suggest_allergens` is removed; its callers use `suggest_entry`.
 - Produces: `SuggestionOut` gains `category: str | None` and `stock_mode: str | None` (null when the suggestion is null). `ResolveIn` gains `category: Literal[*CATEGORIES] | None = None` and `stock_mode: Literal[*STOCK_MODES] | None = None`; `resolve_allergens(session, name, ingredient_id, allergens, category=None, stock_mode=None)` uses them for a new entry, else today's "other" / "level".
 - Produces: the check script `python -m minemydinner.evaluation.allergen_suggest --names eval_data/allergen_suggest/names.yaml` (Task 7 runs it): per name, calls `suggest_entry` once and prints per-field matches (allergens as a set, category, stock mode), the mismatches, and the total cost from the `llm_calls` rows it wrote. It refuses the main database like the planning evaluation.
+- *As built:* the stock-mode lines of the v2 prompt follow the seed convention (seasonings by availability including salt and oil, bulk goods by level, pieces by count), as design 5.3 and the v2 file say; the wording below was the first draft.
 - v2 prompt content (design 5.3): the allergen instruction of v1; one category from the `CATEGORIES` list; one stock mode with one line each — `count` for things counted in pieces (eggs, potatoes), `level` for things used up gradually (oil, salt, rice), `availability` for things one either has or not (for example a dried spice kept for long). No examples beyond these.
 
 - [ ] **Step 1: Write the failing tests**
@@ -241,7 +242,7 @@ Added by the user's decisions on 2026-11-16.
 
 **Interfaces:**
 - Consumes: `typeForUnit(unit)` in `amounts.ts` (existing).
-- Produces: the type select is removed; with a number the type shows as a read-only label from `typeForUnit`; toggle buttons `review.amountVague` "适量" / "Unspecified amount" and `review.amountMissing` "没写" / "Not stated" with `aria-pressed`; the no-unit option label `review.unitHousehold` "家用量具（碗、杯、把、撮）" / "Household measure (bowl, cup, handful, pinch)". "无" stays only where no number is entered.
+- Produces: the type select is removed; with a number the type shows as a read-only label from `typeForUnit`; toggle buttons `review.amountVague` "适量" / "Unspecified amount" and `review.amountMissing` "没写" / "Not stated" with `aria-pressed`; the no-unit option label `review.unitHousehold` "家用量具（碗、杯、把、撮）" / "Household measure (bowl, cup, handful, pinch)" (*as built, user decision:* the short "家用量具" / "Household measure", with the examples in the option title and a hint under the select). "无" stays only where no number is entered.
 
 - [ ] **Step 1: Write the failing tests**
   - `typing a number derives the type from the unit`: unit 克 → label 精确; switch to 个 → 计数; household option → 家用量具; the number stays.

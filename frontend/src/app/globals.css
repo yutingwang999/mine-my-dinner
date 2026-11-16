@@ -11,6 +11,8 @@
   --control: #ffffff;
   /* One height for inputs, selects, and buttons; compact toggles are 1.75rem. */
   --control-height: 2.25rem;
+  /* Text for an unmatched or cautionary state. */
+  --warning-text: #b45309;
   --danger: color-mix(in srgb, #d64545 75%, var(--foreground));
   /* Chat bubbles: soft green for the user; assistant text has no bubble. */
   --bubble-user: color-mix(in srgb, var(--accent) 15%, var(--background));
@@ -27,6 +29,7 @@
     --accent: #5fae86;
     --accent-text: #0f1a14;
     --control: #242424;
+    --warning-text: #f59e0b;
     --bubble-user: color-mix(in srgb, var(--accent) 25%, var(--background));
     }
 }
@@ -462,7 +465,7 @@ button.btn-danger:hover:not(:disabled) {
 }
 
 .line.unmatched .line-status strong {
-  color: #b45309;
+  color: var(--warning-text);
 }
 
 .line-panel {
@@ -1567,9 +1570,5 @@ button.compact {
   /* Compact toggles set their own border; in dark mode they use the stronger control border. */
   .dish-toggles button:not([aria-expanded="true"]) {
     border-color: var(--control-border);
-  }
-
-  .line.unmatched .line-status strong {
-    color: #f59e0b;
   }
 }

@@ -114,7 +114,7 @@
     "saving": "Saving…",
     "severalRecipes": "This text seems to hold {count} recipes; only the first was read. Split them with a line of --- and import again.",
     "rememberLink": "Remember this link",
-    "aliasConflict": "Not remembered, already an alias of another entry: {names}",
+    "aliasConflict": "Not remembered, already a name or alias of another entry: {names}",
     "saveFailed": "Saving failed: {error} Your edits are kept.",
     "discard": "Discard this draft",
     "allergyWarning": "Allergy warning. The recipe can still be saved.",

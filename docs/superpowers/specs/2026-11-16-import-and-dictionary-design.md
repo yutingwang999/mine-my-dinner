@@ -105,6 +105,7 @@ Today each line has a number, a unit (none, 克, 毫升, 个, 根, 大勺, 小�
 - **The type is derived, not chosen.** With a number it shows as a read-only label from the unit (精确 / 计数 / 家用量具). Typing a number or choosing a unit never clears anything.
 - **Two always-visible toggle buttons, "适量" / "没写"** (English: "Unspecified amount" / "Not stated"), with a pressed state (`aria-pressed`). One click clears the number and unit and sets `vague` or `missing`; typing a number releases the pressed button. Clicking the pressed button again releases it and leaves the amount empty for the user to fill in.
 - **The unit option for "a number with no unit" is renamed** from "无" to "家用量具（碗、杯、把、撮）" / "Household measure (bowl, cup, handful, pinch)". The type label stays "家用量具" / "Household measure". "无" no longer appears as a unit choice next to a number.
+- *As built (user decision):* the option is the short "家用量具" / "Household measure"; the examples (碗、杯、把、撮) sit in the option's title and a hint appears under the select.
 - **Internal naming note.** The stored amount type for household measures is `spoon` and the stored unit is null; the unit `spoon` separately means a spoon of unstated size. Comments next to `UNIT_AMOUNT_TYPES` and in `amounts.ts` say so, so the name is not read as "spoons only".
 - Saving still validates on the backend as today; the derived type always agrees with the unit, so the mismatch error no longer appears in normal use.
 

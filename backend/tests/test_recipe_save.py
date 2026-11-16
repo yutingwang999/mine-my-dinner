@@ -241,3 +241,23 @@ def test_save_remembers_the_name_as_saved(client, session, seeded, fake_llm, rec
     assert client.post("/api/recipes", json=recipe_write).status_code == 201
     session.expire_all()
     assert entry.user_aliases_zh == ["西蓝花碎"]
+
+
+def test_removing_a_remembered_alias_keeps_the_lines_it_linked(
+    client, session, seeded, fake_llm, recipe_write
+):
+    from minemydinner.dictionary.service import set_personal_aliases
+
+    entry = remember_setup(session, recipe_write)
+    response = client.post("/api/recipes", json=recipe_write)
+    assert response.status_code == 201
+    session.expire_all()
+    assert entry.user_aliases_zh == ["西蓝花"]
+
+    set_personal_aliases(session, entry.id, [], [])
+    session.flush()
+    session.expire_all()
+
+    assert entry.user_aliases_zh == []
+    recipe = session.get(Recipe, response.json()["id"])
+    assert recipe.ingredients[-1].ingredient_id == entry.id

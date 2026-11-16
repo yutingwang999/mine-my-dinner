@@ -114,7 +114,7 @@
     "saving": "正在保存…",
     "severalRecipes": "这段文字里好像有 {count} 道菜，只读取了第一道。请用单独一行 --- 分开后重新导入。",
     "rememberLink": "记住这个关联",
-    "aliasConflict": "这些名字已是其他条目的别名，没有记住：{names}",
+    "aliasConflict": "这些名字已是其他条目的名称或别名，没有记住：{names}",
     "saveFailed": "保存失败：{error}你的修改已保留。",
     "discard": "放弃这份草稿",
     "allergyWarning": "过敏提醒。菜谱仍然可以保存。",
