@@ -238,3 +238,80 @@ def test_user_cookware_can_be_renamed(client, seeded):
     assert body["name_en"] == "bread maker"
     listed = client.get("/api/cookware?source=user").json()
     assert [item["name_zh"] for item in listed] == ["面包机"]
+
+
+def test_match_returns_entries_for_known_names(client, session, seeded):
+    entry = user_entry(session, "测试西兰花", user_aliases_zh=["测试西蓝花"])
+    body = client.post(
+        "/api/ingredients/match", json={"names": ["测试西兰花", "测试西蓝花", "火龙果皮"]}
+    ).json()
+    assert [match["name"] for match in body["matches"]] == ["测试西兰花", "测试西蓝花"]
+    assert {match["entry"]["id"] for match in body["matches"]} == {entry.id}
+
+
+def test_match_ignores_case_and_spaces(client, session, seeded):
+    entry = user_entry(session, "测试西兰花", name_en="test broccoli")
+    body = client.post("/api/ingredients/match", json={"names": [" Test Broccoli "]}).json()
+    assert body["matches"][0]["entry"]["id"] == entry.id
+
+
+def test_match_rejects_too_many_names(client, seeded):
+    response = client.post("/api/ingredients/match", json={"names": ["a"] * 201})
+    assert response.status_code == 422
+
+
+def link_fixture(session):
+    target = user_entry(session, "测试牛肉末")
+    dish(session, "甲", [("测试牛肉馅", None)])
+    dish(session, "乙", [("测试牛肉馅", None)])
+    return target
+
+
+def test_link_name_links_lines_without_remembering(client, session, seeded):
+    target = link_fixture(session)
+    response = client.post(
+        "/api/allergens/link",
+        json={"name": " 测试牛肉馅 ", "ingredient_id": target.id, "remember": False},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["linked_lines"] == 2 and body["remembered"] is False
+    assert body["aliases_zh"] == [] and body["user_aliases_zh"] == []
+    session.expire_all()
+    assert all(line.ingredient_id == target.id for line in lines_named(session, "测试牛肉馅"))
+    names = [item["name"] for item in client.get("/api/allergens/unresolved").json()["unmatched"]]
+    assert "测试牛肉馅" not in names
+
+
+def test_link_name_remembers(client, session, seeded):
+    target = link_fixture(session)
+    body = client.post(
+        "/api/allergens/link",
+        json={"name": "测试牛肉馅", "ingredient_id": target.id, "remember": True},
+    ).json()
+    assert body["remembered"] is True and body["linked_lines"] == 2
+    assert body["aliases_zh"] == ["测试牛肉馅"]
+
+
+def test_link_name_conflict(client, session, seeded):
+    target = link_fixture(session)
+    user_entry(session, "测试肉糜", aliases_zh=["测试牛肉馅"])
+    body = client.post(
+        "/api/allergens/link",
+        json={"name": "测试牛肉馅", "ingredient_id": target.id, "remember": True},
+    ).json()
+    assert body["remembered"] is False and body["linked_lines"] == 2
+    session.expire_all()
+    assert all(line.ingredient_id == target.id for line in lines_named(session, "测试牛肉馅"))
+
+
+def test_link_name_rejects_unknown_entry_and_blank_name(client, session, seeded):
+    target = link_fixture(session)
+    missing = client.post(
+        "/api/allergens/link", json={"name": "甲", "ingredient_id": 10**9, "remember": False}
+    )
+    assert missing.status_code == 404
+    blank = client.post(
+        "/api/allergens/link", json={"name": "  ", "ingredient_id": target.id, "remember": False}
+    )
+    assert blank.status_code == 422

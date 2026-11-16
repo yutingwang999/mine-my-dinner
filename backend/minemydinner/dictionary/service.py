@@ -278,6 +278,31 @@ def remember_alias(
     return "added"
 
 
+def link_name(
+    session: Session, name: str, ingredient_id: int, remember: bool
+) -> tuple[Ingredient, int, bool]:
+    """Link every unmatched recipe line with this name to an existing entry.
+
+    With `remember`, the name also becomes an alias of the entry, unless another entry
+    owns it. Returns the entry, how many lines were linked, and whether the name is now
+    one of the entry's own terms.
+    """
+    entry = session.get(Ingredient, ingredient_id)
+    if entry is None:
+        raise EntryNotFound()
+    result = session.execute(
+        update(RecipeIngredient)
+        .where(
+            RecipeIngredient.ingredient_id.is_(None),
+            func.lower(func.trim(RecipeIngredient.name)) == name.strip().lower(),
+        )
+        .values(ingredient_id=entry.id)
+        .execution_options(synchronize_session=False)
+    )
+    remembered = remember and remember_alias(session, entry, name) != "conflict"
+    return entry, result.rowcount, remembered
+
+
 @dataclass(frozen=True)
 class UnresolvedEntry:
     id: int

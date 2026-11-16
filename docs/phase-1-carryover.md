@@ -187,6 +187,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - `create_recipe(...)` call in `backend/minemydinner/api/recipes.py` is a little over 100 characters (Task 1 review).
 - The built-in `Ingredient(...)` test setup is repeated in `test_recipe_save.py`, `test_recipes_manage.py`, and `test_personal_aliases.py`; a shared helper in `tests/recipefakes.py` would remove it (Task 1 review).
 - Two lines of one save that link the same unknown name to different entries with "remember" checked: the first wins and the second is reported as a conflict; untested (Task 1 review).
+- `link_name` has no test that already-linked lines with the same name are left alone; `POST /api/ingredients/match` queries each duplicate name in a request separately (harmless at 200 names or fewer) (Task 2 review).
 
 ## Minor findings from the final Phase 0 review, deferred
 
