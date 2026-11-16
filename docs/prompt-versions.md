@@ -10,7 +10,7 @@ Only while no record has used a version may it be edited in place.
 
 ## The composite label
 
-`PROMPT_VERSIONS` maps each planning prompt to its current version, in the order route, parse, planner. `PROMPT_VERSION` joins them with `+`; today it is `route_v2+parse_v3+planner_v3`.
+`PROMPT_VERSIONS` maps each planning prompt to its current version, in the order route, parse, planner. `PROMPT_VERSION` joins them with `+`; today it is `route_v2+parse_v3+planner_v4`.
 
 - `planning_runs.prompt_version` records the composite label (the column is plain text, so no migration was needed).
 - Each evaluation run's `summary.json` records, under `conditions`, `prompt_version` (the label), `prompt_versions` (the mapping), and `prompt_files` (file name to SHA-256). The run folder's `prompts/` copy holds only the files in use.
@@ -31,7 +31,8 @@ Records that say `plan_v1` or `plan_v2` keep that label.
 | Label | Change |
 | --- | --- |
 | `route_v2+parse_v2+planner_v3` | `planner_v3` adds the complete marker to the planner's shortlist rules. |
-| `route_v2+parse_v3+planner_v3` (current) | `parse_v3` adds `meat_bound` and `vegetable_bound` ("至少" / "最多" on a meat or vegetable count), reads "at least" or "at most" on other categories as that number in `range_fields`, and gives examples for the messages the next-action buttons send ("荤素都行", "不一定要用指定的食材") after a plan (design 5.11). The planner prompt is unchanged: the request summary states the ranges in words. |
+| `route_v2+parse_v3+planner_v3` | `parse_v3` adds `meat_bound` and `vegetable_bound` ("至少" / "最多" on a meat or vegetable count), reads "at least" or "at most" on other categories as that number in `range_fields`, and gives examples for the messages the next-action buttons send ("荤素都行", "不一定要用指定的食材") after a plan (design 5.11). The planner prompt is unchanged: the request summary states the ranges in words. |
+| `route_v2+parse_v3+planner_v4` (current) | `planner_v4` replaces the note paragraph (chat page redesign, design 5.5): the note is one sentence with one practical tip (which dish to start first, which takes longest, how the dishes go together); it does not count or list the plan's dishes, names no dish outside the plan, suggests no swaps, and makes no allergy safety claims. Only the note rule changed; `PlanProposal` and the tool version are unchanged. The planning evaluation checks the notes automatically (`note_flags`). Used from evaluation round 7 (2026-11-16, `d4b2e30`), so it must not be edited in place. |
 
 ## Recipe extraction
 

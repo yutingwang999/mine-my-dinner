@@ -54,7 +54,6 @@ Today the conversation state keeps one `current_plan`, overwritten by each new p
 
 - Each plan is stored with the assistant reply it belongs to, in graph state **outside the message content** (for example a mapping from the reply's message id to its plan), so nothing about plans is added to the messages sent to the models. `current_plan` stays for code that uses it.
 - `GET /api/chat/threads/{id}` returns, for each visible assistant message, its plan when it has one. The streamed `plan` event is unchanged; the frontend attaches it to the reply being streamed.
-- Threads saved before this change have no per-reply plans: their `current_plan` is shown on the last assistant reply.
 - **Which card is actionable (decided by the user, option A):** the newest plan in the conversation stays actionable until a newer plan replaces it, even when later turns produced no plan (a chat reply, an "unclear" reply, a failed run). Its buttons are disabled only while a run is working or a question is waiting for an answer. Older cards render the same content with their buttons disabled.
 - **A plan with an empty note** (Claude's call): it still gets its own assistant item, showing only the card, so no plan is dropped. The streamed `plan` event attaches to the reply being streamed, or starts a card-only item when no text came first.
 - **Old threads** (Claude's call): a thread saved before this change keeps only `current_plan`, and which reply it belonged to cannot be known. It is shown as a card-only assistant item at the end of the conversation, not under a reply it may not match. Earlier plans of old threads are not shown.
@@ -62,7 +61,10 @@ Today the conversation state keeps one `current_plan`, overwritten by each new p
 ### 5.2 Layout (Claude's calls, confirmed by the user)
 
 - The site navigation at the top stays. The request-style dropdown and the top "new conversation" button are removed from the top.
-- Messages: user on the right in a bubble; assistant on the left with a light background or none; maximum bubble width about 80% on narrow screens.
+- Messages (settled during the user's browser checks): the user's message is a filled soft-green bubble on the right; the assistant's reply has no box and sits on the page background on the left; both are at most about 80% of the conversation column wide, so replies never run under the user's bubbles. The gap is about 1.5rem when the speaker changes and about 0.5rem between consecutive items from one side. The plan card keeps its own card frame inside the reply.
+- The conversation column and the composer are 48rem wide and centred, with matching edges (the user's bubble ends where the send button ends). The scrolling area spans the whole window, so its scrollbar sits at the window edge, with a symmetric scrollbar gutter; the page itself never scrolls on the chat page, only the conversation does.
+- The send and new-conversation buttons have the same width and line up; the send button matches the input box's height and bottom edge.
+- On the plan card, the "按你的要求" / "我假设了" lines sit in their own block after the dish list, and the allergen notice is a quiet grey line with ⚠ at the bottom of the card (same text, still on every card).
 - The input area is fixed at the bottom of the viewport: a multi-line text box that grows to a few lines, Enter sends, Shift+Enter inserts a line break (IME composition must not send), a send button. Under it: the request-style switch, the "new conversation" button, and the provider notice in small text.
 - The view scrolls to the newest message when a message is sent or a reply streams, unless the user has scrolled up to read.
 - Progress shows as one line in the assistant position while a run is working.
@@ -87,9 +89,24 @@ Today the home page shows only the app name and tagline, and the chat lives at `
 - **Opening the site continues the last conversation** (Claude's call, open to change by the user): with no list of past conversations, starting a new one on every visit would hide the previous conversation for good. "New conversation" starts a fresh one. When a history list is added later, opening on a new conversation (as ChatGPT does) can be reconsidered.
 - The welcome texts and example requests are in `messages/en.json` and `messages/zh.json`.
 
-### 5.5 Open: the reply text that comes with a plan
+### 5.5 The reply text that comes with a plan (decided by the user)
 
-The reply shown with a plan is the planner model's own note, unchecked; in the plan 2a checkpoint it miscounted the dishes and suggested a dish outside the plan. How the reply should be written (code, a stricter prompt, a check, or a mix) is still open and is decided while planning this redesign; see `docs/phase-1-carryover.md` ("The assistant's reply text after a plan…"). The user found a fully code-written reply too rigid.
+The reply shown with a plan is the planner model's `note`, unchecked; in the plan 2a checkpoint it miscounted the dishes ("3 道荤菜……实际为荤 4 道") and suggested a dish outside the plan. The user found a fully code-written reply too rigid and chose to **change only the prompt**, then measure which model writes the note most reliably.
+
+- **`planner_v4`** (a new planner prompt version; only the note rules change): the note is one sentence with one practical tip (which dish to start first, which takes longest, how the dishes go together); it does not count or list the plan's dishes (the card shows them); it names no dish outside the plan and suggests no swaps; it is in the reply locale and makes no allergy safety claims (as today). The `PlanProposal` schema stays the same, so the tool version is unchanged.
+- **Automatic note checks in the planning evaluation**, per scenario and per run: names a library dish that is not in the plan; counts dishes (a number next to 道/菜/dish words, or 荤/素 counts); more than one sentence; wrong reply language (existing check). Reported in `summary.json` (counts and rates, no model text) and in the git-ignored `results.jsonl` (the note itself).
+- **Model comparison.** The evaluation gains `--planning-model <catalog name>`, which runs the whole `planning_eval` task (route, parse, planner) on that model and records it in `summary.json`. All five tool-calling catalog models are compared — deepseek-flash (current), deepseek-v4-pro, gpt-6-luna, gemini-3.5-flash-lite, gemini-3.8-flash — on the plan 2a and counts scenario sets, three runs each, so stability shows. Because the whole chain changes, the comparison reports planning results (as expected, first pass, calls, cost, time) next to the note checks. Paid runs need the user's approval with the expected cost.
+- **The user rates the notes.** After the automatic checks, the notes of every run are exported for review: model, run, scenario, the plan's dishes, the note, and the automatic flags, with empty columns for the user's judgement (quality, and whether anything appears that should not). Model text stays out of Git. The user decides which model plans from the combined result; switching the default planning model is a separate, approved change.
+
+### 5.6 Read-only recipe detail (brought forward from T1.9, decided by the user)
+
+While trying the redesigned page the user wanted to see how to cook a dish from the plan card. The Phase 1 design planned a read-only recipe detail view in T1.9, shared with the plan card's "view dish"; it is built now, in both places, with one component.
+
+- **One `RecipeDetail` component** shows a recipe read-only: ingredients with amounts as entered (amount and unit; "适量" for a vague amount; nothing for a missing one; choice groups shown as "任选其一"; optional lines marked), cookware, time and its source, servings, the steps summary, the source link, and the source text kept at import (collapsed by default).
+- **Plan card and library rows** (as built after the user's browser checks): each dish or recipe row has two compact toggles on its title line, "查看做法" / "How to cook" and "原文" / "Original text" (faint fill, ▾ when closed, ▴ and a pressed tint when open). Clicking one opens its panel under the row in one shared frame; clicking the other switches; clicking the open one closes it. The recipe is fetched once, on the first click. Viewing is not an action: it works on every card, including older, non-actionable ones. On the plan card the dish's missing ingredients are marked.
+- **"原文" shows what the import kept** (a web import keeps only its link, by design 4.2; pasted text and batch parts keep their text; screenshots keep their images): the source link first when there is one, then the saved text, then the screenshots, or "没有保存原文" / "No original text was saved".
+- **Recipe library:** the dish title (accent colour with "›", underline on hover and focus) opens a read-only page `/[locale]/library/[id]`. That page has "← 返回菜谱库", the title with "编辑" and "删除" on its right (delete in soft red, behind a confirmation; after deleting, the page returns to the list), and two framed sections: the recipe and "原文". Edit and delete live only on this page now. The library keeps its search, dish-type filter, and page in the URL, and the detail page's back link returns to them.
+- The backend already serves a recipe (`GET /api/recipes/{id}`); no backend change.
 
 ## 6. Left to the builder
 

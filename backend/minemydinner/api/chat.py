@@ -120,6 +120,39 @@ def _visible_messages(messages: list) -> list[dict[str, str]]:
     return shown
 
 
+def _items(values: dict) -> list[dict[str, Any]]:
+    """The conversation in order for display: messages, each reply's plan, and the questions.
+
+    Old checkpoints lack reply_plans and questions, so both read as empty.
+    """
+    messages = values.get("messages") or []
+    reply_plans = values.get("reply_plans") or {}
+    questions = list(values.get("questions") or [])
+    items: list[dict[str, Any]] = []
+    next_question = 0
+
+    def add_questions_through(count: int) -> None:
+        nonlocal next_question
+        while next_question < len(questions) and questions[next_question]["at"] <= count:
+            items.append({"type": "question", "value": questions[next_question]["value"]})
+            next_question += 1
+
+    for index, message in enumerate(messages):
+        add_questions_through(index)
+        if not isinstance(message.content, str):
+            continue
+        if isinstance(message, HumanMessage) and message.content:
+            items.append({"type": "user", "text": message.content})
+        elif isinstance(message, AIMessage) and not message.tool_calls:
+            plan = reply_plans.get(message.id) if message.id else None
+            if message.content or plan is not None:
+                items.append(
+                    {"type": "assistant", "id": message.id, "text": message.content, "plan": plan}
+                )
+    add_questions_through(len(messages))
+    return items
+
+
 def _steps_for(namespace: tuple, node: str, update: Any) -> list[str]:
     if not isinstance(update, dict):
         return []
@@ -227,6 +260,7 @@ def read_thread(thread_id: str, runtime: RuntimeDep) -> dict[str, Any]:
     _, state = _snapshot(runtime, thread_id)
     pending = _pending(state)
     return {
+        "items": _items(state.values),
         "messages": _visible_messages(state.values.get("messages") or []),
         "current_plan": state.values.get("current_plan"),
         "pending": pending[0].value if pending else None,

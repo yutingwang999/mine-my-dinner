@@ -82,10 +82,22 @@ export type ChatEvent =
   | { event: "token"; data: { text: string } }
   | { event: "done"; data: Record<string, never> };
 
+/** One entry of the conversation as shown: a user line, an assistant reply (with its plan), or a question. */
+export type ThreadItem =
+  | { type: "user"; text: string }
+  | { type: "assistant"; id: string | null; text: string; plan: ChatPlan | null }
+  | { type: "question"; value: Pending };
+
 export type ThreadState = {
-  messages: ChatMessage[];
-  current_plan: ChatPlan | null;
+  items: ThreadItem[];
   pending: Pending | null;
+};
+
+type RawThread = {
+  items?: ThreadItem[];
+  messages?: ChatMessage[];
+  current_plan?: ChatPlan | null;
+  pending?: Pending | null;
 };
 
 export const THREAD_KEY = "mmd.chat.thread";
@@ -189,7 +201,24 @@ export function resume(threadId: string, value: unknown, locale: Locale): Promis
 }
 
 export async function loadThread(threadId: string): Promise<ThreadState> {
-  return (await (await call(`/api/chat/threads/${threadId}`, { method: "GET" })).json()) as ThreadState;
+  const raw = (await (await call(`/api/chat/threads/${threadId}`, { method: "GET" })).json()) as RawThread;
+  const source: ThreadItem[] =
+    raw.items ??
+    (raw.messages ?? []).map(
+      (message): ThreadItem =>
+        message.role === "user"
+          ? { type: "user", text: message.text }
+          : { type: "assistant", id: null, text: message.text, plan: null },
+    );
+  const items = source.map(
+    (item): ThreadItem =>
+      item.type === "assistant" && item.plan ? { ...item, plan: normalizePlan(item.plan) } : item,
+  );
+  // A thread saved before plans were kept per reply: show its one plan as a card-only reply at the end.
+  if (raw.current_plan && !items.some((item) => item.type === "assistant" && item.plan)) {
+    items.push({ type: "assistant", id: null, text: "", plan: normalizePlan(raw.current_plan) });
+  }
+  return { items, pending: raw.pending ?? null };
 }
 
 export async function getRequestStyle(): Promise<RequestStyle | null> {

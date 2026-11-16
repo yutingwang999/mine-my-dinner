@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useFormatter, useLocale, useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { AllergenNotice } from "@/components/AllergenNotice";
+import { RecipeToggles } from "@/components/RecipeToggles";
 import { type ChatPlan, KNOWN_ACTIONS, type NextAction, type PlanFinding } from "@/lib/chat";
 
 type Props = {
@@ -12,6 +13,8 @@ type Props = {
   /** Called with the chosen next action; the buttons are disabled while `busy`. */
   onAction?: (action: NextAction) => void;
   busy?: boolean;
+  /** False for an older plan: every action button and link action is disabled. */
+  actionable?: boolean;
 };
 
 const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
@@ -23,7 +26,6 @@ const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
 /** What the user stated: the spec fields that were not filled by a default. */
 function Asked({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.plan");
-  const format = useFormatter();
   const { spec, defaults_used: defaults } = plan;
   const stated = (name: string) => !defaults.includes(name);
   const items: string[] = [];
@@ -69,12 +71,11 @@ function Asked({ plan }: { plan: ChatPlan }) {
     if (list.length > 0) items.push(t(key, { list: list.join(", ") }));
   }
   if (items.length === 0) return null;
-  return <p className="hint">{t("asked", { list: format.list(items, { type: "unit" }) })}</p>;
+  return <p className="hint">{t("asked", { list: items.join(t("listSeparator")) })}</p>;
 }
 
 function Assumed({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.plan");
-  const format = useFormatter();
   const parts: string[] = [];
   if (plan.defaults_used.includes("headcount")) {
     parts.push(t("assumedHeadcount", { count: plan.headcount }));
@@ -106,7 +107,7 @@ function Assumed({ plan }: { plan: ChatPlan }) {
     parts.push(t(plan.spec.mode === "shopping" ? "assumedShopping" : "assumedFridgeOnly"));
   }
   if (parts.length === 0) return null;
-  return <p className="hint">{t("assumed", { list: format.list(parts, { type: "unit" }) })}</p>;
+  return <p className="hint">{t("assumed", { list: parts.join(t("listSeparator")) })}</p>;
 }
 
 function unitLabel(tUnit: ReturnType<typeof useTranslations>, unit: string): string {
@@ -158,7 +159,7 @@ function warningText(
   }
 }
 
-export function PlanCard({ plan, onAction, busy = false }: Props) {
+export function PlanCard({ plan, onAction, busy = false, actionable = true }: Props) {
   const t = useTranslations("chat.plan");
   const tWarning = useTranslations("chat.warning");
   const tAction = useTranslations("chat.action");
@@ -185,23 +186,33 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
             const cookware = plan.missing_cookware[String(recipe.id)] ?? [];
             return (
               <li key={recipe.id} className="plan-dish">
-                <strong>{recipe.title}</strong>
-                <p className="hint">
-                  {tDish(recipe.dish_type)} ·{" "}
-                  {recipe.time_min === null
-                    ? t("timeUnknown")
-                    : t("timeKnown", {
-                        minutes: recipe.time_min,
-                        source: recipe.time_source ? tSource(recipe.time_source) : "",
-                      })}
-                </p>
-                {missing.length > 0 && <p>{t("missingIngredients", { list: missing.join(", ") })}</p>}
-                {cookware.length > 0 && <p>{t("missingCookware", { list: cookware.join(", ") })}</p>}
+                <RecipeToggles
+                  recipeId={recipe.id}
+                  title={<strong>{recipe.title}</strong>}
+                  missing={missing}
+                >
+                  <p className="hint">
+                    {tDish(recipe.dish_type)} ·{" "}
+                    {recipe.time_min === null
+                      ? t("timeUnknown")
+                      : t("timeKnown", {
+                          minutes: recipe.time_min,
+                          source: recipe.time_source ? tSource(recipe.time_source) : "",
+                        })}
+                  </p>
+                  {missing.length > 0 && <p>{t("missingIngredients", { list: missing.join(", ") })}</p>}
+                  {cookware.length > 0 && <p>{t("missingCookware", { list: cookware.join(", ") })}</p>}
+                </RecipeToggles>
               </li>
             );
           })}
         </ul>
       )}
+      {/* What was asked and assumed: its own block, not part of the last dish. */}
+      <div className="plan-conditions">
+        <Asked plan={plan} />
+        <Assumed plan={plan} />
+      </div>
       {plan.servings_notes.map((note) => (
         <p key={note.recipe_id} className="hint">
           {t("servingsNote", {
@@ -246,19 +257,23 @@ export function PlanCard({ plan, onAction, busy = false }: Props) {
           {actions.map((action) => {
             const href = LINK_ACTIONS[action];
             return href ? (
-              <Link key={action} href={`/${locale}${href}`}>
-                {tAction(action)}
-              </Link>
+              actionable ? (
+                <Link key={action} href={`/${locale}${href}`}>
+                  {tAction(action)}
+                </Link>
+              ) : (
+                <span key={action} aria-disabled="true" className="hint">
+                  {tAction(action)}
+                </span>
+              )
             ) : (
-              <button key={action} type="button" disabled={busy} onClick={() => onAction?.(action)}>
+              <button key={action} type="button" disabled={busy || !actionable} onClick={() => onAction?.(action)}>
                 {tAction(action)}
               </button>
             );
           })}
         </div>
       )}
-      <Asked plan={plan} />
-      <Assumed plan={plan} />
       {plan.left_out_unknown_allergens.length > 0 && (
         <div>
           <p className="hint">{t("leftOut", { count: plan.left_out_unknown_allergens.length })}</p>

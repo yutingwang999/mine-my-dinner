@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type ChatEvent,
   type ChatPlan,
+  loadThread,
   normalizePlan,
   readEvents,
   sendMessage,
@@ -10,6 +11,7 @@ import {
   storeThreadId,
 } from "@/lib/chat";
 import { plan } from "@/test/chatFixtures";
+import { mockFetch } from "@/test/helpers";
 
 async function collect(response: Response): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
@@ -117,5 +119,43 @@ describe("normalizePlan", () => {
     });
     const { spec } = normalizePlan(current);
     expect([spec.meat_bound, spec.vegetable_bound]).toEqual([null, "at_most"]);
+  });
+});
+
+describe("loadThread", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns items with each plan normalized and no extra card when a plan exists", async () => {
+    const old = { ...plan() } as unknown as Record<string, unknown>;
+    delete old.reasons;
+    mockFetch({
+      "GET /api/chat/threads/t": () => ({
+        items: [
+          { type: "user", text: "hi" },
+          { type: "assistant", id: "a", text: "", plan: old },
+          { type: "question", value: { kind: "request_style" } },
+        ],
+        messages: [],
+        current_plan: plan(),
+        pending: null,
+      }),
+    });
+    const state = await loadThread("t");
+    expect(state.items).toHaveLength(3);
+    const reply = state.items[1];
+    expect(reply.type === "assistant" && reply.plan?.reasons).toEqual([]);
+  });
+
+  it("appends a card-only item for current_plan when no item has a plan", async () => {
+    mockFetch({
+      "GET /api/chat/threads/t": () => ({
+        items: [{ type: "assistant", id: "a", text: "old", plan: null }],
+        current_plan: plan(),
+        pending: null,
+      }),
+    });
+    const state = await loadThread("t");
+    expect(state.items).toHaveLength(2);
+    expect(state.items[1]).toMatchObject({ type: "assistant", id: null, text: "" });
   });
 });

@@ -13,7 +13,6 @@
   "nav": {
     "label": "主导航",
     "home": "首页",
-    "chat": "对话",
     "import": "导入",
     "review": "审核",
     "library": "菜谱库",
@@ -287,14 +286,35 @@
     "allTypes": "全部类别",
     "dishTypeFilter": "菜品类别",
     "empty": "没有找到菜谱。",
-    "source": "来源",
     "deleteNotice": "已保存的菜单里仍会显示这道菜的名字；它的评分和笔记会被删除，由它改出的菜谱会保留。",
     "editTitle": "编辑{title}",
     "noEmbedding": "暂时不能按语义搜索，会自动重试。",
-    "showSource": "查看完整做法",
-    "hideSource": "收起完整做法",
     "supplies": "需要准备：{names}",
-    "screenshotAlt": "截图 {number}"
+    "screenshotAlt": "截图 {number}",
+    "back": "← 返回菜谱库",
+    "notFound": "这道菜谱已不存在。",
+    "loadFailed": "无法加载这道菜谱。"
+  },
+  "recipeDetail": {
+    "ingredients": "食材",
+    "toTaste": "适量",
+    "optional": "可选",
+    "missing": "缺少",
+    "choice": "任选其一：{list}",
+    "choiceSeparator": " / ",
+    "cookware": "厨具：{list}",
+    "time": "用时：{minutes} 分钟（{source}）",
+    "timeUnknown": "用时：未知",
+    "servings": "份量：{count} 人份",
+    "steps": "做法",
+    "noSteps": "没有保存做法概要。",
+    "source": "来源",
+    "howToCook": "查看做法",
+    "originalText": "原文",
+    "noOriginalText": "没有保存原文。",
+    "loading": "正在加载做法…",
+    "failed": "无法加载这道菜谱。",
+    "retry": "重试"
   },
   "inventory": {
     "title": "库存",
@@ -404,8 +424,12 @@
       "askFirst": "先问我",
       "planThenAdjust": "先出方案，我再调整",
       "skip": "跳过",
-      "settingLabel": "信息不全时",
-      "unset": "尚未选择"
+      "switchLabel": "信息不全时先问我"
+    },
+    "welcome": {
+      "fridge": "两菜一汤，只用冰箱里的",
+      "shopping": "三个人吃，可以买菜",
+      "quick": "做个快手菜，20 分钟内"
     },
     "question": {
       "hint": "要规划这一餐，请告诉我{fields}。你的下一条消息会作为回答。",
@@ -433,6 +457,7 @@
       "warnings": "需要注意",
       "unmet": "未满足",
       "nextActions": "你可以调整",
+      "listSeparator": "，",
       "assumed": "我假设了：{list}。不对请告诉我。",
       "assumedHeadcount": "{count} 人",
       "assumedDishes": "{count} 道菜",

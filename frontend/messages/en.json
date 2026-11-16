@@ -13,7 +13,6 @@
   "nav": {
     "label": "Main",
     "home": "Home",
-    "chat": "Chat",
     "import": "Import",
     "review": "Review",
     "library": "Library",
@@ -287,14 +286,35 @@
     "allTypes": "All dish types",
     "dishTypeFilter": "Dish type",
     "empty": "No recipes found.",
-    "source": "Source",
     "deleteNotice": "Saved menus still show this dish's name. Its ratings and notes are deleted; recipes made from it are kept.",
     "editTitle": "Edit {title}",
     "noEmbedding": "Not yet searchable by meaning; it is retried automatically.",
-    "showSource": "Show the full method",
-    "hideSource": "Hide the full method",
     "supplies": "Have ready: {names}",
-    "screenshotAlt": "Screenshot {number}"
+    "screenshotAlt": "Screenshot {number}",
+    "back": "← Back to the library",
+    "notFound": "This recipe no longer exists.",
+    "loadFailed": "The recipe could not be loaded."
+  },
+  "recipeDetail": {
+    "ingredients": "Ingredients",
+    "toTaste": "to taste",
+    "optional": "optional",
+    "missing": "missing",
+    "choice": "Choose one: {list}",
+    "choiceSeparator": " / ",
+    "cookware": "Cookware: {list}",
+    "time": "Time: {minutes} min ({source})",
+    "timeUnknown": "Time: unknown",
+    "servings": "Servings: {count}",
+    "steps": "Steps",
+    "noSteps": "No steps summary was saved.",
+    "source": "Source",
+    "howToCook": "How to cook",
+    "originalText": "Original text",
+    "noOriginalText": "No original text was saved.",
+    "loading": "Loading the recipe…",
+    "failed": "The recipe could not be loaded.",
+    "retry": "Try again"
   },
   "inventory": {
     "title": "Inventory",
@@ -404,8 +424,12 @@
       "askFirst": "Ask me first",
       "planThenAdjust": "Plan, then I adjust",
       "skip": "Skip",
-      "settingLabel": "When details are missing",
-      "unset": "Not chosen yet"
+      "switchLabel": "Ask me first when details are missing"
+    },
+    "welcome": {
+      "fridge": "Two dishes and a soup, using only what is in the fridge",
+      "shopping": "Dinner for three, and shopping is fine",
+      "quick": "A quick dish, within 20 minutes"
     },
     "question": {
       "hint": "To plan this, tell me {fields}. Your next message answers it.",
@@ -433,6 +457,7 @@
       "warnings": "Things to know",
       "unmet": "Not met",
       "nextActions": "You can change",
+      "listSeparator": ", ",
       "assumed": "Assumed: {list}. Say if that's wrong.",
       "assumedHeadcount": "{count, plural, one {# person} other {# people}}",
       "assumedDishes": "{count, plural, one {# dish} other {# dishes}}",

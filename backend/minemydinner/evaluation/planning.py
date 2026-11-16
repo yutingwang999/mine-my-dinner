@@ -30,11 +30,16 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from minemydinner.agent.checkpoint import open_checkpointer
-from minemydinner.agent.graph import GraphDeps, build_graph
+from minemydinner.agent.graph import CLOSEST_NOTE_EN, CLOSEST_NOTE_ZH, GraphDeps, build_graph
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import ParsedRequest, set_request_style
 from minemydinner.llm.client import LLMClient
-from minemydinner.llm.config import load_llm_config
+from minemydinner.llm.config import (
+    ConfigError,
+    load_llm_config,
+    pin_task_model,
+    tool_calling_models,
+)
 from minemydinner.models import (
     Cookware,
     CookwareOwned,
@@ -117,6 +122,12 @@ class RunOutcome:
     # For results.jsonl only (never in summary.json): the PlanningRun row and the llm_calls
     # rows of the scenario.
     record: dict[str, Any] = field(default_factory=dict)
+    # The shown plan's own model note (without the fixed closest-attempt text), its automatic
+    # flags (note_flags), and whether there was a note to check. The text stays out of
+    # summary.json.
+    reply_note: str = ""
+    note_flags: list[str] = field(default_factory=list)
+    note_checked: bool = False
 
 
 @dataclass(frozen=True)
@@ -334,17 +345,76 @@ def check_expectations(
     if scenario.expect_missing_nonempty and not any(plan.get("missing", {}).values()):
         failures.append("the plan's missing list is empty")
     if scenario.expect_locale_reply:
-        text = reply
-        for title in sorted(library_titles, key=len, reverse=True):
-            text = text.replace(title, "")
-        has_cjk = bool(_CJK.search(text))
-        if scenario.expect_locale_reply == "en" and has_cjk:
-            failures.append("reply is not English (Chinese characters left after removing titles)")
-        if scenario.expect_locale_reply == "zh" and not has_cjk:
-            failures.append("reply is not Chinese (no Chinese characters besides titles)")
+        problem = locale_problem(reply, scenario.expect_locale_reply, library_titles)
+        if problem:
+            failures.append(problem)
     if scenario.max_model_calls is not None and model_calls > scenario.max_model_calls:
         failures.append(f"{model_calls} model calls, at most {scenario.max_model_calls}")
     return failures
+
+
+def locale_problem(text: str, locale: str, library_titles: Sequence[str] = ()) -> str | None:
+    """Why `text` is not in the reply locale, judged without recipe titles; None when it is.
+    Pure."""
+    for title in sorted(library_titles, key=len, reverse=True):
+        text = text.replace(title, "")
+    has_cjk = bool(_CJK.search(text))
+    if locale == "en" and has_cjk:
+        return "reply is not English (Chinese characters left after removing titles)"
+    if locale == "zh" and not has_cjk:
+        return "reply is not Chinese (no Chinese characters besides titles)"
+    return None
+
+
+NOTE_FLAGS = ("outside_dish", "counts_dishes", "multi_sentence", "wrong_locale")
+# The flags that count toward `flagged_rate`. multi_sentence is still counted in `flags` but
+# is reported apart: it measures only the one-sentence rule (user decision).
+RATE_FLAGS = ("outside_dish", "counts_dishes", "wrong_locale")
+_NUMBER_CHARS = "一二两三四五六七八九十几"
+_NUMBER = rf"(?:\d+|[{_NUMBER_CHARS}]+)"
+_COUNTED = r"(?:道|个菜|荤|素|dishes|dish|meat|vegetables|vegetable)"
+# A number directly before a counted word ("3 道荤菜", "两荤一素", "4 dishes"), not part of a
+# longer number and not an ordinal or "the one that" ("第一道菜", "最费时的一道"); a lone 一
+# before 道 or 个菜 is one dish, never a count ("这一道菜最费时"); or 荤 / 素
+# followed by digits ("荤 4 道"). Words such as "荤素一起" or "this dish 20 minutes" are not
+# counts.
+_COUNTS_DISHES = re.compile(
+    rf"(?<![第的\d{_NUMBER_CHARS}])(?!一\s*(?:道|个菜)){_NUMBER}\s*{_COUNTED}(?![a-z])"
+    r"|[荤素]\s*\d+",
+    re.IGNORECASE,
+)
+# A sentence end: 。！？!? or a period that is not a decimal point.
+_SENTENCE_END = re.compile(r"[。！？!?]+|\.+(?!\d)")
+
+
+def note_flags(
+    note: str, plan_titles: list[str], library_titles: list[str], locale: str
+) -> list[str]:
+    """The automatic checks of a plan's model note (design 5.5), in NOTE_FLAGS order. Pure."""
+    flags = []
+    rest = note
+    for title in sorted(plan_titles, key=len, reverse=True):
+        rest = rest.replace(title, "")
+    if any(t not in plan_titles and t in rest for t in library_titles):
+        flags.append("outside_dish")
+    if _COUNTS_DISHES.search(note):
+        flags.append("counts_dishes")
+    if sum(bool(part.strip()) for part in _SENTENCE_END.split(note)) > 1:
+        flags.append("multi_sentence")
+    if locale_problem(note, locale, library_titles):
+        flags.append("wrong_locale")
+    return flags
+
+
+def shown_model_note(reply: str, locale: str, has_plan: bool) -> str:
+    """The model's own note in the reply: without the fixed closest-attempt text, and empty
+    when no plan is shown (the fixed stop notes are not model text)."""
+    if not has_plan:
+        return ""
+    closest = CLOSEST_NOTE_ZH if locale == "zh" else CLOSEST_NOTE_EN
+    if reply == closest:
+        return ""
+    return reply.removeprefix(closest + "\n\n")
 
 
 def check_shortlist_spread(
@@ -624,6 +694,9 @@ def run_scenario(
     failures = check_expectations(
         scenario, plan, passed, len(rows), first_passed, reply, library_titles, first_plan
     )
+    titles = [r["title"] for r in (plan or {}).get("recipes", [])]
+    model_note = shown_model_note(reply, scenario.locale, bool(titles))
+    flags = note_flags(model_note, titles, list(library_titles), scenario.locale)
     return RunOutcome(
         scenario=scenario.name,
         first_passed=bool(run and run.first_passed),
@@ -647,12 +720,15 @@ def run_scenario(
         failures=failures,
         thread_id=thread_id,
         planning_run_id=run.id if run else None,
-        titles=[r["title"] for r in (plan or {}).get("recipes", [])],
+        titles=titles,
         cache_write_input_tokens=sum(r.cache_write_input_tokens or 0 for r in rows),
         embedding_calls=embedding_calls,
         wall_ms=int((time.perf_counter() - started) * 1000),
         call_latencies=[r.latency_ms or 0 for r in rows],
         record=record,
+        reply_note=model_note,
+        note_flags=flags if model_note.strip() else [],
+        note_checked=bool(model_note.strip()),
     )
 
 
@@ -900,11 +976,17 @@ def run_info(
     from minemydinner.agent.request import PROMPT_VERSION, PROMPT_VERSIONS, prompt_files
     from minemydinner.planning import shortlist
 
+    eval_task = client.config.tasks.get(EVAL_TASK)
     return {
         "started_at": started_at,
         "finished_at": finished_at,
         "conditions": {
             "git_commit": git_commit,
+            # The catalog model the planning_eval task ran on: the one named by
+            # --planning-model, else the configured default.
+            "planning_model": (
+                client.config.models[eval_task.primary].model if eval_task else None
+            ),
             "scenarios_file": _file_info(scenarios_path),
             "library_file": _file_info(library_path),
             "prompt_version": PROMPT_VERSION,
@@ -932,13 +1014,18 @@ def run_info(
 
 
 def make_run_id(
-    started: datetime, scenarios_path: Path, no_shortlist: bool, with_embeddings: bool
+    started: datetime,
+    scenarios_path: Path,
+    no_shortlist: bool,
+    with_embeddings: bool,
+    planning_model: str | None = None,
 ) -> str:
     stamp = started.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     name = scenarios_path.stem.removeprefix("scenarios_")
     shortlist_part = "no-shortlist" if no_shortlist else "shortlist"
     vectors_part = "vectors" if with_embeddings else "no-vectors"
-    return f"{stamp}-{name}-{shortlist_part}-{vectors_part}"
+    run_id = f"{stamp}-{name}-{shortlist_part}-{vectors_part}"
+    return f"{run_id}-{planning_model}" if planning_model else run_id
 
 
 def percentile(values: list[int], pct: float) -> int:
@@ -1003,6 +1090,7 @@ def group_metrics(
     cached = sum(o.cached_input_tokens for o in runs)
     written = sum(o.cache_write_input_tokens for o in runs)
     per_call = [latency for o in runs for latency in o.call_latencies]
+    checked = [o for o in runs if o.note_checked]
     return {
         "scenarios": n,
         "outcomes": {
@@ -1042,6 +1130,13 @@ def group_metrics(
             "model_time_ms": _stats([o.latency_ms for o in runs]),
             "per_call_ms": _stats(per_call),
         },
+        "notes": {
+            "checked": len(checked),
+            "flags": {f: sum(f in o.note_flags for o in checked) for f in NOTE_FLAGS},
+            "flagged_rate": _rate(
+                sum(bool(set(o.note_flags) & set(RATE_FLAGS)) for o in checked), len(checked)
+            ),
+        },
     }
 
 
@@ -1058,6 +1153,7 @@ def build_summary(
     for outcome in outcomes:
         item = _entry(outcome)
         item.pop("detail")
+        item.pop("reply_note")
         scenarios.append(item)
     return {
         "run_id": run_id,
@@ -1137,7 +1233,25 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="embed the library's recipes first, so meaning-based search works",
     )
+    parser.add_argument(
+        "--planning-model",
+        help="run the whole planning_eval task (route, parse, planner) on this tool-calling "
+        "catalog model, with no fallback",
+    )
     args = parser.parse_args(argv)
+    if args.planning_model:
+        try:
+            models = tool_calling_models()
+        except ConfigError as error:
+            print(error, file=sys.stderr)
+            return 2
+        if args.planning_model not in models:
+            print(
+                f"Unknown planning model {args.planning_model}; tool-calling catalog models: "
+                + ", ".join(models),
+                file=sys.stderr,
+            )
+            return 2
     try:
         ensure_clean_tree()
     except UnsafeWorkingTree as error:
@@ -1153,11 +1267,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     engine = create_engine(settings.database_url)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    client = LLMClient(
-        load_llm_config(model_overrides=settings.model_overrides()),
-        factory,
-        settings.llm_monthly_cap_usd,
-    )
+    llm_config = load_llm_config(model_overrides=settings.model_overrides())
+    if args.planning_model:
+        llm_config = pin_task_model(llm_config, EVAL_TASK, args.planning_model)
+    client = LLMClient(llm_config, factory, settings.llm_monthly_cap_usd)
     print(f"Planning evaluation of {len(scenarios)} scenarios (task {EVAL_TASK})")
     started = datetime.now(timezone.utc)
     saved: Path | None = None
@@ -1204,7 +1317,11 @@ def main(argv: list[str] | None = None) -> int:
                     finished.isoformat(),
                 )
                 run_id = make_run_id(
-                    started, args.scenarios, args.no_shortlist, args.with_embeddings
+                    started,
+                    args.scenarios,
+                    args.no_shortlist,
+                    args.with_embeddings,
+                    args.planning_model,
                 )
                 summary = build_summary(
                     run_id, info, collected, stats.get("library_embedding_calls", 0)

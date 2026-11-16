@@ -320,6 +320,7 @@ export const api = {
 
   listRecipes: (params: { q?: string; dish_type?: string; page?: number }) =>
     get<RecipePage>(`/api/recipes${query(params)}`),
+  getRecipe: (id: number) => get<SavedRecipe>(`/api/recipes/${id}`),
   updateRecipe: (id: number, data: RecipeWrite) =>
     sendJson<SavedRecipe>("PUT", `/api/recipes/${id}`, data),
   deleteRecipe: (id: number) => remove(`/api/recipes/${id}`),

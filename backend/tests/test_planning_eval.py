@@ -627,7 +627,7 @@ def test_run_folder_layout_and_summary(tmp_path):
     cond = data["conditions"]
     assert set(cond) == {
         "git_commit", "scenarios_file", "library_file", "prompt_version", "prompt_versions",
-        "prompt_files", "tools_version", "flags", "constants", "models",
+        "prompt_files", "tools_version", "flags", "constants", "models", "planning_model",
     }
     assert cond["git_commit"] == "abc123" and len(cond["scenarios_file"]["sha256"]) == 64
     assert cond["flags"] == {"no_shortlist": True, "with_embeddings": True}
@@ -643,7 +643,7 @@ def test_run_folder_layout_and_summary(tmp_path):
         assert word in metrics["basis"]
     assert set(metrics["groups"]) == {"all", "expect_plan", "expect_stop"}
     m = metrics["groups"]["all"]
-    assert set(m) == {"scenarios", "outcomes", "calls", "tokens", "cost", "latency"}
+    assert set(m) == {"scenarios", "outcomes", "calls", "tokens", "cost", "latency", "notes"}
     assert m["scenarios"] == 2 and m["outcomes"]["as_expected"] == "1/2"
     assert m["calls"]["embedding_calls"] == {"library": 3, "scenarios": 2, "total": 5}
     assert m["calls"]["max_model_calls"] == 5 and m["calls"]["model_calls"] == 8
@@ -959,3 +959,276 @@ def test_counts_scenarios_stock_gives_the_stated_feasibility(session):
     first = check("relax_named_button", dishes=1, all_use=["鸡蛋"])
     assert [(s.reason, s.absent_from_stock) for s in first] == [("named_ingredient", True)]
     assert check("relax_named_button", dishes=1, prefer_use=["鸡蛋"]) == []
+
+
+# ---- note checks, planning model, notes review (chat page redesign, Task 4) ----
+
+_PLAN = ["糖醋小排"]
+_LIBRARY = ["糖醋小排", "胡萝卜炒鸡蛋", "清炒小白菜"]
+
+
+def _flags(note, locale="zh", plan=_PLAN, library=_LIBRARY):
+    from minemydinner.evaluation.planning import note_flags
+
+    return note_flags(note, plan, library, locale)
+
+
+@pytest.mark.parametrize(
+    "note, locale, expected",
+    [
+        ("糖醋小排最费时，可以先腌上。", "zh", []),
+        ("可以把糖醋小排换成胡萝卜炒鸡蛋", "zh", ["outside_dish"]),
+        ("这一餐安排了 3 道荤菜", "zh", ["counts_dishes"]),
+        ("两荤一素，很均衡", "zh", ["counts_dishes"]),
+        ("实际为荤 4 道", "zh", ["counts_dishes"]),
+        ("Start the ribs first. It has 4 dishes.", "en", ["counts_dishes", "multi_sentence"]),
+        ("Start the ribs first. Then the eggs.", "en", ["multi_sentence"]),
+        ("Start the ribs first, they take 1.5 hours.", "en", []),
+        ("荤素一起下锅更入味", "zh", []),
+        ("荤素十分搭配，先腌糖醋小排", "zh", []),
+        ("先做第一道菜糖醋小排", "zh", []),
+        ("糖醋小排是最费时的一道，先腌上", "zh", []),
+        ("Start the ribs first; this dish 20 minutes in the oven", "en", []),
+        ("第三十道不算", "zh", []),
+        ("这一道菜最费时，先做它。", "zh", []),
+        ("其中一道要先腌。", "zh", []),
+        ("每一道都不难。", "zh", []),
+        ("最费时的一道是排骨。", "zh", []),
+        ("一荤一素很清爽。", "zh", ["counts_dishes"]),
+        ("这一餐有十一道菜。", "zh", ["counts_dishes"]),
+        ("先腌糖醋小排。", "zh", []),
+        ("先腌糖醋小排。再炒菜！", "zh", ["multi_sentence"]),
+        ("先腌糖醋小排，再炒菜", "en", ["wrong_locale"]),
+        ("Start the ribs first.", "zh", ["wrong_locale"]),
+    ],
+)
+def test_note_flags(note, locale, expected):
+    assert _flags(note, locale) == expected
+
+
+def test_a_plan_title_inside_a_longer_library_title_is_not_an_outside_dish():
+    assert _flags("先做番茄炒蛋。", plan=["番茄炒蛋"], library=["番茄炒蛋", "炒蛋"]) == []
+
+
+def test_the_shown_note_leaves_out_the_closest_attempt_text():
+    from minemydinner.evaluation.planning import shown_model_note
+
+    closest = "这是我能找到的最接近的方案，有些规则没有满足，详见下方。"
+    assert shown_model_note(closest, "zh", has_plan=True) == ""
+    assert shown_model_note(closest + "\n\n先腌排骨。", "zh", has_plan=True) == "先腌排骨。"
+    assert shown_model_note("先腌排骨。", "zh", has_plan=True) == "先腌排骨。"
+    assert shown_model_note("fixed stop text", "en", has_plan=False) == ""
+
+
+def test_a_scenario_records_its_note_and_flags(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [_scenario()], InMemorySaver()
+    )
+    assert outcome.reply_note == "Here is your dinner."
+    assert outcome.note_checked and outcome.note_flags == ["wrong_locale"]
+
+
+def _note_outcome(name, flags, checked=True):
+    return RunOutcome(
+        name, True, True, 0, Decimal("0"), 0, 1, titles=["糖醋小排"],
+        reply_note="先腌糖醋小排。" if checked else "", note_flags=flags, note_checked=checked,
+    )
+
+
+def test_note_metrics_are_per_group_and_in_the_summary_without_the_text(tmp_path):
+    import json
+
+    outcomes = [
+        _note_outcome("a", []),
+        _note_outcome("b", ["counts_dishes", "multi_sentence"]),
+        _note_outcome("c", ["counts_dishes"]),
+        _note_outcome("d", [], checked=False),
+        _note_outcome("e", ["multi_sentence"]),
+    ]
+    summary = build_summary("RID", _info(tmp_path), outcomes, 0)
+    notes = summary["metrics"]["groups"]["all"]["notes"]
+    # multi_sentence is counted in flags but not in flagged_rate: "e" is not a flagged note.
+    assert notes["checked"] == 4 and notes["flagged_rate"] == pytest.approx(2 / 4)
+    assert notes["flags"] == {
+        "outside_dish": 0, "counts_dishes": 2, "multi_sentence": 2, "wrong_locale": 0
+    }
+    assert [s["note_flags"] for s in summary["scenarios"]][:3] == [
+        [], ["counts_dishes", "multi_sentence"], ["counts_dishes"]
+    ]
+    assert "先腌糖醋小排" not in json.dumps(summary, ensure_ascii=False, default=str)
+    empty = summary["metrics"]["groups"]["expect_stop"]["notes"]
+    assert empty == {
+        "checked": 0,
+        "flags": {"outside_dish": 0, "counts_dishes": 0, "multi_sentence": 0, "wrong_locale": 0},
+        "flagged_rate": 0.0,
+    }
+    folder = write_run(tmp_path / "runs", "RID", summary, outcomes)
+    assert "先腌糖醋小排" in (folder / "results.jsonl").read_text(encoding="utf-8")
+
+
+def test_run_id_gains_the_model_only_when_the_flag_is_given():
+    from datetime import datetime, timezone
+
+    when = datetime(2026, 11, 15, 4, 0, 0, tzinfo=timezone.utc)
+    path = Path("scenarios_plan2a.yaml")
+    assert make_run_id(when, path, False, False) == "20261115T040000Z-plan2a-shortlist-no-vectors"
+    assert make_run_id(when, path, False, False, "gpt-6-luna") == (
+        "20261115T040000Z-plan2a-shortlist-no-vectors-gpt-6-luna"
+    )
+
+
+def test_the_planning_model_override_pins_the_task_without_a_fallback(tmp_path):
+    from minemydinner.llm.config import ConfigError, pin_task_model, tool_calling_models
+
+    path = _config_with_planning_eval(tmp_path)
+    assert tool_calling_models(path) == ["deepseek-test", "openai-test"]
+    config = load_llm_config(path)
+    pinned = pin_task_model(config, "planning_eval", "openai-test", path)
+    assert pinned.tasks["planning_eval"].candidates == ["openai-test"]
+    assert pinned.models["openai-test"].model == "openai-test"
+    assert config.tasks["planning_eval"].candidates == ["deepseek", "openai"]  # untouched
+    assert pinned.tasks["planning"] == config.tasks["planning"]
+    for bad in ("gemini-test", "embedding-test", "nope"):
+        with pytest.raises(ConfigError, match="deepseek-test"):
+            pin_task_model(config, "planning_eval", bad, path)
+
+
+def test_the_run_records_the_planning_model(tmp_path):
+    from minemydinner.llm.config import pin_task_model
+
+    assert _info(tmp_path)["conditions"]["planning_model"] == "deepseek-test"
+    path = _config_with_planning_eval(tmp_path)
+    config = pin_task_model(load_llm_config(path), "planning_eval", "openai-test", path)
+    client = LLMClient(config, None, Decimal("1"))
+    scenarios = tmp_path / "s.yaml"
+    library = tmp_path / "l.yaml"
+    scenarios.write_text("scenarios: []", encoding="utf-8")
+    library.write_text("dishes: []", encoding="utf-8")
+    info = run_info(
+        scenarios, library, client, False, False, None, "2026-11-15T10:00:00+00:00",
+        "2026-11-15T10:05:00+00:00",
+    )
+    assert info["conditions"]["planning_model"] == "openai-test"
+    models = info["conditions"]["models"]["planning_eval"]["candidates"]
+    assert [m["model"] for m in models] == ["openai-test"]
+
+
+def test_main_runs_on_the_named_planning_model(tmp_path, monkeypatch):
+    """Drives main with fakes only (no model call, no database): the flag pins the task, the
+    run id ends with the model, and summary.json records it."""
+    import contextlib
+    import json
+
+    import minemydinner.evaluation.planning as module
+
+    settings = Settings(_env_file=None, database_url=TEST_URL, test_database_url=TEST_URL)
+    scenarios = tmp_path / "scenarios_demo.yaml"
+    library = tmp_path / "library.yaml"
+    scenarios.write_text("scenarios: []", encoding="utf-8")
+    library.write_text("dishes: []", encoding="utf-8")
+    seen = {}
+
+    def fake_evaluate(factory, client, *args, **kwargs):
+        seen["task"] = client.config.tasks[module.EVAL_TASK]
+        return [RunOutcome("a", True, True, 0, Decimal("0"), 0, 1)]
+
+    def fake_evaluate_with_callback(factory, client, library_, scenarios_, saver, on_outcome, **kw):
+        outcomes = fake_evaluate(factory, client)
+        for outcome in outcomes:
+            on_outcome(outcome)
+        return outcomes
+
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    monkeypatch.setattr(module, "ensure_clean_tree", lambda: None)
+    monkeypatch.setattr(module, "_git", lambda *a: "abc\n")
+    monkeypatch.setattr(module, "read_library", lambda path: [])
+    monkeypatch.setattr(module, "load_scenarios", lambda path: [_scenario()])
+    monkeypatch.setattr(
+        module, "create_engine", lambda url: type("E", (), {"dispose": lambda s: None})()
+    )
+    monkeypatch.setattr(module, "sessionmaker", lambda **kw: None)
+    monkeypatch.setattr(module, "open_checkpointer", lambda url: contextlib.nullcontext(None))
+    monkeypatch.setattr(module, "evaluate", fake_evaluate_with_callback)
+    code = main([
+        "--scenarios", str(scenarios), "--library", str(library),
+        "--results-dir", str(tmp_path / "runs"), "--planning-model", "gpt-6-luna",
+    ])
+    assert code == 0
+    assert seen["task"].candidates == ["gpt-6-luna"]
+    [folder] = (tmp_path / "runs").iterdir()
+    assert folder.name.endswith("-demo-shortlist-no-vectors-gpt-6-luna")
+    summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
+    assert summary["run_id"] == folder.name
+    assert summary["conditions"]["planning_model"] == "gpt-6-luna"
+
+
+def test_a_broken_model_config_stops_the_cli_with_an_error(tmp_path, monkeypatch, capsys):
+    import minemydinner.evaluation.planning as module
+    from minemydinner.llm.config import ConfigError
+
+    def broken():
+        raise ConfigError("bad models.yaml")
+
+    monkeypatch.setattr(module, "tool_calling_models", broken)
+    code = main([
+        "--scenarios", str(tmp_path / "s.yaml"), "--library", str(tmp_path / "l.yaml"),
+        "--planning-model", "gpt-6-luna",
+    ])
+    assert code == 2 and "bad models.yaml" in capsys.readouterr().err
+
+
+def test_the_cli_rejects_an_unknown_planning_model(tmp_path, monkeypatch, capsys):
+    import minemydinner.evaluation.planning as module
+
+    monkeypatch.setattr(module, "get_settings", lambda: pytest.fail("must stop first"))
+    code = main([
+        "--scenarios", str(tmp_path / "s.yaml"), "--library", str(tmp_path / "l.yaml"),
+        "--planning-model", "nope-9",
+    ])
+    err = capsys.readouterr().err
+    assert code == 2 and "nope-9" in err and "gpt-6-luna" in err and "deepseek-flash" in err
+    assert "gemini-embedding-001" not in err
+
+
+def _fixture_run(root, run_id, model, rows):
+    import json
+
+    folder = root / run_id
+    folder.mkdir(parents=True)
+    summary = {"run_id": run_id, "conditions": {"planning_model": model}}
+    (folder / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    lines = [json.dumps(row, ensure_ascii=False) for row in rows]
+    (folder / "results.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return folder
+
+
+def test_notes_review_writes_one_row_per_plan_scenario(tmp_path):
+    import csv
+
+    from minemydinner.evaluation.notes_review import HEADER, main as review
+
+    first = _fixture_run(tmp_path, "R1", "gpt-6-luna", [
+        {"name": "one", "titles": ["糖醋小排", "清炒小白菜"], "reply_note": "先腌糖醋小排。",
+         "note_flags": [], "note_checked": True},
+        {"name": "stop", "titles": [], "reply_note": "", "note_flags": [], "note_checked": False},
+        {"name": "two", "titles": ["糖醋小排"], "reply_note": "两荤一素。",
+         "note_flags": ["counts_dishes", "multi_sentence"], "note_checked": True},
+    ])
+    second = _fixture_run(tmp_path, "R2", "deepseek-flash", [
+        {"name": "one", "titles": ["糖醋小排"], "reply_note": "Start now.",
+         "note_flags": ["wrong_locale"], "note_checked": True},
+    ])
+    out = tmp_path / "review.csv"
+    assert review(["--runs", str(first), str(second), "--out", str(out)]) == 0
+    rows = list(csv.reader(out.read_text(encoding="utf-8-sig").splitlines()))
+    assert rows[0] == HEADER == [
+        "model", "run_id", "scenario", "plan_titles", "note", "flags", "quality",
+        "should_not_appear", "comment",
+    ]
+    assert len(rows) == 4
+    assert rows[1] == [
+        "gpt-6-luna", "R1", "one", "糖醋小排 / 清炒小白菜", "先腌糖醋小排。", "", "", "", ""
+    ]
+    assert rows[2][2] == "two" and rows[2][5] == "counts_dishes,multi_sentence"
+    assert rows[3][:3] == ["deepseek-flash", "R2", "one"] and rows[3][6:] == ["", "", ""]

@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from minemydinner.agent.graph import OTHER_REPLY_EN, GraphDeps, build_graph
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import get_request_style, set_request_style
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from minemydinner.agent.checkpoint import open_checkpointer
 from minemydinner.api import chat as chat_module
@@ -116,7 +116,7 @@ def test_create_thread_returns_uuid_and_empty_history(client, chat_env):
     assert str(uuid.UUID(tid)) == tid
     r = client.get(f"/api/chat/threads/{tid}")
     assert r.status_code == 200
-    assert r.json() == {"messages": [], "current_plan": None, "pending": None}
+    assert r.json() == {"items": [], "messages": [], "current_plan": None, "pending": None}
 
 
 def test_message_streams_progress_plan_and_done(client, chat_env):
@@ -351,7 +351,130 @@ def test_thread_existence_with_the_postgres_checkpointer(
             created.append(tid)
             r = client.get(f"/api/chat/threads/{tid}")
             assert r.status_code == 200
-            assert r.json() == {"messages": [], "current_plan": None, "pending": None}
+            assert r.json() == {"items": [], "messages": [], "current_plan": None, "pending": None}
         finally:
             for thread_id in created:
                 saver.delete_thread(thread_id)
+
+
+def items_of(client, tid) -> list[dict]:
+    return client.get(f"/api/chat/threads/{tid}").json()["items"]
+
+
+def test_plan_is_stored_with_its_reply(client, chat_env):
+    tid = new_thread(client)
+    sse(post_message(client, tid, "first dinner", "en"))
+    sse(post_message(client, tid, "second dinner", "en"))
+    items = items_of(client, tid)
+    assert [i["type"] for i in items] == ["user", "assistant", "user", "assistant"]
+    first, second = items[1], items[3]
+    assert first["id"] != second["id"]
+    assert first["text"] == "Here is your dinner." and first["plan"]["passed"] is True
+    assert second["plan"] is not None
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user", "assistant"]
+    assert body["current_plan"] == second["plan"]
+
+
+def test_empty_note_plan_is_a_card_only_item(client, tmp_path, session, recipe):
+    model = ScriptedChatModel(
+        replies=[tool_call("get_recipe", {"recipe_id": recipe.id}), final_proposal([recipe.id], "")],
+        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]},
+    )
+    install(tmp_path, session, model, "plan_then_adjust")
+    tid = new_thread(client)
+    sse(post_message(client, tid, "dinner", "en"))
+    items = items_of(client, tid)
+    assert [i["type"] for i in items] == ["user", "assistant"]
+    assert items[1]["text"] == "" and items[1]["plan"] is not None
+    # The old messages list still leaves the empty reply out.
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    assert [m["role"] for m in body["messages"]] == ["user"]
+
+
+def test_questions_stay_in_the_history(client, chat_env_first_use):
+    tid = new_thread(client)
+    sse(post_message(client, tid, "dinner please", "en"))
+    sse(post_resume(client, tid, "ask_first"))
+    sse(post_resume(client, tid, "two dishes"))
+    items = items_of(client, tid)
+    kinds = [i["type"] for i in items]
+    assert kinds == ["user", "question", "question", "user", "assistant"]
+    assert items[0]["text"] == "dinner please"
+    assert items[1]["value"] == {"kind": "request_style"}
+    assert items[2]["value"]["kind"] == "question"
+    assert items[3]["text"] == "two dishes"
+    assert items[4]["plan"] is not None
+
+
+def test_pending_question_is_not_an_item_yet(client, chat_env_first_use):
+    tid = new_thread(client)
+    sse(post_message(client, tid, "dinner please", "en"))
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    assert body["pending"] == {"kind": "request_style"}
+    assert [i["type"] for i in body["items"]] == ["user"]
+
+
+def test_old_thread_without_reply_plans_reads(client, chat_env):
+    runtime = app.dependency_overrides[get_chat_runtime]()
+    tid = new_thread(client)
+    old_plan = {"recipes": [], "passed": True}
+    runtime.graph.update_state(
+        {"configurable": {"thread_id": tid}},
+        {
+            "messages": [HumanMessage("hi"), AIMessage("old reply")],
+            "current_plan": old_plan,
+        },
+        as_node="__start__",
+    )
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    assert body["current_plan"] == old_plan
+    assert [i["type"] for i in body["items"]] == ["user", "assistant"]
+    assert all(i["plan"] is None for i in body["items"] if i["type"] == "assistant")
+
+
+def test_display_records_never_reach_models(client, chat_env_first_use):
+    tid = new_thread(client)
+    sse(post_message(client, tid, "dinner please", "en"))
+    sse(post_resume(client, tid, "ask_first"))
+    sse(post_resume(client, tid, "two dishes"))
+    earlier = [i for i in items_of(client, tid) if i["type"] in ("assistant", "question")]
+    earlier_plan = next(i["plan"] for i in earlier if i["type"] == "assistant")
+    questions = [i["value"] for i in earlier if i["type"] == "question"]
+    assert earlier_plan is not None and len(questions) == 2
+
+    # The next turn asks the ask-first question again; answer it so the planner runs.
+    chat_env_first_use.model.sent.clear()
+    first = sse(post_message(client, tid, "another one", "en"))
+    assert of(first, "interrupt")[0]["kind"] == "question"
+    second = sse(post_resume(client, tid, "two dishes again"))
+    assert "plan" in names(second)
+
+    sent = chat_env_first_use.model.sent
+    # Route, parse, and the planner's calls all happened on this turn.
+    assert len(sent) >= 4
+    text = "\n".join(str(m.content) for call in sent for m in call)
+    # The planner's own tool results may name the recipe, so check what only a stored plan
+    # or question record would contain.
+    # Keys the planner's own tool results never use.
+    plan_only_keys = [
+        "defaults_used",
+        "servings_notes",
+        "left_out_unknown_allergens",
+        "semantic_paused",
+        "next_actions",
+        "headcount",
+        "unmet",
+        "reasons",
+    ]
+    forbidden = [
+        json.dumps(earlier_plan, ensure_ascii=False),
+        str(earlier_plan),
+        # Plan keys as they would be serialized; bare names appear in the planner's prompt.
+        *(f'"{key}":' for key in plan_only_keys),
+        *(f"'{key}':" for key in plan_only_keys),
+        *(json.dumps(q, ensure_ascii=False) for q in questions),
+        *(str(q) for q in questions),
+    ]
+    for marker in forbidden:
+        assert marker not in text, marker
