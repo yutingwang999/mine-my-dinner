@@ -50,7 +50,7 @@ Records that say `plan_v1` or `plan_v2` keep that label.
 | Version | Change |
 | --- | --- |
 | `allergen_suggest_v1` | The Phase 0 prompt, moved unchanged from a constant in the code into a file: which listed allergens the ingredient may contain. The file ends with one newline, which `load_prompt` removes, so the loaded text equals the old constant. |
-| `allergen_suggest_v2` (current) | Also asks for one category from `CATEGORIES` and one stock mode from `STOCK_MODES`, with one line for each stock mode (`count`, `level`, `availability`). The allergen instruction is v1's. Not yet checked against a real model (the check is planned as Task 7 of the import and dictionary plan). |
+| `allergen_suggest_v2` (current) | Also asks for one category from `CATEGORIES` and one stock mode from `STOCK_MODES`, with one line for each stock mode (`count`, `level`, `availability`). The allergen instruction is v1's. Checked on 2026-11-17 (import and dictionary plan, Task 7) with `python -m minemydinner.evaluation.allergen_suggest` over the 18 names in `backend/eval_data/allergen_suggest/names.yaml` (the set the user approved on 2026-11-17), on the configured `allergen_suggestions` model (gemini-3.5-flash-lite, no fallback used), test database, $0.0026: category 18/18, allergens 17/18, stock mode 15/18. Mismatches: 豆腐 stock mode `level` (expected `count`); 基围虾 stock mode `count` (expected `level`) and allergens crustaceans plus shellfish (expected crustaceans only, the safe direction); shiitake mushroom stock mode `count` (expected `level`). The stock-mode misses are household judgement calls that the user confirms anyway; the user decided to keep v2. |
 
 ## Prompts without a version yet
 

@@ -3,6 +3,11 @@
 # the paid run, and they follow the seed dictionary's convention (seasonings are availability,
 # bulk goods are level, pieces are count). Which stock mode suits an ingredient is partly a
 # household choice.
+#
+# Reviewed and approved by the user on 2026-11-17 before the first paid check of
+# allergen_suggest_v2 (result in docs/prompt-versions.md). Keep this set unchanged so
+# later prompt versions are compared like for like; if it must change, add a new file
+# (for example names_v2.yaml) and say which set each recorded result used.
 names:
   - {name: 鸡蛋, category: egg and dairy, stock_mode: count, allergens: [egg]}
   - {name: 土豆, category: vegetable, stock_mode: count, allergens: []}

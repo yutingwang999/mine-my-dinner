@@ -164,7 +164,7 @@ After every evaluation, add a round to `docs/planning-evaluation-history.md`: wh
 
 ### Suggestion check
 
-The suggestion check calls the configured `allergen_suggestions` model once for each name in `backend/eval_data/allergen_suggest/names.yaml` and compares the suggested allergens (as a set), category, and stock mode with the expected values. It reports how many match per field, lists the mismatches, and prints the cost from the `llm_calls` rows it wrote. It uses the real model, so each run costs money (about one cent for 18 names); run it only on purpose. The expected values are a household judgement that the user reviews before a run.
+The suggestion check calls the configured `allergen_suggestions` model once for each name in `backend/eval_data/allergen_suggest/names.yaml` and compares the suggested allergens (as a set), category, and stock mode with the expected values. It reports how many match per field, lists the mismatches, and prints the cost from the `llm_calls` rows it wrote. It uses the real model, so each run costs money (about one cent for 18 names); run it only on purpose. The expected values are a household judgement; the user reviewed and approved this set on 2026-11-17. Keep the set unchanged so results of different prompt versions compare like for like; a changed set goes into a new file, and each recorded result names the set it used.
 
 Run from `backend/`, with `DATABASE_URL` pointing at the test database (the script refuses the main database):
 
