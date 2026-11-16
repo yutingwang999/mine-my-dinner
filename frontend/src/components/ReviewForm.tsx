@@ -708,6 +708,7 @@ export function ReviewForm({
               <span>{name}</span>
               <button
                 type="button"
+                className="btn-danger"
                 aria-label={t("removeSupply", { name })}
                 onClick={() => setSupplies((current) => current.filter((item) => item !== name))}
               >
@@ -779,7 +780,7 @@ export function ReviewForm({
         </div>
       )}
       <div className="form-actions">
-        <button type="submit" disabled={saving}>
+        <button type="submit" className="btn-primary" disabled={saving}>
           {saving && imagesFailed === null ? t("saving") : t("save")}
         </button>
         {actions}

@@ -46,7 +46,7 @@ export function LanguageSwitcher() {
           <span>{t("switchWarning", { count: drafts.length })}</span>{" "}
           <button
             type="button"
-            className="danger"
+            className="btn-danger-solid"
             onClick={() => router.push(pathname, { locale: confirming })}
           >
             {t("switchAnyway")}

@@ -110,6 +110,19 @@ describe("inventory", () => {
     });
   });
 
+  it("uses the shared button classes: Remove danger", async () => {
+    search = new URLSearchParams("tab=always");
+    setup();
+    const salt = within(await screen.findByTestId("always-3"));
+    expect(salt.getByRole("button", { name: "Remove" })).toHaveClass("btn-danger");
+  });
+
+  it("makes the add button of a stock row primary", async () => {
+    setup();
+    await choose("鸡蛋");
+    expect(await screen.findByRole("button", { name: "Add to inventory" })).toHaveClass("btn-primary");
+  });
+
   it("removes an always-in-stock item", async () => {
     search = new URLSearchParams("tab=always");
     setup();
@@ -184,6 +197,64 @@ describe("inventory paging", () => {
   });
 });
 
+describe("inventory search and descriptions", () => {
+  const empty = {
+    "GET /api/inventory": () => [],
+    "GET /api/ingredients": () => [],
+    "GET /api/always-in-stock": () => [],
+    "GET /api/cookware-owned": () => [],
+    "GET /api/cookware": () => [],
+  };
+
+  it("filters the stock list live and returns to page 1", async () => {
+    mockFetch({ ...empty, "GET /api/inventory": () => rows(25) });
+    renderWithProviders(<InventoryManager />);
+    await screen.findByTestId("inventory-100");
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByTestId(/^inventory-/)).toHaveLength(5);
+    const box = screen.getByRole("searchbox", { name: "Find by name" });
+    expect(box).toHaveAttribute("placeholder", "Find by name");
+    await userEvent.type(box, "库存0");
+    expect(screen.getAllByTestId(/^inventory-/)).toHaveLength(9);
+    expect(screen.getByText("9 items")).toBeInTheDocument();
+    await userEvent.clear(box);
+    await userEvent.type(box, "zzz");
+    expect(screen.getByText("Nothing matches.")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["always", "GET /api/always-in-stock", "always-"],
+    ["cookware", "GET /api/cookware-owned", "owned-"],
+  ])("filters the %s list", async (tab, route, prefix) => {
+    search = new URLSearchParams(`tab=${tab}`);
+    const items = Array.from({ length: 25 }, (_, index) => ({
+      id: 300 + index,
+      name_zh: `项${String(index + 1).padStart(2, "0")}`,
+      name_en: index === 2 ? "Wok" : null,
+    }));
+    mockFetch({ ...empty, [route]: () => items });
+    renderWithProviders(<InventoryManager />);
+    await screen.findByTestId(`${prefix}300`);
+    const box = screen.getByRole("searchbox", { name: "Find by name" });
+    await userEvent.type(box, "wok");
+    expect(screen.getAllByTestId(new RegExp(`^${prefix}`))).toHaveLength(1);
+    await userEvent.clear(box);
+    await userEvent.type(box, "zzz");
+    expect(screen.getByText("Nothing matches.")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["stock", /What you have at home right now/],
+    ["always", /Things you always have, like salt/],
+    ["cookware", /Cookware you own\. Plans only suggest/],
+  ])("describes the %s tab", async (tab, text) => {
+    search = new URLSearchParams(`tab=${tab}`);
+    mockFetch(empty);
+    renderWithProviders(<InventoryManager />);
+    expect(await screen.findByText(text)).toBeInTheDocument();
+  });
+});
+
 describe("inventory tabs", () => {
   it("shows one section at a time with counts and keeps the tab in the address", async () => {
     setup();
@@ -201,7 +272,7 @@ describe("inventory tabs", () => {
     await userEvent.click(tabs.getByRole("tab", { name: /Always in stock/ }));
     expect(replace).toHaveBeenLastCalledWith("/inventory?tab=always");
     expect(await screen.findByTestId("always-3")).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Inventory" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Stock" })).toBeNull();
 
     await userEvent.click(tabs.getByRole("tab", { name: /Cookware I own/ }));
     expect(replace).toHaveBeenLastCalledWith("/inventory?tab=cookware");

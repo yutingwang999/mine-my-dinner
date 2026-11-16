@@ -4,6 +4,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { DictionarySearch } from "@/components/DictionarySearch";
+import { useListSearch } from "@/components/ListSearch";
 import { PagedList } from "@/components/PagedList";
 import { TabPanel, Tabs } from "@/components/Tabs";
 import {
@@ -102,7 +103,7 @@ function AddInventory({ onAdded }: { onAdded: () => void }) {
             {t("expiresOn")}
             <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
           </label>
-          <button type="button" onClick={add}>
+          <button type="button" className="btn-primary" onClick={add}>
             {t("add")}
           </button>
           {error !== null && (
@@ -146,6 +147,7 @@ function RefList({
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const data = items;
+  const listSearch = useListSearch(data ?? [], (item) => [item.name_zh, item.name_en]);
 
   async function run(action: () => Promise<unknown>) {
     setError(null);
@@ -162,12 +164,14 @@ function RefList({
       <h2>{title}</h2>
       {hint && <p className="hint">{hint}</p>}
       {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
-      <PagedList items={data ?? []} list={list}>
+      {listSearch.box}
+      {listSearch.empty}
+      <PagedList key={listSearch.resetKey} items={listSearch.filtered} list={list}>
         {(visible) =>
           visible.map((item) => (
             <li key={item.id} data-testid={`${testId}-${item.id}`}>
               <span>{entryName(asEntry(item), locale)}</span>
-              <button type="button" onClick={() => run(() => remove(item.id))}>
+              <button type="button" className="btn-danger" onClick={() => run(() => remove(item.id))}>
                 {tCommon("remove")}
               </button>
             </li>
@@ -208,6 +212,7 @@ export function InventoryManager() {
   const [sort, setSort] = useState<"name" | "expiry">("name");
   const [error, setError] = useState<unknown>(null);
   const { data, reload } = useLoad(() => api.listInventory(sort), [sort]);
+  const stockSearch = useListSearch(data ?? [], (row) => [row.name_zh, row.name_en]);
   const always = useLoad(api.listAlwaysInStock, []);
   const owned = useLoad(api.listOwnedCookware, []);
   // The plan card used to link to #cookware, so that fragment still opens the cookware tab.
@@ -240,7 +245,7 @@ export function InventoryManager() {
         {tab === "stock" && (
         <section className="card">
           <div className="actions">
-            <h2>{t("title")}</h2>
+            <h2>{t("stockTitle")}</h2>
             <span className="segmented-field">
               <span id="inventory-sort-label">{t("sortLabel")}</span>
               <span className="segmented" role="group" aria-labelledby="inventory-sort-label">
@@ -257,8 +262,11 @@ export function InventoryManager() {
               </span>
             </span>
           </div>
+          <p className="hint">{t("stockHint")}</p>
           {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
-          <PagedList items={data ?? []} list="inventory">
+          {stockSearch.box}
+          {stockSearch.empty}
+          <PagedList key={stockSearch.resetKey} items={stockSearch.filtered} list="inventory">
             {(visible) =>
               visible.map((row) => (
                 <li key={row.ingredient_id} data-testid={`inventory-${row.ingredient_id}`}>
@@ -271,6 +279,7 @@ export function InventoryManager() {
                   </span>
                   <button
                     type="button"
+                    className="btn-danger"
                     onClick={async () => {
                       try {
                         await api.deleteInventory(row.ingredient_id);
@@ -310,6 +319,7 @@ export function InventoryManager() {
         {tab === "cookware" && (
         <RefList
           title={t("cookwareOwned")}
+          hint={t("cookwareOwnedHint")}
           testId="owned"
           list="owned-cookware"
           anchor="cookware"

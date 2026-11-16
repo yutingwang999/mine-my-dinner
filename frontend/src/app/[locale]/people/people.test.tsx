@@ -55,6 +55,21 @@ describe("people", () => {
     });
   });
 
+  it("uses the shared button classes: Add rule primary, Remove danger", async () => {
+    setup();
+    const friend = within(await screen.findByTestId("diner-2"));
+    expect(friend.getByRole("button", { name: "Add rule" })).toHaveClass("btn-primary");
+    expect(await friend.findByRole("button", { name: "Remove" })).toHaveClass("btn-danger");
+    expect(friend.getByRole("button", { name: "Delete" })).toHaveClass("btn-danger");
+  });
+
+  it("keeps the diner list in one card with the pager inside", async () => {
+    setup();
+    const pager = await screen.findByRole("navigation");
+    expect(pager.closest(".card")).not.toBeNull();
+    expect(pager.closest(".card")).toContainElement(screen.getByTestId("diner-2"));
+  });
+
   it("offers free text for a dietary restriction", async () => {
     setup();
     const me = within(await screen.findByTestId("diner-1"));

@@ -77,6 +77,20 @@ describe("library", () => {
     expect(item.getAllByRole("link")).toHaveLength(1);
   });
 
+  it("puts the row toggles in the compact toggle group", async () => {
+    setup();
+    const item = within(await screen.findByTestId("recipe-1"));
+    for (const button of item.getAllByRole("button")) {
+      expect(button.closest(".dish-toggles")).not.toBeNull();
+    }
+  });
+
+  it("keeps the pager inside the library card", async () => {
+    setup();
+    const pager = await screen.findByRole("navigation");
+    expect(pager.closest(".card")).not.toBeNull();
+  });
+
   it("opens one panel at a time from the row data, without a fetch", async () => {
     setup([savedRecipe({ source_url: null })]);
     const item = within(await screen.findByTestId("recipe-1"));

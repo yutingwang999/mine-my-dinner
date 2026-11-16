@@ -57,6 +57,40 @@ describe("review", () => {
     expect(within(row("葱花")).getByText("Linked to scallion")).toBeInTheDocument();
   });
 
+  it("uses the shared button classes: Save recipe primary, Remove danger", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Save recipe" })).toHaveClass("btn-primary");
+    expect(within(row("葱花")).getByRole("button", { name: "Remove" })).toHaveClass("btn-danger");
+  });
+
+  it("shows the three unmatched-line actions as one compact group, and the toggles close on a second click", async () => {
+    setup();
+    const unmatched = within(row("秘制酱"));
+    const link = unmatched.getByRole("button", { name: "Link to existing" });
+    const create = unmatched.getByRole("button", { name: "Create entry" });
+    const skip = unmatched.getByRole("button", { name: "Leave unlinked" });
+    for (const button of [link, create, skip]) expect(button.closest(".dish-toggles")).not.toBeNull();
+    expect(link.closest(".dish-toggles")).toBe(skip.closest(".dish-toggles"));
+    expect(link).toHaveAttribute("aria-expanded", "false");
+    expect(skip).not.toHaveAttribute("aria-expanded");
+    await userEvent.click(link);
+    expect(link).toHaveAttribute("aria-expanded", "true");
+    expect(unmatched.getByRole("searchbox", { name: "Search the dictionary" })).toBeInTheDocument();
+    await userEvent.click(link);
+    expect(link).toHaveAttribute("aria-expanded", "false");
+    expect(unmatched.queryByRole("searchbox", { name: "Search the dictionary" })).toBeNull();
+    await userEvent.click(create);
+    expect(create).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(create);
+    expect(create).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the undo action in the compact style", async () => {
+    setup();
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Leave unlinked" }));
+    expect(within(row("秘制酱")).getByRole("button", { name: /Undo/ }).closest(".dish-toggles")).not.toBeNull();
+  });
+
   it("shows the pasted source text beside the form", () => {
     setup({}, [draft({ provenance: { ...draft().provenance, input_text: "葱花蛋：鸡蛋两个，少量葱花" } })]);
     const source = screen.getByRole("region", { name: "Source text" });
@@ -200,7 +234,7 @@ describe("review", () => {
     await waitFor(() => expect(category).toHaveValue("soy product"));
     const stock = within(row("秘制酱")).getByRole("combobox", { name: "Stock mode" });
     expect(stock).toHaveValue("count");
-    expect(within(row("秘制酱")).getByText("Suggested, please confirm")).toBeInTheDocument();
+    expect(within(row("秘制酱")).getByText("Category and stock mode are suggested from the name; you can change them.")).toBeInTheDocument();
     await userEvent.selectOptions(stock, "availability");
     await userEvent.click(screen.getByRole("button", { name: "Create and link" }));
     await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients")).toHaveLength(1));
@@ -215,7 +249,7 @@ describe("review", () => {
     await screen.findByText(/Suggestions are unavailable/);
     expect(within(row("秘制酱")).getByRole("combobox", { name: "Category" })).toHaveValue("seasoning");
     expect(within(row("秘制酱")).getByRole("combobox", { name: "Stock mode" })).toHaveValue("level");
-    expect(within(row("秘制酱")).queryByText("Suggested, please confirm")).toBeNull();
+    expect(within(row("秘制酱")).queryByText("Category and stock mode are suggested from the name; you can change them.")).toBeNull();
   });
 
   it("links an unmatched ingredient to an existing entry", async () => {

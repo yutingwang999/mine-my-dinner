@@ -18,6 +18,8 @@ vi.mock("@/i18n/navigation", () => ({
 
 let calls: Call[];
 
+const SUGGESTED_NOTE = "Category and stock mode are suggested from the name; you can change them.";
+
 type Routes = Parameters<typeof mockFetch>[0];
 
 const BEEF = { id: 20, name_zh: "牛肉末", name_en: "minced beef", aliases_zh: [], aliases_en: [], source: "seed", category: "meat", stock_mode: "level", allergens: [], parent_id: null };
@@ -275,6 +277,84 @@ describe("dictionary", () => {
     expect(callsTo(calls, "POST", "/api/allergens/link")[0].body).toMatchObject({ remember: false });
   });
 
+  it("shows search results as a wrapping row of chips", async () => {
+    setup();
+    const row = within(await screen.findByTestId("unresolved-name-秘制酱"));
+    await userEvent.click(row.getByRole("button", { name: "Link to an existing entry" }));
+    await userEvent.type(row.getByRole("searchbox", { name: "Search the dictionary" }), "牛肉");
+    const chip = await row.findByRole("button", { name: "Choose minced beef" });
+    expect(chip).toHaveClass("chip");
+    expect(chip.closest("ul")).toHaveClass("search-results");
+  });
+
+  const LINK_NOTICE =
+    "Linked \"秘制酱\" to \"minced beef\", but \"秘制酱\" already belongs to another entry, so it was not remembered.";
+
+  async function linkBeef(remember: boolean) {
+    const row = within(await screen.findByTestId("unresolved-name-秘制酱"));
+    await chooseBeef(row);
+    if (!remember) await userEvent.click(row.getByRole("checkbox", { name: "Remember this link" }));
+    await userEvent.click(row.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/allergens/link")).toHaveLength(1));
+  }
+
+  it("says at the top of the section when a link was not remembered", async () => {
+    let linked = false;
+    setup({
+      "GET /api/allergens/unresolved": () => ({
+        entries: [{ id: 9, name: "外婆辣酱", dish_count: 1 }],
+        unmatched: linked ? [] : [{ name: "秘制酱", dish_count: 2 }],
+      }),
+      "POST /api/allergens/link": () => {
+        linked = true;
+        return { ...BEEF, linked_lines: 2, remembered: false };
+      },
+    });
+    await linkBeef(true);
+    const notice = await screen.findByText(LINK_NOTICE);
+    // It sits in the section, above the list.
+    expect(notice.compareDocumentPosition(screen.getByTestId("unresolved-entry-9"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // It stays until the next action in the section.
+    expect(screen.getByText(LINK_NOTICE)).toBeInTheDocument();
+    await userEvent.click(
+      within(screen.getByTestId("unresolved-entry-9")).getByRole("button", { name: "Confirm allergens" }),
+    );
+    expect(screen.queryByText(LINK_NOTICE)).toBeNull();
+  });
+
+  it("shows no link notice when the link was remembered", async () => {
+    setup();
+    await linkBeef(true);
+    expect(screen.queryByText(/so it was not remembered/)).toBeNull();
+  });
+
+  it("shows no link notice when remember was not checked", async () => {
+    setup({ "POST /api/allergens/link": () => ({ ...BEEF, linked_lines: 2, remembered: false }) });
+    await linkBeef(false);
+    expect(screen.queryByText(/so it was not remembered/)).toBeNull();
+  });
+
+  it("marks the primary and danger buttons with the shared classes", async () => {
+    search = new URLSearchParams("tab=mine");
+    setup();
+    const own = within(await screen.findByTestId("user-ingredient-9"));
+    expect(own.getByRole("button", { name: "Delete" })).toHaveClass("btn-danger");
+    await userEvent.click(own.getByRole("button", { name: "Edit" }));
+    expect(own.getByRole("button", { name: "Save" })).toHaveClass("btn-primary");
+  });
+
+  it("marks Save allergens and the link Confirm as primary", async () => {
+    setup();
+    const row = within(await screen.findByTestId("unresolved-name-秘制酱"));
+    await userEvent.click(row.getByRole("button", { name: "Link to an existing entry" }));
+    expect(row.getByRole("button", { name: "Confirm" })).toHaveClass("btn-primary");
+    await userEvent.click(row.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
+    expect(row.getByRole("button", { name: "Save allergens" })).toHaveClass("btn-primary");
+  });
+
   it("offers linking only for an unmatched name, and no category or stock mode for an entry", async () => {
     setup();
     const entry = within(await screen.findByTestId("unresolved-entry-9"));
@@ -293,9 +373,17 @@ describe("dictionary", () => {
     const row = await openConfirm();
     await waitFor(() => expect(row.getByRole("combobox", { name: "Category" })).toHaveValue("meat"));
     expect(row.getByRole("combobox", { name: "Stock mode" })).toHaveValue("count");
-    expect(row.getByText("Suggested, please confirm")).toBeInTheDocument();
+    expect(row.getByText(SUGGESTED_NOTE)).toBeInTheDocument();
+    expect(row.getAllByText("Suggested")).toHaveLength(2);
     await userEvent.selectOptions(row.getByRole("combobox", { name: "Category" }), "nut");
     expect(row.getByRole("combobox", { name: "Category" })).toHaveValue("nut");
+    // Changing a field removes only its badge.
+    expect(row.getAllByText("Suggested")).toHaveLength(1);
+    expect(row.getByRole("combobox", { name: "Stock mode" })).toHaveAccessibleDescription("Suggested");
+    expect(row.getByRole("combobox", { name: "Category" })).not.toHaveAccessibleDescription("Suggested");
+    await userEvent.selectOptions(row.getByRole("combobox", { name: "Stock mode" }), "level");
+    expect(row.queryByText("Suggested")).toBeNull();
+    expect(row.queryByText(SUGGESTED_NOTE)).toBeNull();
   });
 
   it("keeps the old prefill when there is no suggestion", async () => {
@@ -306,7 +394,8 @@ describe("dictionary", () => {
     await row.findByText(/Suggestions are unavailable/);
     expect(row.getByRole("combobox", { name: "Category" })).toHaveValue("other");
     expect(row.getByRole("combobox", { name: "Stock mode" })).toHaveValue("level");
-    expect(row.queryByText("Suggested, please confirm")).toBeNull();
+    expect(row.queryByText(SUGGESTED_NOTE)).toBeNull();
+    expect(row.queryByText("Suggested")).toBeNull();
   });
 
   it("sends the confirmed category and stock mode to resolve", async () => {
@@ -386,7 +475,7 @@ describe("dictionary", () => {
     search = new URLSearchParams("tab=my-cookware");
     setup();
     expect(await screen.findByRole("tab", { name: /My cookware/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("heading", { name: "My cookware entries" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "My cookware" })).toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
   });
 
@@ -465,6 +554,71 @@ describe("dictionary", () => {
     expect(screen.getAllByTestId(/^user-cookware-/)).toHaveLength(12);
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "10");
     expect(screen.getAllByTestId(/^user-cookware-/)).toHaveLength(10);
+  });
+
+  it("filters my ingredients by name and alias, case-insensitively, and returns to page 1", async () => {
+    const yam = { ...userEntries(1)[0], id: 900, name_zh: "紫薯", name_en: "Purple Yam", aliases_zh: ["地瓜"] };
+    setup({
+      "GET /api/ingredients": (_body, _init, url) =>
+        url.includes("source=user") ? [...userEntries(60), yam] : [],
+    });
+    await openTab(/My ingredients/);
+    await screen.findByTestId("user-ingredient-100");
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByText("Page 2 of 4")).toHaveLength(2);
+    const box = screen.getByRole("searchbox", { name: "Find by name" });
+    expect(box).toHaveAttribute("placeholder", "Find by name");
+    await userEvent.type(box, "自制05");
+    expect(screen.getAllByTestId(/^user-ingredient-/)).toHaveLength(10);
+    expect(screen.getAllByText("Page 1 of 1")).toHaveLength(1);
+    await userEvent.clear(box);
+    await userEvent.type(box, "yam");
+    expect(screen.getAllByTestId(/^user-ingredient-/)).toHaveLength(1);
+    await userEvent.clear(box);
+    await userEvent.type(box, "地瓜");
+    expect(screen.getByTestId("user-ingredient-900")).toBeInTheDocument();
+    await userEvent.clear(box);
+    await userEvent.type(box, "zzz");
+    expect(screen.getByText("Nothing matches.")).toBeInTheDocument();
+    expect(screen.queryByTestId("user-ingredient-900")).toBeNull();
+  });
+
+  it("filters the unknown list and my cookware", async () => {
+    setup({
+      "GET /api/cookware": (_body, _init, url) =>
+        url.includes("source=user")
+          ? [
+              { id: 60, name_zh: "面包机", name_en: "Bread maker", aliases_zh: [], aliases_en: [], source: "user", dish_count: 0 },
+              { id: 61, name_zh: "蒸锅", name_en: null, aliases_zh: [], aliases_en: [], source: "user", dish_count: 0 },
+            ]
+          : [],
+    });
+    await screen.findByTestId("unresolved-name-秘制酱");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "外婆");
+    expect(screen.queryByTestId("unresolved-name-秘制酱")).toBeNull();
+    expect(screen.getByTestId("unresolved-entry-9")).toBeInTheDocument();
+    await userEvent.clear(screen.getByRole("searchbox", { name: "Find by name" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Find by name" }), "nope");
+    expect(screen.getByText("Nothing matches.")).toBeInTheDocument();
+
+    await openTab(/My cookware/);
+    await userEvent.type(await screen.findByRole("searchbox", { name: "Find by name" }), "BREAD");
+    expect(screen.getAllByTestId(/^user-cookware-/)).toHaveLength(1);
+  });
+
+  const DESCRIPTIONS: [string, RegExp, RegExp][] = [
+    ["unresolved", /Allergens unknown/, /We don't know yet whether these ingredients contain allergens/],
+    ["mine", /My ingredients/, /Ingredients you added yourself; you can edit or delete them/],
+    ["my-cookware", /My cookware/, /Cookware you added yourself; you can delete it/],
+    ["all", /All ingredients/, /Every ingredient, built-in and your own/],
+    ["all-cookware", /All cookware/, /Every cookware item, built-in and your own/],
+  ];
+
+  it.each(DESCRIPTIONS)("describes the %s tab under its heading", async (tab, heading, text) => {
+    search = new URLSearchParams(`tab=${tab}`);
+    setup();
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+    expect(screen.getByText(text)).toBeInTheDocument();
   });
 
   it("filters the all-cookware tab", async () => {

@@ -108,6 +108,7 @@ export function AllergenPicker({ name, onChange, onSuggestion }: Props) {
       <div>
         <button
           type="button"
+          className="btn-primary"
           disabled={selected.length === 0}
           onClick={() => confirm("list", selected)}
         >

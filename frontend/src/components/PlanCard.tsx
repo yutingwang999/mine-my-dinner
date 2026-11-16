@@ -277,9 +277,11 @@ export function PlanCard({ plan, onAction, busy = false, actionable = true }: Pr
       {plan.left_out_unknown_allergens.length > 0 && (
         <div>
           <p className="hint">{t("leftOut", { count: plan.left_out_unknown_allergens.length })}</p>
-          <button type="button" aria-expanded={showLeftOut} onClick={() => setShowLeftOut(!showLeftOut)}>
-            {t("showLeftOut")}
-          </button>
+          <span className="dish-toggles">
+            <button type="button" aria-expanded={showLeftOut} onClick={() => setShowLeftOut(!showLeftOut)}>
+              {t("showLeftOut")}
+            </button>
+          </span>
           {showLeftOut && (
             <ul aria-label={t("leftOutTitles")}>
               {plan.left_out_unknown_allergens.map((title) => (

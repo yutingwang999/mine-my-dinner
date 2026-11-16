@@ -133,7 +133,7 @@ export function ImportForm() {
         </label>
         <p className="hint">{t("textHint")}</p>
         <div className="actions">
-          <button type="submit" disabled={working}>
+          <button type="submit" className="btn-primary" disabled={working}>
             {busy === "text" ? t("working") : t("textSubmit")}
           </button>
         </div>
@@ -159,7 +159,7 @@ export function ImportForm() {
         </label>
         <p className="hint">{t("urlHint")}</p>
         <div className="actions">
-          <button type="submit" disabled={working}>
+          <button type="submit" className="btn-primary" disabled={working}>
             {busy === "url" ? t("working") : t("urlSubmit")}
           </button>
         </div>
@@ -187,7 +187,7 @@ export function ImportForm() {
         </label>
         <p className="hint">{t("screenshotsHint")}</p>
         <div className="actions">
-          <button type="submit" disabled={working || images.length === 0}>
+          <button type="submit" className="btn-primary" disabled={working || images.length === 0}>
             {busy === "screenshots" ? t("working") : t("screenshotsSubmit")}
           </button>
         </div>
@@ -214,7 +214,7 @@ export function ImportForm() {
         </label>
         <p className="hint">{t("batchHint")}</p>
         <div className="actions">
-          <button type="submit" disabled={working || batchFile === null}>
+          <button type="submit" className="btn-primary" disabled={working || batchFile === null}>
             {busy === "batch" ? t("working") : t("batchSubmit")}
           </button>
         </div>

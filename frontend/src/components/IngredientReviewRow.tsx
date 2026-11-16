@@ -161,7 +161,7 @@ function CreateIngredient({
       </label>
       <EntryTypeFields type={type} fieldClass="mini-field" />
       <AllergenPicker name={line.name} onChange={setAllergens} onSuggestion={type.applySuggestion} />
-      <button type="button" disabled={busy || owner !== null} onClick={create}>
+      <button type="button" className="btn-primary" disabled={busy || owner !== null} onClick={create}>
         {busy ? t("creating") : t("create")}
       </button>
       <button type="button" onClick={onCancel}>
@@ -380,7 +380,7 @@ export function IngredientReviewRow({
             {t("choiceOut")}
           </button>
         )}
-        <button type="button" onClick={onRemove}>
+        <button type="button" className="btn-danger" onClick={onRemove}>
           {t("remove")}
         </button>
       </div>
@@ -405,16 +405,18 @@ export function IngredientReviewRow({
         {line.ingredient_id !== null ? (
           <>
             {t("matched", { name: line.linkedName ?? line.name })}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                const name = line.linkedName ?? line.name;
-                setPrevious({ id: line.ingredient_id as number, name });
-                update({ ingredient_id: null, linkedName: null, touched: true, linkedByHand: false });
-              }}
-            >
-              {t("unlink")}
-            </button>
+            <span className="dish-toggles">
+              <button
+                type="button"
+                onClick={() => {
+                  const name = line.linkedName ?? line.name;
+                  setPrevious({ id: line.ingredient_id as number, name });
+                  update({ ingredient_id: null, linkedName: null, touched: true, linkedByHand: false });
+                }}
+              >
+                {t("unlink")}
+              </button>
+            </span>
             {line.linkedByHand && (
               <label className="mini-field inline">
                 <input
@@ -429,33 +431,45 @@ export function IngredientReviewRow({
         ) : line.skipped ? (
           <>
             {t("skipped")}{" "}
-            <button type="button" onClick={() => update({ skipped: false, touched: true })}>
-              {t("undoSkip")}
-            </button>
+            <span className="dish-toggles">
+              <button type="button" onClick={() => update({ skipped: false, touched: true })}>
+                {t("undoSkip")}
+              </button>
+            </span>
           </>
         ) : (
           <>
             <strong>{t("unmatched")}</strong>
-            {previous && (
-              <button type="button" onClick={() => link(previous.id, previous.name)}>
-                {t("undoUnlink")}
+            <span className="dish-toggles">
+              {previous && (
+                <button type="button" onClick={() => link(previous.id, previous.name)}>
+                  {t("undoUnlink")}
+                </button>
+              )}
+              <button
+                type="button"
+                aria-expanded={mode === "link"}
+                onClick={() => setMode(mode === "link" ? "idle" : "link")}
+              >
+                {t("linkExisting")}<span aria-hidden="true"> {mode === "link" ? "▴" : "▾"}</span>
               </button>
-            )}
-            <button type="button" onClick={() => setMode("link")}>
-              {t("linkExisting")}
-            </button>
-            <button type="button" onClick={() => setMode("create")}>
-              {t("createEntry")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPrevious(null);
-                update({ skipped: true, touched: true });
-              }}
-            >
-              {t("skip")}
-            </button>
+              <button
+                type="button"
+                aria-expanded={mode === "create"}
+                onClick={() => setMode(mode === "create" ? "idle" : "create")}
+              >
+                {t("createEntry")}<span aria-hidden="true"> {mode === "create" ? "▴" : "▾"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPrevious(null);
+                  update({ skipped: true, touched: true });
+                }}
+              >
+                {t("skip")}
+              </button>
+            </span>
           </>
         )}
       </div>

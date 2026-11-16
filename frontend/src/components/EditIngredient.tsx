@@ -161,6 +161,7 @@ export function EditIngredient({
       <div>
         <button
           type="button"
+          className="btn-primary"
           disabled={busy || (state === "contains" && allergens.length === 0)}
           onClick={save}
         >

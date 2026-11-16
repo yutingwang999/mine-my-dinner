@@ -66,7 +66,7 @@ export function Composer({ busy, onSend, value, onChange, textareaRef }: Props) 
           }, 0);
         }}
       />
-      <button type="submit" className="composer-action" disabled={!canSend}>
+      <button type="submit" className="composer-action btn-primary" disabled={!canSend}>
         {t("send")}
       </button>
     </form>

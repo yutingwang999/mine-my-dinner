@@ -9,6 +9,7 @@ import { DictionaryBrowser } from "@/components/DictionaryBrowser";
 import { DictionarySearch } from "@/components/DictionarySearch";
 import { EditIngredient } from "@/components/EditIngredient";
 import { EntryTypeFields, useEntryType } from "@/components/EntryTypeFields";
+import { entryNames, useListSearch } from "@/components/ListSearch";
 import { PagedList } from "@/components/PagedList";
 import { TabPanel, Tabs } from "@/components/Tabs";
 import { type Allergen, api, entryName, type IngredientEntry } from "@/lib/api";
@@ -17,6 +18,8 @@ import { useLoad } from "@/lib/useLoad";
 import { useUrlTab } from "@/lib/useUrlTab";
 
 type Target = { name: string } | { ingredient_id: number };
+
+type LinkNotice = { name: string; entry: string };
 
 /** Saving needs a confirmed value: a list, or an explicit "contains none". */
 function ConfirmPanel({
@@ -71,7 +74,7 @@ function ConfirmPanel({
         <button type="button" disabled={busy} onClick={onCancel}>
           {tCommon("cancel")}
         </button>
-        <button type="button" disabled={allergens === null || busy} onClick={save}>
+        <button type="button" className="btn-primary" disabled={allergens === null || busy} onClick={save}>
           {t("saveAllergens")}
         </button>
       </div>
@@ -87,7 +90,8 @@ function LinkPanel({
 }: {
   name: string;
   onCancel: () => void;
-  onResolved: () => void;
+  /** Gets the link notice to show when the name could not be remembered, else null. */
+  onResolved: (notice: LinkNotice | null) => void;
 }) {
   const t = useTranslations("dictionary");
   const tReview = useTranslations("review");
@@ -104,8 +108,9 @@ function LinkPanel({
     setBusy(true);
     setError(null);
     try {
-      await api.linkUnknownName(name, chosen.id, remember);
-      onResolved();
+      const linked = await api.linkUnknownName(name, chosen.id, remember);
+      // Asked to remember, but the name already belongs to another entry.
+      onResolved(remember && !linked.remembered ? { name, entry: entryName(chosen, locale) } : null);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -130,7 +135,7 @@ function LinkPanel({
         <button type="button" disabled={busy} onClick={onCancel}>
           {tCommon("cancel")}
         </button>
-        <button type="button" disabled={chosen === null || busy} onClick={confirm}>
+        <button type="button" className="btn-primary" disabled={chosen === null || busy} onClick={confirm}>
           {t("confirmLink")}
         </button>
       </div>
@@ -145,18 +150,25 @@ function ResolveRow({
   dishCount,
   target,
   onResolved,
+  onAct,
 }: {
   testId: string;
   label: string;
   name: string;
   dishCount: number;
   target: Target;
-  onResolved: () => void;
+  onResolved: (notice: LinkNotice | null) => void;
+  /** Called when the user starts something in this row, so an old notice can go. */
+  onAct: () => void;
 }) {
   const t = useTranslations("dictionary");
   // One panel at a time: the user either confirms allergens or links to an entry.
   const [panel, setPanel] = useState<"confirm" | "link" | null>(null);
   const close = () => setPanel(null);
+  const open = (next: "confirm" | "link") => {
+    onAct();
+    setPanel(next);
+  };
 
   return (
     <li data-testid={testId}>
@@ -166,18 +178,18 @@ function ResolveRow({
       </span>
       {panel === null && (
         <span className="actions">
-          <button type="button" onClick={() => setPanel("confirm")}>
+          <button type="button" onClick={() => open("confirm")}>
             {t("resolve")}
           </button>
           {"name" in target && (
-            <button type="button" onClick={() => setPanel("link")}>
+            <button type="button" onClick={() => open("link")}>
               {t("linkExisting")}
             </button>
           )}
         </span>
       )}
       {panel === "confirm" && (
-        <ConfirmPanel name={name} target={target} onCancel={close} onResolved={onResolved} />
+        <ConfirmPanel name={name} target={target} onCancel={close} onResolved={() => onResolved(null)} />
       )}
       {panel === "link" && "name" in target && (
         <LinkPanel name={target.name} onCancel={close} onResolved={onResolved} />
@@ -203,6 +215,8 @@ export function DictionaryManager() {
   const locale = useLocale();
   const { chosen: chosenTab, choose: chooseTab } = useUrlTab(TABS, "/dictionary");
   const [editingId, setEditingId] = useState<number | null>(null);
+  // Shown at the top of the unknown list until the user acts in it again.
+  const [linkNotice, setLinkNotice] = useState<LinkNotice | null>(null);
   // Bumped after any change, so the full list below shows it too.
   const [refreshKey, setRefreshKey] = useState(0);
   const unresolved = useLoad(api.listUnresolved, []);
@@ -233,10 +247,15 @@ export function DictionaryManager() {
     unresolved.data.entries.length === 0 &&
     unresolved.data.unmatched.length === 0;
 
-  const unresolvedItems = [
+  const allUnresolvedItems = [
     ...(unresolved.data?.entries ?? []).map((entry) => ({ kind: "entry" as const, entry })),
     ...(unresolved.data?.unmatched ?? []).map((item) => ({ kind: "name" as const, item })),
   ];
+  const unresolvedSearch = useListSearch(allUnresolvedItems, (row) => [
+    row.kind === "entry" ? row.entry.name : row.item.name,
+  ]);
+  const mineSearch = useListSearch(ingredients.data ?? [], entryNames);
+  const cookwareSearch = useListSearch(cookware.data ?? [], entryNames);
 
   return (
     <div>
@@ -251,9 +270,16 @@ export function DictionaryManager() {
         {tab === "unresolved" && (
           <section className="card">
             <h2>{t("unresolved")}</h2>
+            {linkNotice !== null && (
+              <p role="status" className="notice notice-info">
+                {t("linkNotRemembered", linkNotice)}
+              </p>
+            )}
             <p className="hint">{t("unresolvedHint")}</p>
             {nothingUnresolved && <p>{t("allResolved")}</p>}
-            <PagedList items={unresolvedItems} list="unresolved">
+            {unresolvedSearch.box}
+            {unresolvedSearch.empty}
+            <PagedList key={unresolvedSearch.resetKey} items={unresolvedSearch.filtered} list="unresolved">
               {(visible) =>
                 visible.map((row) =>
                   row.kind === "entry" ? (
@@ -264,7 +290,11 @@ export function DictionaryManager() {
                       name={row.entry.name}
                       dishCount={row.entry.dish_count}
                       target={{ ingredient_id: row.entry.id }}
-                      onResolved={reloadAll}
+                      onResolved={(notice) => {
+                        setLinkNotice(notice);
+                        reloadAll();
+                      }}
+                      onAct={() => setLinkNotice(null)}
                     />
                   ) : (
                     <ResolveRow
@@ -274,7 +304,11 @@ export function DictionaryManager() {
                       name={row.item.name}
                       dishCount={row.item.dish_count}
                       target={{ name: row.item.name }}
-                      onResolved={reloadAll}
+                      onResolved={(notice) => {
+                        setLinkNotice(notice);
+                        reloadAll();
+                      }}
+                      onAct={() => setLinkNotice(null)}
                     />
                   ),
                 )
@@ -288,7 +322,9 @@ export function DictionaryManager() {
             <h2>{t("userIngredients")}</h2>
             <p className="hint">{t("seedNotice")}</p>
             {ingredients.data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
-            <PagedList items={ingredients.data ?? []} list="my-ingredients">
+            {mineSearch.box}
+            {mineSearch.empty}
+            <PagedList key={mineSearch.resetKey} items={mineSearch.filtered} list="my-ingredients">
               {(visible) =>
                 visible.map((entry) => (
                   <li key={entry.id} data-testid={`user-ingredient-${entry.id}`}>
@@ -338,8 +374,11 @@ export function DictionaryManager() {
         {tab === "my-cookware" && (
           <section className="card">
             <h2>{t("userCookware")}</h2>
+            <p className="hint">{t("userCookwareHint")}</p>
             {cookware.data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
-            <PagedList items={cookware.data ?? []} list="my-cookware">
+            {cookwareSearch.box}
+            {cookwareSearch.empty}
+            <PagedList key={cookwareSearch.resetKey} items={cookwareSearch.filtered} list="my-cookware">
               {(visible) =>
                 visible.map((entry) => (
                   <li key={entry.id} data-testid={`user-cookware-${entry.id}`}>

@@ -210,20 +210,27 @@ Added by the user's decisions on 2026-11-16 after checking Task 5 in the browser
 Added by the user's decisions on 2026-11-16.
 
 **Files:**
-- Modify: `frontend/src/components/DictionarySearch.tsx`, `frontend/src/components/EntryTypeFields.tsx`, `frontend/src/components/DictionaryManager.tsx`, `frontend/src/app/globals.css`, the button markup in the dictionary page and the import and review pages (`DictionaryBrowser.tsx`, `DictionaryManager.tsx`, `EditIngredient.tsx`, `ConfirmDelete.tsx`, `ImportForm.tsx`, `ReviewForm.tsx`, `ReviewQueue.tsx`, `IngredientReviewRow.tsx`, `CookwareReviewRow.tsx`, `AllergenPicker.tsx`), `frontend/messages/en.json`, `frontend/messages/zh.json`, `docs/phase-1-carryover.md`
+- Modify: `frontend/src/components/DictionarySearch.tsx`, `frontend/src/components/EntryTypeFields.tsx`, `frontend/src/components/DictionaryManager.tsx`, `frontend/src/app/globals.css`, the button markup on every page (`DictionaryBrowser.tsx`, `DictionaryManager.tsx`, `EditIngredient.tsx`, `ConfirmDelete.tsx`, `ImportForm.tsx`, `ReviewForm.tsx`, `ReviewQueue.tsx`, `IngredientReviewRow.tsx`, `CookwareReviewRow.tsx`, `AllergenPicker.tsx`, `RecipeLibrary.tsx`, `RecipePage.tsx`, `InventoryManager.tsx`, `PeopleManager.tsx`, `Pager.tsx`, `PagedList.tsx`, the chat components), `frontend/messages/en.json`, `frontend/messages/zh.json`, `docs/phase-1-carryover.md`
 - Test: the existing tests of those components
 
 **Interfaces:**
 - **Search results** (`DictionarySearch`, shared by review, inventory, people, and dictionary): results are a wrapping row of chip buttons, left to right, a new row when one is full; a gap of at least 0.5rem between the search box and the first result. Keyboard and screen-reader behaviour stays as today.
 - **Suggestion labels** (`EntryTypeFields`): replace the single "建议值，请确认" hint with a one-line note above the two fields, zh "分类和库存方式是按名字自动建议的，可以修改。" / en "Category and stock mode are suggested from the name; you can change them.", and a small "建议" / "Suggested" badge next to each field's label while that field still holds the suggested value; changing a field removes its badge. No badge and no note when the suggestion is null.
 - **Link notice** (unknown list, "关联到已有条目"): when the answer has `remembered: false` although remember was checked, show at the top of the "allergens unknown" section zh "已把“{name}”关联到“{entry}”，但“{name}”已经是其他条目的名称或别名，所以没有记住。" / en "Linked \"{name}\" to \"{entry}\", but \"{name}\" already belongs to another entry, so it was not remembered."; it stays until the next action in that section.
-- **One button style** on the dictionary, import, and review pages: primary (save, confirm, create, import: filled accent), secondary (cancel, edit, link: white with a thin border), compact toggle (我的别名, the review row's mode toggles where they toggle a panel: the 28 px faint-fill `.dish-toggles` style), danger (delete: soft red text). Shared CSS classes, not per-component styles. Other pages (library, inventory, people, chat) keep their buttons for now; record that in `docs/phase-1-carryover.md`.
+- **One button style** on the dictionary, import, and review pages: primary (save, confirm, create, import: filled accent), secondary (cancel, edit, link: white with a thin border), compact toggle (我的别名, the review row's mode toggles where they toggle a panel: the 28 px faint-fill `.dish-toggles` style), danger (delete: soft red text). Shared CSS classes, not per-component styles. **Scope widened by the user after Task 5b:** the same button classes and the alignment fixes below apply to every page (chat, import, review, library and recipe detail, inventory, people, dictionary).
+- **Alignment (user request; measured by the controller in the browser on 2026-11-16):**
+  - One control height for inputs, selects, and buttons (today selects are 34 px and inputs and buttons 37 px on every page: the pager's page-size select, the library's category select, the people page's rule selects). Compact toggles stay 28 px.
+  - Import page: the three lower cards (web link, screenshots, text file) put their action buttons at different heights (749 vs 762 px); the actions sit at the bottom of each card, aligned across the row. The native file inputs ("选择文件 未选择任何文件") are styled as a secondary button with the file name or "no file chosen" as plain text next to it.
+  - People page: in the add-rule form the labels sit above small selects and the "添加规则" button does not line up with the selects; controls of one form row align on their bottom edge (button level with the selects). The diner list's pager sits inside a card like the other lists.
+  - Pager placement: on every list the pager sits at the top inside the list's card (dictionary and inventory already do; library and people do not).
+  - Rows with a title, a hint, and buttons (dictionary, inventory, library, people) centre their parts vertically on one line; text baselines in a row agree.
+  - Phone width: forms wrap, nothing scrolls horizontally.
 
 - [ ] **Step 1: Write the failing tests** — search results render as a wrapping list of chips; the suggestion badges appear and disappear as described; the link notice appears only for `remembered: false` with remember checked; buttons carry the shared classes (one test per page).
 - [ ] **Step 2: Run them to see them fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `npm test`, `npm run lint`.
-- [ ] **Step 5: User browser check** of the dictionary, import, and review pages.
+- [ ] **Step 5: User browser check** of every page.
 - [ ] **Step 6: User commit.**
 
 ### Task 6: Amount controls in the review form

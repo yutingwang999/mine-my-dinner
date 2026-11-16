@@ -7,6 +7,9 @@
   --accent: #2f6f4f;
   --accent-text: #ffffff;
   --control: #ffffff;
+  /* One height for inputs, selects, and buttons; compact toggles are 1.75rem. */
+  --control-height: 2.25rem;
+  --danger: color-mix(in srgb, #d64545 75%, var(--foreground));
   /* Chat bubbles: soft green for the user; assistant text has no bubble. */
   --bubble-user: color-mix(in srgb, var(--accent) 15%, var(--background));
 }
@@ -134,13 +137,43 @@ textarea {
   background: var(--control);
 }
 
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select {
+  height: var(--control-height);
+  padding-block: 0;
+}
+
+/* A native file input reads as a secondary button with the file name as plain text beside it. */
+input[type="file"] {
+  max-width: 100%;
+  font-weight: normal;
+}
+
+input[type="file"]::file-selector-button {
+  height: var(--control-height);
+  margin-right: 0.6rem;
+  padding: 0 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--control);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+input[type="file"]:hover::file-selector-button {
+  border-color: var(--accent);
+}
+
 textarea {
   width: 100%;
   resize: vertical;
 }
 
+/* A plain button is the secondary style; primary and danger are marked with a class. */
 button {
-  padding: 0.35rem 0.85rem;
+  min-height: var(--control-height);
+  padding: 0 0.85rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--control);
@@ -156,10 +189,25 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button[type="submit"] {
+button[type="submit"],
+.btn-primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-text);
+}
+
+button.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--foreground));
+}
+
+/* btn-danger: soft red text on the secondary look, for the first click of delete and remove.
+   btn-danger-solid: filled red, only for the final "yes, delete" inside a confirm box. */
+button.btn-danger {
+  color: var(--danger);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
 }
 
 .card {
@@ -250,6 +298,11 @@ button[type="submit"] {
   grid-column: 1 / -1;
 }
 
+/* The cards of one row have the same height, so their actions sit at the same bottom edge. */
+.import-grid > .card > .actions {
+  margin-top: auto;
+}
+
 .import-grid input[type="text"] {
   width: 100%;
 }
@@ -297,16 +350,21 @@ button[type="submit"] {
   opacity: 0.75;
 }
 
-.review-form input,
-.review-form select,
-.review-form textarea,
-.review-form button {
+.review-form textarea {
   font: inherit;
   padding: 0.25rem 0.5rem;
 }
 
-.review-form button {
-  cursor: pointer;
+/* Phone width: the label sits above its field instead of beside it. */
+@media (max-width: 40rem) {
+  .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .field-note {
+    margin-left: 0;
+  }
 }
 
 .line-list {
@@ -341,11 +399,12 @@ button[type="submit"] {
   opacity: 0.75;
 }
 
+/* Controls of one form row share their bottom edge, so a button sits level with the selects. */
 .line-fields {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
-  align-items: end;
+  align-items: flex-end;
 }
 
 .mini-field {
@@ -355,8 +414,31 @@ button[type="submit"] {
   font-size: 0.8rem;
 }
 
+.mini-field input,
+.mini-field select {
+  font-size: 1rem;
+}
+
 .mini-field input[type="number"] {
   width: 6rem;
+}
+
+/* A label with a small "Suggested" badge beside its text. */
+.field-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.suggested-badge {
+  padding: 0 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .mini-field.inline {
@@ -492,6 +574,75 @@ button[type="submit"] {
   list-style: none;
 }
 
+/* The diner list is one card; each diner is a block separated by a thin line. */
+.diner-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.diner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.diner:last-child {
+  border-bottom: none;
+}
+
+/* Search results: chips in a wrapping row, with room below the search box. */
+.dictionary-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.search-bar input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.search-results {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Inside a form row the search box joins the row's alignment; its results get their own line below. */
+.line-fields > .dictionary-search,
+.line-fields > .dictionary-search > .search-bar {
+  display: contents;
+}
+
+.line-fields > .dictionary-search > .search-results {
+  order: 1;
+  flex-basis: 100%;
+}
+
+.search-results:empty {
+  display: none;
+}
+
+button.chip {
+  min-height: 1.75rem;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
 /* A heading sitting in a row of actions keeps the actions on the right. */
 .actions > h2,
 .actions > h3 {
@@ -545,14 +696,14 @@ button[type="submit"] {
   background: #dc26261a;
 }
 
-button.danger {
+button.btn-danger-solid {
   background: #dc2626;
   border-color: #dc2626;
   color: #ffffff;
   font-weight: 600;
 }
 
-button.danger:hover:not(:disabled) {
+button.btn-danger-solid:hover:not(:disabled) {
   background: #b91c1c;
   border-color: #b91c1c;
 }
@@ -896,6 +1047,7 @@ body:has(.chat) {
 }
 
 .switch {
+  min-height: 0;
   position: relative;
   width: 2.5rem;
   height: 1.4rem;
@@ -1183,6 +1335,7 @@ body:has(.chat) {
 }
 
 .dish-toggles button {
+  min-height: 0;
   height: 1.75rem;
   padding: 0 0.6rem;
   font-size: 0.875rem;
@@ -1215,6 +1368,7 @@ body:has(.chat) {
 }
 
 .recipe-page-actions button {
+  min-height: 0;
   height: 1.75rem;
   padding: 0 0.6rem;
   font-size: 0.875rem;
@@ -1239,6 +1393,7 @@ body:has(.chat) {
 .tabs button.tab,
 .tabs button.tab:hover:not(:disabled) {
   flex: none;
+  min-height: 0;
   padding: 0.5rem 0.9rem;
   border: 0;
   border-radius: 0;

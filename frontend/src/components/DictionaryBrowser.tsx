@@ -101,7 +101,7 @@ function PersonalAliasPanel({
         <button type="button" disabled={busy} onClick={onClose}>
           {t("cancelPersonalAliases")}
         </button>
-        <button type="button" disabled={busy} onClick={save}>
+        <button type="button" className="btn-primary" disabled={busy} onClick={save}>
           {t("savePersonalAliases")}
         </button>
       </div>
@@ -262,6 +262,7 @@ export function DictionaryBrowser({
       {section !== "ingredients" && (
         <section className="card">
           <h2>{t("allCookware")}</h2>
+          <p className="hint">{t("allCookwareHint")}</p>
           {section === "cookware" && <div className="browse-filters">{filterInput}</div>}
           <Pager
             page={tools.current}
