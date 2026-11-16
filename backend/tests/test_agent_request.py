@@ -35,7 +35,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v2+parse_v3+planner_v3"
+    assert PROMPT_VERSION == "route_v2+parse_v3+planner_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -360,3 +360,16 @@ def test_both_sides_at_most_zero_is_a_contradiction():
     )
     assert dish_total(request, 3) == 2
     assert request_problem(request) == "split_conflicts_total"
+
+
+def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
+    import hashlib
+
+    assert PROMPT_VERSIONS["planner"] == "planner_v4"
+    v3 = (PROMPT_DIR / "planner_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    # The committed planner_v3.md (a version records used) must never change.
+    assert hashlib.sha256(v3).hexdigest() == (
+        "123206bf2e1030911e6c7ecf80a0854d9336fc1c110e2c8715f6232b7c89fa1e"
+    )
+    v4 = (PROMPT_DIR / "planner_v4.md").read_text(encoding="utf-8")
+    assert "Do not count or list" in v4 and "one sentence" in v4

@@ -228,6 +228,8 @@ __marimo__/
 data/
 # Full per-run evaluation records (summary.json, prompts, and tools.json are committed)
 backend/eval_data/planning/runs/*/results.jsonl
+# The notes review export holds model text
+backend/eval_data/planning/runs/**/notes_review*.csv
 
 # Private planning documents
 docs/private/

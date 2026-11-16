@@ -12,7 +12,7 @@ A model does two things only: it understands the user's words, and it chooses th
 | 2. Defaults | Code | `apply_defaults` in `agent/request.py` | The parsed request | The spec: the hard requirements every later step follows |
 | 3. Feasibility check | Code | `planning/feasibility.py` | The spec, the library, the fridge | Go ahead, or stop early with reasons |
 | 4. First message | Code | `agent/graph.py` | The spec and the candidate list | The text the planner reads (candidate list, then request summary) |
-| 5. Planner | Model (`planner_v3`) | `agent/planner.py` | That text, plus its tools | The chosen recipe ids |
+| 5. Planner | Model (`planner_v4`) | `agent/planner.py` | That text, plus its tools | The chosen recipe ids |
 | 6. Validation | Code | `_h4` and the other rules in `planning/validate.py` | The spec and the chosen recipes | Passed, or the rules it breaks |
 | 7. Retry message and plan card | Code | `agent/graph.py` | The validation result | Text for the planner's next attempt, and the reasons shown to the user |
 

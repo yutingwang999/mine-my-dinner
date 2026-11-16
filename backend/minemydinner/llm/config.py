@@ -116,3 +116,33 @@ def load_llm_config(
     for name, task in config.tasks.items():
         validate_task(name, task, config.models)
     return config
+
+
+def _read_config_file(path: Path) -> ConfigFile:
+    try:
+        return ConfigFile.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+    except (OSError, yaml.YAMLError, ValidationError) as error:
+        raise ConfigError(f"Cannot load model config {path}: {error}") from error
+
+
+def tool_calling_models(path: Path = CONFIG_PATH) -> list[str]:
+    """The catalog model IDs that can call tools, in catalog order."""
+    catalog = _read_config_file(path).catalog
+    return [name for name, entry in catalog.items() if "tool_calling" in entry.capabilities]
+
+
+def pin_task_model(
+    config: LLMConfig, task: str, catalog_name: str, path: Path = CONFIG_PATH
+) -> LLMConfig:
+    """A copy of `config` that runs `task` only on the catalog model `catalog_name`, with no
+    fallback. Only tool-calling models are accepted. Other tasks and the file are untouched."""
+    allowed = tool_calling_models(path)
+    if catalog_name not in allowed:
+        raise ConfigError(
+            f"Unknown or non-tool-calling model {catalog_name}; choose one of {', '.join(allowed)}"
+        )
+    entry = _read_config_file(path).catalog[catalog_name]
+    models = {**config.models, catalog_name: ModelConfig(model=catalog_name, **entry.model_dump())}
+    pinned = config.tasks[task].model_copy(update={"primary": catalog_name, "fallback": None})
+    validate_task(task, pinned, models)
+    return config.model_copy(update={"models": models, "tasks": {**config.tasks, task: pinned}})
