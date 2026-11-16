@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RecipeLibrary } from "@/components/RecipeLibrary";
@@ -8,8 +9,25 @@ import { type Call, mockFetch, renderWithProviders, savedRecipe } from "@/test/h
 
 const replace = vi.fn();
 let search = new URLSearchParams();
+const listeners = new Set<() => void>();
 
-vi.mock("next/navigation", () => ({ useSearchParams: () => search }));
+/** Change the mocked address from outside the component, as a nav link or back/forward does. */
+function navigate(query: string) {
+  search = new URLSearchParams(query);
+  act(() => listeners.forEach((listener) => listener()));
+}
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () =>
+    useSyncExternalStore(
+      (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      () => search,
+      () => search,
+    ),
+}));
 vi.mock("@/i18n/navigation", () => ({
   Link: ({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) => (
     <a href={href} className={className}>
@@ -114,6 +132,43 @@ describe("library search in the address", () => {
     await waitFor(() =>
       expect(replace).toHaveBeenLastCalledWith(`/library?q=${encodeURIComponent("蛋")}&type=soup`),
     );
+  });
+
+  it("clears the filters when the address loses its query (nav link)", async () => {
+    search = new URLSearchParams("q=鸡蛋");
+    setup();
+    await screen.findByText("番茄炒蛋");
+    const box = screen.getByRole("searchbox", { name: /Search title/ });
+    expect(box).toHaveValue("鸡蛋");
+    calls.length = 0;
+    navigate("");
+    await waitFor(() => expect(box).toHaveValue(""));
+    await waitFor(() => expect(calls.some((call) => call.path === "/api/recipes")).toBe(true));
+    expect(calls.at(-1)?.url).not.toContain("q=");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("follows a back/forward change to another search", async () => {
+    search = new URLSearchParams("q=鸡蛋");
+    setup();
+    await screen.findByText("番茄炒蛋");
+    navigate("q=番茄&type=soup&page=3");
+    const box = screen.getByRole("searchbox", { name: /Search title/ });
+    await waitFor(() => expect(box).toHaveValue("番茄"));
+    expect(screen.getByRole("combobox", { name: "Dish type" })).toHaveValue("soup");
+    await waitFor(() => expect(calls.at(-1)?.url).toContain("page=3"));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("keeps what is typed when the address catches up with it", async () => {
+    setup();
+    await screen.findByText("番茄炒蛋");
+    const box = screen.getByRole("searchbox", { name: /Search title/ });
+    await userEvent.type(box, "蛋");
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    await userEvent.type(box, "汤");
+    navigate(`q=${encodeURIComponent("蛋")}`); // the older write lands late
+    expect(box).toHaveValue("蛋汤");
   });
 
   it("passes the search to the detail link as from", async () => {

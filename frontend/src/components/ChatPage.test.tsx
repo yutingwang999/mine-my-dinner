@@ -409,6 +409,34 @@ describe("ChatPage", () => {
     expect(screen.queryByRole("heading", { name: "MineMyDinner" })).toBeNull();
   });
 
+  it("disables New conversation while the stored thread is loading", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t9");
+    setup({ "GET /api/chat/threads/t9": () => new Promise(() => {}) as never });
+    await screen.findByText("Loading the conversation…");
+    expect(screen.getByRole("button", { name: "New conversation" })).toBeDisabled();
+  });
+
+  it("shows an answered question between the user messages of a stored thread", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t4");
+    setup({
+      "GET /api/chat/threads/t4": () => ({
+        items: [
+          { type: "user", text: "dinner" },
+          { type: "question", value: { kind: "question", fields: ["mode"] } },
+          { type: "user", text: "yes" },
+        ],
+        messages: [],
+        current_plan: null,
+        pending: null,
+      }),
+    });
+    await screen.findByText(/whether to cook only from the fridge/);
+    const texts = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(texts[0]).toMatch(/dinner/);
+    expect(texts[1]).toMatch(/whether to cook only from the fridge/);
+    expect(texts[2]).toMatch(/yes/);
+  });
+
   it("reverts the switch when a request-style choice fails", async () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({

@@ -2,7 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Pager } from "@/components/Pager";
 import { RecipeToggles } from "@/components/RecipeToggles";
@@ -41,17 +41,38 @@ export function RecipeLibrary() {
   );
 
   const qs = searchString(q, dishType, page);
+  const urlQs = searchString(
+    searchParams.get("q") ?? "",
+    searchParams.get("type") ?? "",
+    Number(searchParams.get("page")) || 1,
+  );
+  // Addresses this component wrote that the URL has not reported back yet.
+  const written = useRef<string[]>([]);
+
   // Keep the address in step with the filters, replacing the entry so typing leaves no history.
   useEffect(() => {
-    const current = searchString(
-      searchParams.get("q") ?? "",
-      searchParams.get("type") ?? "",
-      Number(searchParams.get("page")) || 1,
-    );
-    if (current !== qs) router.replace(qs ? `/library?${qs}` : "/library");
+    if (urlQs !== qs) {
+      written.current.push(qs);
+      router.replace(qs ? `/library?${qs}` : "/library");
+    }
     // Only the filters drive the address; the router and params objects change every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qs]);
+
+  // Follow the address when it changes from outside (nav link, back/forward). An address this
+  // component wrote itself is not an outside change, so it must not reset what is being typed.
+  useEffect(() => {
+    const index = written.current.indexOf(urlQs);
+    if (index !== -1) {
+      written.current = written.current.slice(index + 1);
+      return;
+    }
+    written.current = [];
+    const next = new URLSearchParams(urlQs);
+    setQ(next.get("q") ?? "");
+    setDishType(next.get("type") ?? "");
+    setPage(Number(next.get("page")) || 1);
+  }, [urlQs]);
 
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 

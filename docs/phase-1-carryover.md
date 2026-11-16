@@ -78,19 +78,20 @@ Task-review and final-review findings that were judged safe to defer. None block
 
 ### Chat API and page (plan 2 or T1.9)
 
-- **Recipe detail page edge cases (chat page redesign, Task 3b review).** After saving an edit, the detail view may show the pre-edit values for a moment until the reload returns; if that reload fails, the page shows the load-failed notice with no retry button (refreshing recovers); the edit flow (save or cancel returning to the detail) has no test.
+- **Recipe detail page edge cases (chat page redesign, Task 3b review).** After saving an edit, the detail view may show the pre-edit values for a moment until the reload returns; if that reload fails, the page shows the load-failed notice with no retry button (refreshing recovers); the edit flow is tested in `recipe.test.tsx`, except that cancel returning to the detail is not.
 - **Where the language switch lives (T1.9b, decided with the user to postpone).** Today "中文 / English" sits in the top navigation on every page; switching mid-conversation makes later replies use the new language while earlier ones stay, so a conversation can mix languages. Language is a set-once preference, so options for the site-wide pass: (A) keep it on every page but quieter (a small "中 / EN" in a corner or the footer); (B) move it into a settings menu (for example ⚙ top right, which could also hold the request style). A chat note "later replies will be in English" after a mid-conversation switch was considered and not added for now.
 - **Typing while the request-style choice is pending drops the question** (found in the chat page redesign, Task 2 review; pre-existing). When the first-use "ask first / plan then adjust" choice waits and the user types a message instead of pressing a button, the run clears the pending question and no item records it. Either keep the choice visible until answered, or record it like other questions.
 - **No guard against concurrent requests on one thread** (two messages, or a message and a resume). Acceptable for one user; add a per-thread lock before anything multi-user.
 - **A new message while a question is pending starts a fresh run** and drops the pending question. Decide whether to block it (409) or keep allowing it.
 - **Progress events fire when a node finishes,** so nothing shows during the first model call. A start-of-node signal would need another stream mode.
 - **The chat runtime is built lazily** on the first request and could be built twice by two concurrent first requests; build it in `lifespan`.
-- **Only the latest plan is shown and restored after a reload;** `plan_versions` is kept in state but not returned by `GET /api/chat/threads/{id}`.
-- **The chat input is a single line;** a textarea suits long requests.
 - **The stream is not aborted when the page unmounts.**
 - **A non-404 failure while loading a stored thread** keeps the stale id in `localStorage`; the next send then starts a new thread and overwrites it.
 - **The request-style select updates before the resume returns,** so a failed resume can show a style the backend did not save until reload. A restored pending question can be stale if the backend advanced before an error event.
 - **`token` events are reserved but never sent** in this slice; the page handles them if they arrive.
+- **The message list uses `display: contents` on the aria-live list** (`frontend/src/app/globals.css`, around lines 743-745). Some engines drop list semantics or live-region behaviour with it; check with a screen reader.
+- **`PlanProposal.note` and the planner prompt disagree on length.** The schema description in `backend/minemydinner/agent/planner.py` (around line 36) says "One or two sentences to the user" while `planner_v4` says one sentence, and the model sees both. Align them in the next tool/prompt version (changing the schema description changes the tool version).
+- **The first-use request-style question has no visible answer in the history.** After "ask first" or "plan, then adjust" is answered, the history shows the question with no answer, both in the session and after a reload. A short user-side item (or "chose: ask first") would fix it; a UI decision for the user.
 
 ### Evaluation (T1.10)
 

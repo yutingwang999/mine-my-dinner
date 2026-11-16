@@ -272,7 +272,7 @@ export function ChatPage() {
         <Composer busy={busy || loading} onSend={send} value={draft} onChange={setDraft} textareaRef={inputRef} />
         <div className="chat-tools">
           <RequestStyleSwitch value={style} onChange={changeStyle} />
-          <button type="button" className="composer-action" disabled={busy} onClick={newConversation}>
+          <button type="button" className="composer-action" disabled={busy || loading} onClick={newConversation}>
             {t("newConversation")}
           </button>
         </div>

@@ -1133,7 +1133,9 @@ def group_metrics(
         "notes": {
             "checked": len(checked),
             "flags": {f: sum(f in o.note_flags for o in checked) for f in NOTE_FLAGS},
-            "flagged_rate": _rate(sum(bool(set(o.note_flags) & set(RATE_FLAGS)) for o in checked), len(checked)),
+            "flagged_rate": _rate(
+                sum(bool(set(o.note_flags) & set(RATE_FLAGS)) for o in checked), len(checked)
+            ),
         },
     }
 

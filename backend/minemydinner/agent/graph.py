@@ -1,4 +1,4 @@
-﻿import json
+import json
 import uuid
 from collections.abc import Collection
 from dataclasses import asdict, dataclass, field
