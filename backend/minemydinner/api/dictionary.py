@@ -8,7 +8,7 @@ from sqlalchemy import case, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
-from minemydinner.constants import ALLERGENS, CATEGORIES, DICTIONARY_SOURCES
+from minemydinner.constants import ALLERGENS, CATEGORIES, DICTIONARY_SOURCES, STOCK_MODES
 from minemydinner.db import get_session
 from minemydinner.dictionary.service import (
     CookwareWrite,
@@ -32,7 +32,7 @@ from minemydinner.dictionary.service import (
     update_user_cookware,
     update_user_ingredient,
 )
-from minemydinner.extraction.allergen_suggest import suggest_allergens
+from minemydinner.extraction.allergen_suggest import suggest_entry
 from minemydinner.extraction.normalize import match_ingredient, names_equal
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import (
@@ -104,6 +104,8 @@ class SuggestionIn(BaseModel):
 
 class SuggestionOut(BaseModel):
     suggested: list[str] | None
+    category: str | None = None
+    stock_mode: str | None = None
 
 
 class UnresolvedEntryOut(BaseModel):
@@ -128,6 +130,9 @@ class ResolveIn(BaseModel):
     name: str | None = None
     ingredient_id: int | None = None
     allergens: list[Literal[*ALLERGENS]]
+    # Used only when the name creates a new entry.
+    category: Literal[*CATEGORIES] | None = None
+    stock_mode: Literal[*STOCK_MODES] | None = None
 
     @model_validator(mode="after")
     def one_target(self) -> Self:
@@ -379,7 +384,14 @@ def delete_cookware(entry_id: int, session: SessionDep) -> Response:
 
 @router.post("/allergen-suggestions")
 def allergen_suggestions(body: SuggestionIn, client: ClientDep) -> SuggestionOut:
-    return SuggestionOut(suggested=suggest_allergens(client, body.name))
+    suggestion = suggest_entry(client, body.name)
+    if suggestion is None:
+        return SuggestionOut(suggested=None)
+    return SuggestionOut(
+        suggested=suggestion.allergens,
+        category=suggestion.category,
+        stock_mode=suggestion.stock_mode,
+    )
 
 
 @router.get("/allergens/unresolved")
@@ -394,7 +406,14 @@ def list_unresolved(session: SessionDep) -> UnresolvedOut:
 @router.post("/allergens/resolve")
 def resolve(body: ResolveIn, session: SessionDep) -> LinkedIngredient:
     def apply() -> LinkedIngredient:
-        entry, linked = resolve_allergens(session, body.name, body.ingredient_id, body.allergens)
+        entry, linked = resolve_allergens(
+            session,
+            body.name,
+            body.ingredient_id,
+            body.allergens,
+            body.category,
+            body.stock_mode,
+        )
         return _linked(session, entry, linked)
 
     return _committed(session, apply)

@@ -190,6 +190,18 @@ def test_resolving_unmatched_name_creates_entry_and_links_all_dishes(
     assert by_zh(session, "秘制酱").allergens == ["soy"]
 
 
+def test_resolve_uses_confirmed_category_and_stock_mode(client, session, seeded):
+    body = {"name": "秘制酱", "allergens": [], "category": "meat", "stock_mode": "count"}
+    assert client.post("/api/allergens/resolve", json=body).status_code == 200
+    entry = by_zh(session, "秘制酱")
+    assert (entry.category, entry.stock_mode) == ("meat", "count")
+    assert client.post("/api/allergens/resolve", json={"name": "神秘粉", "allergens": []}).status_code == 200
+    entry = by_zh(session, "神秘粉")
+    assert (entry.category, entry.stock_mode) == ("other", "level")
+    bad = {"name": "新菜", "allergens": [], "category": "dairy"}
+    assert client.post("/api/allergens/resolve", json=bad).status_code == 422
+
+
 def test_resolving_entry_as_none_clears_unknown(client, seeded, dishes_with_unknowns):
     entry_id = client.get("/api/allergens/unresolved").json()["entries"][0]["id"]
     client.post("/api/allergens/resolve", json={"ingredient_id": entry_id, "allergens": []})

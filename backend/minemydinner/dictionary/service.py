@@ -344,7 +344,12 @@ def unresolved_allergens(session: Session) -> tuple[list[UnresolvedEntry], list[
 
 
 def resolve_allergens(
-    session: Session, name: str | None, ingredient_id: int | None, allergens: list[str]
+    session: Session,
+    name: str | None,
+    ingredient_id: int | None,
+    allergens: list[str],
+    category: str | None = None,
+    stock_mode: str | None = None,
 ) -> tuple[Ingredient, int]:
     """Record the user's confirmed allergens, creating an entry for an unmatched name.
 
@@ -356,10 +361,14 @@ def resolve_allergens(
         name = (name or "").strip()
         entry = find_term_owner(session, Ingredient, name)
         if entry is None:
-            # Category and stock mode are guesses; the user can change them later.
+            # Without a confirmed category and stock mode they are guesses; the user can
+            # change them later.
             field = "name_zh" if CJK.search(name) else "name_en"
             entry = Ingredient(
-                **{field: name}, category="other", stock_mode="level", source="user"
+                **{field: name},
+                category=category or "other",
+                stock_mode=stock_mode or "level",
+                source="user",
             )
             session.add(entry)
     if entry.source == "user":

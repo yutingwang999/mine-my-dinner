@@ -162,3 +162,17 @@ It writes one row per scenario with a checked note, per run: `model, run_id, sce
 
 After every evaluation, add a round to `docs/planning-evaluation-history.md`: what changed since the previous round, the runs made, and a row per run in its comparison tables.
 
+### Suggestion check
+
+The suggestion check calls the configured `allergen_suggestions` model once for each name in `backend/eval_data/allergen_suggest/names.yaml` and compares the suggested allergens (as a set), category, and stock mode with the expected values. It reports how many match per field, lists the mismatches, and prints the cost from the `llm_calls` rows it wrote. It uses the real model, so each run costs money (about one cent for 18 names); run it only on purpose. The expected values are a household judgement that the user reviews before a run.
+
+Run from `backend/`, with `DATABASE_URL` pointing at the test database (the script refuses the main database):
+
+```powershell
+cd backend
+$env:DATABASE_URL = (& $py -c "from minemydinner.settings import Settings; print(Settings().test_database_url)")
+& $py -m minemydinner.evaluation.allergen_suggest --names eval_data/allergen_suggest/names.yaml
+Remove-Item Env:DATABASE_URL
+```
+
+Record the outcome next to `allergen_suggest_v2` in `docs/prompt-versions.md`.

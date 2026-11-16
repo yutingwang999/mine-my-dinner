@@ -1,0 +1,24 @@
+# Common ingredient names with the expected suggestion for each. The expected values are a
+# household judgement (a typical Chinese home cook's view) to be reviewed by the user before
+# the paid run, and they follow the seed dictionary's convention (seasonings are availability,
+# bulk goods are level, pieces are count). Which stock mode suits an ingredient is partly a
+# household choice.
+names:
+  - {name: 鸡蛋, category: egg and dairy, stock_mode: count, allergens: [egg]}
+  - {name: 土豆, category: vegetable, stock_mode: count, allergens: []}
+  - {name: 苹果, category: fruit, stock_mode: count, allergens: []}
+  - {name: 豆腐, category: soy product, stock_mode: count, allergens: [soy]}
+  - {name: 五花肉, category: meat, stock_mode: level, allergens: []}
+  - {name: 基围虾, category: seafood, stock_mode: level, allergens: [crustaceans]}
+  - {name: 牛奶, category: egg and dairy, stock_mode: level, allergens: [milk]}
+  - {name: 大米, category: staple food, stock_mode: level, allergens: []}
+  - {name: 面粉, category: staple food, stock_mode: level, allergens: [wheat]}
+  - {name: 核桃, category: nut, stock_mode: level, allergens: [tree nut]}
+  - {name: 食用油, category: seasoning, stock_mode: availability, allergens: []}
+  - {name: 八角, category: seasoning, stock_mode: availability, allergens: []}
+  - {name: 芝麻酱, category: seasoning, stock_mode: availability, allergens: [sesame]}
+  - {name: salmon, category: seafood, stock_mode: level, allergens: [fish]}
+  - {name: butter, category: egg and dairy, stock_mode: level, allergens: [milk]}
+  - {name: cumin, category: seasoning, stock_mode: availability, allergens: []}
+  - {name: shiitake mushroom, category: mushroom, stock_mode: level, allergens: []}
+  - {name: lemon, category: fruit, stock_mode: count, allergens: []}

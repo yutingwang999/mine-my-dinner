@@ -1,0 +1,1 @@
+List which of these allergens the ingredient may contain: crustaceans, shellfish, fish, egg, milk, peanut, tree nut, soy, wheat, sesame. Use only these exact values. Include an allergen when a common version of the ingredient contains it. Return an empty list when none apply.
