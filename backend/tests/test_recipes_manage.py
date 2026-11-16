@@ -89,6 +89,16 @@ def test_pages(client, seeded):
     assert (len(first["items"]), len(second["items"]), first["total"]) == (20, 5, 25)
 
 
+def test_page_size_is_chosen_from_a_fixed_list(client, seeded):
+    for index in range(25):
+        make_recipe(seeded, f"菜{index:02d}")
+    ten = client.get("/api/recipes", params={"page_size": 10, "page": 3}).json()
+    assert (len(ten["items"]), ten["total"]) == (5, 25)
+    fifty = client.get("/api/recipes", params={"page_size": 50}).json()
+    assert len(fifty["items"]) == 25
+    assert client.get("/api/recipes", params={"page_size": 30}).status_code == 422
+
+
 def test_saved_lines_carry_the_linked_entry_names(client, library, fake_llm, seeded):
     linked = LINE | {"name": "鸡蛋液", "ingredient_id": by_zh(seeded, "鸡蛋").id}
     updated = put_recipe(client, library[0], ingredients=[linked, LINE])

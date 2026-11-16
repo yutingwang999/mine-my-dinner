@@ -5,18 +5,10 @@ import { useState } from "react";
 
 import { useErrorText } from "@/lib/errors";
 
-import { Pager } from "@/components/Pager";
+import { Pager, PagerBottom } from "@/components/Pager";
 import { api, CATEGORIES, type DictionaryEntry, entryName, type IngredientEntry } from "@/lib/api";
+import { paginate, usePageSize } from "@/lib/pageSize";
 import { useLoad } from "@/lib/useLoad";
-
-const PAGE_SIZE = 50;
-
-/** One page of items. A page past the end shows the last page. */
-function paginate<T>(items: T[], page: number) {
-  const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  const current = Math.min(page, pages);
-  return { current, pages, visible: items.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE) };
-}
 
 function bothNames(entry: DictionaryEntry): string {
   return [entry.name_zh, entry.name_en].filter(Boolean).join(" / ");
@@ -122,7 +114,14 @@ function PersonalAliasPanel({
  * names and aliases will match and what each entry records. Entries are read-only,
  * except that a built-in ingredient can take the user's own aliases.
  */
-export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
+export function DictionaryBrowser({
+  refreshKey = 0,
+  section,
+}: {
+  refreshKey?: number;
+  /** Show only one of the two lists; both when omitted. */
+  section?: "ingredients" | "cookware";
+}) {
   const t = useTranslations("dictionary");
   const tCategory = useTranslations("category");
   const tStock = useTranslations("stockMode");
@@ -133,6 +132,8 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
   const [category, setCategory] = useState("");
   const [page, setPage] = useState(1);
   const [cookwarePage, setCookwarePage] = useState(1);
+  const [pageSize, setPageSize] = usePageSize("all-ingredients");
+  const [cookwareSize, setCookwareSize] = usePageSize("all-cookware");
   // The built-in entry whose personal aliases are open; one at a time.
   const [editingId, setEditingId] = useState<number | null>(null);
   // Entries saved with personal aliases, shown in place of the loaded copy.
@@ -145,9 +146,9 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
   const shown = all.filter(
     (entry) => matches(entry, text) && (!category || entry.category === category),
   );
-  const { current, pages, visible } = paginate(shown, page);
+  const { current, pages, visible } = paginate(shown, page, pageSize);
   const shownCookware = (cookware.data ?? []).filter((entry) => matches(entry, text));
-  const tools = paginate(shownCookware, cookwarePage);
+  const tools = paginate(shownCookware, cookwarePage, cookwareSize);
 
   function allergenText(entry: IngredientEntry): string {
     if (entry.allergens === null) return t("allergensUnknown");
@@ -159,106 +160,135 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
     return <small className="badge">{entry.source === "seed" ? t("builtIn") : t("mine")}</small>;
   }
 
+  const filterInput = (
+    <input
+      type="search"
+      aria-label={t("filterText")}
+      placeholder={t("filterText")}
+      value={text}
+      onChange={(event) => {
+        setText(event.target.value);
+        setPage(1);
+        setCookwarePage(1);
+      }}
+    />
+  );
+
   return (
     <>
-      <section className="card">
-        <h2>{t("allIngredients")}</h2>
-        <p className="hint">{t("browseHint")}</p>
-        <div className="browse-filters">
-          <input
-            type="search"
-            aria-label={t("filterText")}
-            placeholder={t("filterText")}
-            value={text}
-            onChange={(event) => {
-              setText(event.target.value);
+      {section !== "cookware" && (
+        <section className="card">
+          <h2>{t("allIngredients")}</h2>
+          <p className="hint">{t("browseHint")}</p>
+          <div className="browse-filters">
+            {filterInput}
+            <label>
+              {tEntry("category")}
+              <select
+                value={category}
+                onChange={(event) => {
+                  setCategory(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">{t("allCategories")}</option>
+                {CATEGORIES.map((value) => (
+                  <option key={value} value={value}>
+                    {tCategory(value)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {ingredients.data !== null && (
+              <span>{t("shownCount", { shown: shown.length, total: all.length })}</span>
+            )}
+          </div>
+          <Pager
+            page={current}
+            pages={pages}
+            onPage={setPage}
+            pageSize={pageSize}
+            onPageSize={(size) => {
+              setPageSize(size);
               setPage(1);
-              setCookwarePage(1);
             }}
+            total={shown.length}
           />
-          <label>
-            {tEntry("category")}
-            <select
-              value={category}
-              onChange={(event) => {
-                setCategory(event.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">{t("allCategories")}</option>
-              {CATEGORIES.map((value) => (
-                <option key={value} value={value}>
-                  {tCategory(value)}
-                </option>
-              ))}
-            </select>
-          </label>
-          {ingredients.data !== null && (
-            <span>{t("shownCount", { shown: shown.length, total: all.length })}</span>
-          )}
-        </div>
-        <Pager page={current} pages={pages} onPage={setPage} />
-        <ul className="browse-list">
-          {visible.map((entry) => {
-            const parent = entry.parent_id ? byId.get(entry.parent_id) : undefined;
-            return (
-              <li key={entry.id} data-testid={`all-ingredient-${entry.id}`}>
-                <div className="dish-head">
-                  <span>
-                    <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
-                  </span>
-                  {entry.source === "seed" && (
-                    <PersonalAliasToggle
-                      open={editingId === entry.id}
-                      onToggle={() => setEditingId(editingId === entry.id ? null : entry.id)}
+          <ul className="browse-list">
+            {visible.map((entry) => {
+              const parent = entry.parent_id ? byId.get(entry.parent_id) : undefined;
+              return (
+                <li key={entry.id} data-testid={`all-ingredient-${entry.id}`}>
+                  <div className="dish-head">
+                    <span>
+                      <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
+                    </span>
+                    {entry.source === "seed" && (
+                      <PersonalAliasToggle
+                        open={editingId === entry.id}
+                        onToggle={() => setEditingId(editingId === entry.id ? null : entry.id)}
+                      />
+                    )}
+                  </div>
+                  <div className="browse-details">
+                    <span>{tCategory(entry.category)}</span>
+                    <span>{tStock(entry.stock_mode)}</span>
+                    <span>{allergenText(entry)}</span>
+                    {parent && <span>{t("parentName", { name: entryName(parent, locale) })}</span>}
+                    {[...entry.aliases_zh, ...entry.aliases_en].length > 0 && (
+                      <span>
+                        {t("aliasesList", { list: [...entry.aliases_zh, ...entry.aliases_en].join(", ") })}
+                      </span>
+                    )}
+                    {personalAliases(entry).length > 0 && (
+                      <span>{t("personalAliasesList", { list: personalAliases(entry).join(", ") })}</span>
+                    )}
+                  </div>
+                  {entry.source === "seed" && editingId === entry.id && (
+                    <PersonalAliasPanel
+                      entry={entry}
+                      onSaved={(updated) => setSaved((previous) => new Map(previous).set(updated.id, updated))}
+                      onClose={() => setEditingId(null)}
                     />
                   )}
-                </div>
-                <div className="browse-details">
-                  <span>{tCategory(entry.category)}</span>
-                  <span>{tStock(entry.stock_mode)}</span>
-                  <span>{allergenText(entry)}</span>
-                  {parent && <span>{t("parentName", { name: entryName(parent, locale) })}</span>}
-                  {[...entry.aliases_zh, ...entry.aliases_en].length > 0 && (
-                    <span>
-                      {t("aliasesList", { list: [...entry.aliases_zh, ...entry.aliases_en].join(", ") })}
-                    </span>
-                  )}
-                  {personalAliases(entry).length > 0 && (
-                    <span>{t("personalAliasesList", { list: personalAliases(entry).join(", ") })}</span>
-                  )}
-                </div>
-                {entry.source === "seed" && editingId === entry.id && (
-                  <PersonalAliasPanel
-                    entry={entry}
-                    onSaved={(updated) => setSaved((previous) => new Map(previous).set(updated.id, updated))}
-                    onClose={() => setEditingId(null)}
-                  />
+                </li>
+              );
+            })}
+          </ul>
+          <PagerBottom page={current} pages={pages} onPage={setPage} />
+        </section>
+      )}
+
+      {section !== "ingredients" && (
+        <section className="card">
+          <h2>{t("allCookware")}</h2>
+          {section === "cookware" && <div className="browse-filters">{filterInput}</div>}
+          <Pager
+            page={tools.current}
+            pages={tools.pages}
+            onPage={setCookwarePage}
+            pageSize={cookwareSize}
+            onPageSize={(size) => {
+              setCookwareSize(size);
+              setCookwarePage(1);
+            }}
+            total={shownCookware.length}
+          />
+          <ul className="browse-list">
+            {tools.visible.map((entry) => (
+              <li key={entry.id} data-testid={`all-cookware-${entry.id}`}>
+                <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
+                {aliases(entry).length > 0 && (
+                  <div className="browse-details">
+                    <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
+                  </div>
                 )}
               </li>
-            );
-          })}
-        </ul>
-        <Pager page={current} pages={pages} onPage={setPage} />
-      </section>
-
-      <section className="card">
-        <h2>{t("allCookware")}</h2>
-        <Pager page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
-        <ul className="browse-list">
-          {tools.visible.map((entry) => (
-            <li key={entry.id} data-testid={`all-cookware-${entry.id}`}>
-              <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
-              {aliases(entry).length > 0 && (
-                <div className="browse-details">
-                  <span>{t("aliasesList", { list: aliases(entry).join(", ") })}</span>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-        <Pager page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
-      </section>
+            ))}
+          </ul>
+          <PagerBottom page={tools.current} pages={tools.pages} onPage={setCookwarePage} />
+        </section>
+      )}
     </>
   );
 }

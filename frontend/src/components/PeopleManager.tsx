@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { DictionarySearch } from "@/components/DictionarySearch";
+import { PagedList } from "@/components/PagedList";
 import {
   type Allergen,
   ALLERGENS,
@@ -177,12 +178,13 @@ function DinerCard({ diner, onChanged }: { diner: Diner; onChanged: () => void }
     }
   }
 
-  const label = diner.is_self ? `${t("me")} (${diner.display_name})` : diner.display_name;
+  // The user's own record is always "me"; only friends have a name to change.
+  const label = diner.is_self ? t("me") : diner.display_name;
 
   return (
     <li data-testid={`diner-${diner.id}`} className="card">
       <div className="actions">
-        {renaming ? (
+        {renaming && !diner.is_self ? (
           <span className="actions">
             <input aria-label={t("displayName")} value={name} onChange={(event) => setName(event.target.value)} />
             <button
@@ -200,7 +202,7 @@ function DinerCard({ diner, onChanged }: { diner: Diner; onChanged: () => void }
         ) : (
           <strong>{label}</strong>
         )}{" "}
-        {!renaming && (
+        {!renaming && !diner.is_self && (
           <button type="button" onClick={() => setRenaming(true)}>
             {t("rename")}
           </button>
@@ -265,11 +267,11 @@ export function PeopleManager() {
 
   return (
     <div>
-      <ul className="card-list">
-        {data?.map((diner) => (
-          <DinerCard key={diner.id} diner={diner} onChanged={reload} />
-        ))}
-      </ul>
+      <PagedList items={data ?? []} list="diners" className="card-list">
+        {(visible) =>
+          visible.map((diner) => <DinerCard key={diner.id} diner={diner} onChanged={reload} />)
+        }
+      </PagedList>
       <section className="card">
         <h2>{t("addFriend")}</h2>
         <p className="hint">{t("friendHint")}</p>

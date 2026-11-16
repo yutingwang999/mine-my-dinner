@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -49,7 +49,8 @@ from minemydinner.settings import Settings, get_settings
 router = APIRouter(prefix="/api/recipes")
 images_router = APIRouter(prefix="/api/images")
 
-PAGE_SIZE = 20
+# Query values arrive as text, so the Literal needs them as numbers first.
+PAGE_SIZE = 20  # the default; a request may choose 10, 20, 50, or 100
 
 SessionDep = Annotated[Session, Depends(get_session)]
 ClientDep = Annotated[LLMClient, Depends(get_llm_client)]
@@ -178,6 +179,7 @@ def list_recipes(
     q: str | None = None,
     dish_type: Literal[*DISH_TYPES] | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[Literal[10, 20, 50, 100], BeforeValidator(int)] = PAGE_SIZE,
 ) -> RecipePage:
     """Text search on title, tags, and ingredient names, with no model call."""
     query = select(Recipe)
@@ -213,8 +215,8 @@ def list_recipes(
             selectinload(Recipe.images),
         )
         .order_by(Recipe.created_at.desc(), Recipe.id.desc())
-        .offset((page - 1) * PAGE_SIZE)
-        .limit(PAGE_SIZE)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     return RecipePage(items=[_recipe_out(row) for row in rows], total=total, page=page)
 

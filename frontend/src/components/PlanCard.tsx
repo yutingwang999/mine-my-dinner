@@ -19,7 +19,7 @@ type Props = {
 
 const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
   update_inventory: "/inventory",
-  register_cookware: "/inventory#cookware",
+  register_cookware: "/inventory?tab=cookware",
   import_recipes: "/import",
 };
 

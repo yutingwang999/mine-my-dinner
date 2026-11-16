@@ -191,6 +191,7 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The suggestion check script (`evaluation/allergen_suggest.py`) and two new dictionary tests have lines over 100 characters; a `names.yaml` row missing a field raises a bare `KeyError` instead of a clear message (Task 3 review).
 - The recipe edit page does not show `alias_conflicts` after saving (it navigates away), so a "remember" that hit another entry's alias is dropped silently there; the import review shows it (Task 4 review).
 - `ReviewForm`'s re-match runs once per mounted form and relies on `ReviewQueue` keying the form per draft; add a note on the `rematch` prop. Same-name linking inside one draft compares names ignoring case, while the server match is exact (harmless). The inline line `onChange` in `ReviewForm` could become a named function (Task 4 review).
+- Page size (Task 5b review): the backend test covers only `page_size=30`, not a non-numeric value; a page-size change made in another browser tab does not reset the library's page, so it can land past the last page; the library fetches once more on first load when a non-default size is stored; with no `tab` in the URL, resolving the last unknown row switches the dictionary page to "All ingredients" by itself.
 
 ## Minor findings from the final Phase 0 review, deferred
 

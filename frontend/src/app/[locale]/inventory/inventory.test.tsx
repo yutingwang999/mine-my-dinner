@@ -1,15 +1,19 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { InventoryManager } from "@/components/InventoryManager";
 import { type Call, callsTo, mockFetch, renderWithProviders } from "@/test/helpers";
 
+const replace = vi.fn();
+let search = new URLSearchParams();
+
+vi.mock("next/navigation", () => ({ useSearchParams: () => search }));
 vi.mock("@/i18n/navigation", () => ({
   Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
     <a href={href}>{children}</a>
   ),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace }),
 }));
 
 function entry(id: number, name: string, stockMode: string) {
@@ -51,6 +55,26 @@ async function choose(name: string) {
   await userEvent.click(await screen.findByRole("button", { name: `Choose ${name}` }));
 }
 
+function rows(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    ingredient_id: 100 + index,
+    name_zh: `库存${String(index + 1).padStart(2, "0")}`,
+    name_en: null,
+    stock_mode: "availability",
+    count: null,
+    level: null,
+    grams: null,
+    expires_on: null,
+    updated_at: "",
+  }));
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  search = new URLSearchParams();
+  replace.mockClear();
+  window.location.hash = "";
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe("inventory", () => {
@@ -87,9 +111,142 @@ describe("inventory", () => {
   });
 
   it("removes an always-in-stock item", async () => {
+    search = new URLSearchParams("tab=always");
     setup();
     const salt = await screen.findByTestId("always-3");
     await userEvent.click(salt.querySelector("button") as HTMLButtonElement);
     await waitFor(() => expect(callsTo(calls, "DELETE", "/api/always-in-stock/3")).toHaveLength(1));
+  });
+});
+
+describe("inventory paging", () => {
+  it("shows 20 rows and the rest on page 2, and a chosen size returns to page 1", async () => {
+    calls = mockFetch({
+      "GET /api/inventory": () => rows(25),
+      "GET /api/ingredients": () => [],
+      "GET /api/always-in-stock": () => [],
+      "GET /api/cookware-owned": () => [],
+      "GET /api/cookware": () => [],
+    });
+    renderWithProviders(<InventoryManager />);
+    await screen.findByTestId("inventory-100");
+    expect(screen.getAllByTestId(/^inventory-/)).toHaveLength(20);
+    expect(screen.getByText("25 items")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByTestId(/^inventory-/)).toHaveLength(5);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "50");
+    expect(screen.getAllByTestId(/^inventory-/)).toHaveLength(25);
+    expect(window.localStorage.getItem("pageSize:inventory")).toBe("50");
+    expect(within(screen.getByTestId("inventory-100")).getByText("库存01")).toBeInTheDocument();
+  });
+
+  function refs(count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: 300 + index,
+      name_zh: `项${String(index + 1).padStart(2, "0")}`,
+      name_en: null,
+    }));
+  }
+
+  function setupRefs(routes: Record<string, () => unknown>) {
+    mockFetch({
+      "GET /api/inventory": () => [],
+      "GET /api/ingredients": () => [],
+      "GET /api/always-in-stock": () => [],
+      "GET /api/cookware-owned": () => [],
+      "GET /api/cookware": () => [],
+      ...routes,
+    });
+    renderWithProviders(<InventoryManager />);
+  }
+
+  it("pages the always-in-stock list", async () => {
+    search = new URLSearchParams("tab=always");
+    setupRefs({ "GET /api/always-in-stock": () => refs(25) });
+    await screen.findByTestId("always-300");
+    expect(screen.getAllByTestId(/^always-/)).toHaveLength(20);
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByTestId(/^always-/)).toHaveLength(5);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "50");
+    expect(window.localStorage.getItem("pageSize:always-in-stock")).toBe("50");
+    expect(screen.getAllByTestId(/^always-/)).toHaveLength(25);
+  });
+
+  it("pages the owned cookware list", async () => {
+    search = new URLSearchParams("tab=cookware");
+    setupRefs({ "GET /api/cookware-owned": () => refs(25) });
+    await screen.findByTestId("owned-300");
+    expect(screen.getAllByTestId(/^owned-/)).toHaveLength(20);
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByTestId(/^owned-/)).toHaveLength(5);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "50");
+    expect(window.localStorage.getItem("pageSize:owned-cookware")).toBe("50");
+  });
+});
+
+describe("inventory tabs", () => {
+  it("shows one section at a time with counts and keeps the tab in the address", async () => {
+    setup();
+    const tabs = within(await screen.findByRole("tablist", { name: "Inventory sections" }));
+    await waitFor(() =>
+      expect(tabs.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+        "Stock (0)",
+        "Always in stock (1)",
+        "Cookware I own (0)",
+      ]),
+    );
+    expect(tabs.getByRole("tab", { name: /Stock/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("always-3")).toBeNull();
+
+    await userEvent.click(tabs.getByRole("tab", { name: /Always in stock/ }));
+    expect(replace).toHaveBeenLastCalledWith("/inventory?tab=always");
+    expect(await screen.findByTestId("always-3")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Inventory" })).toBeNull();
+
+    await userEvent.click(tabs.getByRole("tab", { name: /Cookware I own/ }));
+    expect(replace).toHaveBeenLastCalledWith("/inventory?tab=cookware");
+    expect(screen.queryByTestId("always-3")).toBeNull();
+  });
+
+  it("opens the tab named in the address and ignores an unknown one", async () => {
+    search = new URLSearchParams("tab=cookware");
+    setup();
+    expect(await screen.findByRole("tab", { name: /Cookware I own/ })).toHaveAttribute("aria-selected", "true");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("falls back to stock for an unknown tab", async () => {
+    search = new URLSearchParams("tab=nope");
+    setup();
+    expect(await screen.findByRole("tab", { name: /Stock/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens the cookware tab for the old #cookware link", async () => {
+    window.location.hash = "#cookware";
+    setup();
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /Cookware I own/ })).toHaveAttribute("aria-selected", "true"),
+    );
+    expect(replace).toHaveBeenCalledWith("/inventory?tab=cookware");
+  });
+});
+
+describe("inventory sort", () => {
+  it("shows the active order as pressed and switches the request when the other is clicked", async () => {
+    setup();
+    const group = within(await screen.findByRole("group", { name: "Sort:" }));
+    expect(group.getByRole("button", { name: "Name" })).toHaveAttribute("aria-pressed", "true");
+    expect(group.getByRole("button", { name: "Expiry" })).toHaveAttribute("aria-pressed", "false");
+    const before = callsTo(calls, "GET", "/api/inventory").length;
+
+    await userEvent.click(group.getByRole("button", { name: "Name" }));
+    expect(callsTo(calls, "GET", "/api/inventory")).toHaveLength(before);
+
+    await userEvent.click(group.getByRole("button", { name: "Expiry" }));
+    await waitFor(() =>
+      expect(callsTo(calls, "GET", "/api/inventory").at(-1)?.url).toContain("sort=expiry"),
+    );
+    expect(group.getByRole("button", { name: "Expiry" })).toHaveAttribute("aria-pressed", "true");
+    expect(group.getByRole("button", { name: "Name" })).toHaveAttribute("aria-pressed", "false");
   });
 });

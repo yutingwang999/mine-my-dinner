@@ -184,6 +184,48 @@ git add frontend
 git commit -m "feat: link an unknown name from the allergens list, and prefill category and stock mode from the suggestion"
 ```
 
+### Task 5b: Dictionary page tabs and page sizes (user's browser check after Task 5)
+
+Added by the user's decisions on 2026-11-16 after checking Task 5 in the browser: the dictionary page is too long to scroll, and the user wants to choose how many rows a page shows.
+
+**Files:**
+- Modify: `frontend/src/components/DictionaryManager.tsx`, `frontend/src/components/DictionaryBrowser.tsx`, `frontend/src/components/Pager.tsx`, `frontend/src/components/RecipeLibrary.tsx`, `frontend/src/lib/api.ts`, `frontend/src/app/globals.css`, `frontend/messages/en.json`, `frontend/messages/zh.json`, `backend/minemydinner/api/recipes.py`
+- Test: `frontend/src/app/[locale]/dictionary/dictionary.test.tsx`, `frontend/src/components/DictionaryBrowser.test.tsx`, `frontend/src/app/[locale]/library/library.test.tsx`, `backend/tests/test_recipes_manage.py`
+
+**Interfaces:**
+- Dictionary page tabs (user chose tabs over stacked sections): 过敏原未知 (n) / 我的食材 (n) / 我的厨具 (n) / 全部食材 / 全部厨具 — en "Allergens unknown (n)" / "My ingredients (n)" / "My cookware (n)" / "All ingredients" / "All cookware". One section shows at a time; the counts come from the loaded lists; the chosen tab is kept in the URL (`?tab=unresolved|mine|my-cookware|all|all-cookware`, default `unresolved` when it has rows, else `all`) so reload and back keep it. Tabs use `role="tablist"` / `role="tab"` / `aria-selected`.
+- Every section is paginated with `Pager`, including the unknown list, my ingredients, and my cookware.
+- Page size: `Pager` gains an optional page-size select "每页 10 / 20 / 50 / 100 条" / "Per page: 10 / 20 / 50 / 100". The choice is remembered per list in `localStorage` (key `pageSize:<list>`, read and written in try/catch; default 20); changing it returns to page 1. Used by every dictionary section and by the recipe library.
+- Recipe library: `GET /api/recipes` gains `page_size: Literal[10, 20, 50, 100] = 20` (other values → 422); the library sends it and keeps `page` in the URL as today; the page size is not put in the URL.
+
+- [ ] **Step 1: Write the failing tests** — tabs switch sections and keep the tab in the URL; the default tab rule; each section paginates; choosing 50 per page shows up to 50 rows, returns to page 1, and is remembered after a remount; the library sends `page_size` and the backend rejects 30.
+- [ ] **Step 2: Run them to see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** backend suite, `npm test`, `npm run lint` (build skipped while the dev server runs).
+- [ ] **Step 5: User browser check.**
+- [ ] **Step 6: User commit.**
+
+### Task 5c: Search results, suggestion labels, link notice, and one button style (user's browser check after Task 5)
+
+Added by the user's decisions on 2026-11-16.
+
+**Files:**
+- Modify: `frontend/src/components/DictionarySearch.tsx`, `frontend/src/components/EntryTypeFields.tsx`, `frontend/src/components/DictionaryManager.tsx`, `frontend/src/app/globals.css`, the button markup in the dictionary page and the import and review pages (`DictionaryBrowser.tsx`, `DictionaryManager.tsx`, `EditIngredient.tsx`, `ConfirmDelete.tsx`, `ImportForm.tsx`, `ReviewForm.tsx`, `ReviewQueue.tsx`, `IngredientReviewRow.tsx`, `CookwareReviewRow.tsx`, `AllergenPicker.tsx`), `frontend/messages/en.json`, `frontend/messages/zh.json`, `docs/phase-1-carryover.md`
+- Test: the existing tests of those components
+
+**Interfaces:**
+- **Search results** (`DictionarySearch`, shared by review, inventory, people, and dictionary): results are a wrapping row of chip buttons, left to right, a new row when one is full; a gap of at least 0.5rem between the search box and the first result. Keyboard and screen-reader behaviour stays as today.
+- **Suggestion labels** (`EntryTypeFields`): replace the single "建议值，请确认" hint with a one-line note above the two fields, zh "分类和库存方式是按名字自动建议的，可以修改。" / en "Category and stock mode are suggested from the name; you can change them.", and a small "建议" / "Suggested" badge next to each field's label while that field still holds the suggested value; changing a field removes its badge. No badge and no note when the suggestion is null.
+- **Link notice** (unknown list, "关联到已有条目"): when the answer has `remembered: false` although remember was checked, show at the top of the "allergens unknown" section zh "已把“{name}”关联到“{entry}”，但“{name}”已经是其他条目的名称或别名，所以没有记住。" / en "Linked \"{name}\" to \"{entry}\", but \"{name}\" already belongs to another entry, so it was not remembered."; it stays until the next action in that section.
+- **One button style** on the dictionary, import, and review pages: primary (save, confirm, create, import: filled accent), secondary (cancel, edit, link: white with a thin border), compact toggle (我的别名, the review row's mode toggles where they toggle a panel: the 28 px faint-fill `.dish-toggles` style), danger (delete: soft red text). Shared CSS classes, not per-component styles. Other pages (library, inventory, people, chat) keep their buttons for now; record that in `docs/phase-1-carryover.md`.
+
+- [ ] **Step 1: Write the failing tests** — search results render as a wrapping list of chips; the suggestion badges appear and disappear as described; the link notice appears only for `remembered: false` with remember checked; buttons carry the shared classes (one test per page).
+- [ ] **Step 2: Run them to see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `npm test`, `npm run lint`.
+- [ ] **Step 5: User browser check** of the dictionary, import, and review pages.
+- [ ] **Step 6: User commit.**
+
 ### Task 6: Amount controls in the review form
 
 **Files:**

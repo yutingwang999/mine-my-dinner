@@ -336,7 +336,7 @@ export const api = {
     return postForm<RecipeImage[]>(`/api/recipes/${recipeId}/images`, form);
   },
 
-  listRecipes: (params: { q?: string; dish_type?: string; page?: number }) =>
+  listRecipes: (params: { q?: string; dish_type?: string; page?: number; page_size?: number }) =>
     get<RecipePage>(`/api/recipes${query(params)}`),
   getRecipe: (id: number) => get<SavedRecipe>(`/api/recipes/${id}`),
   updateRecipe: (id: number, data: RecipeWrite) =>

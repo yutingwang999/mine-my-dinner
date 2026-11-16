@@ -1,15 +1,19 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DictionaryManager } from "@/components/DictionaryManager";
 import { type Call, callsTo, mockFetch, renderWithProviders, reply } from "@/test/helpers";
 
+const replace = vi.fn();
+let search = new URLSearchParams();
+
+vi.mock("next/navigation", () => ({ useSearchParams: () => search }));
 vi.mock("@/i18n/navigation", () => ({
   Link: ({ href, children }: { href: string; children: React.ReactNode }) => (
     <a href={href}>{children}</a>
   ),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace }),
 }));
 
 let calls: Call[];
@@ -39,7 +43,31 @@ function setup(routes: Routes = {}) {
   renderWithProviders(<DictionaryManager />);
 }
 
+beforeEach(() => {
+  search = new URLSearchParams();
+  replace.mockClear();
+  window.localStorage.clear();
+});
 afterEach(() => vi.unstubAllGlobals());
+
+async function openTab(name: RegExp) {
+  await userEvent.click(await screen.findByRole("tab", { name }));
+}
+
+function userEntries(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: 100 + index,
+    name_zh: `自制${String(index + 1).padStart(3, "0")}`,
+    name_en: null,
+    aliases_zh: [],
+    aliases_en: [],
+    source: "user",
+    category: "seasoning",
+    stock_mode: "level",
+    allergens: [],
+    parent_id: null,
+  }));
+}
 
 describe("dictionary", () => {
   it("lists unresolved items with dish counts and suggested allergens", async () => {
@@ -86,6 +114,7 @@ describe("dictionary", () => {
 
   it("edits a user entry's category and allergens", async () => {
     setup();
+    await openTab(/My ingredients/);
     const own = within(await screen.findByTestId("user-ingredient-9"));
     await userEvent.click(own.getByRole("button", { name: "Edit" }));
     await userEvent.selectOptions(own.getByRole("combobox", { name: "Category" }), "vegetable");
@@ -105,6 +134,7 @@ describe("dictionary", () => {
 
   it("keeps allergens unknown unless the user chooses otherwise", async () => {
     setup();
+    await openTab(/My ingredients/);
     const own = within(await screen.findByTestId("user-ingredient-9"));
     await userEvent.click(own.getByRole("button", { name: "Edit" }));
     expect(own.getByRole("radio", { name: "Unknown" })).toBeChecked();
@@ -116,6 +146,7 @@ describe("dictionary", () => {
 
   it("sends the chosen allergens", async () => {
     setup();
+    await openTab(/My ingredients/);
     const own = within(await screen.findByTestId("user-ingredient-9"));
     await userEvent.click(own.getByRole("button", { name: "Edit" }));
     await userEvent.click(own.getByRole("radio", { name: "Contains" }));
@@ -138,6 +169,7 @@ describe("dictionary", () => {
       "PATCH /api/ingredients/9": () => reply(409, { code: "in_inventory" }),
     });
     renderWithProviders(<DictionaryManager />);
+    await openTab(/My ingredients/);
     const own = within(await screen.findByTestId("user-ingredient-9"));
     await userEvent.click(own.getByRole("button", { name: "Edit" }));
     await userEvent.selectOptions(own.getByRole("combobox", { name: "Stock mode" }), "count");
@@ -161,6 +193,7 @@ describe("dictionary", () => {
           : [],
     });
     renderWithProviders(<DictionaryManager />);
+    await openTab(/My ingredients/);
     const used = within(await screen.findByTestId("user-ingredient-9"));
     expect(used.getByText(/3 dishes/)).toBeInTheDocument();
     await userEvent.click(used.getByRole("button", { name: "Delete" }));
@@ -170,13 +203,15 @@ describe("dictionary", () => {
     await userEvent.click(unused.getByRole("button", { name: "Delete" }));
     expect(unused.queryByText(/use it/)).toBeNull();
 
-    const cookware = within(screen.getByTestId("user-cookware-60"));
+    await openTab(/My cookware/);
+    const cookware = within(await screen.findByTestId("user-cookware-60"));
     await userEvent.click(cookware.getByRole("button", { name: "Delete" }));
     expect(cookware.getByText(/2 dishes need it/)).toBeInTheDocument();
   });
 
   it("lists the user's own entries and marks unknown allergens", async () => {
     setup();
+    await openTab(/My ingredients/);
     const own = within(await screen.findByTestId("user-ingredient-9"));
     expect(own.getByText(/allergens unknown/)).toBeInTheDocument();
     expect(own.getByRole("button", { name: "Delete" })).toBeInTheDocument();
@@ -316,5 +351,133 @@ describe("dictionary", () => {
     await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
     expect(row.queryByRole("searchbox", { name: "Search the dictionary" })).toBeNull();
     expect(row.queryByRole("button", { name: "Link to an existing entry" })).toBeNull();
+  });
+
+  it("shows one section at a time under tabs with counts", async () => {
+    setup();
+    const tabs = within(await screen.findByRole("tablist", { name: "Dictionary sections" }));
+    expect(tabs.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Allergens unknown (2)",
+      "My ingredients (1)",
+      "My cookware (0)",
+      "All ingredients",
+      "All cookware",
+    ]);
+    expect(tabs.getByRole("tab", { name: /Allergens unknown/ })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("unresolved-entry-9")).toBeInTheDocument();
+    expect(screen.queryByTestId("user-ingredient-9")).toBeNull();
+
+    await userEvent.click(tabs.getByRole("tab", { name: /My ingredients/ }));
+    expect(tabs.getByRole("tab", { name: /My ingredients/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("user-ingredient-9")).toBeInTheDocument();
+    expect(screen.queryByTestId("unresolved-entry-9")).toBeNull();
+    expect(replace).toHaveBeenLastCalledWith("/dictionary?tab=mine");
+
+    await userEvent.click(tabs.getByRole("tab", { name: "All cookware" }));
+    expect(replace).toHaveBeenLastCalledWith("/dictionary?tab=all-cookware");
+    expect(await screen.findByRole("heading", { name: "All cookware" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "All ingredients" })).toBeNull();
+    await userEvent.click(tabs.getByRole("tab", { name: "All ingredients" }));
+    expect(replace).toHaveBeenLastCalledWith("/dictionary?tab=all");
+    expect(await screen.findByRole("heading", { name: "All ingredients" })).toBeInTheDocument();
+  });
+
+  it("opens the tab named in the address", async () => {
+    search = new URLSearchParams("tab=my-cookware");
+    setup();
+    expect(await screen.findByRole("tab", { name: /My cookware/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "My cookware entries" })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the unknown list when it has rows", async () => {
+    setup();
+    expect(await screen.findByRole("tab", { name: /Allergens unknown/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("defaults to all ingredients when nothing is unknown", async () => {
+    setup({ "GET /api/allergens/unresolved": () => ({ entries: [], unmatched: [] }) });
+    const tab = await screen.findByRole("tab", { name: "All ingredients" });
+    await waitFor(() => expect(tab).toHaveAttribute("aria-selected", "true"));
+  });
+
+  it("ignores an unknown tab in the address", async () => {
+    search = new URLSearchParams("tab=nope");
+    setup();
+    expect(await screen.findByRole("tab", { name: /Allergens unknown/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("paginates my ingredients and returns to page 1 when the page size changes", async () => {
+    setup({
+      "GET /api/ingredients": (_body, _init, url) => (url.includes("source=user") ? userEntries(120) : []),
+    });
+    await openTab(/My ingredients/);
+    await screen.findByTestId("user-ingredient-100");
+    expect(screen.getAllByTestId(/^user-ingredient-/)).toHaveLength(20);
+    expect(screen.getAllByText("Page 1 of 6")).toHaveLength(2);
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByText("Page 2 of 6")).toHaveLength(2);
+    expect(screen.queryByTestId("user-ingredient-100")).toBeNull();
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "50");
+    expect(screen.getAllByTestId(/^user-ingredient-/)).toHaveLength(50);
+    expect(screen.getByTestId("user-ingredient-100")).toBeInTheDocument();
+    expect(screen.getAllByText("Page 1 of 3")).toHaveLength(2);
+    expect(window.localStorage.getItem("pageSize:my-ingredients")).toBe("50");
+  });
+
+  it("uses the remembered page size when the list is shown again", async () => {
+    window.localStorage.setItem("pageSize:my-ingredients", "50");
+    setup({
+      "GET /api/ingredients": (_body, _init, url) => (url.includes("source=user") ? userEntries(60) : []),
+    });
+    await openTab(/My ingredients/);
+    await screen.findByTestId("user-ingredient-100");
+    await waitFor(() => expect(screen.getAllByTestId(/^user-ingredient-/)).toHaveLength(50));
+    expect(screen.getByRole("combobox", { name: "Rows per page" })).toHaveValue("50");
+  });
+
+  it("paginates the unknown list and my cookware", async () => {
+    const names = Array.from({ length: 25 }, (_, index) => ({
+      name: `酱${String(index + 1).padStart(2, "0")}`,
+      dish_count: 1,
+    }));
+    const pots = Array.from({ length: 12 }, (_, index) => ({
+      id: 200 + index,
+      name_zh: `锅${index + 1}`,
+      name_en: null,
+      aliases_zh: [],
+      aliases_en: [],
+      source: "user",
+      dish_count: 0,
+    }));
+    setup({
+      "GET /api/allergens/unresolved": () => ({ entries: [], unmatched: names }),
+      "GET /api/cookware": (_body, _init, url) => (url.includes("source=user") ? pots : []),
+    });
+    await screen.findByTestId("unresolved-name-酱01");
+    expect(screen.getAllByTestId(/^unresolved-name-/)).toHaveLength(20);
+    await userEvent.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(screen.getAllByTestId(/^unresolved-name-/)).toHaveLength(5);
+
+    await openTab(/My cookware/);
+    await screen.findByTestId("user-cookware-200");
+    expect(screen.getAllByTestId(/^user-cookware-/)).toHaveLength(12);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "10");
+    expect(screen.getAllByTestId(/^user-cookware-/)).toHaveLength(10);
+  });
+
+  it("filters the all-cookware tab", async () => {
+    setup({
+      "GET /api/cookware": () => [
+        { id: 3, name_zh: "炒锅", name_en: "wok", aliases_zh: [], aliases_en: [], source: "seed" },
+        { id: 4, name_zh: "蒸锅", name_en: "steamer", aliases_zh: [], aliases_en: [], source: "seed" },
+      ],
+    });
+    await openTab(/^All cookware$/);
+    await screen.findByTestId("all-cookware-3");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search names and aliases" }), "蒸");
+    expect(screen.queryByTestId("all-cookware-3")).toBeNull();
+    expect(screen.getByTestId("all-cookware-4")).toBeInTheDocument();
   });
 });
