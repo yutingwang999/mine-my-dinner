@@ -43,8 +43,9 @@ Columns: first pass and calls are over the 6 scenarios that expect a plan; cost,
 | 4 | 20261115T003618Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0128 | 0.89 | 3022 | 3.0 s | 4.4 s |
 | 5 (reverted) | 20261115T013859Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0037 | $0.0128 | 0.84 | 3022 | 3.4 s | 5.7 s |
 | 5 (reverted) | 20261115T013928Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0127 | 0.89 | 3022 | 3.3 s | 4.8 s |
-| **6** | 20261115T040226Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0046 | $0.0146 | 0.79 | 3493 | 3.5 s | 4.9 s |
-| **6** | 20261115T040255Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0033 | $0.0147 | 0.90 | 3493 | 3.4 s | 5.5 s |
+| 6 | 20261115T040226Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0046 | $0.0146 | 0.79 | 3493 | 3.5 s | 4.9 s |
+| 6 | 20261115T040255Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0033 | $0.0147 | 0.90 | 3493 | 3.4 s | 5.5 s |
+| **7** | 20261116T042755Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0042 | $0.0148 | 0.83 | 3493 | 3.2 s | 4.6 s |
 
 ## Comparison: plan 2a set (18 scored scenarios, 12 expect a plan, plus 1 check-only)
 
@@ -62,8 +63,11 @@ Same columns. "Over 5" names the scenarios that used more than 5 calls.
 | 5 (reverted) | 20261115T014105Z | yes | 17/18 | 12/12 | 3.42 | 7 | $0.0086 | $0.0355 | 0.90 | 3609 | 3.4 s | 9.1 s | three_vegetable_dishes_only_eggs (7 calls) |
 | 5 (reverted) | 20261115T014229Z | yes | 18/18 | 12/12 | 3.08 | 4 | $0.0075 | $0.0312 | 0.89 | 3609 | 3.1 s | 5.4 s | — |
 | 5 (reverted) | 20261115T014347Z | yes | 18/18 | 12/12 | 3.17 | 5 | $0.0079 | $0.0326 | 0.89 | 3730 | 3.0 s | 6.7 s | — |
-| **6** | 20261115T040333Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0081 | $0.0363 | 0.90 | 3658 | 3.0 s | 5.6 s | — |
-| **6** | 20261115T040434Z | yes | 18/18 | 12/12 | 3.17 | 4 | $0.0081 | $0.0372 | 0.91 | 3602 | 3.0 s | 4.6 s | — |
+| 6 | 20261115T040333Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0081 | $0.0363 | 0.90 | 3658 | 3.0 s | 5.6 s | — |
+| 6 | 20261115T040434Z | yes | 18/18 | 12/12 | 3.17 | 4 | $0.0081 | $0.0372 | 0.91 | 3602 | 3.0 s | 4.6 s | — |
+| **7** | 20261116T042822Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0086 | $0.0363 | 0.88 | 3554 | 3.0 s | 5.1 s | — |
+| **7** | 20261116T042924Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0081 | $0.0378 | 0.91 | 3792 | 3.2 s | 5.7 s | — |
+| **7** | 20261116T043028Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0079 | $0.0376 | 0.91 | 3661 | 3.2 s | 6.4 s | — |
 
 Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient_dominates`) passed in every plan 2a run.
 
@@ -73,7 +77,10 @@ Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient
 
 | Round | Run | Vectors | As expected | First pass | Avg calls | Max calls | Cost (cache-aware) | Cost (uncached) | Cache hit | Largest call (tokens) | Model time avg | Wall p95 | Not as expected |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **6** | 20261115T040549Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0059 | $0.0238 | 0.88 | 3510 | 3.7 s | 6.1 s | — |
+| 6 | 20261115T040549Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0059 | $0.0238 | 0.88 | 3510 | 3.7 s | 6.1 s | — |
+| **7** | 20261116T043132Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0058 | $0.0239 | 0.88 | 3510 | 3.6 s | 5.8 s | — |
+| **7** | 20261116T043213Z | no | 10/10 | 8/8 | 3.88 | 7 | $0.0057 | $0.0268 | 0.92 | 3510 | 4.0 s | 6.7 s | — (relax_split_button 7 calls over two turns, within its limit) |
+| **7** | 20261116T043258Z | no | 9/10 | 7/8 | 4.25 | 7 | $0.0070 | $0.0312 | 0.90 | 5542 | 4.3 s | 9.3 s | eight_dishes_at_least_two_meat_fridge (6 calls, over its limit of 5); three_dishes_at_most_one_vegetable_shopping passed on the second attempt |
 
 ## Rounds
 
@@ -118,12 +125,59 @@ Bold rounds in the tables hold the results of record for the current code.
 - **Result:** `all_dishes_with_eggs` took 3 calls in all four plan 2a runs. But `three_vegetable_dishes_only_eggs` went to 7 calls in one run for a different reason: it searched for green vegetables because it did not see egg dishes as real vegetable dishes. Over the six runs, 1 of 60 plan scenarios went over 5 calls.
 - **Decision (user):** revert this change. It answered one evaluation scenario, and each such line closes only one of the model's reasons for searching. Stop tuning; judge model calls by the average (3.0-3.5 per plan scenario, against about 4) and treat a single scenario over 5 as a warning. After the revert the code was the same as round 4, so round 4's runs were the results of record until round 6.
 
-### Round 6 — meat and vegetable bounds (2026-11-15, `fe6ed93`) — results of record
+### Round 6 — meat and vegetable bounds (2026-11-15, `fe6ed93`)
 
 - **Changed:** plan 2a Task 11 (design 5.11). `parse_v3` reads "至少" / "最多" on meat and vegetable counts and the next-action buttons' messages; each side gets a range used by validation, the feasibility check, the shortlist, and every text; the feasibility check now covers the side the user did not name; a default total is clamped to the stated bounds; contradictions ask with `split_conflicts_total`. The evaluation runner gained two-message scenarios, a range expectation, and saves every planning run of a thread. New scenario file `scenarios_counts.yaml`. Prompts `route_v2+parse_v3+planner_v3`; tools unchanged.
 - **Runs:** the four usual runs and the counts set once (no vectors).
 - **Result:** every run as expected: baseline 7/7 twice, plan 2a 18/18 twice, counts 10/10; first pass 6/6, 12/12, 8/8. No scenario over 5 calls; average calls per plan scenario 3.0-3.2 (3.5 in the counts set, where the two button scenarios take 5 calls over two turns). In the counts set, "8个菜，2个荤菜" with 5 makeable vegetable dishes stopped at once with `not_enough_dishes` and `relax_split`, and "8个菜，至少2个荤菜" with the same stock planned 3 meat and 5 vegetable dishes. Both button conversations ended with a plan on the second turn.
 - **Cost:** the uncached cost on the baseline set rose from $0.0128 to $0.0146 and the largest call from 3,022 to 3,493 tokens, because `parse_v3` is a longer prompt (the parse call is the largest). The cache-aware cost stayed between $0.003 and $0.005.
+
+### Round 7 — planner_v4 note rules and model comparison (2026-11-16, `d4b2e30`) — results of record
+
+- **Changed:** chat page redesign Task 4 (design 5.5 of `2026-11-15-chat-page-redesign-design.md`). `planner_v4` changes only the note rule: one sentence with one practical tip; do not count or list the plan's dishes; name no dish outside the plan and suggest no swaps. Prompts `route_v2+parse_v3+planner_v4`; tools and the `PlanProposal` schema unchanged. The evaluation gained note checks (`notes` per group, `note_flags` per scenario), `--planning-model`, and the `notes_review` export.
+- **Runs:** the baseline set once with the default model (`20261116T042755Z`), then each of the five tool-calling catalog models on the plan 2a and counts sets, three runs each, all without vectors (30 runs, `20261116T042822Z` to `20261116T051816Z`). The `deepseek-flash` runs are the default model's rows in the tables above; the others are in "Model comparison" below. Estimated spend for the 31 runs: $1.07 cache-aware, $1.98 uncached.
+- **Result (default model):** baseline 7/7; plan 2a 18/18 three times; counts 10/10, 10/10 and 9/10. Planning results match round 6: the note rule changed nothing else. The one mismatch is a call-count warning (`eight_dishes_at_least_two_meat_fridge`, 6 calls against 5).
+- **Notes:** no note in any run named a library dish outside its plan (`outside_dish` 0 for every model). See "Model comparison" for the other checks and the user's ratings.
+
+### Model comparison (round 7)
+
+The whole `planning_eval` task (route, parse, planner) ran on each model with no fallback, on prompts `route_v2+parse_v3+planner_v4` at `d4b2e30`. Figures are the mean over three runs, with the range in brackets. Calls are the average over plan scenarios, followed by the most calls in any one scenario. Cost and model time are per run (cost) and per scenario (time), over all scenarios. Wall p95 is over plan scenarios.
+
+**Plan 2a set (18 scored scenarios, 12 expect a plan)**
+
+| Model | As expected | First pass | Calls | Cost (cache-aware) | Cost (uncached) | Model time avg | Wall p95 | Note flags (36 notes) | Not as expected |
+|---|---|---|---|---|---|---|---|---|---|
+| deepseek-flash (default) | 54/54 | 36/36 | 3.14 [3.08-3.17], max 5 | $0.0082 [0.0079-0.0086] | $0.037 | 3.1 s | 5.7 s [5.1-6.4] | counts 16, multi 1 | — |
+| deepseek-v4-pro | 54/54 | 36/36 | 3.06 [3.00-3.17], max 5 | $0.028 [0.022-0.040] | $0.155 | 4.2 s | 6.4 s [5.5-7.7] | counts 15 | — |
+| gpt-6-luna | 53/54 | 35/36 | 3.47 [3.42-3.58], max 6 | $0.0042 [0.0037-0.0050] | $0.012 | 5.7 s | 8.7 s [8.2-9.6] | counts 4 | `eight_dishes_two_meat` once (6 calls, one retry) |
+| gemini-3.5-flash-lite | 51/54 | 36/36 | 3.33 [3.33-3.33], max 6 | $0.036 | $0.036 | 3.7 s | 7.9 s [7.7-8.1] | counts 11 | `eight_dishes_two_meat` in every run (6 calls) |
+| gemini-3.8-flash | 54/54 | 36/36 | 3.00, max 3 | $0.121 [0.115-0.130] | $0.131 | 15.6 s | 38.9 s [24.1-66.2] | counts 6 | — |
+
+**Counts set (10 scenarios, 8 expect a plan)**
+
+| Model | As expected | First pass | Calls | Cost (cache-aware) | Cost (uncached) | Model time avg | Wall p95 | Note flags (24 notes) | Not as expected |
+|---|---|---|---|---|---|---|---|---|---|
+| deepseek-flash (default) | 29/30 | 23/24 | 3.88 [3.50-4.25], max 7 | $0.0062 [0.0057-0.0070] | $0.027 | 3.9 s | 7.3 s [5.8-9.3] | counts 12, multi 1 | `eight_dishes_at_least_two_meat_fridge` once (6 calls) |
+| deepseek-v4-pro | 30/30 | 22/24 | 3.62, max 5 | $0.019 [0.017-0.022] | $0.108 | 5.3 s | 9.0 s [8.2-9.4] | counts 8 | — |
+| gpt-6-luna | 30/30 | 24/24 | 4.46 [4.38-4.50], max 5 | $0.0030 [0.0028-0.0035] | $0.010 | 7.2 s | 10.5 s [9.8-11.4] | counts 3 | — |
+| gemini-3.5-flash-lite | 23/30 | 23/24 | 4.88 [4.62-5.25], max 9 | $0.032 [0.030-0.034] | $0.032 | 5.3 s | 11.2 s [10.7-11.6] | counts 4 | `three_dishes_no_vegetable_shopping` in every run (wrong split: 1-2 meat and 1-2 vegetable dishes for "no vegetable, 3 dishes"); `relax_named_button` in every run (8-9 calls against 7); `eight_dishes_at_least_two_meat_fridge` once (9 calls) |
+| gemini-3.8-flash | 29/30 | 24/24 | 3.67 [3.50-4.00], max 7 | $0.097 [0.090-0.106] | $0.106 | 21.1 s | 45.3 s [25.4-59.7] | counts 2 | `five_people_at_most_one_each_shopping` once (7 calls) |
+
+Gemini models showed little or no cache hits (gemini-3.5-flash-lite 0.00 in every run; gemini-3.8-flash 0.00-0.37), so their cache-aware cost is close to the uncached one.
+
+**The user's ratings.** The notes of run 1 of each set for each model (100 notes, 20 per model) were exported with `notes_review` and rated by the user, with the model names hidden by default: `quality` 1-3, judged by how the sentence reads as a whole, and `should_not_appear` y/n. Five single-dish notes were left without a y/n and are counted as n.
+
+| Model | Avg quality | 3 / 2 / 1 | should_not_appear y | Auto-flagged (outside, counts, locale) |
+|---|---|---|---|---|
+| gemini-3.8-flash | 3.00 | 20 / 0 / 0 | 0 | 2 |
+| deepseek-flash (default) | 2.90 | 19 / 0 / 1 | 0 | 6 |
+| deepseek-v4-pro | 2.75 | 16 / 3 / 1 | 1 | 7 |
+| gemini-3.5-flash-lite | 2.65 | 13 / 7 / 0 | 0 | 8 |
+| gpt-6-luna | 2.50 | 10 / 10 / 0 | 0 | 2 |
+
+- **The automatic checks against the user's judgement.** None of the 25 notes flagged `counts_dishes` was marked y by the user: almost all say "两道菜可同时上桌" or "三道都很快手", a correct reference to the dishes as a group, which the user accepted. The one note the user marked y (deepseek-v4-pro: "最后快炒肉丝和青菜" for a plan with 宫保鸡丁 and no 肉丝 dish) was not flagged: it names a dish loosely, not by its library title. As written, `counts_dishes` measures a wording the user does not object to, so its rate does not rank the models.
+- **Wrong facts seen while reading (not caught by any check):** "一荤一素" for 蒜蓉西兰花 and 清炒小白菜, both vegetable dishes (deepseek-v4-pro, rated 1); "Diner 2 的饮食限制尚未确认" in two Chinese notes (deepseek-flash, default model), which shows the internal diner label to the user.
+- **Decision (user, 2026-11-16):** keep deepseek-flash as the default planning model. It rated second (2.90 of 3), is the fastest, and costs a fraction of the models that rated close to it.
 
 ### Status after round 6
 
