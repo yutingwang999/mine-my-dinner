@@ -16,7 +16,7 @@ type Routes = Parameters<typeof mockFetch>[0];
 
 const BASE_ROUTES: Routes = {
   "POST /api/recipes/allergy-check": () => ({ conflicts: [], unknown: ["秘制酱"] }),
-  "POST /api/allergen-suggestions": () => ({ suggested: ["soy"] }),
+  "POST /api/allergen-suggestions": () => ({ suggested: ["soy"], category: null, stock_mode: null }),
   "POST /api/ingredients": () => ({ id: 50, name_zh: "秘制酱", name_en: null, aliases_zh: [], aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null, parent_id: null, linked_lines: 0 }),
   "POST /api/cookware": () => ({ id: 60, name_zh: "神奇锅", name_en: null, aliases_zh: [], aliases_en: [], source: "user" }),
   "POST /api/recipes": () => reply(201, { id: 1 }),
@@ -174,7 +174,7 @@ describe("review", () => {
   });
 
   it("does not treat an empty suggestion as confirmed none", async () => {
-    setup({ "POST /api/allergen-suggestions": () => ({ suggested: [] }) });
+    setup({ "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }) });
     await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
     expect(await screen.findByText(/The model suggested none/)).toBeInTheDocument();
     expect(screen.queryByText("Confirmed: contains none")).toBeNull();
@@ -185,10 +185,37 @@ describe("review", () => {
   });
 
   it("still allows saving when suggestions are unavailable", async () => {
-    setup({ "POST /api/allergen-suggestions": () => ({ suggested: null }) });
+    setup({ "POST /api/allergen-suggestions": () => ({ suggested: null, category: null, stock_mode: null }) });
     await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
     expect(await screen.findByText(/Suggestions are unavailable/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save recipe" })).toBeEnabled();
+  });
+
+  it("prefills category and stock mode from the suggestion, and the user can change them", async () => {
+    setup({
+      "POST /api/allergen-suggestions": () => ({ suggested: ["soy"], category: "soy product", stock_mode: "count" }),
+    });
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
+    const category = within(row("秘制酱")).getByRole("combobox", { name: "Category" });
+    await waitFor(() => expect(category).toHaveValue("soy product"));
+    const stock = within(row("秘制酱")).getByRole("combobox", { name: "Stock mode" });
+    expect(stock).toHaveValue("count");
+    expect(within(row("秘制酱")).getByText("Suggested, please confirm")).toBeInTheDocument();
+    await userEvent.selectOptions(stock, "availability");
+    await userEvent.click(screen.getByRole("button", { name: "Create and link" }));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients")).toHaveLength(1));
+    expect(lastBody("/api/ingredients")).toMatchObject({ category: "soy product", stock_mode: "availability" });
+  });
+
+  it("keeps the old prefill without a suggestion: seasoning for a seasoning line, and level", async () => {
+    setup({
+      "POST /api/allergen-suggestions": () => ({ suggested: null, category: null, stock_mode: null }),
+    });
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
+    await screen.findByText(/Suggestions are unavailable/);
+    expect(within(row("秘制酱")).getByRole("combobox", { name: "Category" })).toHaveValue("seasoning");
+    expect(within(row("秘制酱")).getByRole("combobox", { name: "Stock mode" })).toHaveValue("level");
+    expect(within(row("秘制酱")).queryByText("Suggested, please confirm")).toBeNull();
   });
 
   it("links an unmatched ingredient to an existing entry", async () => {

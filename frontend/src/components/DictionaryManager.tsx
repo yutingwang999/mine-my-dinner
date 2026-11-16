@@ -6,12 +6,135 @@ import { useState } from "react";
 import { AllergenPicker } from "@/components/AllergenPicker";
 import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { DictionaryBrowser } from "@/components/DictionaryBrowser";
+import { DictionarySearch } from "@/components/DictionarySearch";
 import { EditIngredient } from "@/components/EditIngredient";
+import { EntryTypeFields, useEntryType } from "@/components/EntryTypeFields";
 import { type Allergen, api, entryName, type IngredientEntry } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 import { useLoad } from "@/lib/useLoad";
 
+type Target = { name: string } | { ingredient_id: number };
+
 /** Saving needs a confirmed value: a list, or an explicit "contains none". */
+function ConfirmPanel({
+  name,
+  target,
+  onCancel,
+  onResolved,
+}: {
+  name: string;
+  target: Target;
+  onCancel: () => void;
+  onResolved: () => void;
+}) {
+  const t = useTranslations("dictionary");
+  const tCommon = useTranslations("common");
+  const errorText = useErrorText();
+  const [allergens, setAllergens] = useState<Allergen[] | null>(null);
+  const type = useEntryType("other");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  // Only a name that has no entry yet becomes a new entry, so only it has a category.
+  const isNewEntry = "name" in target;
+
+  async function save() {
+    if (allergens === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.resolveAllergens(
+        target,
+        allergens,
+        isNewEntry ? { category: type.category, stock_mode: type.stockMode } : undefined,
+      );
+      onResolved();
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="dish-panel form-panel">
+      {isNewEntry && <EntryTypeFields type={type} fieldClass="panel-row" />}
+      <AllergenPicker name={name} onChange={setAllergens} onSuggestion={type.applySuggestion} />
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
+      <div className="panel-actions">
+        <button type="button" disabled={busy} onClick={onCancel}>
+          {tCommon("cancel")}
+        </button>
+        <button type="button" disabled={allergens === null || busy} onClick={save}>
+          {t("saveAllergens")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Links every line with an unmatched name to an entry the user picks. */
+function LinkPanel({
+  name,
+  onCancel,
+  onResolved,
+}: {
+  name: string;
+  onCancel: () => void;
+  onResolved: () => void;
+}) {
+  const t = useTranslations("dictionary");
+  const tReview = useTranslations("review");
+  const tCommon = useTranslations("common");
+  const locale = useLocale();
+  const errorText = useErrorText();
+  const [chosen, setChosen] = useState<IngredientEntry | null>(null);
+  const [remember, setRemember] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  async function confirm() {
+    if (chosen === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.linkUnknownName(name, chosen.id, remember);
+      onResolved();
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="dish-panel form-panel">
+      <DictionarySearch search={api.searchIngredients} onChoose={setChosen} />
+      {chosen !== null && <p role="status">{t("linkChosen", { entry: entryName(chosen, locale) })}</p>}
+      <label className="mini-field inline">
+        <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
+        {tReview("rememberLink")}
+      </label>
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
+      <div className="panel-actions">
+        <button type="button" disabled={busy} onClick={onCancel}>
+          {tCommon("cancel")}
+        </button>
+        <button type="button" disabled={chosen === null || busy} onClick={confirm}>
+          {t("confirmLink")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ResolveRow({
   testId,
   label,
@@ -24,29 +147,13 @@ function ResolveRow({
   label: string;
   name: string;
   dishCount: number;
-  target: { name: string } | { ingredient_id: number };
+  target: Target;
   onResolved: () => void;
 }) {
   const t = useTranslations("dictionary");
-  const errorText = useErrorText();
-  const [open, setOpen] = useState(false);
-  const [allergens, setAllergens] = useState<Allergen[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-
-  async function save() {
-    if (allergens === null) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.resolveAllergens(target, allergens);
-      onResolved();
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
+  // One panel at a time: the user either confirms allergens or links to an entry.
+  const [panel, setPanel] = useState<"confirm" | "link" | null>(null);
+  const close = () => setPanel(null);
 
   return (
     <li data-testid={testId}>
@@ -54,23 +161,23 @@ function ResolveRow({
         <strong>{label}</strong>
         <span className="hint">{t("dishCount", { count: dishCount })}</span>
       </span>
-      {!open && (
-        <button type="button" onClick={() => setOpen(true)}>
-          {t("resolve")}
-        </button>
-      )}
-      {open && (
-        <div className="line-panel">
-          <AllergenPicker name={name} onChange={setAllergens} />
-          <button type="button" disabled={allergens === null || busy} onClick={save}>
-            {t("saveAllergens")}
+      {panel === null && (
+        <span className="actions">
+          <button type="button" onClick={() => setPanel("confirm")}>
+            {t("resolve")}
           </button>
-          {error !== null && (
-            <p role="alert" className="notice notice-warning">
-              {errorText(error)}
-            </p>
+          {"name" in target && (
+            <button type="button" onClick={() => setPanel("link")}>
+              {t("linkExisting")}
+            </button>
           )}
-        </div>
+        </span>
+      )}
+      {panel === "confirm" && (
+        <ConfirmPanel name={name} target={target} onCancel={close} onResolved={onResolved} />
+      )}
+      {panel === "link" && "name" in target && (
+        <LinkPanel name={target.name} onCancel={close} onResolved={onResolved} />
       )}
     </li>
   );

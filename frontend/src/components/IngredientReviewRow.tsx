@@ -5,21 +5,18 @@ import { useEffect, useState } from "react";
 
 import { AllergenPicker } from "@/components/AllergenPicker";
 import { DictionarySearch, namesEntry } from "@/components/DictionarySearch";
+import { EntryTypeFields, useEntryType } from "@/components/EntryTypeFields";
 import {
   type Allergen,
   AMOUNT_TYPES,
   type AmountType,
   api,
   ApiError,
-  CATEGORIES,
-  type Category,
   entryName,
   type IngredientLine,
   type Lang,
   ROLES,
   type Role,
-  STOCK_MODES,
-  type StockMode,
   type Unit,
   UNITS,
 } from "@/lib/api";
@@ -79,13 +76,10 @@ function CreateIngredient({
 }) {
   const t = useTranslations("entry");
   const tLine = useTranslations("line");
-  const tCategory = useTranslations("category");
-  const tStock = useTranslations("stockMode");
   const errorText = useErrorText();
   const [nameZh, setNameZh] = useState(lang === "zh" ? line.name : "");
   const [nameEn, setNameEn] = useState(lang === "en" ? line.name : "");
-  const [category, setCategory] = useState<Category>(line.role === "seasoning" ? "seasoning" : "other");
-  const [stockMode, setStockMode] = useState<StockMode>("level");
+  const type = useEntryType(line.role === "seasoning" ? "seasoning" : "other");
   const [allergens, setAllergens] = useState<Allergen[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -130,8 +124,8 @@ function CreateIngredient({
       const entry = await api.createIngredient({
         name_zh: nameZh.trim() || null,
         name_en: nameEn.trim() || null,
-        category,
-        stock_mode: stockMode,
+        category: type.category,
+        stock_mode: type.stockMode,
         allergens,
       });
       onCreated(entry.id, nameZh.trim() || nameEn.trim());
@@ -165,30 +159,8 @@ function CreateIngredient({
         {t("nameEn")}
         <input value={nameEn} onChange={(event) => setNameEn(event.target.value)} />
       </label>
-      <label className="mini-field">
-        {t("category")}
-        <select value={category} onChange={(event) => setCategory(event.target.value as Category)}>
-          {CATEGORIES.map((value) => (
-            <option key={value} value={value}>
-              {tCategory(value)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="mini-field">
-        {t("stockMode")}
-        <select
-          value={stockMode}
-          onChange={(event) => setStockMode(event.target.value as StockMode)}
-        >
-          {STOCK_MODES.map((value) => (
-            <option key={value} value={value}>
-              {tStock(value)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <AllergenPicker name={line.name} onChange={setAllergens} />
+      <EntryTypeFields type={type} fieldClass="mini-field" />
+      <AllergenPicker name={line.name} onChange={setAllergens} onSuggestion={type.applySuggestion} />
       <button type="button" disabled={busy || owner !== null} onClick={create}>
         {busy ? t("creating") : t("create")}
       </button>

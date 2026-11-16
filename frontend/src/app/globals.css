@@ -1099,6 +1099,53 @@ body:has(.chat) {
   overflow-wrap: anywhere;
 }
 
+/* A form inside the dish panel frame: fields stacked, label left and input right, actions at the bottom right. */
+.form-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.row-list > li > .form-panel {
+  flex-basis: 100%;
+}
+
+.panel-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.panel-row input,
+.panel-row select {
+  width: 100%;
+  min-width: 0;
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.form-panel > .hint,
+.form-panel > p {
+  margin: 0;
+}
+
+.form-panel .hint {
+  font-size: 0.85rem;
+}
+
+@media (max-width: 30rem) {
+  .panel-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+}
+
 .dish-panel .recipe-detail.compact {
   margin: 0;
   padding: 0;

@@ -18,7 +18,8 @@ type Props<T extends DictionaryEntry> = {
   search: (q: string) => Promise<T[]>;
   /** Also gets the typed text, so a caller can keep the user's own wording. */
   onChoose: (entry: T, typed: string) => void;
-  onCancel: () => void;
+  /** When given, the search shows its own cancel button; a panel with its own cancel omits it. */
+  onCancel?: () => void;
   /** When given, the typed text can be added as a new entry, under this label. */
   onAddUnlisted?: (name: string) => void;
   unlistedLabel?: (name: string) => string;
@@ -69,9 +70,11 @@ export function DictionarySearch<T extends DictionaryEntry>({
         value={query}
         onChange={(event) => update(event.target.value)}
       />
-      <button type="button" onClick={onCancel}>
-        {t("cancel")}
-      </button>
+      {onCancel && (
+        <button type="button" onClick={onCancel}>
+          {t("cancel")}
+        </button>
+      )}
       {results !== null && results.length === 0 && <p>{t("noResults")}</p>}
       {onAddUnlisted && unlistedLabel && results !== null && term && !hasExactMatch && (
         <button type="button" onClick={() => onAddUnlisted(query.trim())}>

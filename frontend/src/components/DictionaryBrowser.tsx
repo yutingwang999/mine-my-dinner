@@ -46,35 +46,42 @@ function splitAliases(text: string): string[] {
     .filter(Boolean);
 }
 
-/** A small form for the user's own wordings of a built-in ingredient. */
-function PersonalAliasEditor({
+/** The toggle in an entry's title row; it opens the panel with the user's own wordings. */
+function PersonalAliasToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const t = useTranslations("dictionary");
+  return (
+    <span className="dish-toggles">
+      <button type="button" aria-expanded={open} onClick={onToggle}>
+        {t("personalAliases")}
+        <span aria-hidden="true"> {open ? "▴" : "▾"}</span>
+      </button>
+    </span>
+  );
+}
+
+/** A framed form for the user's own wordings of a built-in ingredient. */
+function PersonalAliasPanel({
   entry,
   onSaved,
+  onClose,
 }: {
   entry: IngredientEntry;
   onSaved: (entry: IngredientEntry) => void;
+  onClose: () => void;
 }) {
   const t = useTranslations("dictionary");
   const errorText = useErrorText();
-  const [open, setOpen] = useState(false);
-  const [zh, setZh] = useState("");
-  const [en, setEn] = useState("");
+  const [zh, setZh] = useState(entry.user_aliases_zh.join(", "));
+  const [en, setEn] = useState(entry.user_aliases_en.join(", "));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-
-  function start() {
-    setZh(entry.user_aliases_zh.join(", "));
-    setEn(entry.user_aliases_en.join(", "));
-    setError(null);
-    setOpen(true);
-  }
 
   async function save() {
     setBusy(true);
     setError(null);
     try {
       onSaved(await api.setPersonalAliases(entry.id, splitAliases(zh), splitAliases(en)));
-      setOpen(false);
+      onClose();
     } catch (caught) {
       setError(caught);
     } finally {
@@ -82,35 +89,30 @@ function PersonalAliasEditor({
     }
   }
 
-  if (!open) {
-    return (
-      <button type="button" onClick={start}>
-        {t("personalAliases")}
-      </button>
-    );
-  }
   return (
-    <div className="line-panel">
+    <div className="dish-panel form-panel">
       <p className="hint">{t("personalAliasesHint")}</p>
-      <label>
+      <label className="panel-row">
         {t("personalAliasesZh")}
         <input value={zh} onChange={(event) => setZh(event.target.value)} />
       </label>
-      <label>
+      <label className="panel-row">
         {t("personalAliasesEn")}
         <input value={en} onChange={(event) => setEn(event.target.value)} />
       </label>
-      <button type="button" disabled={busy} onClick={save}>
-        {t("savePersonalAliases")}
-      </button>
-      <button type="button" disabled={busy} onClick={() => setOpen(false)}>
-        {t("cancelPersonalAliases")}
-      </button>
       {error !== null && (
         <p role="alert" className="notice notice-warning">
           {errorText(error)}
         </p>
       )}
+      <div className="panel-actions">
+        <button type="button" disabled={busy} onClick={onClose}>
+          {t("cancelPersonalAliases")}
+        </button>
+        <button type="button" disabled={busy} onClick={save}>
+          {t("savePersonalAliases")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -131,6 +133,8 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
   const [category, setCategory] = useState("");
   const [page, setPage] = useState(1);
   const [cookwarePage, setCookwarePage] = useState(1);
+  // The built-in entry whose personal aliases are open; one at a time.
+  const [editingId, setEditingId] = useState<number | null>(null);
   // Entries saved with personal aliases, shown in place of the loaded copy.
   const [saved, setSaved] = useState<Map<number, IngredientEntry>>(new Map());
   const ingredients = useLoad(api.listAllIngredients, [refreshKey]);
@@ -199,7 +203,17 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
             const parent = entry.parent_id ? byId.get(entry.parent_id) : undefined;
             return (
               <li key={entry.id} data-testid={`all-ingredient-${entry.id}`}>
-                <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
+                <div className="dish-head">
+                  <span>
+                    <strong>{bothNames(entry)}</strong> {sourceBadge(entry)}
+                  </span>
+                  {entry.source === "seed" && (
+                    <PersonalAliasToggle
+                      open={editingId === entry.id}
+                      onToggle={() => setEditingId(editingId === entry.id ? null : entry.id)}
+                    />
+                  )}
+                </div>
                 <div className="browse-details">
                   <span>{tCategory(entry.category)}</span>
                   <span>{tStock(entry.stock_mode)}</span>
@@ -214,10 +228,11 @@ export function DictionaryBrowser({ refreshKey = 0 }: { refreshKey?: number }) {
                     <span>{t("personalAliasesList", { list: personalAliases(entry).join(", ") })}</span>
                   )}
                 </div>
-                {entry.source === "seed" && (
-                  <PersonalAliasEditor
+                {entry.source === "seed" && editingId === entry.id && (
+                  <PersonalAliasPanel
                     entry={entry}
                     onSaved={(updated) => setSaved((previous) => new Map(previous).set(updated.id, updated))}
+                    onClose={() => setEditingId(null)}
                   />
                 )}
               </li>

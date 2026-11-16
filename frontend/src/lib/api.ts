@@ -220,6 +220,13 @@ export type RuleWrite = {
   text: string | null;
 };
 
+/** What the model suggests for a new entry; each part is null when it gave no valid value. */
+export type EntrySuggestion = {
+  suggested: Allergen[] | null;
+  category: Category | null;
+  stock_mode: StockMode | null;
+};
+
 export type Unresolved = {
   entries: { id: number; name: string; dish_count: number }[];
   unmatched: { name: string; dish_count: number }[];
@@ -318,8 +325,7 @@ export const api = {
   searchCookware: (q: string) =>
     request<DictionaryEntry[]>(`/api/cookware?q=${encodeURIComponent(q)}`, { method: "GET" }),
   createCookware: (data: CookwareCreate) => postJson<DictionaryEntry>("/api/cookware", data),
-  suggestAllergens: (name: string) =>
-    postJson<{ suggested: Allergen[] | null }>("/api/allergen-suggestions", { name }),
+  suggestEntry: (name: string) => postJson<EntrySuggestion>("/api/allergen-suggestions", { name }),
   checkAllergies: (lines: { name: string; ingredient_id: number | null }[]) =>
     postJson<AllergyCheck>("/api/recipes/allergy-check", { lines }),
   saveRecipe: (data: RecipeWrite) => postJson<CreatedRecipe>("/api/recipes", data),
@@ -373,8 +379,18 @@ export const api = {
   listUserCookware: () => get<DictionaryEntry[]>("/api/cookware?source=user"),
   deleteCookware: (id: number) => remove(`/api/cookware/${id}`),
   listUnresolved: () => get<Unresolved>("/api/allergens/unresolved"),
-  resolveAllergens: (target: { name: string } | { ingredient_id: number }, allergens: Allergen[]) =>
-    postJson<IngredientEntry>("/api/allergens/resolve", { ...target, allergens }),
+  /** The category and stock mode are used only when a new entry is created for a name. */
+  resolveAllergens: (
+    target: { name: string } | { ingredient_id: number },
+    allergens: Allergen[],
+    entry?: { category: Category; stock_mode: StockMode },
+  ) => postJson<IngredientEntry>("/api/allergens/resolve", { ...target, allergens, ...entry }),
+  linkUnknownName: (name: string, ingredientId: number, remember: boolean) =>
+    postJson<IngredientEntry & { linked_lines: number; remembered: boolean }>("/api/allergens/link", {
+      name,
+      ingredient_id: ingredientId,
+      remember,
+    }),
 };
 
 export function imageUrl(fileName: string): string {

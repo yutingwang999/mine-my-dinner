@@ -154,7 +154,7 @@ describe("dictionary browser", () => {
     renderWithProviders(<DictionaryBrowser />);
     const potato = within(await screen.findByTestId("all-ingredient-1"));
     await userEvent.click(potato.getByRole("button", { name: "My aliases" }));
-    await userEvent.type(screen.getByLabelText("Chinese aliases (comma-separated)"), "马铃薯丁");
+    await userEvent.type(screen.getByLabelText("Chinese aliases"), "马铃薯丁");
     await userEvent.click(screen.getByRole("button", { name: "Save aliases" }));
     expect(callsTo(calls, "PUT", "/api/ingredients/1/personal-aliases")[0].body).toEqual({
       aliases_zh: ["马铃薯丁"],
@@ -176,8 +176,36 @@ describe("dictionary browser", () => {
 
     const potato = within(screen.getByTestId("all-ingredient-1"));
     await userEvent.click(potato.getByRole("button", { name: "My aliases" }));
-    await userEvent.type(screen.getByLabelText("Chinese aliases (comma-separated)"), "番茄");
+    await userEvent.type(screen.getByLabelText("Chinese aliases"), "番茄");
     await userEvent.click(screen.getByRole("button", { name: "Save aliases" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already belongs to another entry");
+  });
+
+  it("shows the personal alias toggle in the title row and the editor in a framed panel", async () => {
+    setup();
+    const potato = within(await screen.findByTestId("all-ingredient-1"));
+    const toggle = potato.getByRole("button", { name: "My aliases" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("My aliases ▾");
+    expect(toggle.closest(".dish-head")).not.toBeNull();
+    expect(potato.queryByLabelText("Chinese aliases")).toBeNull();
+
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveTextContent("My aliases ▴");
+    const panel = potato.getByLabelText("Chinese aliases").closest(".dish-panel") as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(within(panel).getByText(/Your own wordings/)).toBeInTheDocument();
+    expect(within(panel).getByLabelText("English aliases")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Save aliases" })).toBeInTheDocument();
+
+    // The toggle closes the panel too, and the cancel button does the same.
+    await userEvent.click(toggle);
+    expect(potato.queryByLabelText("Chinese aliases")).toBeNull();
+    await userEvent.click(toggle);
+    await userEvent.click(potato.getByRole("button", { name: "Cancel" }));
+    expect(potato.queryByLabelText("Chinese aliases")).toBeNull();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 });
