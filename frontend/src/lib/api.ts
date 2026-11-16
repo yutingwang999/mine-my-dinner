@@ -69,6 +69,8 @@ export type IngredientLine = {
   /** Lines sharing a value are alternatives: one of the group is required. */
   choice_group: number | null;
   ingredient_id: number | null;
+  /** Sent on save: remember the name as an alias of the linked entry. */
+  remember_link?: boolean;
   /** The linked entry's own names, for display only; the server does not read them. */
   linked_name_zh?: string | null;
   linked_name_en?: string | null;
@@ -166,7 +168,13 @@ export type SavedRecipe = RecipeFields & {
 
 export type RecipeImage = { file_name: string; mime_type: string; position: number };
 
-export type CreatedRecipe = { id: number; embedded: boolean; log_id: number | null };
+export type CreatedRecipe = {
+  id: number;
+  embedded: boolean;
+  log_id: number | null;
+  /** Names not remembered because another entry already owns them. */
+  alias_conflicts?: string[];
+};
 
 export type RecipePage = { items: SavedRecipe[]; total: number; page: number };
 
@@ -301,6 +309,10 @@ export const api = {
   },
   searchIngredients: (q: string) =>
     request<IngredientEntry[]>(`/api/ingredients?q=${encodeURIComponent(q)}`, { method: "GET" }),
+  matchIngredients: (names: string[]) =>
+    postJson<{ matches: { name: string; entry: IngredientEntry }[] }>("/api/ingredients/match", {
+      names,
+    }),
   createIngredient: (data: IngredientCreate) =>
     postJson<IngredientEntry & { linked_lines: number }>("/api/ingredients", data),
   searchCookware: (q: string) =>

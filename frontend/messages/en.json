@@ -108,6 +108,8 @@
     "save": "Save recipe",
     "saving": "Saving…",
     "severalRecipes": "This text seems to hold {count} recipes; only the first was read. Split them with a line of --- and import again.",
+    "rememberLink": "Remember this link",
+    "aliasConflict": "Not remembered, already an alias of another entry: {names}",
     "saveFailed": "Saving failed: {error} Your edits are kept.",
     "discard": "Discard this draft",
     "allergyWarning": "Allergy warning. The recipe can still be saved.",
@@ -179,6 +181,9 @@
     "create": "Create and link",
     "creating": "Creating…",
     "linkToOwner": "Link to that entry",
+    "ownedName": "\"{term}\" is already a name or alias of \"{entry}\".",
+    "linkToEntry": "Link to \"{entry}\"",
+    "manageInDictionary": "Manage in the dictionary",
     "owned": "I own this cookware",
     "aliasesZh": "Chinese aliases (comma-separated)",
     "aliasesEn": "English aliases (comma-separated)"

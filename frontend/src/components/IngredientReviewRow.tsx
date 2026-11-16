@@ -24,6 +24,7 @@ import {
   UNITS,
 } from "@/lib/api";
 import { amountProblem, typeForUnit } from "@/lib/amounts";
+import { Link } from "@/i18n/navigation";
 import { useErrorText } from "@/lib/errors";
 
 export type ReviewLine = IngredientLine & {
@@ -32,6 +33,14 @@ export type ReviewLine = IngredientLine & {
   linkedName: string | null;
   /** Added on the review page, so it has no source wording of its own. */
   added: boolean;
+  /** The line's own name matched an entry before the user did anything with it. */
+  startedMatched: boolean;
+  /** The user linked this line by hand, so the form offers to remember the link. */
+  linkedByHand: boolean;
+  /** Save the name as an alias of the linked entry; only meaningful when linkedByHand. */
+  rememberLink: boolean;
+  /** The user linked, unlinked, skipped, or renamed the line; a re-match leaves it alone. */
+  touched: boolean;
 };
 
 type Props = {
@@ -80,6 +89,39 @@ function CreateIngredient({
   const [allergens, setAllergens] = useState<Allergen[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
+  const locale = useLocale();
+  // The entry that already owns one of the typed names, found before the user submits.
+  const [found, setOwner] = useState<{ key: string; term: string; id: number; entry: string } | null>(null);
+
+  const namesKey = [nameZh.trim(), nameEn.trim()].filter(Boolean).join("|");
+
+  useEffect(() => {
+    if (!namesKey) return;
+    const names = namesKey.split("|");
+    let active = true;
+    const timer = setTimeout(() => {
+      api
+        .matchIngredients(names)
+        .then(({ matches }) => {
+          if (!active) return;
+          const match = matches[0];
+          setOwner(
+            match
+              ? { key: namesKey, term: match.name, id: match.entry.id, entry: entryName(match.entry, locale) }
+              : null,
+          );
+        })
+        // A failed check shows nothing; the server still refuses a taken name.
+        .catch(() => active && setOwner(null));
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [namesKey, locale]);
+
+  // An answer for names the user has since changed no longer counts.
+  const owner = found !== null && found.key === namesKey ? found : null;
 
   async function create() {
     setBusy(true);
@@ -104,6 +146,17 @@ function CreateIngredient({
 
   return (
     <div>
+      {owner && (
+        <div className="notice notice-warning actions">
+          <span>{t("ownedName", { term: owner.term, entry: owner.entry })}</span>
+          <button type="button" onClick={() => onCreated(owner.id, owner.entry)}>
+            {t("linkToEntry", { entry: owner.entry })}
+          </button>
+          <Link href="/dictionary" target="_blank">
+            {t("manageInDictionary")}
+          </Link>
+        </div>
+      )}
       <label className="mini-field">
         {t("nameZh")}
         <input value={nameZh} onChange={(event) => setNameZh(event.target.value)} />
@@ -136,7 +189,7 @@ function CreateIngredient({
         </select>
       </label>
       <AllergenPicker name={line.name} onChange={setAllergens} />
-      <button type="button" disabled={busy} onClick={create}>
+      <button type="button" disabled={busy || owner !== null} onClick={create}>
         {busy ? t("creating") : t("create")}
       </button>
       <button type="button" onClick={onCancel}>
@@ -169,6 +222,7 @@ export function IngredientReviewRow({
   const tUnit = useTranslations("unit");
   const tAmount = useTranslations("amountType");
   const tRole = useTranslations("role");
+  const tReview = useTranslations("review");
   const locale = useLocale();
   const [mode, setMode] = useState<Mode>("idle");
   // The link before "Change link", so the change can be undone.
@@ -207,8 +261,16 @@ export function IngredientReviewRow({
     onChange({ ...line, ...fields });
   }
 
-  function link(id: number, name: string) {
-    update({ ingredient_id: id, linkedName: name, skipped: false });
+  function link(id: number, name: string, byHand = false) {
+    update({
+      ingredient_id: id,
+      linkedName: name,
+      skipped: false,
+      touched: true,
+      // Relinking a line whose own name matched is a correction, not a new wording.
+      linkedByHand: byHand && !line.startedMatched,
+      rememberLink: true,
+    });
     setPrevious(null);
     setMode("idle");
   }
@@ -271,7 +333,7 @@ export function IngredientReviewRow({
             value={line.name}
             onChange={(event) => {
               setNameEdited(true);
-              update({ name: event.target.value });
+              update({ name: event.target.value, touched: true });
             }}
           />
         </label>
@@ -376,16 +438,26 @@ export function IngredientReviewRow({
               onClick={() => {
                 const name = line.linkedName ?? line.name;
                 setPrevious({ id: line.ingredient_id as number, name });
-                update({ ingredient_id: null, linkedName: null });
+                update({ ingredient_id: null, linkedName: null, touched: true, linkedByHand: false });
               }}
             >
               {t("unlink")}
             </button>
+            {line.linkedByHand && (
+              <label className="mini-field inline">
+                <input
+                  type="checkbox"
+                  checked={line.rememberLink}
+                  onChange={(event) => update({ rememberLink: event.target.checked })}
+                />
+                {tReview("rememberLink")}
+              </label>
+            )}
           </>
         ) : line.skipped ? (
           <>
             {t("skipped")}{" "}
-            <button type="button" onClick={() => update({ skipped: false })}>
+            <button type="button" onClick={() => update({ skipped: false, touched: true })}>
               {t("undoSkip")}
             </button>
           </>
@@ -407,7 +479,7 @@ export function IngredientReviewRow({
               type="button"
               onClick={() => {
                 setPrevious(null);
-                update({ skipped: true });
+                update({ skipped: true, touched: true });
               }}
             >
               {t("skip")}
@@ -436,7 +508,7 @@ export function IngredientReviewRow({
         <div className="line-panel">
           <DictionarySearch
             search={api.searchIngredients}
-            onChoose={(entry) => link(entry.id, entryName(entry, locale))}
+            onChoose={(entry) => link(entry.id, entryName(entry, locale), true)}
             onCancel={() => setMode("idle")}
           />
         </div>

@@ -1,8 +1,12 @@
 import { screen } from "@testing-library/react";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { ReviewForm } from "@/components/ReviewForm";
 import { draft, renderWithProviders } from "@/test/helpers";
+
+vi.mock("@/i18n/navigation", () => ({
+  Link: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
+}));
 
 it("warns when the model saw several recipes", () => {
   renderWithProviders(<ReviewForm draft={draft({ recipe_count: 2 })} onSaved={() => {}} />);

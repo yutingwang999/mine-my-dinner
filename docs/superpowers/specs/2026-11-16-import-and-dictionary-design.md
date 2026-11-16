@@ -68,7 +68,7 @@ Where: the ingredient row of the review form (`IngredientReviewRow.tsx`), which 
 
 ### 5.1b Warn before leaving with unsaved drafts (decided by the user)
 
-The review queue lives only in browser memory (`frontend/src/lib/drafts.tsx`); closing or reloading the page loses every unsaved draft, and re-importing pays for the extraction again. Today only a notice on the review page says so.
+The review queue lives only in browser memory (`frontend/src/lib/drafts.tsx`); closing or reloading the page loses every unsaved draft, and re-importing pays for the extraction again. A notice on the review page says so. (Correction found while building Task 4: `DraftsProvider` already registers a `beforeunload` warning while drafts are queued, since the Phase 0 management commit; this design first said there was none. The behaviour below is therefore kept and covered by a test rather than built new.)
 
 - While the queue holds at least one draft, closing, reloading, or leaving the site asks the browser's own "leave this page?" confirmation (`beforeunload`). Browsers show their own fixed text; the custom count of drafts cannot be shown there.
 - Moving between pages inside the app keeps the queue (it lives in a provider above the pages), so no confirmation is needed there.

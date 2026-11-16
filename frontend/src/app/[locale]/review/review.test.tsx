@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -820,5 +820,225 @@ describe("choice groups", () => {
     await save();
     const lines = lastBody("/api/recipes").ingredients as { optional: boolean }[];
     expect(lines.map((line) => line.optional)).toEqual([true, true]);
+  });
+});
+
+const BROCCOLI = {
+  id: 9, name_zh: "西兰花", name_en: "broccoli", aliases_zh: ["西蓝花"], aliases_en: [], user_aliases_zh: [], user_aliases_en: [],
+  source: "seed", category: "vegetable", stock_mode: "level", allergens: [], parent_id: null,
+};
+
+function broccoliLine(raw = "西蓝花", name = "西蓝花") {
+  return { raw, name, amount: null, unit: null, amount_type: "missing", role: "main", optional: false, choice_group: null, ingredient_id: null } as const;
+}
+
+async function linkBroccoli(index = 0) {
+  const target = screen.getAllByTestId("row-西蓝花")[index];
+  await userEvent.click(within(target).getByRole("button", { name: "Link to existing" }));
+  await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "西");
+  await userEvent.click(await screen.findByRole("button", { name: "Choose broccoli" }));
+}
+
+const BROCCOLI_ROUTES: Routes = { "GET /api/ingredients": () => [BROCCOLI] };
+
+function ingredientsSent(): { ingredient_id: number | null; remember_link: boolean }[] {
+  const matching = callsTo(calls, "POST", "/api/recipes");
+  return (matching[matching.length - 1].body as { ingredients: never[] }).ingredients;
+}
+
+describe("review: remembering links", () => {
+  it("shows the remember checkbox checked after a manual link of an unmatched line", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await linkBroccoli();
+    expect(screen.getByRole("checkbox", { name: "Remember this link" })).toBeChecked();
+  });
+
+  it("offers no checkbox on a line whose own name matched, or when relinking it", async () => {
+    setup(BROCCOLI_ROUTES, [draft()]);
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await userEvent.click(within(row("葱花")).getByRole("button", { name: "Change link" }));
+    await userEvent.click(within(row("葱花")).getByRole("button", { name: "Link to existing" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "西");
+    await userEvent.click(await screen.findByRole("button", { name: "Choose broccoli" }));
+    expect(within(row("葱花")).getByText("Linked to broccoli")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+  });
+
+  it("sends remember_link for a remembered line and false when unchecked", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    await linkBroccoli();
+    await save();
+    expect(ingredientsSent()).toMatchObject([{ ingredient_id: 9, remember_link: true }]);
+
+    cleanup();
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    await linkBroccoli();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Remember this link" }));
+    await save();
+    expect(ingredientsSent()).toMatchObject([{ ingredient_id: 9, remember_link: false }]);
+  });
+
+  it("links the other unmatched same-name lines of the draft when remembered", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine("一颗西蓝花"), broccoliLine("西蓝花少许")] })]);
+    await linkBroccoli(0);
+    const rows = screen.getAllByTestId("row-西蓝花");
+    expect(within(rows[1]).getByText("Linked to broccoli")).toBeInTheDocument();
+    await save();
+    expect(ingredientsSent()).toMatchObject([
+      { ingredient_id: 9, remember_link: true },
+      { ingredient_id: 9, remember_link: true },
+    ]);
+  });
+
+  it("keeps the second line's link but does not remember it when the box is unchecked", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine("一颗西蓝花"), broccoliLine("西蓝花少许")] })]);
+    await linkBroccoli(0);
+    await userEvent.click(within(screen.getAllByTestId("row-西蓝花")[0]).getByRole("checkbox", { name: "Remember this link" }));
+    await save();
+    expect(ingredientsSent()).toMatchObject([
+      { ingredient_id: 9, remember_link: false },
+      { ingredient_id: 9, remember_link: false },
+    ]);
+  });
+
+  it("matches the next draft again when it is shown", async () => {
+    let saved = false;
+    setup(
+      {
+        ...BROCCOLI_ROUTES,
+        "POST /api/recipes": () => {
+          saved = true;
+          return reply(201, { id: 1 });
+        },
+        "POST /api/ingredients/match": () => ({
+          matches: saved ? [{ name: "西蓝花", entry: BROCCOLI }] : [],
+        }),
+      },
+      [draft({ ingredients: [broccoliLine()] }), draft({ title: "清炒西蓝花", ingredients: [broccoliLine()] })],
+    );
+    await linkBroccoli();
+    await save();
+    expect(await screen.findByDisplayValue("清炒西蓝花")).toBeInTheDocument();
+    expect(await within(row("西蓝花")).findByText("Linked to broccoli")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+  });
+
+  it("asks the match endpoint only for unmatched names", async () => {
+    setup({ "POST /api/ingredients/match": () => ({ matches: [] }) });
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/ingredients/match")[0].body).toEqual({ names: ["秘制酱"] });
+  });
+
+  it("the re-match leaves touched lines alone", async () => {
+    let answer: (response: unknown) => void = () => {};
+    setup(
+      { "POST /api/ingredients/match": () => new Promise((resolve) => (answer = resolve)) },
+      [draft({ ingredients: [broccoliLine("西蓝花", "西蓝花"), broccoliLine("青花菜", "青花菜"), broccoliLine("花椰菜", "花椰菜")] })],
+    );
+    // One line is skipped and another renamed (and renamed back) before the answer arrives.
+    await userEvent.click(within(row("西蓝花")).getByRole("button", { name: "Leave unlinked" }));
+    const renamed = within(row("青花菜")).getByRole("textbox", { name: "Name" });
+    await userEvent.type(renamed, "x");
+    await userEvent.type(renamed, "{Backspace}");
+    await act(async () =>
+      answer(
+        reply(200, {
+          matches: ["西蓝花", "青花菜", "花椰菜"].map((name) => ({ name, entry: BROCCOLI })),
+        }),
+      ),
+    );
+    expect(within(row("西蓝花")).getByText(/Not linked/)).toBeInTheDocument();
+    expect(within(row("青花菜")).getByText("Not in the dictionary")).toBeInTheDocument();
+    expect(within(row("花椰菜")).getByText("Linked to broccoli")).toBeInTheDocument();
+  });
+
+  it("a failed re-match leaves the draft usable", async () => {
+    setup({ "POST /api/ingredients/match": () => reply(500, { code: "unknown" }) });
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match")).toHaveLength(1));
+    expect(within(row("秘制酱")).getByText("Not in the dictionary")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await save();
+  });
+
+  it("shows the alias conflict notice after saving", async () => {
+    setup(
+      { "POST /api/recipes": () => reply(201, { id: 1, alias_conflicts: ["西蓝花"] }) },
+      [draft(), draft({ title: "下一道" })],
+    );
+    await save();
+    expect(await screen.findByDisplayValue("下一道")).toBeInTheDocument();
+    expect(screen.getByText("Not remembered, already an alias of another entry: 西蓝花")).toBeInTheDocument();
+  });
+
+  it("shows the alias conflict notice on the empty-queue page", async () => {
+    setup({ "POST /api/recipes": () => reply(201, { id: 1, alias_conflicts: ["西蓝花"] }) });
+    await save();
+    await screen.findByText("There are no drafts to review.");
+    expect(screen.getByText("Not remembered, already an alias of another entry: 西蓝花")).toBeInTheDocument();
+  });
+
+  it("warns before unload only while drafts are queued", async () => {
+    setup({}, [draft(), draft({ title: "下一道" })]);
+    const before = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(before);
+    expect(before.defaultPrevented).toBe(true);
+    await save();
+    await userEvent.click(await screen.findByRole("button", { name: "Save recipe" }));
+    await screen.findByText("There are no drafts to review.");
+    const after = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+  });
+});
+
+describe("review: owned names in the create form", () => {
+  // The first call is the draft's own re-match; only the create form's check finds an owner.
+  let matchCalls = 0;
+  const OWNER_ROUTES: Routes = {
+    "POST /api/ingredients/match": () =>
+      ++matchCalls > 1 ? { matches: [{ name: "秘制酱", entry: BROCCOLI }] } : { matches: [] },
+  };
+
+  beforeEach(() => {
+    matchCalls = 0;
+  });
+
+  async function openCreate() {
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
+  }
+
+  it("shows the notice and disables submit when the name belongs to an entry", async () => {
+    setup(OWNER_ROUTES);
+    await openCreate();
+    expect(await screen.findByText("\"秘制酱\" is already a name or alias of \"broccoli\".")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage in the dictionary" })).toHaveAttribute("href", "/dictionary");
+    expect(screen.getByRole("button", { name: "Create and link" })).toBeDisabled();
+  });
+
+  it("links the line to the owner entry from the notice", async () => {
+    setup(OWNER_ROUTES);
+    await openCreate();
+    await userEvent.click(await screen.findByRole("button", { name: "Link to \"broccoli\"" }));
+    expect(within(row("秘制酱")).getByText("Linked to broccoli")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await save();
+    expect(ingredientsSent()[1]).toMatchObject({ ingredient_id: 9, remember_link: false });
+  });
+
+  it("shows no notice for an unowned name", async () => {
+    setup({ "POST /api/ingredients/match": () => ({ matches: [] }) });
+    await openCreate();
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match").length).toBeGreaterThan(1));
+    expect(screen.queryByText(/is already a name or alias/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create and link" })).toBeEnabled();
+  });
+
+  it("leaves submit enabled when the check fails", async () => {
+    setup({ "POST /api/ingredients/match": () => reply(500, { code: "unknown" }) });
+    await openCreate();
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match").length).toBeGreaterThan(1));
+    expect(screen.queryByText(/is already a name or alias/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create and link" })).toBeEnabled();
   });
 });

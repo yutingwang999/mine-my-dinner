@@ -189,6 +189,8 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - Two lines of one save that link the same unknown name to different entries with "remember" checked: the first wins and the second is reported as a conflict; untested (Task 1 review).
 - `link_name` has no test that already-linked lines with the same name are left alone; `POST /api/ingredients/match` queries each duplicate name in a request separately (harmless at 200 names or fewer) (Task 2 review).
 - The suggestion check script (`evaluation/allergen_suggest.py`) and two new dictionary tests have lines over 100 characters; a `names.yaml` row missing a field raises a bare `KeyError` instead of a clear message (Task 3 review).
+- The recipe edit page does not show `alias_conflicts` after saving (it navigates away), so a "remember" that hit another entry's alias is dropped silently there; the import review shows it (Task 4 review).
+- `ReviewForm`'s re-match runs once per mounted form and relies on `ReviewQueue` keying the form per draft; add a note on the `rematch` prop. Same-name linking inside one draft compares names ignoring case, while the server match is exact (harmless). The inline line `onChange` in `ReviewForm` could become a named function (Task 4 review).
 
 ## Minor findings from the final Phase 0 review, deferred
 
