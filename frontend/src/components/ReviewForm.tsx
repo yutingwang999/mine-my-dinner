@@ -20,7 +20,7 @@ import {
   type RecipeWrite,
   type TimeSource,
 } from "@/lib/api";
-import { amountProblem } from "@/lib/amounts";
+import { amountProblem, savedAmount } from "@/lib/amounts";
 import { useErrorText } from "@/lib/errors";
 import { copyImages } from "@/lib/images";
 import { useDragAutoScroll } from "@/lib/useDragAutoScroll";
@@ -322,9 +322,7 @@ export function ReviewForm({
         // An added line has no source wording, so its name stands in for it.
         raw: line.added ? line.name : line.raw,
         name: line.name,
-        amount: line.amount,
-        unit: line.unit,
-        amount_type: line.amount_type,
+        ...savedAmount(line),
         role: line.role,
         optional: line.optional,
         choice_group: line.choice_group,

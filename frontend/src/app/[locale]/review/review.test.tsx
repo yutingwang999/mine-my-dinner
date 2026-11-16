@@ -664,23 +664,129 @@ describe("review", () => {
 
   const EGGS = { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, choice_group: null, ingredient_id: 1 } as const;
 
-  it("sets the amount type from the unit, and clears a unit that no longer fits", async () => {
+  it("typing a number derives the type from the unit", async () => {
     setup({}, [draft({ ingredients: [EGGS] })]);
     const eggs = within(row("鸡蛋"));
-    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Unit" }), "teaspoon");
-    expect(eggs.getByRole("combobox", { name: "Amount type" })).toHaveValue("spoon");
-    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Amount type" }), "exact");
-    expect(eggs.getByRole("combobox", { name: "Unit" })).toHaveValue("");
+    const unit = eggs.getByRole("combobox", { name: "Unit" });
+    expect(eggs.queryByRole("combobox", { name: "Amount type" })).not.toBeInTheDocument();
+    await userEvent.selectOptions(unit, "g");
+    expect(eggs.getByText("Exact")).toBeInTheDocument();
+    await userEvent.selectOptions(unit, "piece");
+    expect(eggs.getByText("Count")).toBeInTheDocument();
+    await userEvent.selectOptions(unit, "");
+    expect(eggs.getByText("Household measure", { selector: "strong" })).toBeInTheDocument();
+    const household = within(unit).getByRole("option", { name: "Household measure" });
+    expect(household).toHaveAttribute("title", "bowl, cup, handful, pinch, …");
+    expect(eggs.getByText("e.g. bowl, cup, handful, pinch")).toBeInTheDocument();
+    await userEvent.selectOptions(unit, "g");
+    expect(eggs.queryByText("e.g. bowl, cup, handful, pinch")).not.toBeInTheDocument();
+    expect(eggs.getByRole("spinbutton", { name: "Amount" })).toHaveValue(2);
   });
 
-  it("warns about a unit and type that do not match, blocks save, and offers the fix", async () => {
-    setup({}, [draft({ ingredients: [{ ...EGGS, raw: "生抽4勺", name: "生抽", amount: 4, unit: "spoon" }] })]);
-    const soy = within(row("生抽"));
-    expect(soy.getByText("A spoon measure is a household measure.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
-    expect(screen.getByText("Fix the amounts marked above before saving.")).toBeInTheDocument();
-    expect(callsTo(calls, "POST", "/api/recipes")).toHaveLength(0);
-    await userEvent.click(soy.getByRole("button", { name: "Change to Household measure" }));
+  it("shows None for the empty unit only while no number is entered", async () => {
+    setup({}, [draft({ ingredients: [EGGS] })]);
+    const eggs = within(row("鸡蛋"));
+    const unit = eggs.getByRole("combobox", { name: "Unit" });
+    expect(within(unit).queryByRole("option", { name: "None" })).not.toBeInTheDocument();
+    await userEvent.clear(eggs.getByRole("spinbutton", { name: "Amount" }));
+    expect(within(unit).getByRole("option", { name: "None" })).toBeInTheDocument();
+  });
+
+  it("disables the unit while the amount is empty and enables it after a number is typed", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: null, unit: null, amount_type: "missing" }] })]);
+    const eggs = within(row("鸡蛋"));
+    const unit = eggs.getByRole("combobox", { name: "Unit" });
+    expect(unit).toBeDisabled();
+    await userEvent.type(eggs.getByRole("spinbutton", { name: "Amount" }), "2");
+    expect(unit).toBeEnabled();
+    await userEvent.selectOptions(unit, "g");
+    await userEvent.clear(eggs.getByRole("spinbutton", { name: "Amount" }));
+    expect(unit).toBeDisabled();
+    expect(unit).toHaveValue("g");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "missing" });
+  });
+
+  it("Unspecified amount clears number and unit and is pressed", async () => {
+    setup({}, [draft({ ingredients: [EGGS] })]);
+    const eggs = within(row("鸡蛋"));
+    await userEvent.click(eggs.getByRole("button", { name: "Unspecified amount" }));
+    expect(eggs.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "true");
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "vague" });
+  });
+
+  it("typing a number releases a pressed toggle", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: null, unit: null, amount_type: "missing" }] })]);
+    const eggs = within(row("鸡蛋"));
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.type(eggs.getByRole("spinbutton", { name: "Amount" }), "2");
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByText("Household measure", { selector: "strong" })).toBeInTheDocument();
+    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Unit" }), "piece");
+    expect(eggs.getByText("Count")).toBeInTheDocument();
+  });
+
+  it("clicking a pressed toggle again releases it and leaves the amount empty", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: null, unit: null, amount_type: "vague" }] })]);
+    const eggs = within(row("鸡蛋"));
+    const toggle = eggs.getByRole("button", { name: "Unspecified amount" });
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByRole("spinbutton", { name: "Amount" })).toHaveValue(null);
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "missing" });
+  });
+
+  it("renders the same seven slots in the same order for a vague line and a numbered line", () => {
+    setup({}, [
+      draft({
+        ingredients: [
+          { ...EGGS, name: "盐", raw: "盐适量", amount: null, unit: null, amount_type: "vague" },
+          EGGS,
+        ],
+      }),
+    ]);
+    const slots = (name: string) =>
+      Array.from(row(name).querySelectorAll(".line-grid > [data-slot]")).map((el) => el.getAttribute("data-slot"));
+    const order = ["name", "amount", "unit", "toggles", "type", "role", "optional"];
+    expect(slots("盐")).toEqual(order);
+    expect(slots("鸡蛋")).toEqual(order);
+    expect(row("盐").querySelector('[data-slot="type"]')).toBeEmptyDOMElement();
+    // Remove sits on the top line, outside the grid.
+    const remove = within(row("盐")).getByRole("button", { name: "Remove" });
+    expect(remove.closest(".line-raw")).not.toBeNull();
+    expect(remove.closest(".line-grid")).toBeNull();
+    expect(row("鸡蛋").querySelector('[data-slot="type"]')).toHaveTextContent("Count");
+  });
+
+  it("shows the toggle that matches how the line was extracted", () => {
+    setup({}, [
+      draft({
+        ingredients: [
+          { ...EGGS, name: "盐", raw: "盐适量", amount: null, unit: null, amount_type: "vague" },
+          { ...EGGS, name: "葱", raw: "葱", amount: null, unit: null, amount_type: "missing" },
+        ],
+      }),
+    ]);
+    const salt = within(row("盐"));
+    expect(salt.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "true");
+    expect(salt.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    const scallion = within(row("葱"));
+    expect(scallion.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "true");
+    expect(scallion.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("the save request never has a type that disagrees with the unit", async () => {
+    // The model's type disagrees with the unit; the saved type follows the unit.
+    setup({}, [draft({ ingredients: [{ ...EGGS, raw: "生抽4勺", name: "生抽", amount: 4, unit: "spoon", amount_type: "exact" }] })]);
+    expect(within(row("生抽")).getByText("Household measure", { selector: "strong" })).toBeInTheDocument();
     await save();
     const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
     expect(lines[0]).toMatchObject({ amount: 4, unit: "spoon", amount_type: "spoon" });
@@ -699,23 +805,6 @@ describe("review", () => {
     amount.focus();
     fireEvent.wheel(amount);
     expect(amount).not.toHaveFocus();
-  });
-
-  it("clears amount and unit when the amount type becomes vague", async () => {
-    setup({}, [
-      draft({
-        ingredients: [
-          { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, choice_group: null, ingredient_id: 1 },
-        ],
-      }),
-    ]);
-    await userEvent.selectOptions(
-      within(row("鸡蛋")).getByRole("combobox", { name: "Amount type" }),
-      "vague",
-    );
-    await save();
-    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
-    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "vague" });
   });
 });
 

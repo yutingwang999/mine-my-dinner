@@ -84,6 +84,11 @@
     "nothing_pending": "There is no question waiting for an answer."
   },
   "review": {
+    "amountVague": "Unspecified amount",
+    "amountMissing": "Not stated",
+    "unitHousehold": "Household measure",
+    "unitHouseholdTitle": "bowl, cup, handful, pinch, …",
+    "unitHouseholdHint": "e.g. bowl, cup, handful, pinch",
     "title": "Review recipe",
     "empty": "There are no drafts to review.",
     "goImport": "Import recipes",
@@ -140,7 +145,8 @@
     "name": "Name",
     "amount": "Amount",
     "unit": "Unit",
-    "amountType": "Amount type",
+    "amountMode": "Amount",
+    "kind": "Type",
     "role": "Role",
     "optional": "Optional",
     "remove": "Remove",
@@ -163,11 +169,6 @@
     "nameConflict": "The name “{name}” is the dictionary entry “{entry}”, but this line is linked to “{linked}”.",
     "relinkTo": "Link to {entry}",
     "keepLink": "Keep {linked}",
-    "mismatchExact": "Grams and milliliters are exact amounts.",
-    "mismatchCount": "Pieces and stalks are counts.",
-    "mismatchSpoon": "A spoon measure is a household measure.",
-    "mismatchNoUnit": "A number with no unit is a household measure, such as a bowl or a handful. Pick a unit, or change the type.",
-    "fixType": "Change to {type}",
     "zeroAmount": "The amount must be more than 0.",
     "dragLine": "Drag {name}",
     "choiceOut": "Not a choice",
@@ -231,9 +232,7 @@
   "amountType": {
     "exact": "Exact",
     "count": "Count",
-    "spoon": "Household measure",
-    "vague": "Vague",
-    "missing": "Not given"
+    "spoon": "Household measure"
   },
   "role": {
     "main": "Main",

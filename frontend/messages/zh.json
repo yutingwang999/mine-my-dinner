@@ -84,6 +84,11 @@
     "nothing_pending": "现在没有等待回答的问题。"
   },
   "review": {
+    "amountVague": "适量",
+    "amountMissing": "没写",
+    "unitHousehold": "家用量具",
+    "unitHouseholdTitle": "碗、杯、把、撮等",
+    "unitHouseholdHint": "如碗、杯、把、撮",
     "title": "审核菜谱",
     "empty": "没有待审核的草稿。",
     "goImport": "去导入菜谱",
@@ -140,7 +145,8 @@
     "name": "名称",
     "amount": "数量",
     "unit": "单位",
-    "amountType": "数量类型",
+    "amountMode": "数量方式",
+    "kind": "类型",
     "role": "作用",
     "optional": "可选",
     "remove": "删除",
@@ -163,11 +169,6 @@
     "nameConflict": "名称“{name}”是词典里的“{entry}”，但这一行关联的是“{linked}”。",
     "relinkTo": "改为关联{entry}",
     "keepLink": "保持关联{linked}",
-    "mismatchExact": "克和毫升是精确数量。",
-    "mismatchCount": "个和根是计数。",
-    "mismatchSpoon": "勺是家用量具。",
-    "mismatchNoUnit": "有数字但没有单位的，是碗、把这类家用量具。请选一个单位，或者改数量类型。",
-    "fixType": "改为{type}",
     "zeroAmount": "数量必须大于 0。",
     "dragLine": "拖动{name}",
     "choiceOut": "移出任选",
@@ -231,9 +232,7 @@
   "amountType": {
     "exact": "精确",
     "count": "计数",
-    "spoon": "家用量具",
-    "vague": "模糊",
-    "missing": "未给出"
+    "spoon": "家用量具"
   },
   "role": {
     "main": "主料",

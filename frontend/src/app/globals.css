@@ -3,6 +3,8 @@
   --foreground: #1f1f1f;
   --card: #ffffff;
   --border: #d9d9d4;
+  /* Borders of inputs and buttons; stronger than --border in dark mode. */
+  --control-border: var(--border);
   --muted: #6b6b66;
   --accent: #2f6f4f;
   --accent-text: #ffffff;
@@ -20,6 +22,7 @@
     --foreground: #ececec;
     --card: #1c1c1c;
     --border: #3a3a3a;
+    --control-border: #5f5f5f;
     --muted: #a3a3a3;
     --accent: #5fae86;
     --accent-text: #0f1a14;
@@ -132,7 +135,7 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
 select,
 textarea {
   padding: 0.35rem 0.6rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--control);
 }
@@ -153,7 +156,7 @@ input[type="file"]::file-selector-button {
   height: var(--control-height);
   margin-right: 0.6rem;
   padding: 0 0.85rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--control);
   color: inherit;
@@ -174,7 +177,7 @@ textarea {
 button {
   min-height: var(--control-height);
   padding: 0 0.85rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--control);
   cursor: pointer;
@@ -396,6 +399,9 @@ button.btn-danger:hover:not(:disabled) {
 
 .line-raw {
   font-size: 0.875rem;
+}
+
+.line-raw > span:first-child {
   opacity: 0.75;
 }
 
@@ -1446,11 +1452,124 @@ body:has(.chat) {
   border-radius: 0 6px 6px 0;
 }
 
+/* Not pressed: plain control, muted text; hover darkens the border. */
+.segmented button {
+  color: var(--muted);
+}
+
+.segmented button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--foreground) 45%, var(--border));
+}
+
+/* Pressed: a light accent tint with accent text and border, so it marks the state without shouting. */
 .segmented button[aria-pressed="true"],
 .segmented button[aria-pressed="true"]:hover:not(:disabled) {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--control));
   border-color: var(--accent);
-  color: var(--accent-text);
+  color: var(--accent);
+  font-weight: 600;
   position: relative;
 }
 
+
+/* The amount type that follows the unit: read-only text; its cell exists even when empty. */
+.amount-kind strong {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-height);
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* The top line of a row: drag handle and source wording on the left, row actions on the right. */
+.line-raw {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.line-actions {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+button.compact {
+  min-height: 0;
+  height: 1.75rem;
+  padding: 0 0.6rem;
+  font-size: 0.875rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Row-scoped size: 14 px text and 32 px controls, muted 13 px labels. The global control height is untouched. */
+.line-grid {
+  --control-height: 2rem;
+  font-size: 0.875rem;
+}
+
+.line-grid .mini-field {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.line-grid .mini-field input:not([type="checkbox"]),
+.line-grid .mini-field select,
+.line-grid button {
+  font-size: 0.875rem;
+}
+
+.line-grid .mini-field:has(> input[type="checkbox"]) {
+  align-items: flex-start;
+}
+
+.line-grid input[type="checkbox"] {
+  height: var(--control-height);
+  margin: 0;
+}
+
+/* One column template for every ingredient row, so the columns line up down the form.
+   Below this width the controls wrap as flex items again. */
+@media (min-width: 60rem) {
+  .line-fields.line-grid {
+    display: grid;
+    grid-template-columns: minmax(6rem, 12.5rem) 6rem 6.5rem max-content 5rem 5.5rem max-content;
+    align-items: end;
+  }
+
+  .line-grid .mini-field input:not([type="checkbox"]),
+  .line-grid .mini-field select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+/* An example under the unit select; it floats so the row's control line keeps its height. */
+.unit-wrap {
+  display: flex;
+  position: relative;
+}
+
+.unit-hint {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.1rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Compact toggles set their own border; in dark mode they use the stronger control border. */
+  .dish-toggles button:not([aria-expanded="true"]) {
+    border-color: var(--control-border);
+  }
+
+  .line.unmatched .line-status strong {
+    color: #f59e0b;
+  }
+}

@@ -8,8 +8,6 @@ import { DictionarySearch, namesEntry } from "@/components/DictionarySearch";
 import { EntryTypeFields, useEntryType } from "@/components/EntryTypeFields";
 import {
   type Allergen,
-  AMOUNT_TYPES,
-  type AmountType,
   api,
   ApiError,
   entryName,
@@ -247,18 +245,16 @@ export function IngredientReviewRow({
     setMode("idle");
   }
 
-  function setAmountType(amountType: AmountType) {
-    // A vague or missing amount never carries a number.
-    const clears = amountType === "vague" || amountType === "missing";
-    // A unit that belongs to another type is cleared, so the user picks a fitting one.
-    const unitFits = line.unit !== null && typeForUnit(line.unit) === amountType;
-    update({
-      amount_type: amountType,
-      ...(clears ? { amount: null, unit: null } : unitFits ? {} : { unit: null }),
-    });
+  // 适量 and 没写 are two ways to say there is no number; each one clears the number and unit.
+  function toggleNoNumber(type: "vague" | "missing") {
+    if (line.amount_type === type) {
+      // Released: the amount stays empty and neither toggle is pressed.
+      update({ amount_type: typeForUnit(null) });
+    } else {
+      update({ amount_type: type, amount: null, unit: null });
+    }
   }
 
-  const noNumber = line.amount_type === "vague" || line.amount_type === "missing";
   const problem = amountProblem(line);
   const state =
     line.ingredient_id !== null ? "matched" : line.skipped ? "skipped" : "unmatched";
@@ -280,6 +276,7 @@ export function IngredientReviewRow({
       }}
     >
       <div className="line-raw">
+        <span>
         <span
           className="drag-handle"
           aria-label={dragLabel}
@@ -297,9 +294,20 @@ export function IngredientReviewRow({
           ⠿ {t("drag")}
         </span>{" "}
         {t("raw")}: {line.added ? t("addedByYou") : line.raw}
+      </span>
+        <span className="line-actions">
+          {onUngroup && (
+            <button type="button" className="compact" onClick={onUngroup}>
+              {t("choiceOut")}
+            </button>
+          )}
+          <button type="button" className="btn-danger compact" onClick={onRemove}>
+            {t("remove")}
+          </button>
+        </span>
       </div>
-      <div className="line-fields">
-        <label className="mini-field">
+      <div className="line-fields line-grid">
+        <label className="mini-field" data-slot="name">
           {t("name")}
           <input
             value={line.name}
@@ -309,32 +317,40 @@ export function IngredientReviewRow({
             }}
           />
         </label>
-        <label className="mini-field">
+        <label className="mini-field" data-slot="amount">
           {t("amount")}
           <input
             type="number"
             step="any"
             min="0"
-            disabled={noNumber}
             // A wheel turn over a focused number field would change the amount unseen.
             onWheel={(event) => event.currentTarget.blur()}
             value={line.amount ?? ""}
-            onChange={(event) =>
-              update({ amount: event.target.value === "" ? null : Number(event.target.value) })
-            }
+            onChange={(event) => {
+              const amount = event.target.value === "" ? null : Number(event.target.value);
+              // A number releases a pressed toggle; the type then follows the unit.
+              update({ amount, amount_type: typeForUnit(line.unit) });
+            }}
           />
         </label>
+        <span className="unit-wrap" data-slot="unit">
         <label className="mini-field">
           {t("unit")}
           <select
-            disabled={noNumber}
+            // A unit means nothing without a number, and the save drops it.
+            disabled={line.amount === null}
             value={line.unit ?? ""}
             onChange={(event) => {
               const unit = (event.target.value || null) as Unit | null;
               update({ unit, amount_type: typeForUnit(unit) });
             }}
           >
-            <option value="">{tUnit("none")}</option>
+            <option
+              value=""
+              title={line.amount === null ? undefined : tReview("unitHouseholdTitle")}
+            >
+              {line.amount === null ? tUnit("none") : tReview("unitHousehold")}
+            </option>
             {UNITS.map((value) => (
               <option key={value} value={value}>
                 {tUnit(value)}
@@ -342,20 +358,39 @@ export function IngredientReviewRow({
             ))}
           </select>
         </label>
-        <label className="mini-field">
-          {t("amountType")}
-          <select
-            value={line.amount_type}
-            onChange={(event) => setAmountType(event.target.value as AmountType)}
+        {line.amount !== null && line.unit === null && (
+          <small className="unit-hint">{tReview("unitHouseholdHint")}</small>
+        )}
+        </span>
+        <div className="mini-field" data-slot="toggles">
+          {t("amountMode")}
+        <div className="segmented" role="group" aria-label={t("amountMode")}>
+          <button
+            type="button"
+            aria-pressed={line.amount_type === "vague"}
+            onClick={() => toggleNoNumber("vague")}
           >
-            {AMOUNT_TYPES.map((value) => (
-              <option key={value} value={value}>
-                {tAmount(value)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="mini-field">
+            {tReview("amountVague")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={line.amount_type === "missing"}
+            onClick={() => toggleNoNumber("missing")}
+          >
+            {tReview("amountMissing")}
+          </button>
+        </div>
+        </div>
+        {/* Always rendered, so the columns after it keep their place when there is no number. */}
+        <span className="mini-field amount-kind" data-slot="type">
+          {line.amount !== null && (
+            <>
+              {t("kind")}
+              <strong>{tAmount(typeForUnit(line.unit))}</strong>
+            </>
+          )}
+        </span>
+        <label className="mini-field" data-slot="role">
           {t("role")}
           <select value={line.role} onChange={(event) => update({ role: event.target.value as Role })}>
             {ROLES.map((value) => (
@@ -365,42 +400,21 @@ export function IngredientReviewRow({
             ))}
           </select>
         </label>
-        {!grouped && (
-          <label className="mini-field inline">
+        {grouped ? (
+          <span data-slot="optional" />
+        ) : (
+          <label className="mini-field" data-slot="optional">
+            {t("optional")}
             <input
               type="checkbox"
               checked={line.optional}
               onChange={(event) => update({ optional: event.target.checked })}
             />
-            {t("optional")}
           </label>
         )}
-        {onUngroup && (
-          <button type="button" onClick={onUngroup}>
-            {t("choiceOut")}
-          </button>
-        )}
-        <button type="button" className="btn-danger" onClick={onRemove}>
-          {t("remove")}
-        </button>
       </div>
 
-      {problem && (
-        <p className="notice notice-warning">
-          {problem.kind === "zero" ? (
-            t("zeroAmount")
-          ) : (
-            <>
-              {line.unit === null
-                ? t("mismatchNoUnit")
-                : t(problem.expected === "exact" ? "mismatchExact" : problem.expected === "count" ? "mismatchCount" : "mismatchSpoon")}{" "}
-              <button type="button" onClick={() => update({ amount_type: problem.expected })}>
-                {t("fixType", { type: tAmount(problem.expected) })}
-              </button>
-            </>
-          )}
-        </p>
-      )}
+      {problem && <p className="notice notice-warning">{t("zeroAmount")}</p>}
       <div className="line-status">
         {line.ingredient_id !== null ? (
           <>

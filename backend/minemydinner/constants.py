@@ -41,6 +41,9 @@ TIME_SOURCES = ("stated", "user", "estimated")
 UNITS = ("g", "ml", "piece", "stalk", "tablespoon", "teaspoon", "spoon")
 # The amount type a line with a number must have. No unit means a household
 # measure such as a bowl or a handful.
+# Naming note: the stored amount type "spoon" with a null unit covers every
+# household measure (bowl, cup, handful, pinch), not only spoons. The unit
+# "spoon" is different: a spoon whose size the source does not state.
 UNIT_AMOUNT_TYPES = {
     "g": "exact",
     "ml": "exact",
