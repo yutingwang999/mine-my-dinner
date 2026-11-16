@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PeopleManager } from "@/components/PeopleManager";
 import { type Call, callsTo, mockFetch, renderWithProviders } from "@/test/helpers";
@@ -30,6 +30,7 @@ function setup() {
   renderWithProviders(<PeopleManager />);
 }
 
+beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.unstubAllGlobals());
 
 describe("people", () => {
@@ -52,6 +53,21 @@ describe("people", () => {
       ingredient_id: null,
       text: null,
     });
+  });
+
+  it("uses the shared button classes: Add rule primary, Remove danger", async () => {
+    setup();
+    const friend = within(await screen.findByTestId("diner-2"));
+    expect(friend.getByRole("button", { name: "Add rule" })).toHaveClass("btn-primary");
+    expect(await friend.findByRole("button", { name: "Remove" })).toHaveClass("btn-danger");
+    expect(friend.getByRole("button", { name: "Delete" })).toHaveClass("btn-danger");
+  });
+
+  it("keeps the diner list in one card with the pager inside", async () => {
+    setup();
+    const pager = await screen.findByRole("navigation");
+    expect(pager.closest(".card")).not.toBeNull();
+    expect(pager.closest(".card")).toContainElement(screen.getByTestId("diner-2"));
   });
 
   it("offers free text for a dietary restriction", async () => {
@@ -79,5 +95,63 @@ describe("people", () => {
     expect(callsTo(calls, "DELETE", "/api/diners/2")).toHaveLength(0);
     await userEvent.click(friend.getByRole("button", { name: "Yes, delete" }));
     await waitFor(() => expect(callsTo(calls, "DELETE", "/api/diners/2")).toHaveLength(1));
+  });
+});
+
+describe("people paging", () => {
+  it("pages the diners but shows all of a diner's rules without a pager", async () => {
+    const diners = Array.from({ length: 25 }, (_, index) => ({
+      id: index + 1,
+      display_name: `朋友${index + 1}`,
+      is_self: index === 0,
+    }));
+    const rules = Array.from({ length: 25 }, (_, index) => ({
+      id: 500 + index,
+      diner_id: 1,
+      rule_type: "dislike",
+      allergen: null,
+      ingredient_id: null,
+      ingredient_name_zh: null,
+      ingredient_name_en: null,
+      text: `规则${index + 1}`,
+    }));
+    mockFetch({
+      "GET /api/diners": () => diners,
+      "GET /api/diners/1/rules": () => rules,
+    });
+    renderWithProviders(<PeopleManager />);
+    const first = within(await screen.findByTestId("diner-1"));
+    await first.findByText(/规则1$/);
+    expect(screen.getAllByTestId(/^diner-/)).toHaveLength(20);
+    expect(screen.getAllByText("25 items")).toHaveLength(1);
+    expect(first.getByText(/规则1$/)).toBeInTheDocument();
+    expect(first.getByText(/规则25$/)).toBeInTheDocument();
+    expect(first.queryByRole("navigation")).toBeNull();
+    expect(window.localStorage.getItem("pageSize:rules")).toBeNull();
+  });
+});
+
+describe("diner labels", () => {
+  function setupDiners(diners: { id: number; display_name: string; is_self: boolean }[]) {
+    mockFetch({ "GET /api/diners": () => diners, "GET /api/diners/1/rules": () => [], "GET /api/diners/2/rules": () => [] });
+    renderWithProviders(<PeopleManager />);
+  }
+
+  it("titles the self card Me with no rename button, whatever the stored name", async () => {
+    setupDiners([{ id: 1, display_name: "小王", is_self: true }]);
+    const card = within(await screen.findByTestId("diner-1"));
+    expect(card.getByText("Me", { selector: "strong" })).toBeInTheDocument();
+    expect(card.queryByText("小王")).toBeNull();
+    expect(card.queryByRole("button", { name: "Rename" })).toBeNull();
+  });
+
+  it("shows a friend by name with a rename button", async () => {
+    setupDiners([
+      { id: 1, display_name: "Me", is_self: true },
+      { id: 2, display_name: "小李", is_self: false },
+    ]);
+    const friend = within(await screen.findByTestId("diner-2"));
+    expect(friend.getByText("小李", { selector: "strong" })).toBeInTheDocument();
+    expect(friend.getByRole("button", { name: "Rename" })).toBeInTheDocument();
   });
 });

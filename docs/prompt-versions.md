@@ -1,6 +1,6 @@
 # Prompt Versions
 
-Each model task has its own prompt file, versioned on its own: `route`, `parse`, and `planner` for planning (`backend/minemydinner/agent/prompts/<kind>_vN.md`), and `extract_vN.md` for recipe extraction (`backend/minemydinner/extraction/prompts/`), which follows the same rule.
+Each model task has its own prompt file, versioned on its own: `route`, `parse`, and `planner` for planning (`backend/minemydinner/agent/prompts/<kind>_vN.md`), `extract_vN.md` for recipe extraction, and `allergen_suggest_vN.md` for allergen suggestions (both in `backend/minemydinner/extraction/prompts/`), which follow the same rule.
 
 ## The rule
 
@@ -43,7 +43,15 @@ Records that say `plan_v1` or `plan_v2` keep that label.
 | `extract_v1` | The Phase 0 prompt. It was edited in place several times during the Phase 0 import, each time with the user's approval, while `extraction_logs` was still empty. The 134 logs in the real database (as of 2026-11-15) all use it. |
 | `extract_v2` (current) | Adds `recipe_count`: the number of distinct recipes in the input (at least 1; only the first is extracted; variations of one recipe count as one), so the review can warn when several recipes were pasted together. Adds an example with two recipes pasted together. Commit `d8a6271`, 2026-11-13; the same commit tightened the amount guard in `postprocess.py`, which is code, not prompt. No saved review has used it yet (2026-11-15). |
 
+## Allergen suggestions
+
+`PROMPT_VERSION` in `backend/minemydinner/extraction/allergen_suggest.py` names the current file (`backend/minemydinner/extraction/prompts/`), task `allergen_suggestions`. No record names the version: a suggestion is never stored, only what the user confirms, and the model call leaves a `llm_calls` usage row without a prompt version. The rule above still applies, and the paid check (`python -m minemydinner.evaluation.allergen_suggest`, see `docs/local-development.md`) counts as using a version once its result is recorded here.
+
+| Version | Change |
+| --- | --- |
+| `allergen_suggest_v1` | The Phase 0 prompt, moved unchanged from a constant in the code into a file: which listed allergens the ingredient may contain. The file ends with one newline, which `load_prompt` removes, so the loaded text equals the old constant. |
+| `allergen_suggest_v2` (current) | Also asks for one category from `CATEGORIES` and one stock mode from `STOCK_MODES`, with one line for each stock mode (`count`, `level`, `availability`). The allergen instruction is v1's. Checked on 2026-11-17 (import and dictionary plan, Task 7) with `python -m minemydinner.evaluation.allergen_suggest` over the 18 names in `backend/eval_data/allergen_suggest/names.yaml` (the set the user approved on 2026-11-17), on the configured `allergen_suggestions` model (gemini-3.5-flash-lite, no fallback used), test database, $0.0026: category 18/18, allergens 17/18, stock mode 15/18. Mismatches: 豆腐 stock mode `level` (expected `count`); 基围虾 stock mode `count` (expected `level`) and allergens crustaceans plus shellfish (expected crustaceans only, the safe direction); shiitake mushroom stock mode `count` (expected `level`). The stock-mode misses are household judgement calls that the user confirms anyway; the user decided to keep v2. |
+
 ## Prompts without a version yet
 
-- **Allergen suggestions** (`backend/minemydinner/extraction/allergen_suggest.py`, task `allergen_suggestions`). The prompt is a constant in the code, not a file, and no record names it: a suggestion is never stored, only the allergens the user confirms, and the model call leaves a `llm_calls` usage row without a prompt version. The import and dictionary experience plan changes this prompt (it adds the category and stock mode); that change moves it to a file (`allergen_suggest_v1.md`) under the same rule. See `docs/phase-1-carryover.md`.
-
+None.

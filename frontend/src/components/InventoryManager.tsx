@@ -4,6 +4,9 @@ import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { DictionarySearch } from "@/components/DictionarySearch";
+import { useListSearch } from "@/components/ListSearch";
+import { PagedList } from "@/components/PagedList";
+import { TabPanel, Tabs } from "@/components/Tabs";
 import {
   api,
   type DictionaryEntry,
@@ -16,6 +19,7 @@ import {
 } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
 import { useLoad } from "@/lib/useLoad";
+import { useUrlTab } from "@/lib/useUrlTab";
 
 function asEntry(ref: EntryRef | InventoryRow) {
   const id = "ingredient_id" in ref ? ref.ingredient_id : ref.id;
@@ -99,7 +103,7 @@ function AddInventory({ onAdded }: { onAdded: () => void }) {
             {t("expiresOn")}
             <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
           </label>
-          <button type="button" onClick={add}>
+          <button type="button" className="btn-primary" onClick={add}>
             {t("add")}
           </button>
           {error !== null && (
@@ -117,8 +121,10 @@ function RefList({
   title,
   hint,
   testId,
+  list,
   anchor,
-  load,
+  items,
+  reload,
   search,
   add,
   remove,
@@ -126,8 +132,11 @@ function RefList({
   title: string;
   hint?: string;
   testId: string;
+  /** The page-size key: the choice is kept under `pageSize:<list>`. */
+  list: string;
   anchor?: string;
-  load: () => Promise<EntryRef[]>;
+  items: EntryRef[] | null;
+  reload: () => void;
   search: (q: string) => Promise<DictionaryEntry[]>;
   add: (id: number) => Promise<unknown>;
   remove: (id: number) => Promise<unknown>;
@@ -137,7 +146,8 @@ function RefList({
   const locale = useLocale();
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const { data, reload } = useLoad(load, []);
+  const data = items;
+  const listSearch = useListSearch(data ?? [], (item) => [item.name_zh, item.name_en]);
 
   async function run(action: () => Promise<unknown>) {
     setError(null);
@@ -154,16 +164,20 @@ function RefList({
       <h2>{title}</h2>
       {hint && <p className="hint">{hint}</p>}
       {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
-      <ul className="row-list">
-        {data?.map((item) => (
-          <li key={item.id} data-testid={`${testId}-${item.id}`}>
-            <span>{entryName(asEntry(item), locale)}</span>
-            <button type="button" onClick={() => run(() => remove(item.id))}>
-              {tCommon("remove")}
-            </button>
-          </li>
-        ))}
-      </ul>
+      {listSearch.box}
+      {listSearch.empty}
+      <PagedList key={listSearch.resetKey} items={listSearch.filtered} list={list}>
+        {(visible) =>
+          visible.map((item) => (
+            <li key={item.id} data-testid={`${testId}-${item.id}`}>
+              <span>{entryName(asEntry(item), locale)}</span>
+              <button type="button" className="btn-danger" onClick={() => run(() => remove(item.id))}>
+                {tCommon("remove")}
+              </button>
+            </li>
+          ))
+        }
+      </PagedList>
       {adding ? (
         <DictionarySearch
           search={search}
@@ -186,6 +200,9 @@ function RefList({
   );
 }
 
+const TABS = ["stock", "always", "cookware"] as const;
+type Tab = (typeof TABS)[number];
+
 export function InventoryManager() {
   const t = useTranslations("inventory");
   const tCommon = useTranslations("common");
@@ -195,6 +212,17 @@ export function InventoryManager() {
   const [sort, setSort] = useState<"name" | "expiry">("name");
   const [error, setError] = useState<unknown>(null);
   const { data, reload } = useLoad(() => api.listInventory(sort), [sort]);
+  const stockSearch = useListSearch(data ?? [], (row) => [row.name_zh, row.name_en]);
+  const always = useLoad(api.listAlwaysInStock, []);
+  const owned = useLoad(api.listOwnedCookware, []);
+  // The plan card used to link to #cookware, so that fragment still opens the cookware tab.
+  const { chosen, choose } = useUrlTab(TABS, "/inventory", { cookware: "cookware" });
+  const tab: Tab = chosen ?? "stock";
+  const tabLabels: Record<Tab, string> = {
+    stock: t("tabStock", { count: data?.length ?? 0 }),
+    always: t("tabAlways", { count: always.data?.length ?? 0 }),
+    cookware: t("tabCookware", { count: owned.data?.length ?? 0 }),
+  };
 
   function amount(row: InventoryRow): string {
     if (row.stock_mode === "count") return String(row.count ?? "");
@@ -206,65 +234,103 @@ export function InventoryManager() {
 
   return (
     <div>
-      <section className="card">
-        <div className="actions">
-          <h2>{t("title")}</h2>
-          <button type="button" onClick={() => setSort(sort === "name" ? "expiry" : "name")}>
-            {sort === "name" ? t("sortByExpiry") : t("sortByName")}
-          </button>
-        </div>
-        {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
-        <ul className="row-list">
-          {data?.map((row) => (
-            <li key={row.ingredient_id} data-testid={`inventory-${row.ingredient_id}`}>
-              <span className="row-main">
-                <strong>{entryName(asEntry(row), locale)}</strong>
-                <span className="hint">
-                  {amount(row)}
-                  {row.expires_on && ` · ${t("expires", { date: row.expires_on })}`}
-                </span>
+      <Tabs
+        tabs={TABS.map((value) => ({ value, label: tabLabels[value] }))}
+        active={tab}
+        onChange={choose}
+        label={t("tabsLabel")}
+        idPrefix="inventory"
+      />
+      <TabPanel idPrefix="inventory" active={tab}>
+        {tab === "stock" && (
+        <section className="card">
+          <div className="actions">
+            <h2>{t("stockTitle")}</h2>
+            <span className="segmented-field">
+              <span id="inventory-sort-label">{t("sortLabel")}</span>
+              <span className="segmented" role="group" aria-labelledby="inventory-sort-label">
+                {(["name", "expiry"] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={sort === value}
+                    onClick={() => setSort(value)}
+                  >
+                    {t(value === "name" ? "sortName" : "sortExpiry")}
+                  </button>
+                ))}
               </span>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await api.deleteInventory(row.ingredient_id);
-                    reload();
-                  } catch (caught) {
-                    setError(caught);
-                  }
-                }}
-              >
-                {tCommon("remove")}
-              </button>
-            </li>
-          ))}
-        </ul>
-        {error !== null && (
-          <p role="alert" className="notice notice-warning">
-            {errorText(error)}
-          </p>
+            </span>
+          </div>
+          <p className="hint">{t("stockHint")}</p>
+          {data?.length === 0 && <p className="hint">{tCommon("none")}</p>}
+          {stockSearch.box}
+          {stockSearch.empty}
+          <PagedList key={stockSearch.resetKey} items={stockSearch.filtered} list="inventory">
+            {(visible) =>
+              visible.map((row) => (
+                <li key={row.ingredient_id} data-testid={`inventory-${row.ingredient_id}`}>
+                  <span className="row-main">
+                    <strong>{entryName(asEntry(row), locale)}</strong>
+                    <span className="hint">
+                      {amount(row)}
+                      {row.expires_on && ` · ${t("expires", { date: row.expires_on })}`}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    onClick={async () => {
+                      try {
+                        await api.deleteInventory(row.ingredient_id);
+                        reload();
+                      } catch (caught) {
+                        setError(caught);
+                      }
+                    }}
+                  >
+                    {tCommon("remove")}
+                  </button>
+                </li>
+              ))
+            }
+          </PagedList>
+          {error !== null && (
+            <p role="alert" className="notice notice-warning">
+              {errorText(error)}
+            </p>
+          )}
+          <AddInventory onAdded={reload} />
+        </section>
         )}
-        <AddInventory onAdded={reload} />
-      </section>
-      <RefList
-        title={t("alwaysInStock")}
-        hint={t("alwaysInStockHint")}
-        testId="always"
-        load={api.listAlwaysInStock}
-        search={api.searchIngredients}
-        add={api.addAlwaysInStock}
-        remove={api.removeAlwaysInStock}
-      />
-      <RefList
-        title={t("cookwareOwned")}
-        testId="owned"
-        anchor="cookware"
-        load={api.listOwnedCookware}
-        search={api.searchCookware}
-        add={api.addOwnedCookware}
-        remove={api.removeOwnedCookware}
-      />
+        {tab === "always" && (
+        <RefList
+          title={t("alwaysInStock")}
+          hint={t("alwaysInStockHint")}
+          testId="always"
+          list="always-in-stock"
+          items={always.data}
+          reload={always.reload}
+          search={api.searchIngredients}
+          add={api.addAlwaysInStock}
+          remove={api.removeAlwaysInStock}
+        />
+        )}
+        {tab === "cookware" && (
+        <RefList
+          title={t("cookwareOwned")}
+          hint={t("cookwareOwnedHint")}
+          testId="owned"
+          list="owned-cookware"
+          anchor="cookware"
+          items={owned.data}
+          reload={owned.reload}
+          search={api.searchCookware}
+          add={api.addOwnedCookware}
+          remove={api.removeOwnedCookware}
+        />
+        )}
+      </TabPanel>
     </div>
   );
 }

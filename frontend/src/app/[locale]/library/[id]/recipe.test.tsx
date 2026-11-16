@@ -37,6 +37,15 @@ describe("recipe page", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 
+  it("marks Delete as a danger button", async () => {
+    mockFetch({ "GET /api/recipes/1": () => savedRecipe() });
+    renderWithProviders(<RecipePage id={1} />);
+    const trigger = await screen.findByRole("button", { name: "Delete" });
+    expect(trigger).toHaveClass("btn-danger");
+    await userEvent.click(trigger);
+    expect(screen.getByRole("button", { name: /^Yes/ })).toHaveClass("btn-danger-solid");
+  });
+
   it("keeps the library search in the back link", async () => {
     search = new URLSearchParams({ from: "q=鸡蛋&type=vegetable dish&page=2" });
     mockFetch({ "GET /api/recipes/1": () => savedRecipe() });

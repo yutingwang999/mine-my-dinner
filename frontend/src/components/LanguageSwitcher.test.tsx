@@ -8,6 +8,9 @@ import { draft, renderWithProviders } from "@/test/helpers";
 
 // Loading the real next-intl/routing module breaks Vitest's collection, so both
 // i18n modules are mocked, as in the other component tests.
+let search = "";
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(search) }));
+
 vi.mock("@/i18n/routing", () => ({
   routing: { locales: ["zh", "en"], defaultLocale: "zh" },
 }));
@@ -39,7 +42,10 @@ vi.mock("@/i18n/navigation", () => {
 const { __push: push } = navigation as unknown as { __push: ReturnType<typeof vi.fn> };
 
 describe("LanguageSwitcher", () => {
-  beforeEach(() => push.mockClear());
+  beforeEach(() => {
+    push.mockClear();
+    search = "";
+  });
 
   // renderWithProviders renders with locale "en", so 中文 is the other language.
   it("switches without asking when there are no drafts", async () => {
@@ -82,5 +88,17 @@ describe("LanguageSwitcher", () => {
     await userEvent.click(screen.getByRole("link", { name: "English" }));
 
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  });
+
+  it("carries the query across the language switch", async () => {
+    search = "tab=cookware&page=2";
+    renderWithProviders(<LanguageSwitcher />, [draft()]);
+
+    expect(screen.getByRole("link", { name: "中文" })).toHaveAttribute("href", "/review?tab=cookware&page=2");
+
+    await userEvent.click(screen.getByRole("link", { name: "中文" }));
+    await userEvent.click(screen.getByRole("button", { name: "Switch anyway" }));
+
+    expect(push).toHaveBeenCalledWith("/review?tab=cookware&page=2", { locale: "zh" });
   });
 });

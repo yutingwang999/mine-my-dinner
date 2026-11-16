@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -49,7 +49,7 @@ from minemydinner.settings import Settings, get_settings
 router = APIRouter(prefix="/api/recipes")
 images_router = APIRouter(prefix="/api/images")
 
-PAGE_SIZE = 20
+PAGE_SIZE = 20  # the default; a request may choose 10, 20, 50, or 100
 
 SessionDep = Annotated[Session, Depends(get_session)]
 ClientDep = Annotated[LLMClient, Depends(get_llm_client)]
@@ -61,6 +61,8 @@ class CreatedRecipe(BaseModel):
     embedded: bool
     # The extraction log written with the recipe, so its screenshots can be added to it.
     log_id: int | None
+    # Names not remembered as aliases because another entry owns them.
+    alias_conflicts: list[str] = []
 
 
 class ImageOut(BaseModel):
@@ -114,6 +116,8 @@ class RecipeOut(BaseModel):
     images: list[ImageOut]
     embedded: bool
     created_at: datetime
+    # Set only in the reply to an edit.
+    alias_conflicts: list[str] = []
 
 
 class RecipePage(BaseModel):
@@ -174,6 +178,8 @@ def list_recipes(
     q: str | None = None,
     dish_type: Literal[*DISH_TYPES] | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
+    # Query values arrive as text, so the Literal needs them as numbers first.
+    page_size: Annotated[Literal[10, 20, 50, 100], BeforeValidator(int)] = PAGE_SIZE,
 ) -> RecipePage:
     """Text search on title, tags, and ingredient names, with no model call."""
     query = select(Recipe)
@@ -209,8 +215,8 @@ def list_recipes(
             selectinload(Recipe.images),
         )
         .order_by(Recipe.created_at.desc(), Recipe.id.desc())
-        .offset((page - 1) * PAGE_SIZE)
-        .limit(PAGE_SIZE)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     return RecipePage(items=[_recipe_out(row) for row in rows], total=total, page=page)
 
@@ -230,10 +236,10 @@ def put_recipe(
     """An edit replaces the lines and recomputes the embedding. Edits write no
     extraction log, so the log keeps only corrections of model output."""
     try:
-        recipe = update_recipe(session, client, recipe_id, data)
+        recipe, conflicts = update_recipe(session, client, recipe_id, data)
     except InvalidRecipe as error:
         raise _not_found(error) from error
-    return _recipe_out(recipe)
+    return _recipe_out(recipe).model_copy(update={"alias_conflicts": conflicts})
 
 
 @router.delete("/{recipe_id}", status_code=204)
@@ -250,11 +256,14 @@ def save_recipe(
     data: RecipeWrite, session: SessionDep, client: ClientDep, settings: SettingsDep
 ) -> CreatedRecipe:
     try:
-        recipe, log = create_recipe(session, client, data, settings.extraction_log_max_rows)
+        recipe, log, conflicts = create_recipe(session, client, data, settings.extraction_log_max_rows)
     except InvalidRecipe as error:
         raise ApiError(422, error.code) from error
     return CreatedRecipe(
-        id=recipe.id, embedded=recipe.embedding is not None, log_id=log.id if log else None
+        id=recipe.id,
+        embedded=recipe.embedding is not None,
+        log_id=log.id if log else None,
+        alias_conflicts=conflicts,
     )
 
 

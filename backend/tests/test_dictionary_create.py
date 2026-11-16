@@ -6,7 +6,11 @@ from minemydinner.dictionary.service import (
     create_user_ingredient,
     link_unmatched_lines,
 )
-from minemydinner.extraction.allergen_suggest import suggest_allergens
+from minemydinner.extraction.allergen_suggest import (
+    Suggestion,
+    load_prompt,
+    suggest_entry,
+)
 from minemydinner.llm.client import AllModelsFailed, MonthlyCapExceeded
 from minemydinner.models import CookwareOwned, Ingredient, Recipe, RecipeIngredient
 from tests.recipefakes import *  # noqa: F403
@@ -176,22 +180,109 @@ def test_search_cookware(client, seeded):
     assert "炒锅" in [item["name_zh"] for item in client.get("/api/cookware?q=wok").json()]
 
 
-def test_suggestions_drop_unlisted_and_survive_outage():
-    suggesting = FakeLLMClient(payload={"allergens": ["shrimp", "soy", "soy"]})
-    assert suggest_allergens(suggesting, "秘制酱") == ["soy"]
-    assert suggest_allergens(FakeLLMClient(error=AllModelsFailed("down")), "秘制酱") is None
-    assert suggest_allergens(FakeLLMClient(error=MonthlyCapExceeded("over")), "秘制酱") is None
+OLD_PROMPT = (
+    "List which of these allergens the ingredient may contain: crustaceans, shellfish, fish, "
+    "egg, milk, peanut, tree nut, soy, wheat, sesame. Use only these exact values. Include an "
+    "allergen when a common version of the ingredient contains it. Return an empty list when "
+    "none apply."
+)
 
 
-def test_suggestion_route(client):
-    use_llm(FakeLLMClient(payload={"allergens": ["sesame"]}))
+def test_v1_prompt_matches_the_old_text():
+    assert load_prompt("allergen_suggest_v1") == OLD_PROMPT
+
+
+def test_v2_prompt_lists_categories_and_stock_modes():
+    from minemydinner.constants import CATEGORIES, STOCK_MODES
+
+    prompt = load_prompt()
+    assert all(value in prompt for value in (*CATEGORIES, *STOCK_MODES))
+
+
+def test_suggest_entry_parses_all_fields():
+    client = FakeLLMClient(
+        payload={"allergens": ["egg"], "category": "egg and dairy", "stock_mode": "count"}
+    )
+    assert suggest_entry(client, "鸡蛋") == Suggestion(["egg"], "egg and dairy", "count")
+
+
+def test_suggest_entry_drops_invalid_values():
+    client = FakeLLMClient(
+        payload={"allergens": ["shrimp", "soy", "soy"], "category": "dairy", "stock_mode": "grams"}
+    )
+    assert suggest_entry(client, "秘制酱") == Suggestion(["soy"], None, None)
+
+
+def test_suggest_entry_is_none_when_no_model_is_available():
+    assert suggest_entry(FakeLLMClient(error=AllModelsFailed("down")), "秘制酱") is None
+    assert suggest_entry(FakeLLMClient(error=MonthlyCapExceeded("over")), "秘制酱") is None
+
+
+def test_suggestion_route_returns_category_and_stock_mode(client):
+    use_llm(
+        FakeLLMClient(payload={"allergens": ["sesame"], "category": "seasoning", "stock_mode": "level"})
+    )
     assert client.post("/api/allergen-suggestions", json={"name": "麻酱"}).json() == {
-        "suggested": ["sesame"]
+        "suggested": ["sesame"],
+        "category": "seasoning",
+        "stock_mode": "level",
     }
     use_llm(FakeLLMClient(error=AllModelsFailed("down")))
     assert client.post("/api/allergen-suggestions", json={"name": "麻酱"}).json() == {
-        "suggested": None
+        "suggested": None,
+        "category": None,
+        "stock_mode": None,
     }
+
+
+class NamedClient:
+    """Answers each name from a table, like the model would."""
+
+    def __init__(self, answers):
+        self.answers = answers
+
+    def invoke_structured(self, task, messages, schema):
+        from minemydinner.llm.client import StructuredResult
+
+        name = messages[-1].content.removeprefix("Ingredient: ")
+        return StructuredResult(schema.model_validate(self.answers[name]), "gemini", False)
+
+
+def test_check_script_scores_fields(engine):
+    from sqlalchemy.orm import sessionmaker
+
+    from minemydinner.evaluation.allergen_suggest import run_check
+
+    names = [
+        {"name": "鸡蛋", "category": "egg and dairy", "stock_mode": "count", "allergens": ["egg"]},
+        {"name": "牛奶", "category": "egg and dairy", "stock_mode": "level", "allergens": ["milk"]},
+    ]
+    client = NamedClient(
+        {
+            "鸡蛋": {"allergens": ["egg"], "category": "egg and dairy", "stock_mode": "count"},
+            "牛奶": {"allergens": ["milk"], "category": "other", "stock_mode": "level"},
+        }
+    )
+    report = run_check(sessionmaker(bind=engine), client, names)
+    assert report.total == 2
+    assert report.matches == {"allergens": 2, "category": 1, "stock_mode": 2}
+    assert report.mismatches == ["牛奶: category got other, expected egg and dairy"]
+
+
+def test_names_file_holds_valid_expected_values():
+    from pathlib import Path
+
+    from minemydinner.constants import ALLERGENS, CATEGORIES, STOCK_MODES
+    from minemydinner.evaluation.allergen_suggest import load_names
+
+    path = Path(__file__).resolve().parents[1] / "eval_data/allergen_suggest/names.yaml"
+    names = load_names(path)
+    assert len(names) == 18
+    assert {item["stock_mode"] for item in names} == set(STOCK_MODES)
+    assert len({item["category"] for item in names}) >= 8
+    for item in names:
+        assert item["category"] in CATEGORIES
+        assert set(item["allergens"]) <= set(ALLERGENS)
 
 
 def test_linked_lines_are_queried_by_exact_name(session, seeded, recipe_with_lines_named):

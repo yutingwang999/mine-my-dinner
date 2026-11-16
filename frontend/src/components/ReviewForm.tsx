@@ -20,7 +20,7 @@ import {
   type RecipeWrite,
   type TimeSource,
 } from "@/lib/api";
-import { amountProblem } from "@/lib/amounts";
+import { amountProblem, savedAmount } from "@/lib/amounts";
 import { useErrorText } from "@/lib/errors";
 import { copyImages } from "@/lib/images";
 import { useDragAutoScroll } from "@/lib/useDragAutoScroll";
@@ -28,7 +28,9 @@ import { useDragAutoScroll } from "@/lib/useDragAutoScroll";
 type Props = {
   /** A draft to review, or a saved recipe to edit. */
   draft: EditableRecipe;
-  onSaved: () => void;
+  onSaved: (info: SavedInfo) => void;
+  /** Match the draft's unmatched names against the dictionary once the form shows. */
+  rematch?: boolean;
   /** Saves a new recipe unless given another action, such as an update. */
   save?: (data: RecipeWrite) => Promise<unknown>;
   /** More buttons beside Save, such as discarding the draft or cancelling an edit. */
@@ -56,7 +58,58 @@ function toLine(line: EditableRecipe["ingredients"][number], locale: string): Re
     skipped: false,
     linkedName,
     added: false,
+    startedMatched: line.ingredient_id !== null,
+    linkedByHand: false,
+    rememberLink: true,
+    touched: false,
   };
+}
+
+/** What a finished save reports to the page. */
+export type SavedInfo = { aliasConflicts: string[] };
+
+function savedInfo(created: unknown): SavedInfo {
+  const conflicts = (created as { alias_conflicts?: string[] } | null)?.alias_conflicts;
+  return { aliasConflicts: conflicts ?? [] };
+}
+
+function sameName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * After a hand link, the draft's other unmatched lines with the same name get the same
+ * link, so one choice answers them all. Lines the user already handled are left alone.
+ */
+function linkSameName(lines: ReviewLine[], linked: ReviewLine): ReviewLine[] {
+  return lines.map((line) =>
+    line.key !== linked.key &&
+    line.ingredient_id === null &&
+    !line.skipped &&
+    !line.touched &&
+    sameName(line.name, linked.name)
+      ? {
+          ...line,
+          ingredient_id: linked.ingredient_id,
+          linkedName: linked.linkedName,
+          touched: true,
+          linkedByHand: true,
+          rememberLink: linked.rememberLink,
+        }
+      : line,
+  );
+}
+
+/** The remember box of a hand link covers the same-name lines linked with it. */
+function syncRemember(lines: ReviewLine[], changed: ReviewLine): ReviewLine[] {
+  return lines.map((line) =>
+    line.key !== changed.key &&
+    line.linkedByHand &&
+    line.ingredient_id === changed.ingredient_id &&
+    sameName(line.name, changed.name)
+      ? { ...line, rememberLink: changed.rememberLink }
+      : line,
+  );
 }
 
 /**
@@ -145,6 +198,7 @@ function useAllergyCheck(lines: ReviewLine[]): AllergyCheck | null {
 export function ReviewForm({
   draft,
   onSaved,
+  rematch = false,
   save: saveRecipe = api.saveRecipe,
   actions,
 }: Props) {
@@ -191,6 +245,47 @@ export function ReviewForm({
   const allergyCheck = useAllergyCheck(lines);
   useDragAutoScroll(dragKey !== null);
 
+  // The dictionary may have grown since the draft was extracted, such as by a link
+  // remembered while saving an earlier draft. Match the still-unmatched names once.
+  useEffect(() => {
+    if (!rematch) return;
+    const names = [
+      ...new Set(
+        draft.ingredients
+          .filter((line) => line.ingredient_id === null && line.name.trim())
+          .map((line) => line.name),
+      ),
+    ];
+    if (names.length === 0) return;
+    let active = true;
+    api
+      .matchIngredients(names)
+      .then(({ matches }) => {
+        if (!active || matches.length === 0) return;
+        const byName = new Map(matches.map((match) => [match.name, match.entry]));
+        setLines((current) =>
+          current.map((line) => {
+            const entry = byName.get(line.name);
+            // Only a line nobody has touched, and that is still unmatched now.
+            if (!entry || line.ingredient_id !== null || line.touched) return line;
+            return {
+              ...line,
+              ingredient_id: entry.id,
+              linkedName: entryName(entry, locale),
+              startedMatched: true,
+            };
+          }),
+        );
+      })
+      // A failed match is silent: the draft stays as extracted.
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+    // Runs once per shown draft; the form is remounted for each one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const timeMin = parseNumber(time);
   const timeChanged = timeMin !== draft.time_min;
   // "estimated" describes only the model's own number, so it goes once the time changes.
@@ -227,13 +322,12 @@ export function ReviewForm({
         // An added line has no source wording, so its name stands in for it.
         raw: line.added ? line.name : line.raw,
         name: line.name,
-        amount: line.amount,
-        unit: line.unit,
-        amount_type: line.amount_type,
+        ...savedAmount(line),
         role: line.role,
         optional: line.optional,
         choice_group: line.choice_group,
         ingredient_id: line.ingredient_id,
+        remember_link: line.linkedByHand && line.rememberLink && line.ingredient_id !== null,
       })),
       cookware_ids: [...new Set(cookwareIds)],
       supplies,
@@ -250,7 +344,7 @@ export function ReviewForm({
       // Reading the files first turns an unreadable file into a clear message
       // instead of a misleading network error from a failed fetch.
       await api.uploadRecipeImages(created.id, await copyImages(draft.images ?? []), created.log_id);
-      onSaved();
+      onSaved(savedInfo(created));
     } catch (caught) {
       setImagesFailed({ created, error: caught });
     }
@@ -277,7 +371,7 @@ export function ReviewForm({
         await uploadImages(created as CreatedRecipe);
         return;
       }
-      onSaved();
+      onSaved(savedInfo(created));
     } catch (caught) {
       setError(caught);
       savingRef.current = false;
@@ -480,12 +574,16 @@ export function ReviewForm({
                   grouped={line.choice_group !== null}
                   onUngroup={line.choice_group !== null ? () => ungroupLine(line.key) : null}
                   onChange={(changed) =>
-                    setLines((current) =>
-                      syncGroupOptional(
-                        current.map((other, i) => (i === index ? changed : other)),
-                        changed,
-                      ),
-                    )
+                    setLines((current) => {
+                      const before = current[index];
+                      let next = current.map((other, i) => (i === index ? changed : other));
+                      if (changed.linkedByHand && before.ingredient_id === null) {
+                        next = linkSameName(next, changed);
+                      } else if (changed.linkedByHand && changed.rememberLink !== before.rememberLink) {
+                        next = syncRemember(next, changed);
+                      }
+                      return syncGroupOptional(next, changed);
+                    })
                   }
                   onRemove={() =>
                     setLines((current) => clearOrphanGroups(current.filter((_, i) => i !== index)))
@@ -608,6 +706,7 @@ export function ReviewForm({
               <span>{name}</span>
               <button
                 type="button"
+                className="btn-danger"
                 aria-label={t("removeSupply", { name })}
                 onClick={() => setSupplies((current) => current.filter((item) => item !== name))}
               >
@@ -673,13 +772,13 @@ export function ReviewForm({
           <button type="button" onClick={() => uploadImages(imagesFailed.created)}>
             {t("retryImages")}
           </button>
-          <button type="button" onClick={onSaved}>
+          <button type="button" onClick={() => onSaved(savedInfo(imagesFailed.created))}>
             {t("skipImages")}
           </button>
         </div>
       )}
       <div className="form-actions">
-        <button type="submit" disabled={saving}>
+        <button type="submit" className="btn-primary" disabled={saving}>
           {saving && imagesFailed === null ? t("saving") : t("save")}
         </button>
         {actions}

@@ -78,29 +78,43 @@ export function CookwareReviewRow({ item, lang, onChange }: Props) {
         {item.skipped ? (
           <>
             {t("notNeededDone")}{" "}
-            <button type="button" onClick={() => onChange({ ...item, skipped: false })}>
-              {t("undoSkip")}
-            </button>
+            <span className="dish-toggles">
+              <button type="button" onClick={() => onChange({ ...item, skipped: false })}>
+                {t("undoSkip")}
+              </button>
+            </span>
           </>
         ) : item.cookware_id !== null ? (
           <>
             {t("matched", { name: item.linkedName ?? item.name })}{" "}
-            <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
-              {t("notNeeded")}
-            </button>
+            <span className="dish-toggles">
+              <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
+                {t("notNeeded")}
+              </button>
+            </span>
           </>
         ) : (
           <>
             <strong>{t("unmatched")}</strong>
-            <button type="button" onClick={() => setMode("link")}>
-              {t("linkExisting")}
-            </button>
-            <button type="button" onClick={() => setMode("create")}>
-              {t("createEntry")}
-            </button>
-            <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
-              {t("notNeeded")}
-            </button>
+            <span className="dish-toggles">
+              <button
+                type="button"
+                aria-expanded={mode === "link"}
+                onClick={() => setMode(mode === "link" ? "idle" : "link")}
+              >
+                {t("linkExisting")}<span aria-hidden="true"> {mode === "link" ? "▴" : "▾"}</span>
+              </button>
+              <button
+                type="button"
+                aria-expanded={mode === "create"}
+                onClick={() => setMode(mode === "create" ? "idle" : "create")}
+              >
+                {t("createEntry")}<span aria-hidden="true"> {mode === "create" ? "▴" : "▾"}</span>
+              </button>
+              <button type="button" onClick={() => onChange({ ...item, skipped: true })}>
+                {t("notNeeded")}
+              </button>
+            </span>
           </>
         )}
       </div>
@@ -129,7 +143,7 @@ export function CookwareReviewRow({ item, lang, onChange }: Props) {
             />
             {tEntry("owned")}
           </label>
-          <button type="button" disabled={busy} onClick={create}>
+          <button type="button" className="btn-primary" disabled={busy} onClick={create}>
             {busy ? tEntry("creating") : tEntry("create")}
           </button>
           <button type="button" onClick={() => setMode("idle")}>

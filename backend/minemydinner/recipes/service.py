@@ -12,6 +12,7 @@ from minemydinner.constants import (
     TIME_SOURCES,
     UNIT_AMOUNT_TYPES,
 )
+from minemydinner.dictionary.service import remember_alias
 from minemydinner.imports.service import DraftIngredient, Provenance
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import (
@@ -36,6 +37,9 @@ class InvalidRecipe(Exception):
 
 
 class RecipeLineWrite(DraftIngredient):
+    # Asks to keep the line's name as an alias of the linked entry. Not stored.
+    remember_link: bool = False
+
     @field_validator("raw", "name")
     @classmethod
     def not_blank(cls, value: str) -> str:
@@ -137,7 +141,8 @@ def _apply(recipe: Recipe, data: RecipeWrite) -> None:
     recipe.source_type = data.source_type
     recipe.source_url = data.source_url
     recipe.ingredients = [
-        RecipeIngredient(**line.model_dump()) for line in data.ingredients
+        RecipeIngredient(**line.model_dump(exclude={"remember_link"}))
+        for line in data.ingredients
     ]
     recipe.cookware = [
         RecipeCookware(cookware_id=cookware_id) for cookware_id in dict.fromkeys(data.cookware_ids)
@@ -153,12 +158,27 @@ def _write_log(session: Session, data: RecipeWrite, max_log_rows: int) -> Extrac
     log = ExtractionLog(
         input_text=data.provenance.input_text,
         model_output=data.provenance.model_output,
-        user_corrected=data.model_dump(mode="json", exclude={"provenance"}),
+        user_corrected=data.model_dump(
+            mode="json",
+            exclude={"provenance": True, "ingredients": {"__all__": {"remember_link"}}},
+        ),
         model_name=data.provenance.model_name,
         prompt_version=data.provenance.prompt_version,
     )
     session.add(log)
     return log
+
+
+def _remember_links(session: Session, data: RecipeWrite) -> list[str]:
+    """Remember the linked lines' names as aliases. Returns the names another entry owns."""
+    conflicts: list[str] = []
+    for line in data.ingredients:
+        if not line.remember_link or line.ingredient_id is None:
+            continue
+        entry = session.get(Ingredient, line.ingredient_id)
+        if remember_alias(session, entry, line.name) == "conflict" and line.name not in conflicts:
+            conflicts.append(line.name)
+    return conflicts
 
 
 def _source_text(data: RecipeWrite) -> str | None:
@@ -171,31 +191,36 @@ def _source_text(data: RecipeWrite) -> str | None:
 
 def create_recipe(
     session: Session, client: LLMClient, data: RecipeWrite, max_log_rows: int
-) -> tuple[Recipe, ExtractionLog | None]:
+) -> tuple[Recipe, ExtractionLog | None, list[str]]:
     """Commit the recipe before embedding it, so an embedding failure cannot lose it.
 
-    Returns the extraction log too, so screenshots uploaded next can be added to it.
+    Returns the extraction log too, so screenshots uploaded next can be added to it, and
+    the names not remembered as aliases because another entry owns them.
     """
     _check_references(session, data)
     recipe = Recipe(source_text=_source_text(data))
     _apply(recipe, data)
     session.add(recipe)
     log = _write_log(session, data, max_log_rows)
+    conflicts = _remember_links(session, data)
     session.commit()
     try_embed_recipe(session, client, recipe)
-    return recipe, log
+    return recipe, log, conflicts
 
 
-def update_recipe(session: Session, client: LLMClient, recipe_id: int, data: RecipeWrite) -> Recipe:
+def update_recipe(
+    session: Session, client: LLMClient, recipe_id: int, data: RecipeWrite
+) -> tuple[Recipe, list[str]]:
     recipe = session.get(Recipe, recipe_id)
     if recipe is None:
         raise InvalidRecipe("not_found")
     _check_references(session, data)
     _apply(recipe, data)
     recipe.embedding = None
+    conflicts = _remember_links(session, data)
     session.commit()
     try_embed_recipe(session, client, recipe)
-    return recipe
+    return recipe, conflicts
 
 
 def delete_recipe(session: Session, recipe_id: int, image_dir: Path) -> None:

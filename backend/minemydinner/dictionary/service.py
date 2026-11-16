@@ -257,6 +257,52 @@ def set_personal_aliases(
     return entry, link_unmatched_lines(session, entry)
 
 
+def remember_alias(
+    session: Session, entry: Ingredient, name: str
+) -> Literal["added", "exists", "conflict"]:
+    """Add a name the user linked by hand to the entry as an alias.
+
+    A built-in entry keeps it as a personal alias; the user's own entry keeps it as an
+    alias. Nothing is written when another entry already owns the name.
+    """
+    name = name.strip()
+    owner = find_term_owner(session, Ingredient, name)
+    if owner is not None:
+        return "exists" if owner.id == entry.id else "conflict"
+    personal = entry.source != "user"
+    side = "zh" if CJK.search(name) else "en"
+    field = f"{'user_' if personal else ''}aliases_{side}"
+    setattr(entry, field, [*getattr(entry, field), name])
+    session.flush()
+    link_unmatched_lines(session, entry)
+    return "added"
+
+
+def link_name(
+    session: Session, name: str, ingredient_id: int, remember: bool
+) -> tuple[Ingredient, int, bool]:
+    """Link every unmatched recipe line with this name to an existing entry.
+
+    With `remember`, the name also becomes an alias of the entry, unless another entry
+    owns it. Returns the entry, how many lines were linked, and whether the name is now
+    one of the entry's own terms.
+    """
+    entry = session.get(Ingredient, ingredient_id)
+    if entry is None:
+        raise EntryNotFound()
+    result = session.execute(
+        update(RecipeIngredient)
+        .where(
+            RecipeIngredient.ingredient_id.is_(None),
+            func.lower(func.trim(RecipeIngredient.name)) == name.strip().lower(),
+        )
+        .values(ingredient_id=entry.id)
+        .execution_options(synchronize_session=False)
+    )
+    remembered = remember and remember_alias(session, entry, name) != "conflict"
+    return entry, result.rowcount, remembered
+
+
 @dataclass(frozen=True)
 class UnresolvedEntry:
     id: int
@@ -298,7 +344,12 @@ def unresolved_allergens(session: Session) -> tuple[list[UnresolvedEntry], list[
 
 
 def resolve_allergens(
-    session: Session, name: str | None, ingredient_id: int | None, allergens: list[str]
+    session: Session,
+    name: str | None,
+    ingredient_id: int | None,
+    allergens: list[str],
+    category: str | None = None,
+    stock_mode: str | None = None,
 ) -> tuple[Ingredient, int]:
     """Record the user's confirmed allergens, creating an entry for an unmatched name.
 
@@ -310,10 +361,14 @@ def resolve_allergens(
         name = (name or "").strip()
         entry = find_term_owner(session, Ingredient, name)
         if entry is None:
-            # Category and stock mode are guesses; the user can change them later.
+            # Without a confirmed category and stock mode they are guesses; the user can
+            # change them later.
             field = "name_zh" if CJK.search(name) else "name_en"
             entry = Ingredient(
-                **{field: name}, category="other", stock_mode="level", source="user"
+                **{field: name},
+                category=category or "other",
+                stock_mode=stock_mode or "level",
+                source="user",
             )
             session.add(entry)
     if entry.source == "user":

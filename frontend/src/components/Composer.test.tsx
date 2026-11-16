@@ -23,6 +23,13 @@ function renderComposer(props: { busy?: boolean; onSend: () => void }) {
 const box = () => screen.getByRole("textbox", { name: "Your message" });
 
 describe("Composer", () => {
+  it("keeps the composer sizing class and gives Send the primary class", () => {
+    renderComposer({ onSend: vi.fn() });
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toHaveClass("composer-action");
+    expect(send).toHaveClass("btn-primary");
+  });
+
   it("sends on Enter", async () => {
     const onSend = vi.fn();
     renderComposer({ onSend });

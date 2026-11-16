@@ -4,7 +4,7 @@ import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 
 import { ConfirmDelete } from "@/components/ConfirmDelete";
-import { ReviewForm } from "@/components/ReviewForm";
+import { ReviewForm, type SavedInfo } from "@/components/ReviewForm";
 import { ScreenshotPreview } from "@/components/ScreenshotPreview";
 import { Link } from "@/i18n/navigation";
 import { useDrafts } from "@/lib/drafts";
@@ -14,6 +14,7 @@ export function ReviewQueue() {
   const { drafts, removeFirst } = useDrafts();
   // Each finished draft gets a fresh form, so no state carries over.
   const [finished, setFinished] = useState(0);
+  const [conflicts, setConflicts] = useState<string[]>([]);
   const sourcePanel = useRef<HTMLElement>(null);
 
   // The save button sits at the bottom of a long form, so without this the
@@ -26,21 +27,35 @@ export function ReviewQueue() {
     }
   }, [finished]);
 
+  // Names the last save did not remember; shown until the next save replaces them.
+  const conflictNotice =
+    conflicts.length > 0 ? (
+      <p role="status" className="notice notice-info">
+        {t("aliasConflict", { names: conflicts.join(", ") })}
+      </p>
+    ) : null;
+
   if (drafts.length === 0) {
     return (
-      <p>
-        {t("empty")} <Link href="/import">{t("goImport")}</Link>
-      </p>
+      <>
+        {conflictNotice}
+        <p>
+          {t("empty")} <Link href="/import">{t("goImport")}</Link>
+        </p>
+      </>
     );
   }
 
-  function next() {
+  // A save reports its conflicts; discarding a draft passes nothing and keeps the notice.
+  function next(saved?: SavedInfo) {
+    if (saved) setConflicts(saved.aliasConflicts);
     removeFirst();
     setFinished((count) => count + 1);
   }
 
   return (
     <section>
+      {conflictNotice}
       <p className="notice notice-info">
         <strong>{t("position", { current: 1, total: drafts.length })}</strong> {t("unsavedNotice")}
       </p>
@@ -60,6 +75,7 @@ export function ReviewQueue() {
           key={finished}
           draft={drafts[0]}
           onSaved={next}
+          rematch
           actions={
             <ConfirmDelete
               name={drafts[0].title}

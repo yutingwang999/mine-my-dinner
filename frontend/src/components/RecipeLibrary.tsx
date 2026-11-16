@@ -4,14 +4,13 @@ import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { Pager } from "@/components/Pager";
+import { Pager, PagerBottom } from "@/components/Pager";
 import { RecipeToggles } from "@/components/RecipeToggles";
 import { Link, useRouter } from "@/i18n/navigation";
 import { api, DISH_TYPES } from "@/lib/api";
 import { useErrorText } from "@/lib/errors";
+import { usePageSize } from "@/lib/pageSize";
 import { useLoad } from "@/lib/useLoad";
-
-const PAGE_SIZE = 20;
 
 /** The library's search state as a query string: q, type, and page (omitted when default). */
 function searchString(q: string, dishType: string, page: number): string {
@@ -35,9 +34,11 @@ export function RecipeLibrary() {
     const value = Number(searchParams.get("page"));
     return Number.isInteger(value) && value >= 1 ? value : 1;
   });
+  // The page size is remembered in the browser, not put in the address.
+  const [pageSize, setPageSize] = usePageSize("library");
   const { data, error } = useLoad(
-    () => api.listRecipes({ q, dish_type: dishType, page }),
-    [q, dishType, page],
+    () => api.listRecipes({ q, dish_type: dishType, page, page_size: pageSize }),
+    [q, dishType, page, pageSize],
   );
 
   const qs = searchString(q, dishType, page);
@@ -74,7 +75,12 @@ export function RecipeLibrary() {
     setPage(Number(next.get("page")) || 1);
   }, [urlQs]);
 
-  const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+  function changePageSize(size: number) {
+    setPageSize(size);
+    setPage(1);
+  }
+
+  const pages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1;
 
   return (
     <section className="card">
@@ -114,6 +120,14 @@ export function RecipeLibrary() {
       )}
       {data === null && error === null && <p>{tCommon("loading")}</p>}
       {data?.items.length === 0 && <p className="hint">{t("empty")}</p>}
+      <Pager
+        page={page}
+        pages={pages}
+        onPage={setPage}
+        pageSize={pageSize}
+        onPageSize={changePageSize}
+        total={data?.total ?? 0}
+      />
       <ul className="row-list">
         {data?.items.map((recipe) => (
           <li key={recipe.id} className="recipe-row" data-testid={`recipe-${recipe.id}`}>
@@ -142,7 +156,7 @@ export function RecipeLibrary() {
           </li>
         ))}
       </ul>
-      <Pager page={page} pages={pages} onPage={setPage} />
+      <PagerBottom page={page} pages={pages} onPage={setPage} />
     </section>
   );
 }

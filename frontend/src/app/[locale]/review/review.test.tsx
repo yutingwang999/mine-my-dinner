@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +16,7 @@ type Routes = Parameters<typeof mockFetch>[0];
 
 const BASE_ROUTES: Routes = {
   "POST /api/recipes/allergy-check": () => ({ conflicts: [], unknown: ["秘制酱"] }),
-  "POST /api/allergen-suggestions": () => ({ suggested: ["soy"] }),
+  "POST /api/allergen-suggestions": () => ({ suggested: ["soy"], category: null, stock_mode: null }),
   "POST /api/ingredients": () => ({ id: 50, name_zh: "秘制酱", name_en: null, aliases_zh: [], aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null, parent_id: null, linked_lines: 0 }),
   "POST /api/cookware": () => ({ id: 60, name_zh: "神奇锅", name_en: null, aliases_zh: [], aliases_en: [], source: "user" }),
   "POST /api/recipes": () => reply(201, { id: 1 }),
@@ -55,6 +55,40 @@ describe("review", () => {
   it("shows the linked dictionary entry's own name, not the line's wording", () => {
     setup();
     expect(within(row("葱花")).getByText("Linked to scallion")).toBeInTheDocument();
+  });
+
+  it("uses the shared button classes: Save recipe primary, Remove danger", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Save recipe" })).toHaveClass("btn-primary");
+    expect(within(row("葱花")).getByRole("button", { name: "Remove" })).toHaveClass("btn-danger");
+  });
+
+  it("shows the three unmatched-line actions as one compact group, and the toggles close on a second click", async () => {
+    setup();
+    const unmatched = within(row("秘制酱"));
+    const link = unmatched.getByRole("button", { name: "Link to existing" });
+    const create = unmatched.getByRole("button", { name: "Create entry" });
+    const skip = unmatched.getByRole("button", { name: "Leave unlinked" });
+    for (const button of [link, create, skip]) expect(button.closest(".dish-toggles")).not.toBeNull();
+    expect(link.closest(".dish-toggles")).toBe(skip.closest(".dish-toggles"));
+    expect(link).toHaveAttribute("aria-expanded", "false");
+    expect(skip).not.toHaveAttribute("aria-expanded");
+    await userEvent.click(link);
+    expect(link).toHaveAttribute("aria-expanded", "true");
+    expect(unmatched.getByRole("searchbox", { name: "Search the dictionary" })).toBeInTheDocument();
+    await userEvent.click(link);
+    expect(link).toHaveAttribute("aria-expanded", "false");
+    expect(unmatched.queryByRole("searchbox", { name: "Search the dictionary" })).toBeNull();
+    await userEvent.click(create);
+    expect(create).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(create);
+    expect(create).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the undo action in the compact style", async () => {
+    setup();
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Leave unlinked" }));
+    expect(within(row("秘制酱")).getByRole("button", { name: /Undo/ }).closest(".dish-toggles")).not.toBeNull();
   });
 
   it("shows the pasted source text beside the form", () => {
@@ -174,7 +208,7 @@ describe("review", () => {
   });
 
   it("does not treat an empty suggestion as confirmed none", async () => {
-    setup({ "POST /api/allergen-suggestions": () => ({ suggested: [] }) });
+    setup({ "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }) });
     await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
     expect(await screen.findByText(/The model suggested none/)).toBeInTheDocument();
     expect(screen.queryByText("Confirmed: contains none")).toBeNull();
@@ -185,10 +219,37 @@ describe("review", () => {
   });
 
   it("still allows saving when suggestions are unavailable", async () => {
-    setup({ "POST /api/allergen-suggestions": () => ({ suggested: null }) });
+    setup({ "POST /api/allergen-suggestions": () => ({ suggested: null, category: null, stock_mode: null }) });
     await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
     expect(await screen.findByText(/Suggestions are unavailable/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save recipe" })).toBeEnabled();
+  });
+
+  it("prefills category and stock mode from the suggestion, and the user can change them", async () => {
+    setup({
+      "POST /api/allergen-suggestions": () => ({ suggested: ["soy"], category: "soy product", stock_mode: "count" }),
+    });
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
+    const category = within(row("秘制酱")).getByRole("combobox", { name: "Category" });
+    await waitFor(() => expect(category).toHaveValue("soy product"));
+    const stock = within(row("秘制酱")).getByRole("combobox", { name: "Stock mode" });
+    expect(stock).toHaveValue("count");
+    expect(within(row("秘制酱")).getByText("Category and stock mode are suggested from the name; you can change them.")).toBeInTheDocument();
+    await userEvent.selectOptions(stock, "availability");
+    await userEvent.click(screen.getByRole("button", { name: "Create and link" }));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients")).toHaveLength(1));
+    expect(lastBody("/api/ingredients")).toMatchObject({ category: "soy product", stock_mode: "availability" });
+  });
+
+  it("keeps the old prefill without a suggestion: seasoning for a seasoning line, and level", async () => {
+    setup({
+      "POST /api/allergen-suggestions": () => ({ suggested: null, category: null, stock_mode: null }),
+    });
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
+    await screen.findByText(/Suggestions are unavailable/);
+    expect(within(row("秘制酱")).getByRole("combobox", { name: "Category" })).toHaveValue("seasoning");
+    expect(within(row("秘制酱")).getByRole("combobox", { name: "Stock mode" })).toHaveValue("level");
+    expect(within(row("秘制酱")).queryByText("Category and stock mode are suggested from the name; you can change them.")).toBeNull();
   });
 
   it("links an unmatched ingredient to an existing entry", async () => {
@@ -603,23 +664,129 @@ describe("review", () => {
 
   const EGGS = { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, choice_group: null, ingredient_id: 1 } as const;
 
-  it("sets the amount type from the unit, and clears a unit that no longer fits", async () => {
+  it("typing a number derives the type from the unit", async () => {
     setup({}, [draft({ ingredients: [EGGS] })]);
     const eggs = within(row("鸡蛋"));
-    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Unit" }), "teaspoon");
-    expect(eggs.getByRole("combobox", { name: "Amount type" })).toHaveValue("spoon");
-    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Amount type" }), "exact");
-    expect(eggs.getByRole("combobox", { name: "Unit" })).toHaveValue("");
+    const unit = eggs.getByRole("combobox", { name: "Unit" });
+    expect(eggs.queryByRole("combobox", { name: "Amount type" })).not.toBeInTheDocument();
+    await userEvent.selectOptions(unit, "g");
+    expect(eggs.getByText("Exact")).toBeInTheDocument();
+    await userEvent.selectOptions(unit, "piece");
+    expect(eggs.getByText("Count")).toBeInTheDocument();
+    await userEvent.selectOptions(unit, "");
+    expect(eggs.getByText("Household measure", { selector: "strong" })).toBeInTheDocument();
+    const household = within(unit).getByRole("option", { name: "Household measure" });
+    expect(household).toHaveAttribute("title", "bowl, cup, handful, pinch, …");
+    expect(eggs.getByText("e.g. bowl, cup, handful, pinch")).toBeInTheDocument();
+    await userEvent.selectOptions(unit, "g");
+    expect(eggs.queryByText("e.g. bowl, cup, handful, pinch")).not.toBeInTheDocument();
+    expect(eggs.getByRole("spinbutton", { name: "Amount" })).toHaveValue(2);
   });
 
-  it("warns about a unit and type that do not match, blocks save, and offers the fix", async () => {
-    setup({}, [draft({ ingredients: [{ ...EGGS, raw: "生抽4勺", name: "生抽", amount: 4, unit: "spoon" }] })]);
-    const soy = within(row("生抽"));
-    expect(soy.getByText("A spoon measure is a household measure.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Save recipe" }));
-    expect(screen.getByText("Fix the amounts marked above before saving.")).toBeInTheDocument();
-    expect(callsTo(calls, "POST", "/api/recipes")).toHaveLength(0);
-    await userEvent.click(soy.getByRole("button", { name: "Change to Household measure" }));
+  it("shows None for the empty unit only while no number is entered", async () => {
+    setup({}, [draft({ ingredients: [EGGS] })]);
+    const eggs = within(row("鸡蛋"));
+    const unit = eggs.getByRole("combobox", { name: "Unit" });
+    expect(within(unit).queryByRole("option", { name: "None" })).not.toBeInTheDocument();
+    await userEvent.clear(eggs.getByRole("spinbutton", { name: "Amount" }));
+    expect(within(unit).getByRole("option", { name: "None" })).toBeInTheDocument();
+  });
+
+  it("disables the unit while the amount is empty and enables it after a number is typed", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: null, unit: null, amount_type: "missing" }] })]);
+    const eggs = within(row("鸡蛋"));
+    const unit = eggs.getByRole("combobox", { name: "Unit" });
+    expect(unit).toBeDisabled();
+    await userEvent.type(eggs.getByRole("spinbutton", { name: "Amount" }), "2");
+    expect(unit).toBeEnabled();
+    await userEvent.selectOptions(unit, "g");
+    await userEvent.clear(eggs.getByRole("spinbutton", { name: "Amount" }));
+    expect(unit).toBeDisabled();
+    expect(unit).toHaveValue("g");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "missing" });
+  });
+
+  it("Unspecified amount clears number and unit and is pressed", async () => {
+    setup({}, [draft({ ingredients: [EGGS] })]);
+    const eggs = within(row("鸡蛋"));
+    await userEvent.click(eggs.getByRole("button", { name: "Unspecified amount" }));
+    expect(eggs.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "true");
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "vague" });
+  });
+
+  it("typing a number releases a pressed toggle", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: null, unit: null, amount_type: "missing" }] })]);
+    const eggs = within(row("鸡蛋"));
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.type(eggs.getByRole("spinbutton", { name: "Amount" }), "2");
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByText("Household measure", { selector: "strong" })).toBeInTheDocument();
+    await userEvent.selectOptions(eggs.getByRole("combobox", { name: "Unit" }), "piece");
+    expect(eggs.getByText("Count")).toBeInTheDocument();
+  });
+
+  it("clicking a pressed toggle again releases it and leaves the amount empty", async () => {
+    setup({}, [draft({ ingredients: [{ ...EGGS, amount: null, unit: null, amount_type: "vague" }] })]);
+    const eggs = within(row("鸡蛋"));
+    const toggle = eggs.getByRole("button", { name: "Unspecified amount" });
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    expect(eggs.getByRole("spinbutton", { name: "Amount" })).toHaveValue(null);
+    await save();
+    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
+    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "missing" });
+  });
+
+  it("renders the same seven slots in the same order for a vague line and a numbered line", () => {
+    setup({}, [
+      draft({
+        ingredients: [
+          { ...EGGS, name: "盐", raw: "盐适量", amount: null, unit: null, amount_type: "vague" },
+          EGGS,
+        ],
+      }),
+    ]);
+    const slots = (name: string) =>
+      Array.from(row(name).querySelectorAll(".line-grid > [data-slot]")).map((el) => el.getAttribute("data-slot"));
+    const order = ["name", "amount", "unit", "toggles", "type", "role", "optional"];
+    expect(slots("盐")).toEqual(order);
+    expect(slots("鸡蛋")).toEqual(order);
+    expect(row("盐").querySelector('[data-slot="type"]')).toBeEmptyDOMElement();
+    // Remove sits on the top line, outside the grid.
+    const remove = within(row("盐")).getByRole("button", { name: "Remove" });
+    expect(remove.closest(".line-raw")).not.toBeNull();
+    expect(remove.closest(".line-grid")).toBeNull();
+    expect(row("鸡蛋").querySelector('[data-slot="type"]')).toHaveTextContent("Count");
+  });
+
+  it("shows the toggle that matches how the line was extracted", () => {
+    setup({}, [
+      draft({
+        ingredients: [
+          { ...EGGS, name: "盐", raw: "盐适量", amount: null, unit: null, amount_type: "vague" },
+          { ...EGGS, name: "葱", raw: "葱", amount: null, unit: null, amount_type: "missing" },
+        ],
+      }),
+    ]);
+    const salt = within(row("盐"));
+    expect(salt.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "true");
+    expect(salt.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "false");
+    const scallion = within(row("葱"));
+    expect(scallion.getByRole("button", { name: "Not stated" })).toHaveAttribute("aria-pressed", "true");
+    expect(scallion.getByRole("button", { name: "Unspecified amount" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("the save request never has a type that disagrees with the unit", async () => {
+    // The model's type disagrees with the unit; the saved type follows the unit.
+    setup({}, [draft({ ingredients: [{ ...EGGS, raw: "生抽4勺", name: "生抽", amount: 4, unit: "spoon", amount_type: "exact" }] })]);
+    expect(within(row("生抽")).getByText("Household measure", { selector: "strong" })).toBeInTheDocument();
     await save();
     const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
     expect(lines[0]).toMatchObject({ amount: 4, unit: "spoon", amount_type: "spoon" });
@@ -638,23 +805,6 @@ describe("review", () => {
     amount.focus();
     fireEvent.wheel(amount);
     expect(amount).not.toHaveFocus();
-  });
-
-  it("clears amount and unit when the amount type becomes vague", async () => {
-    setup({}, [
-      draft({
-        ingredients: [
-          { raw: "两个鸡蛋", name: "鸡蛋", amount: 2, unit: "piece", amount_type: "count", role: "main", optional: false, choice_group: null, ingredient_id: 1 },
-        ],
-      }),
-    ]);
-    await userEvent.selectOptions(
-      within(row("鸡蛋")).getByRole("combobox", { name: "Amount type" }),
-      "vague",
-    );
-    await save();
-    const lines = lastBody("/api/recipes").ingredients as Record<string, unknown>[];
-    expect(lines[0]).toMatchObject({ amount: null, unit: null, amount_type: "vague" });
   });
 });
 
@@ -820,5 +970,240 @@ describe("choice groups", () => {
     await save();
     const lines = lastBody("/api/recipes").ingredients as { optional: boolean }[];
     expect(lines.map((line) => line.optional)).toEqual([true, true]);
+  });
+});
+
+const BROCCOLI = {
+  id: 9, name_zh: "西兰花", name_en: "broccoli", aliases_zh: ["西蓝花"], aliases_en: [], user_aliases_zh: [], user_aliases_en: [],
+  source: "seed", category: "vegetable", stock_mode: "level", allergens: [], parent_id: null,
+};
+
+function broccoliLine(raw = "西蓝花", name = "西蓝花") {
+  return { raw, name, amount: null, unit: null, amount_type: "missing", role: "main", optional: false, choice_group: null, ingredient_id: null } as const;
+}
+
+async function linkBroccoli(index = 0) {
+  const target = screen.getAllByTestId("row-西蓝花")[index];
+  await userEvent.click(within(target).getByRole("button", { name: "Link to existing" }));
+  await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "西");
+  await userEvent.click(await screen.findByRole("button", { name: "Choose broccoli" }));
+}
+
+const BROCCOLI_ROUTES: Routes = { "GET /api/ingredients": () => [BROCCOLI] };
+
+function ingredientsSent(): { ingredient_id: number | null; remember_link: boolean }[] {
+  const matching = callsTo(calls, "POST", "/api/recipes");
+  return (matching[matching.length - 1].body as { ingredients: never[] }).ingredients;
+}
+
+describe("review: remembering links", () => {
+  it("shows the remember checkbox checked after a manual link of an unmatched line", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await linkBroccoli();
+    expect(screen.getByRole("checkbox", { name: "Remember this link" })).toBeChecked();
+  });
+
+  it("offers no checkbox on a line whose own name matched, or when relinking it", async () => {
+    setup(BROCCOLI_ROUTES, [draft()]);
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await userEvent.click(within(row("葱花")).getByRole("button", { name: "Change link" }));
+    await userEvent.click(within(row("葱花")).getByRole("button", { name: "Link to existing" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search the dictionary" }), "西");
+    await userEvent.click(await screen.findByRole("button", { name: "Choose broccoli" }));
+    expect(within(row("葱花")).getByText("Linked to broccoli")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+  });
+
+  it("sends remember_link for a remembered line and false when unchecked", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    await linkBroccoli();
+    await save();
+    expect(ingredientsSent()).toMatchObject([{ ingredient_id: 9, remember_link: true }]);
+
+    cleanup();
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    await linkBroccoli();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Remember this link" }));
+    await save();
+    expect(ingredientsSent()).toMatchObject([{ ingredient_id: 9, remember_link: false }]);
+  });
+
+  it("links the other unmatched same-name lines of the draft when remembered", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine("一颗西蓝花"), broccoliLine("西蓝花少许")] })]);
+    await linkBroccoli(0);
+    const rows = screen.getAllByTestId("row-西蓝花");
+    expect(within(rows[1]).getByText("Linked to broccoli")).toBeInTheDocument();
+    await save();
+    expect(ingredientsSent()).toMatchObject([
+      { ingredient_id: 9, remember_link: true },
+      { ingredient_id: 9, remember_link: true },
+    ]);
+  });
+
+  it("keeps the second line's link but does not remember it when the box is unchecked", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine("一颗西蓝花"), broccoliLine("西蓝花少许")] })]);
+    await linkBroccoli(0);
+    await userEvent.click(within(screen.getAllByTestId("row-西蓝花")[0]).getByRole("checkbox", { name: "Remember this link" }));
+    await save();
+    expect(ingredientsSent()).toMatchObject([
+      { ingredient_id: 9, remember_link: false },
+      { ingredient_id: 9, remember_link: false },
+    ]);
+  });
+
+  it("matches the next draft again when it is shown", async () => {
+    let saved = false;
+    setup(
+      {
+        ...BROCCOLI_ROUTES,
+        "POST /api/recipes": () => {
+          saved = true;
+          return reply(201, { id: 1 });
+        },
+        "POST /api/ingredients/match": () => ({
+          matches: saved ? [{ name: "西蓝花", entry: BROCCOLI }] : [],
+        }),
+      },
+      [draft({ ingredients: [broccoliLine()] }), draft({ title: "清炒西蓝花", ingredients: [broccoliLine()] })],
+    );
+    await linkBroccoli();
+    await save();
+    expect(await screen.findByDisplayValue("清炒西蓝花")).toBeInTheDocument();
+    expect(await within(row("西蓝花")).findByText("Linked to broccoli")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+  });
+
+  it("asks the match endpoint only for unmatched names", async () => {
+    setup({ "POST /api/ingredients/match": () => ({ matches: [] }) });
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/ingredients/match")[0].body).toEqual({ names: ["秘制酱"] });
+  });
+
+  it("the re-match leaves touched lines alone", async () => {
+    let answer: (response: unknown) => void = () => {};
+    setup(
+      { "POST /api/ingredients/match": () => new Promise((resolve) => (answer = resolve)) },
+      [draft({ ingredients: [broccoliLine("西蓝花", "西蓝花"), broccoliLine("青花菜", "青花菜"), broccoliLine("花椰菜", "花椰菜")] })],
+    );
+    // One line is skipped and another renamed (and renamed back) before the answer arrives.
+    await userEvent.click(within(row("西蓝花")).getByRole("button", { name: "Leave unlinked" }));
+    const renamed = within(row("青花菜")).getByRole("textbox", { name: "Name" });
+    await userEvent.type(renamed, "x");
+    await userEvent.type(renamed, "{Backspace}");
+    await act(async () =>
+      answer(
+        reply(200, {
+          matches: ["西蓝花", "青花菜", "花椰菜"].map((name) => ({ name, entry: BROCCOLI })),
+        }),
+      ),
+    );
+    expect(within(row("西蓝花")).getByText(/Not linked/)).toBeInTheDocument();
+    expect(within(row("青花菜")).getByText("Not in the dictionary")).toBeInTheDocument();
+    expect(within(row("花椰菜")).getByText("Linked to broccoli")).toBeInTheDocument();
+  });
+
+  it("a failed re-match leaves the draft usable", async () => {
+    setup({ "POST /api/ingredients/match": () => reply(500, { code: "unknown" }) });
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match")).toHaveLength(1));
+    expect(within(row("秘制酱")).getByText("Not in the dictionary")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await save();
+  });
+
+  it("shows the alias conflict notice after saving", async () => {
+    setup(
+      { "POST /api/recipes": () => reply(201, { id: 1, alias_conflicts: ["西蓝花"] }) },
+      [draft(), draft({ title: "下一道" })],
+    );
+    await save();
+    expect(await screen.findByDisplayValue("下一道")).toBeInTheDocument();
+    expect(screen.getByText("Not remembered, already a name or alias of another entry: 西蓝花")).toBeInTheDocument();
+  });
+
+  it("shows the alias conflict notice on the empty-queue page", async () => {
+    setup({ "POST /api/recipes": () => reply(201, { id: 1, alias_conflicts: ["西蓝花"] }) });
+    await save();
+    await screen.findByText("There are no drafts to review.");
+    expect(screen.getByText("Not remembered, already a name or alias of another entry: 西蓝花")).toBeInTheDocument();
+  });
+
+  it("warns before unload only while drafts are queued", async () => {
+    setup({}, [draft(), draft({ title: "下一道" })]);
+    const before = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(before);
+    expect(before.defaultPrevented).toBe(true);
+    await save();
+    await userEvent.click(await screen.findByRole("button", { name: "Save recipe" }));
+    await screen.findByText("There are no drafts to review.");
+    const after = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+  });
+});
+
+describe("review: undoing a link change", () => {
+  it("restores a hand link with its remember choice", async () => {
+    setup(BROCCOLI_ROUTES, [draft({ ingredients: [broccoliLine()] })]);
+    await linkBroccoli();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Remember this link" }));
+    const target = within(screen.getByTestId("row-西蓝花"));
+    await userEvent.click(target.getByRole("button", { name: "Change link" }));
+    expect(target.queryByRole("checkbox", { name: "Remember this link" })).toBeNull();
+    await userEvent.click(target.getByRole("button", { name: "Undo change" }));
+    expect(target.getByText("Linked to broccoli")).toBeInTheDocument();
+    expect(target.getByRole("checkbox", { name: "Remember this link" })).not.toBeChecked();
+  });
+});
+
+describe("review: owned names in the create form", () => {
+  // The first call is the draft's own re-match; only the create form's check finds an owner.
+  let matchCalls = 0;
+  const OWNER_ROUTES: Routes = {
+    "POST /api/ingredients/match": () =>
+      ++matchCalls > 1 ? { matches: [{ name: "秘制酱", entry: BROCCOLI }] } : { matches: [] },
+  };
+
+  beforeEach(() => {
+    matchCalls = 0;
+  });
+
+  async function openCreate() {
+    await userEvent.click(within(row("秘制酱")).getByRole("button", { name: "Create entry" }));
+  }
+
+  it("shows the notice and disables submit when the name belongs to an entry", async () => {
+    setup(OWNER_ROUTES);
+    await openCreate();
+    expect(await screen.findByText("\"秘制酱\" is already a name or alias of \"broccoli\".")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage in the dictionary" })).toHaveAttribute("href", "/dictionary");
+    expect(screen.getByRole("button", { name: "Create and link" })).toBeDisabled();
+  });
+
+  it("links the line to the owner entry from the notice", async () => {
+    setup(OWNER_ROUTES);
+    await openCreate();
+    await userEvent.click(await screen.findByRole("button", { name: "Link to \"broccoli\"" }));
+    expect(within(row("秘制酱")).getByText("Linked to broccoli")).toBeInTheDocument();
+    // A link to an existing entry is a link by hand, so the user may remember it.
+    expect(within(row("秘制酱")).getByRole("checkbox", { name: "Remember this link" })).toBeChecked();
+    await save();
+    expect(ingredientsSent()[1]).toMatchObject({ ingredient_id: 9, remember_link: true });
+  });
+
+  it("shows no notice for an unowned name", async () => {
+    setup({ "POST /api/ingredients/match": () => ({ matches: [] }) });
+    await openCreate();
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match").length).toBeGreaterThan(1));
+    expect(screen.queryByText(/is already a name or alias/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create and link" })).toBeEnabled();
+  });
+
+  it("leaves submit enabled when the check fails", async () => {
+    setup({ "POST /api/ingredients/match": () => reply(500, { code: "unknown" }) });
+    await openCreate();
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/ingredients/match").length).toBeGreaterThan(1));
+    expect(screen.queryByText(/is already a name or alias/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create and link" })).toBeEnabled();
   });
 });

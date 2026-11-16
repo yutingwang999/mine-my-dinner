@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import select
 
-from minemydinner.models import MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
+from minemydinner.models import Ingredient, MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
 from tests.recipefakes import *  # noqa: F403
 from tests.recipefakes import by_zh, count, line
 
@@ -87,6 +87,16 @@ def test_pages(client, seeded):
     first = client.get("/api/recipes", params={"page": 1}).json()
     second = client.get("/api/recipes", params={"page": 2}).json()
     assert (len(first["items"]), len(second["items"]), first["total"]) == (20, 5, 25)
+
+
+def test_page_size_is_chosen_from_a_fixed_list(client, seeded):
+    for index in range(25):
+        make_recipe(seeded, f"菜{index:02d}")
+    ten = client.get("/api/recipes", params={"page_size": 10, "page": 3}).json()
+    assert (len(ten["items"]), ten["total"]) == (5, 25)
+    fifty = client.get("/api/recipes", params={"page_size": 50}).json()
+    assert len(fifty["items"]) == 25
+    assert client.get("/api/recipes", params={"page_size": 30}).status_code == 422
 
 
 def test_saved_lines_carry_the_linked_entry_names(client, library, fake_llm, seeded):
@@ -221,3 +231,27 @@ def test_list_recipes_query_count_is_constant(client, session, seeded, count_que
     session.flush()
     many = _count_list_queries(client, session, count_queries, 5)
     assert few == many <= 8
+
+
+def test_update_with_remember_link_adds_alias(client, session, library, fake_llm):
+    entry = Ingredient(
+        name_zh="测试西兰花", name_en="Test Broccoli", allergens=[],
+        category="vegetable", stock_mode="level", source="seed",
+    )
+    session.add(entry)
+    session.flush()
+    linked = line("西蓝花", "西蓝花", entry.id, amount_type="missing", remember_link=True)
+    body = put_recipe(client, library[0], ingredients=[LINE, linked])
+    assert body["alias_conflicts"] == []
+    session.expire_all()
+    assert entry.user_aliases_zh == ["西蓝花"]
+    session.add(
+        Ingredient(
+            name_zh="测试花菜", name_en="Test Cauliflower", allergens=[],
+            category="vegetable", stock_mode="level", source="seed",
+            user_aliases_zh=["花椰"],
+        )
+    )
+    session.flush()
+    clash = line("花椰", "花椰", entry.id, amount_type="missing", remember_link=True)
+    assert put_recipe(client, library[0], ingredients=[LINE, clash])["alias_conflicts"] == ["花椰"]

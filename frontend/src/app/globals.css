@@ -3,10 +3,17 @@
   --foreground: #1f1f1f;
   --card: #ffffff;
   --border: #d9d9d4;
+  /* Borders of inputs and buttons; stronger than --border in dark mode. */
+  --control-border: var(--border);
   --muted: #6b6b66;
   --accent: #2f6f4f;
   --accent-text: #ffffff;
   --control: #ffffff;
+  /* One height for inputs, selects, and buttons; compact toggles are 1.75rem. */
+  --control-height: 2.25rem;
+  /* Text for an unmatched or cautionary state. */
+  --warning-text: #b45309;
+  --danger: color-mix(in srgb, #d64545 75%, var(--foreground));
   /* Chat bubbles: soft green for the user; assistant text has no bubble. */
   --bubble-user: color-mix(in srgb, var(--accent) 15%, var(--background));
 }
@@ -17,10 +24,12 @@
     --foreground: #ececec;
     --card: #1c1c1c;
     --border: #3a3a3a;
+    --control-border: #5f5f5f;
     --muted: #a3a3a3;
     --accent: #5fae86;
     --accent-text: #0f1a14;
     --control: #242424;
+    --warning-text: #f59e0b;
     --bubble-user: color-mix(in srgb, var(--accent) 25%, var(--background));
     }
 }
@@ -129,9 +138,37 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
 select,
 textarea {
   padding: 0.35rem 0.6rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--control);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select {
+  height: var(--control-height);
+  padding-block: 0;
+}
+
+/* A native file input reads as a secondary button with the file name as plain text beside it. */
+input[type="file"] {
+  max-width: 100%;
+  font-weight: normal;
+}
+
+input[type="file"]::file-selector-button {
+  height: var(--control-height);
+  margin-right: 0.6rem;
+  padding: 0 0.85rem;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+input[type="file"]:hover::file-selector-button {
+  border-color: var(--accent);
 }
 
 textarea {
@@ -139,9 +176,11 @@ textarea {
   resize: vertical;
 }
 
+/* A plain button is the secondary style; primary and danger are marked with a class. */
 button {
-  padding: 0.35rem 0.85rem;
-  border: 1px solid var(--border);
+  min-height: var(--control-height);
+  padding: 0 0.85rem;
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   background: var(--control);
   cursor: pointer;
@@ -156,10 +195,25 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button[type="submit"] {
+button[type="submit"],
+.btn-primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-text);
+}
+
+button.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--foreground));
+}
+
+/* btn-danger: soft red text on the secondary look, for the first click of delete and remove.
+   btn-danger-solid: filled red, only for the final "yes, delete" inside a confirm box. */
+button.btn-danger {
+  color: var(--danger);
+}
+
+button.btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
 }
 
 .card {
@@ -250,6 +304,11 @@ button[type="submit"] {
   grid-column: 1 / -1;
 }
 
+/* The cards of one row have the same height, so their actions sit at the same bottom edge. */
+.import-grid > .card > .actions {
+  margin-top: auto;
+}
+
 .import-grid input[type="text"] {
   width: 100%;
 }
@@ -297,16 +356,21 @@ button[type="submit"] {
   opacity: 0.75;
 }
 
-.review-form input,
-.review-form select,
-.review-form textarea,
-.review-form button {
+.review-form textarea {
   font: inherit;
   padding: 0.25rem 0.5rem;
 }
 
-.review-form button {
-  cursor: pointer;
+/* Phone width: the label sits above its field instead of beside it. */
+@media (max-width: 40rem) {
+  .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .field-note {
+    margin-left: 0;
+  }
 }
 
 .line-list {
@@ -338,14 +402,18 @@ button[type="submit"] {
 
 .line-raw {
   font-size: 0.875rem;
+}
+
+.line-raw > span:first-child {
   opacity: 0.75;
 }
 
+/* Controls of one form row share their bottom edge, so a button sits level with the selects. */
 .line-fields {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
-  align-items: end;
+  align-items: flex-end;
 }
 
 .mini-field {
@@ -355,8 +423,31 @@ button[type="submit"] {
   font-size: 0.8rem;
 }
 
+.mini-field input,
+.mini-field select {
+  font-size: 1rem;
+}
+
 .mini-field input[type="number"] {
   width: 6rem;
+}
+
+/* A label with a small "Suggested" badge beside its text. */
+.field-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.suggested-badge {
+  padding: 0 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .mini-field.inline {
@@ -374,7 +465,7 @@ button[type="submit"] {
 }
 
 .line.unmatched .line-status strong {
-  color: #b45309;
+  color: var(--warning-text);
 }
 
 .line-panel {
@@ -463,9 +554,23 @@ button[type="submit"] {
 
 .pager {
   display: flex;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
   align-items: center;
+  justify-content: space-between;
   margin: 0.5rem 0;
+}
+
+.pager-bottom {
+  justify-content: center;
+}
+
+.pager-nav,
+.pager-size {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .browse-filters label {
@@ -476,6 +581,75 @@ button[type="submit"] {
 
 .card-list {
   list-style: none;
+}
+
+/* The diner list is one card; each diner is a block separated by a thin line. */
+.diner-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.diner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.diner:last-child {
+  border-bottom: none;
+}
+
+/* Search results: chips in a wrapping row, with room below the search box. */
+.dictionary-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.search-bar input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.search-results {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Inside a form row the search box joins the row's alignment; its results get their own line below. */
+.line-fields > .dictionary-search,
+.line-fields > .dictionary-search > .search-bar {
+  display: contents;
+}
+
+.line-fields > .dictionary-search > .search-results {
+  order: 1;
+  flex-basis: 100%;
+}
+
+.search-results:empty {
+  display: none;
+}
+
+button.chip {
+  min-height: 1.75rem;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  line-height: 1;
 }
 
 /* A heading sitting in a row of actions keeps the actions on the right. */
@@ -531,14 +705,14 @@ button[type="submit"] {
   background: #dc26261a;
 }
 
-button.danger {
+button.btn-danger-solid {
   background: #dc2626;
   border-color: #dc2626;
   color: #ffffff;
   font-weight: 600;
 }
 
-button.danger:hover:not(:disabled) {
+button.btn-danger-solid:hover:not(:disabled) {
   background: #b91c1c;
   border-color: #b91c1c;
 }
@@ -882,6 +1056,7 @@ body:has(.chat) {
 }
 
 .switch {
+  min-height: 0;
   position: relative;
   width: 2.5rem;
   height: 1.4rem;
@@ -1099,6 +1274,53 @@ body:has(.chat) {
   overflow-wrap: anywhere;
 }
 
+/* A form inside the dish panel frame: fields stacked, label left and input right, actions at the bottom right. */
+.form-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.row-list > li > .form-panel {
+  flex-basis: 100%;
+}
+
+.panel-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.panel-row input,
+.panel-row select {
+  width: 100%;
+  min-width: 0;
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.form-panel > .hint,
+.form-panel > p {
+  margin: 0;
+}
+
+.form-panel .hint {
+  font-size: 0.85rem;
+}
+
+@media (max-width: 30rem) {
+  .panel-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+}
+
 .dish-panel .recipe-detail.compact {
   margin: 0;
   padding: 0;
@@ -1122,6 +1344,7 @@ body:has(.chat) {
 }
 
 .dish-toggles button {
+  min-height: 0;
   height: 1.75rem;
   padding: 0 0.6rem;
   font-size: 0.875rem;
@@ -1154,6 +1377,7 @@ body:has(.chat) {
 }
 
 .recipe-page-actions button {
+  min-height: 0;
   height: 1.75rem;
   padding: 0 0.6rem;
   font-size: 0.875rem;
@@ -1163,4 +1387,188 @@ body:has(.chat) {
 
 .recipe-page-actions > button:not(:first-child) {
   color: color-mix(in srgb, #d64545 75%, var(--foreground));
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.75rem 0 1rem;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Written as button.tab so they beat the shared button rules, including its hover border. */
+.tabs button.tab,
+.tabs button.tab:hover:not(:disabled) {
+  flex: none;
+  min-height: 0;
+  padding: 0.5rem 0.9rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.tabs button.tab:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+.tabs button.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tabs button.tab[aria-selected="true"],
+.tabs button.tab[aria-selected="true"]:hover:not(:disabled) {
+  color: var(--accent);
+  font-weight: 600;
+  /* An inset shadow draws the underline inside the tab, so the bar never overflows. */
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.segmented-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+}
+
+/* One joined group of buttons; the pressed one is filled with the accent color. */
+.segmented {
+  display: inline-flex;
+}
+
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.segmented button:first-child {
+  margin-left: 0;
+  border-radius: 6px 0 0 6px;
+}
+
+.segmented button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+/* Not pressed: plain control, muted text; hover darkens the border. */
+.segmented button {
+  color: var(--muted);
+}
+
+.segmented button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--foreground) 45%, var(--border));
+}
+
+/* Pressed: a light accent tint with accent text and border, so it marks the state without shouting. */
+.segmented button[aria-pressed="true"],
+.segmented button[aria-pressed="true"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--control));
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  position: relative;
+}
+
+
+/* The amount type that follows the unit: read-only text; its cell exists even when empty. */
+.amount-kind strong {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-height);
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* The top line of a row: drag handle and source wording on the left, row actions on the right. */
+.line-raw {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.line-actions {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+button.compact {
+  min-height: 0;
+  height: 1.75rem;
+  padding: 0 0.6rem;
+  font-size: 0.875rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Row-scoped size: 14 px text and 32 px controls, muted 13 px labels. The global control height is untouched. */
+.line-grid {
+  --control-height: 2rem;
+  font-size: 0.875rem;
+}
+
+.line-grid .mini-field {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.line-grid .mini-field input:not([type="checkbox"]),
+.line-grid .mini-field select,
+.line-grid button {
+  font-size: 0.875rem;
+}
+
+.line-grid .mini-field:has(> input[type="checkbox"]) {
+  align-items: flex-start;
+}
+
+.line-grid input[type="checkbox"] {
+  height: var(--control-height);
+  margin: 0;
+}
+
+/* One column template for every ingredient row, so the columns line up down the form.
+   Below this width the controls wrap as flex items again. */
+@media (min-width: 60rem) {
+  .line-fields.line-grid {
+    display: grid;
+    grid-template-columns: minmax(6rem, 12.5rem) 6rem 6.5rem max-content 5rem 5.5rem max-content;
+    align-items: end;
+  }
+
+  .line-grid .mini-field input:not([type="checkbox"]),
+  .line-grid .mini-field select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+/* An example under the unit select; it floats so the row's control line keeps its height. */
+.unit-wrap {
+  display: flex;
+  position: relative;
+}
+
+.unit-hint {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.1rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Compact toggles set their own border; in dark mode they use the stronger control border. */
+  .dish-toggles button:not([aria-expanded="true"]) {
+    border-color: var(--control-border);
+  }
 }

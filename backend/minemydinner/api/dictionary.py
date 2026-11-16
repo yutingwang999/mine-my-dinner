@@ -3,12 +3,12 @@ from contextlib import contextmanager
 from typing import Annotated, Literal, Self
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import case, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
-from minemydinner.constants import ALLERGENS, CATEGORIES, DICTIONARY_SOURCES
+from minemydinner.constants import ALLERGENS, CATEGORIES, DICTIONARY_SOURCES, STOCK_MODES
 from minemydinner.db import get_session
 from minemydinner.dictionary.service import (
     CookwareWrite,
@@ -24,6 +24,7 @@ from minemydinner.dictionary.service import (
     create_user_ingredient,
     delete_user_cookware,
     delete_user_ingredient,
+    link_name,
     link_unmatched_lines,
     resolve_allergens,
     set_personal_aliases,
@@ -31,8 +32,8 @@ from minemydinner.dictionary.service import (
     update_user_cookware,
     update_user_ingredient,
 )
-from minemydinner.extraction.allergen_suggest import suggest_allergens
-from minemydinner.extraction.normalize import names_equal
+from minemydinner.extraction.allergen_suggest import suggest_entry
+from minemydinner.extraction.normalize import match_ingredient, names_equal
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import (
     Cookware,
@@ -49,6 +50,8 @@ ClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 SEARCH_LIMIT = 20
 # Listing one source is for the dictionary page, which shows every entry.
 SOURCE_LIMIT = 500
+# Most names a draft can ask to match again in one request.
+MATCH_LIMIT = 200
 
 
 class IngredientOut(BaseModel):
@@ -101,6 +104,8 @@ class SuggestionIn(BaseModel):
 
 class SuggestionOut(BaseModel):
     suggested: list[str] | None
+    category: str | None = None
+    stock_mode: str | None = None
 
 
 class UnresolvedEntryOut(BaseModel):
@@ -125,6 +130,9 @@ class ResolveIn(BaseModel):
     name: str | None = None
     ingredient_id: int | None = None
     allergens: list[Literal[*ALLERGENS]]
+    # Used only when the name creates a new entry.
+    category: Literal[*CATEGORIES] | None = None
+    stock_mode: Literal[*STOCK_MODES] | None = None
 
     @model_validator(mode="after")
     def one_target(self) -> Self:
@@ -132,6 +140,36 @@ class ResolveIn(BaseModel):
         if has_name == (self.ingredient_id is not None):
             raise ValueError("give either a name or an ingredient_id")
         return self
+
+
+class MatchIn(BaseModel):
+    names: list[str] = Field(max_length=MATCH_LIMIT)
+
+
+class MatchOut(BaseModel):
+    name: str
+    entry: IngredientOut
+
+
+class MatchesOut(BaseModel):
+    matches: list[MatchOut]
+
+
+class LinkIn(BaseModel):
+    name: str
+    ingredient_id: int
+    remember: bool
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("the name must not be blank")
+        return value
+
+
+class LinkedByName(LinkedIngredient):
+    remembered: bool
 
 
 Source = Literal[*DICTIONARY_SOURCES]
@@ -256,6 +294,15 @@ def search_ingredients(
     return _ingredient_outs(session, rows)
 
 
+@router.post("/ingredients/match")
+def match_names(body: MatchIn, session: SessionDep) -> MatchesOut:
+    """Match names against the dictionary again; names with no entry are left out."""
+    found = [(name, match_ingredient(session, name)) for name in body.names]
+    pairs = [(name, entry) for name, entry in found if entry is not None]
+    outs = {out.id: out for out in _ingredient_outs(session, [e for _, e in pairs])}
+    return MatchesOut(matches=[MatchOut(name=name, entry=outs[e.id]) for name, e in pairs])
+
+
 @router.post("/ingredients", status_code=201)
 def create_ingredient(data: IngredientWrite, session: SessionDep) -> LinkedIngredient:
     def create() -> LinkedIngredient:
@@ -337,7 +384,14 @@ def delete_cookware(entry_id: int, session: SessionDep) -> Response:
 
 @router.post("/allergen-suggestions")
 def allergen_suggestions(body: SuggestionIn, client: ClientDep) -> SuggestionOut:
-    return SuggestionOut(suggested=suggest_allergens(client, body.name))
+    suggestion = suggest_entry(client, body.name)
+    if suggestion is None:
+        return SuggestionOut(suggested=None)
+    return SuggestionOut(
+        suggested=suggestion.allergens,
+        category=suggestion.category,
+        stock_mode=suggestion.stock_mode,
+    )
 
 
 @router.get("/allergens/unresolved")
@@ -352,7 +406,25 @@ def list_unresolved(session: SessionDep) -> UnresolvedOut:
 @router.post("/allergens/resolve")
 def resolve(body: ResolveIn, session: SessionDep) -> LinkedIngredient:
     def apply() -> LinkedIngredient:
-        entry, linked = resolve_allergens(session, body.name, body.ingredient_id, body.allergens)
+        entry, linked = resolve_allergens(
+            session,
+            body.name,
+            body.ingredient_id,
+            body.allergens,
+            body.category,
+            body.stock_mode,
+        )
         return _linked(session, entry, linked)
+
+    return _committed(session, apply)
+
+
+@router.post("/allergens/link")
+def link(body: LinkIn, session: SessionDep) -> LinkedByName:
+    def apply() -> LinkedByName:
+        entry, linked, remembered = link_name(
+            session, body.name, body.ingredient_id, body.remember
+        )
+        return LinkedByName(**_linked(session, entry, linked).model_dump(), remembered=remembered)
 
     return _committed(session, apply)

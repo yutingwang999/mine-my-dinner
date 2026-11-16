@@ -69,6 +69,8 @@ export type IngredientLine = {
   /** Lines sharing a value are alternatives: one of the group is required. */
   choice_group: number | null;
   ingredient_id: number | null;
+  /** Sent on save: remember the name as an alias of the linked entry. */
+  remember_link?: boolean;
   /** The linked entry's own names, for display only; the server does not read them. */
   linked_name_zh?: string | null;
   linked_name_en?: string | null;
@@ -166,7 +168,13 @@ export type SavedRecipe = RecipeFields & {
 
 export type RecipeImage = { file_name: string; mime_type: string; position: number };
 
-export type CreatedRecipe = { id: number; embedded: boolean; log_id: number | null };
+export type CreatedRecipe = {
+  id: number;
+  embedded: boolean;
+  log_id: number | null;
+  /** Names not remembered because another entry already owns them. */
+  alias_conflicts?: string[];
+};
 
 export type RecipePage = { items: SavedRecipe[]; total: number; page: number };
 
@@ -210,6 +218,13 @@ export type RuleWrite = {
   allergen: Allergen | null;
   ingredient_id: number | null;
   text: string | null;
+};
+
+/** What the model suggests for a new entry; each part is null when it gave no valid value. */
+export type EntrySuggestion = {
+  suggested: Allergen[] | null;
+  category: Category | null;
+  stock_mode: StockMode | null;
 };
 
 export type Unresolved = {
@@ -301,13 +316,16 @@ export const api = {
   },
   searchIngredients: (q: string) =>
     request<IngredientEntry[]>(`/api/ingredients?q=${encodeURIComponent(q)}`, { method: "GET" }),
+  matchIngredients: (names: string[]) =>
+    postJson<{ matches: { name: string; entry: IngredientEntry }[] }>("/api/ingredients/match", {
+      names,
+    }),
   createIngredient: (data: IngredientCreate) =>
     postJson<IngredientEntry & { linked_lines: number }>("/api/ingredients", data),
   searchCookware: (q: string) =>
     request<DictionaryEntry[]>(`/api/cookware?q=${encodeURIComponent(q)}`, { method: "GET" }),
   createCookware: (data: CookwareCreate) => postJson<DictionaryEntry>("/api/cookware", data),
-  suggestAllergens: (name: string) =>
-    postJson<{ suggested: Allergen[] | null }>("/api/allergen-suggestions", { name }),
+  suggestEntry: (name: string) => postJson<EntrySuggestion>("/api/allergen-suggestions", { name }),
   checkAllergies: (lines: { name: string; ingredient_id: number | null }[]) =>
     postJson<AllergyCheck>("/api/recipes/allergy-check", { lines }),
   saveRecipe: (data: RecipeWrite) => postJson<CreatedRecipe>("/api/recipes", data),
@@ -318,7 +336,7 @@ export const api = {
     return postForm<RecipeImage[]>(`/api/recipes/${recipeId}/images`, form);
   },
 
-  listRecipes: (params: { q?: string; dish_type?: string; page?: number }) =>
+  listRecipes: (params: { q?: string; dish_type?: string; page?: number; page_size?: number }) =>
     get<RecipePage>(`/api/recipes${query(params)}`),
   getRecipe: (id: number) => get<SavedRecipe>(`/api/recipes/${id}`),
   updateRecipe: (id: number, data: RecipeWrite) =>
@@ -361,8 +379,18 @@ export const api = {
   listUserCookware: () => get<DictionaryEntry[]>("/api/cookware?source=user"),
   deleteCookware: (id: number) => remove(`/api/cookware/${id}`),
   listUnresolved: () => get<Unresolved>("/api/allergens/unresolved"),
-  resolveAllergens: (target: { name: string } | { ingredient_id: number }, allergens: Allergen[]) =>
-    postJson<IngredientEntry>("/api/allergens/resolve", { ...target, allergens }),
+  /** The category and stock mode are used only when a new entry is created for a name. */
+  resolveAllergens: (
+    target: { name: string } | { ingredient_id: number },
+    allergens: Allergen[],
+    entry?: { category: Category; stock_mode: StockMode },
+  ) => postJson<IngredientEntry>("/api/allergens/resolve", { ...target, allergens, ...entry }),
+  linkUnknownName: (name: string, ingredientId: number, remember: boolean) =>
+    postJson<IngredientEntry & { linked_lines: number; remembered: boolean }>("/api/allergens/link", {
+      name,
+      ingredient_id: ingredientId,
+      remember,
+    }),
 };
 
 export function imageUrl(fileName: string): string {

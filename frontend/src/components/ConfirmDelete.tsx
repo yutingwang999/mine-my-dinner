@@ -46,7 +46,7 @@ export function ConfirmDelete({
 
   if (!asking) {
     return (
-      <button type="button" onClick={() => setAsking(true)}>
+      <button type="button" className="btn-danger" onClick={() => setAsking(true)}>
         {label ?? t("delete")}
       </button>
     );
@@ -54,7 +54,7 @@ export function ConfirmDelete({
   return (
     <span role="group" className="confirm-box">
       <span>{question ?? t("confirmDelete", { name })}</span> {notice && <span>{notice}</span>}{" "}
-      <button type="button" className="danger" disabled={busy} onClick={confirm}>
+      <button type="button" className="btn-danger-solid" disabled={busy} onClick={confirm}>
         {confirmLabel ?? t("yesDelete")}
       </button>
       <button type="button" onClick={() => setAsking(false)}>

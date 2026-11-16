@@ -51,6 +51,7 @@ beforeEach(() => {
   replace.mockClear();
 });
 afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => window.localStorage.clear());
 
 describe("library", () => {
   it("searches and filters", async () => {
@@ -74,6 +75,20 @@ describe("library", () => {
     const link = item.getByRole("link", { name: "番茄炒蛋" });
     expect(link).toHaveAttribute("href", "/library/1");
     expect(item.getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("puts the row toggles in the compact toggle group", async () => {
+    setup();
+    const item = within(await screen.findByTestId("recipe-1"));
+    for (const button of item.getAllByRole("button")) {
+      expect(button.closest(".dish-toggles")).not.toBeNull();
+    }
+  });
+
+  it("keeps the pager inside the library card", async () => {
+    setup();
+    const pager = await screen.findByRole("navigation");
+    expect(pager.closest(".card")).not.toBeNull();
   });
 
   it("opens one panel at a time from the row data, without a fetch", async () => {
@@ -106,6 +121,37 @@ describe("library", () => {
   it("shows an empty state", async () => {
     setup([]);
     expect(await screen.findByText("No recipes found.")).toBeInTheDocument();
+  });
+});
+
+describe("library page size", () => {
+  it("sends page_size, defaulting to 20", async () => {
+    setup();
+    await screen.findByText("番茄炒蛋");
+    expect(calls.find((call) => call.path === "/api/recipes")?.url).toContain("page_size=20");
+  });
+
+  it("sends the chosen size, returns to page 1, keeps it out of the address, and remembers it", async () => {
+    const items = [savedRecipe()];
+    calls = mockFetch({ "GET /api/recipes": () => ({ items, total: 120, page: 1 }) });
+    search = new URLSearchParams("page=3");
+    const view = renderWithProviders(<RecipeLibrary />);
+    await screen.findByText("番茄炒蛋");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Rows per page" }), "50");
+    await waitFor(() => {
+      const last = calls.filter((call) => call.path === "/api/recipes").at(-1)?.url ?? "";
+      expect(last).toContain("page_size=50");
+      expect(last).toContain("page=1&");
+    });
+    expect(replace.mock.calls.every(([address]) => !String(address).includes("page_size"))).toBe(true);
+    expect(window.localStorage.getItem("pageSize:library")).toBe("50");
+
+    view.unmount();
+    search = new URLSearchParams();
+    renderWithProviders(<RecipeLibrary />);
+    await waitFor(() =>
+      expect(calls.filter((call) => call.path === "/api/recipes").at(-1)?.url).toContain("page_size=50"),
+    );
   });
 });
 

@@ -170,7 +170,7 @@ describe("PlanCard what was asked, reasons, and links", () => {
     expect(screen.getByRole("link", { name: "Update your stock" })).toHaveAttribute("href", "/en/inventory");
     expect(screen.getByRole("link", { name: "Register your cookware" })).toHaveAttribute(
       "href",
-      "/en/inventory#cookware",
+      "/en/inventory?tab=cookware",
     );
     expect(screen.getByRole("link", { name: "Import more recipes" })).toHaveAttribute("href", "/en/import");
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Any mix is fine"]);
@@ -180,7 +180,7 @@ describe("PlanCard what was asked, reasons, and links", () => {
         <PlanCard plan={plan({ next_actions: ["register_cookware"] })} />
       </NextIntlClientProvider>,
     );
-    expect(screen.getByRole("link", { name: "登记厨具" })).toHaveAttribute("href", "/zh/inventory#cookware");
+    expect(screen.getByRole("link", { name: "登记厨具" })).toHaveAttribute("href", "/zh/inventory?tab=cookware");
   });
 
   it("lists named ingredients by kind under what was asked", () => {

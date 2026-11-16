@@ -1,6 +1,6 @@
 import { useTranslations } from "next-intl";
 import { setRequestLocale } from "next-intl/server";
-import { use } from "react";
+import { Suspense, use } from "react";
 
 import { DictionaryManager } from "@/components/DictionaryManager";
 
@@ -15,7 +15,9 @@ export default function DictionaryPage({ params }: Props) {
   return (
     <>
       <h1>{t("title")}</h1>
-      <DictionaryManager />
+      <Suspense>
+        <DictionaryManager />
+      </Suspense>
     </>
   );
 }

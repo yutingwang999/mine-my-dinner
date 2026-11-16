@@ -29,6 +29,14 @@ describe("import", () => {
     expect(screen.getByTestId("queue")).toHaveTextContent("葱花蛋");
   });
 
+  it("uses the primary button class for every import action", () => {
+    mockFetch({});
+    renderWithProviders(<ImportForm />);
+    const submits = screen.getAllByRole("button").filter((button) => button.getAttribute("type") === "submit");
+    expect(submits).toHaveLength(4);
+    for (const button of submits) expect(button).toHaveClass("btn-primary");
+  });
+
   it("keeps the pasted text and shows a message when import fails", async () => {
     mockFetch({ "POST /api/imports/text": () => reply(503, { code: "models_unavailable" }) });
     renderWithProviders(<ImportForm />);
