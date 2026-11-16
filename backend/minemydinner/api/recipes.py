@@ -61,6 +61,8 @@ class CreatedRecipe(BaseModel):
     embedded: bool
     # The extraction log written with the recipe, so its screenshots can be added to it.
     log_id: int | None
+    # Names not remembered as aliases because another entry owns them.
+    alias_conflicts: list[str] = []
 
 
 class ImageOut(BaseModel):
@@ -114,6 +116,8 @@ class RecipeOut(BaseModel):
     images: list[ImageOut]
     embedded: bool
     created_at: datetime
+    # Set only in the reply to an edit.
+    alias_conflicts: list[str] = []
 
 
 class RecipePage(BaseModel):
@@ -230,10 +234,10 @@ def put_recipe(
     """An edit replaces the lines and recomputes the embedding. Edits write no
     extraction log, so the log keeps only corrections of model output."""
     try:
-        recipe = update_recipe(session, client, recipe_id, data)
+        recipe, conflicts = update_recipe(session, client, recipe_id, data)
     except InvalidRecipe as error:
         raise _not_found(error) from error
-    return _recipe_out(recipe)
+    return _recipe_out(recipe).model_copy(update={"alias_conflicts": conflicts})
 
 
 @router.delete("/{recipe_id}", status_code=204)
@@ -250,11 +254,14 @@ def save_recipe(
     data: RecipeWrite, session: SessionDep, client: ClientDep, settings: SettingsDep
 ) -> CreatedRecipe:
     try:
-        recipe, log = create_recipe(session, client, data, settings.extraction_log_max_rows)
+        recipe, log, conflicts = create_recipe(session, client, data, settings.extraction_log_max_rows)
     except InvalidRecipe as error:
         raise ApiError(422, error.code) from error
     return CreatedRecipe(
-        id=recipe.id, embedded=recipe.embedding is not None, log_id=log.id if log else None
+        id=recipe.id,
+        embedded=recipe.embedding is not None,
+        log_id=log.id if log else None,
+        alias_conflicts=conflicts,
     )
 
 

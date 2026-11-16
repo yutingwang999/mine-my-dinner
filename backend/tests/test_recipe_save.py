@@ -1,10 +1,10 @@
 import pytest
 
 from minemydinner.main import app
-from minemydinner.models import ExtractionLog, Recipe
+from minemydinner.models import ExtractionLog, Ingredient, Recipe
 from minemydinner.settings import Settings, get_settings
 from tests.recipefakes import *  # noqa: F403
-from tests.recipefakes import count, one, saved
+from tests.recipefakes import count, line, one, saved
 
 
 @pytest.fixture
@@ -178,3 +178,66 @@ def test_same_group_id_in_two_recipes_is_fine(client, session, seeded, fake_llm,
     recipe_write["ingredients"][1]["choice_group"] = 1
     assert client.post("/api/recipes", json=recipe_write).status_code == 201
     assert client.post("/api/recipes", json=recipe_write).status_code == 201
+
+
+def remember_setup(session, recipe_write, **owner_fields):
+    entry = Ingredient(
+        name_zh="测试西兰花", name_en="Test Broccoli", allergens=[],
+        category="vegetable", stock_mode="level", source="seed",
+    )
+    session.add(entry)
+    session.flush()
+    if owner_fields:
+        session.add(
+            Ingredient(
+                name_zh="测试花菜", name_en="Test Cauliflower", allergens=[],
+                category="vegetable", stock_mode="level", source="seed",
+                **owner_fields,
+            )
+        )
+        session.flush()
+    recipe_write["ingredients"].append(
+        line("西蓝花", "西蓝花", entry.id, amount_type="missing", remember_link=True)
+    )
+    return entry
+
+
+def test_save_with_remember_link_adds_alias(client, session, seeded, fake_llm, recipe_write):
+    entry = remember_setup(session, recipe_write)
+    response = client.post("/api/recipes", json=recipe_write)
+    assert response.status_code == 201 and response.json()["alias_conflicts"] == []
+    session.expire_all()
+    assert entry.user_aliases_zh == ["西蓝花"]
+    recipe = session.get(Recipe, response.json()["id"])
+    assert not hasattr(recipe.ingredients[0], "remember_link")
+    log = one(session, ExtractionLog)
+    assert all("remember_link" not in item for item in log.user_corrected["ingredients"])
+
+
+def test_save_without_remember_link_changes_no_dictionary(
+    client, session, seeded, fake_llm, recipe_write
+):
+    entry = remember_setup(session, recipe_write)
+    recipe_write["ingredients"][-1]["remember_link"] = False
+    assert client.post("/api/recipes", json=recipe_write).status_code == 201
+    session.expire_all()
+    assert entry.user_aliases_zh == []
+
+
+def test_save_conflict_still_saves(client, session, seeded, fake_llm, recipe_write):
+    entry = remember_setup(session, recipe_write, user_aliases_zh=["西蓝花"])
+    response = client.post("/api/recipes", json=recipe_write)
+    assert response.status_code == 201
+    assert response.json()["alias_conflicts"] == ["西蓝花"]
+    session.expire_all()
+    recipe = session.get(Recipe, response.json()["id"])
+    assert recipe.ingredients[-1].ingredient_id == entry.id
+    assert entry.user_aliases_zh == []
+
+
+def test_save_remembers_the_name_as_saved(client, session, seeded, fake_llm, recipe_write):
+    entry = remember_setup(session, recipe_write)
+    recipe_write["ingredients"][-1]["name"] = "西蓝花碎"
+    assert client.post("/api/recipes", json=recipe_write).status_code == 201
+    session.expire_all()
+    assert entry.user_aliases_zh == ["西蓝花碎"]

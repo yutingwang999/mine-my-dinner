@@ -4,6 +4,7 @@ from sqlalchemy import select
 from minemydinner.dictionary.service import (
     ReadOnlyEntry,
     TermConflict,
+    remember_alias,
     set_personal_aliases,
 )
 from minemydinner.extraction.normalize import all_terms, match_ingredient
@@ -119,3 +120,62 @@ def test_all_terms_includes_personal_aliases(session, seeded):
     set_personal_aliases(session, potato.id, ["马铃薯丁"], ["spud"])
     terms = all_terms(potato)
     assert {"土豆", "马铃薯丁", "spud"} <= set(terms)
+
+
+def make_entry(session, source="seed", **fields) -> Ingredient:
+    if source == "seed":  # a built-in entry has both names and confirmed allergens
+        fields = {"name_en": f"en {fields['name_zh']}", "allergens": []} | fields
+    entry = Ingredient(category="vegetable", stock_mode="level", source=source, **fields)
+    session.add(entry)
+    session.flush()
+    return entry
+
+
+def unmatched_recipe(session, *names) -> Recipe:
+    recipe = Recipe(
+        lang="zh",
+        title="别名测试",
+        dish_type="other",
+        source_type="manual",
+        ingredients=[
+            RecipeIngredient(raw=name, name=name, amount_type="missing", role="main")
+            for name in names
+        ],
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
+
+
+def test_remember_alias_on_builtin_entry(session, seeded):
+    entry = make_entry(session, name_zh="测试西兰花")
+    recipe = unmatched_recipe(session, "西蓝花")
+    assert remember_alias(session, entry, "西蓝花") == "added"
+    session.expire_all()
+    assert entry.user_aliases_zh == ["西蓝花"]
+    assert recipe.ingredients[0].ingredient_id == entry.id
+
+
+def test_remember_alias_on_user_entry(session, seeded):
+    entry = make_entry(session, source="user", name_zh="测试西兰花")
+    assert remember_alias(session, entry, "西蓝花") == "added"
+    assert entry.aliases_zh == ["西蓝花"] and entry.user_aliases_zh == []
+
+
+def test_remember_alias_english_name_goes_to_en(session, seeded):
+    entry = make_entry(session, name_zh="测试西兰花")
+    assert remember_alias(session, entry, "broccolini") == "added"
+    assert entry.user_aliases_en == ["broccolini"] and entry.user_aliases_zh == []
+
+
+def test_remember_alias_exists_ignores_case_and_spaces(session, seeded):
+    entry = make_entry(session, name_zh="测试西兰花", user_aliases_en=["Broccolini"])
+    assert remember_alias(session, entry, "  broccolini ") == "exists"
+    assert entry.user_aliases_en == ["Broccolini"]
+
+
+def test_remember_alias_conflict_writes_nothing(session, seeded):
+    entry = make_entry(session, name_zh="测试西兰花")
+    other = make_entry(session, name_zh="测试花菜", user_aliases_zh=["西蓝花"])
+    assert remember_alias(session, entry, "西蓝花") == "conflict"
+    assert entry.user_aliases_zh == [] and other.user_aliases_zh == ["西蓝花"]

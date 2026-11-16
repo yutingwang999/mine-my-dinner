@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import select
 
-from minemydinner.models import MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
+from minemydinner.models import Ingredient, MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
 from tests.recipefakes import *  # noqa: F403
 from tests.recipefakes import by_zh, count, line
 
@@ -221,3 +221,27 @@ def test_list_recipes_query_count_is_constant(client, session, seeded, count_que
     session.flush()
     many = _count_list_queries(client, session, count_queries, 5)
     assert few == many <= 8
+
+
+def test_update_with_remember_link_adds_alias(client, session, library, fake_llm):
+    entry = Ingredient(
+        name_zh="测试西兰花", name_en="Test Broccoli", allergens=[],
+        category="vegetable", stock_mode="level", source="seed",
+    )
+    session.add(entry)
+    session.flush()
+    linked = line("西蓝花", "西蓝花", entry.id, amount_type="missing", remember_link=True)
+    body = put_recipe(client, library[0], ingredients=[LINE, linked])
+    assert body["alias_conflicts"] == []
+    session.expire_all()
+    assert entry.user_aliases_zh == ["西蓝花"]
+    session.add(
+        Ingredient(
+            name_zh="测试花菜", name_en="Test Cauliflower", allergens=[],
+            category="vegetable", stock_mode="level", source="seed",
+            user_aliases_zh=["花椰"],
+        )
+    )
+    session.flush()
+    clash = line("花椰", "花椰", entry.id, amount_type="missing", remember_link=True)
+    assert put_recipe(client, library[0], ingredients=[LINE, clash])["alias_conflicts"] == ["花椰"]

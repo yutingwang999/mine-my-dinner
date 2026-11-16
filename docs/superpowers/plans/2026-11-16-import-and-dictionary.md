@@ -74,9 +74,9 @@ git commit -m "feat: remember a manual ingredient link as an alias when the reci
 
 **Interfaces:**
 - Consumes: `remember_alias` (Task 1), `match_ingredient(session, name)` (`extraction/normalize.py`), `link_unmatched_lines`.
-- Produces: `POST /api/dictionary/ingredients/match` with body `{"names": list[str]}` (at most 200 names) → `{"matches": [{"name": str, "entry": IngredientOut}]}`, one item per input name that matches, in input order; unmatched names are left out.
+- Produces: `POST /api/ingredients/match` with body `{"names": list[str]}` (at most 200 names) → `{"matches": [{"name": str, "entry": IngredientOut}]}`, one item per input name that matches, in input order; unmatched names are left out.
 - Produces: `link_name(session, name: str, ingredient_id: int, remember: bool) -> tuple[Ingredient, int, bool]` in `dictionary/service.py`: links every unmatched recipe line whose trimmed, case-folded name equals the name; with `remember`, calls `remember_alias`; returns the entry, the number of lines linked, and whether the name was remembered ("added" or "exists").
-- Produces: `POST /api/dictionary/allergens/link` with body `{"name": str, "ingredient_id": int, "remember": bool}` → `LinkedIngredient` plus `remembered: bool`. 404 for an unknown entry, 422 for a blank name.
+- Produces: `POST /api/allergens/link` with body `{"name": str, "ingredient_id": int, "remember": bool}` → `LinkedIngredient` plus `remembered: bool`. 404 for an unknown entry, 422 for a blank name.
 
 - [ ] **Step 1: Write the failing tests**
   - `test_match_returns_entries_for_known_names`: names ["西兰花", "西蓝花", "火龙果皮"] with 西蓝花 a personal alias of 西兰花 → two matches (西兰花, 西蓝花 → the same entry), 火龙果皮 absent.
@@ -133,7 +133,7 @@ git commit -m "feat: allergen_suggest_v2 suggests category and stock mode, versi
 - Test: `frontend/src/app/[locale]/review/review.test.tsx`, `frontend/src/components/ReviewForm.test.tsx`
 
 **Interfaces:**
-- Consumes: `remember_link` and `alias_conflicts` (Task 1); `POST /api/dictionary/ingredients/match` (Task 2).
+- Consumes: `remember_link` and `alias_conflicts` (Task 1); `POST /api/ingredients/match` (Task 2).
 - Produces: `api.matchIngredients(names: string[]): Promise<{ matches: { name: string; entry: IngredientEntry }[] }>`.
 - Produces: each review line in the form state carries `rememberLink: boolean` (sent as `remember_link`) and `touched: boolean` (set when the user links, unlinks, skips, or renames the line).
 - Strings: `review.rememberLink` "记住这个关联" / "Remember this link"; `review.aliasConflict` (with `{names}`) "这些名字已是其他条目的别名，没有记住：{names}" / "Not remembered, already an alias of another entry: {names}".
@@ -165,7 +165,7 @@ git commit -m "feat: remember ingredient links in the review form, match each dr
 - Test: `frontend/src/app/[locale]/dictionary/dictionary.test.tsx`, `frontend/src/app/[locale]/review/review.test.tsx`
 
 **Interfaces:**
-- Consumes: `POST /api/dictionary/allergens/link`, `remembered` (Task 2); `SuggestionOut.category` / `stock_mode`, `ResolveIn.category` / `stock_mode` (Task 3).
+- Consumes: `POST /api/allergens/link`, `remembered` (Task 2); `SuggestionOut.category` / `stock_mode`, `ResolveIn.category` / `stock_mode` (Task 3).
 - Produces: `api.linkUnknownName(name: string, ingredientId: number, remember: boolean)`; `api.suggestAllergens` renamed `api.suggestEntry`, returning `{ suggested: Allergen[] | null; category: Category | null; stock_mode: StockMode | null }`; `api.resolveAllergens` accepts optional `category` and `stock_mode`.
 - Strings: `dictionary.linkExisting` "关联到已有条目" / "Link to an existing entry" (the remember checkbox reuses the wording of `review.rememberLink`, defined again under `dictionary` if the namespaces require it); `dictionary.suggestedHint` "建议值，请确认" / "Suggested, please confirm" or reuse the existing allergen suggestion hint if one exists.
 

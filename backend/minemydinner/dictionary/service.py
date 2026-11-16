@@ -257,6 +257,27 @@ def set_personal_aliases(
     return entry, link_unmatched_lines(session, entry)
 
 
+def remember_alias(
+    session: Session, entry: Ingredient, name: str
+) -> Literal["added", "exists", "conflict"]:
+    """Add a name the user linked by hand to the entry as an alias.
+
+    A built-in entry keeps it as a personal alias; the user's own entry keeps it as an
+    alias. Nothing is written when another entry already owns the name.
+    """
+    name = name.strip()
+    owner = find_term_owner(session, Ingredient, name)
+    if owner is not None:
+        return "exists" if owner.id == entry.id else "conflict"
+    personal = entry.source != "user"
+    side = "zh" if CJK.search(name) else "en"
+    field = f"{'user_' if personal else ''}aliases_{side}"
+    setattr(entry, field, [*getattr(entry, field), name])
+    session.flush()
+    link_unmatched_lines(session, entry)
+    return "added"
+
+
 @dataclass(frozen=True)
 class UnresolvedEntry:
     id: int

@@ -76,7 +76,7 @@ The review queue lives only in browser memory (`frontend/src/lib/drafts.tsx`); c
 
 ### 5.2 Link from the "allergens unknown" list
 
-The list (dictionary page, `DictionaryManager.tsx`, backed by `GET /api/dictionary/allergens/unresolved`) shows entries with unknown allergens and names of unmatched recipe lines. For an unmatched name it offers only "确认过敏原", which creates a new entry (`resolve_allergens`).
+The list (dictionary page, `DictionaryManager.tsx`, backed by `GET /api/allergens/unresolved`) shows entries with unknown allergens and names of unmatched recipe lines. For an unmatched name it offers only "确认过敏原", which creates a new entry (`resolve_allergens`).
 
 - Add **"关联到已有条目" / "Link to an existing entry"** next to it: the user picks an ingredient entry with the dictionary search, with the same "remember this link" checkbox, checked by default.
 - On confirm, every unmatched recipe line with that name is linked to the chosen entry. With the box checked, the name also becomes an alias as in 5.1; unchecked, only today's lines are linked and future imports will ask again.
@@ -84,7 +84,7 @@ The list (dictionary page, `DictionaryManager.tsx`, backed by `GET /api/dictiona
 
 ### 5.3 Suggest the category and stock mode with the allergens
 
-Today `POST /api/dictionary/allergen-suggestions` sends only the name (task `allergen_suggestions`, Gemini then OpenAI) and returns allergens; the new-entry form prefills the category ("seasoning" when the line's role is seasoning, otherwise "other") and stock mode "level", and `resolve_allergens` creates entries from the unknown list with "other" and "level".
+Today `POST /api/allergen-suggestions` sends only the name (task `allergen_suggestions`, Gemini then OpenAI) and returns allergens; the new-entry form prefills the category ("seasoning" when the line's role is seasoning, otherwise "other") and stock mode "level", and `resolve_allergens` creates entries from the unknown list with "other" and "level".
 
 - The same call also asks for one category from `CATEGORIES` and one stock mode from `STOCK_MODES`. The response gains `category` and `stock_mode` (each null when the model gives no valid value or no model is available).
 - The new-entry form (review row) and the "confirm allergens" form of the unknown list prefill category and stock mode from the suggestion, shown as suggestions the user confirms or changes, as the allergens are today. When the suggestion is null, today's prefill stays (seasoning/other, level).
@@ -110,9 +110,9 @@ Today each line has a number, a unit (none, 克, 毫升, 个, 根, 大勺, 小�
 
 ## 6. Left to the builder
 
-- API shapes: how the review save carries "remember" per line (for example a `remember_link: bool` on each ingredient line of the save request), and the endpoint for linking from the unknown list (a new `POST` under `/api/dictionary/` or an extension of `/allergens/resolve`).
+- API shapes: how the review save carries "remember" per line (for example a `remember_link: bool` on each ingredient line of the save request), and the endpoint for linking from the unknown list (a new `POST` under `/api/` or an extension of `/allergens/resolve`).
 - Whether adding one alias uses `set_personal_aliases` with the current list plus the name, or a new small service function; either must keep the conflict check and call `link_unmatched_lines`.
 - Exact layout and wording of the checkbox, the link action in the unknown list, and the toggle buttons, following the existing plain CSS and the review form's look. Every string in both message files.
 - The script's name and output format for 5.4, and whether its result folder is committed (no model text beyond the three short fields).
-- The endpoint for matching a draft's unmatched names again (for example `POST /api/dictionary/ingredients/match` taking a list of names and returning the entry for each name that matches).
+- The endpoint for matching a draft's unmatched names again (for example `POST /api/ingredients/match` taking a list of names and returning the entry for each name that matches).
 - Test cases, including: a later draft matching a name remembered in an earlier saved draft, and an entry created in an earlier draft; the re-match leaving linked, skipped, and renamed lines alone; the leave-page confirmation only while drafts are queued; a remembered link on a built-in entry and on a user entry; an unchecked link changing nothing in the dictionary; a name that became another entry's alias before saving; same-name lines in one draft; unlink-free alias removal; the unknown-list link with and without remembering; suggestion parsing with invalid category or stock mode; the amount toggles in both directions.
