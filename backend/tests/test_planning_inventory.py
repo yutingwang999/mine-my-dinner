@@ -1,6 +1,7 @@
 from datetime import date
 
-from minemydinner.models import Inventory
+from minemydinner.agent.labels import LabelTable
+from minemydinner.models import Diner, Inventory
 from minemydinner.planning.context import RuleRef
 from minemydinner.planning.inventory import (
     InventoryChange,
@@ -96,6 +97,22 @@ def test_meal_preferences_cover_rule_kinds_guests_and_unconfirmed(session, seede
         "Diner 3: dietary limits unconfirmed",
     ]
     assert "Me" not in " ".join(lines)
+
+
+def test_meal_preferences_uses_label_table(session, seeded):
+    me = self_diner(session).id
+    friend = Diner(display_name="Alex", is_self=False)
+    session.add(friend)
+    session.flush()
+    rule(session, friend.id, "allergy", allergen="peanut")
+    table = LabelTable.from_state(None, me)
+    table.label_for("diner:999")
+    table.label_for(f"diner:{friend.id}")
+    ctx = ctx_for(session, me, friend.id, unconfirmed_diners=1)
+    assert meal_preferences(session, ctx, table) == [
+        "Diner 3: allergy peanut",
+        "Diner 4: dietary limits unconfirmed",
+    ]
 
 
 def test_meal_preferences_ignore_unselected_diners(session, seeded):

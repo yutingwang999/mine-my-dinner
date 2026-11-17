@@ -238,11 +238,11 @@ git commit -m "feat: diner card answer - meal constraints, saved rules and frien
 - Produces: `unknown_allergen_exclusions(session, ctx, recipe_ids: list[int] | None = None) -> list[ExcludedRecipe]` in `search.py` (all recipes when None); empty when no diner of the meal has an allergy. Search and the shortlist use it.
 - Produces: `ShortlistResult.left_out_unknown_allergens: list[ExcludedRecipe]`; the `search_recipes` tool result keeps sending titles only to the model (unchanged schema, `TOOLS_VERSION` unchanged).
 - Produces: `check_feasibility(...)` unchanged signature; `feasibility_step` also merges `unknown_allergen_exclusions(session, ctx)` into `search_notes`.
-- Produces: `current_plan["left_out_unknown_allergens"]: list[{"id": int, "title": str, "lines": list[str]}]`, one entry per recipe, on every planning reply (plan, closest attempt, early stop, no valid plan). `current_plan["diners"]: list[{"name": str | None, "is_self": bool, "guest": bool}]` and `"others": int` for the plan card's diners line.
+- Produces: `current_plan["left_out_unknown_allergens"]` stays a list of titles (unchanged, so the current UI and the evaluation runner keep working); new `current_plan["left_out_details"]: list[{"id": int, "title": str, "lines": list[str]}]`, one entry per recipe, on every planning reply (plan, closest attempt, early stop, no valid plan). `current_plan["diners"]: list[{"name": str | None, "is_self": bool, "guest": bool}]` and `"others": int` for the plan card's diners line.
 
 - [ ] **Step 1: Write the failing tests:**
   - `test_unknown_allergen_exclusions_lines`: a recipe with an unlinked line 某某酱 and a diner with an allergy → `[ExcludedRecipe(id, title, ["某某酱"])]`; no allergy in the meal → `[]`.
-  - `test_feasibility_stop_carries_left_out` (graph, fake client): fridge-only request that stops early, with an unknown-allergen dish and an allergic diner → the reply's plan has `reasons` and `left_out_unknown_allergens` with lines.
+  - `test_feasibility_stop_carries_left_out` (graph, fake client): fridge-only request that stops early, with an unknown-allergen dish and an allergic diner → the reply's plan has `reasons`, the title in `left_out_unknown_allergens`, and the lines in `left_out_details`.
   - `test_no_valid_plan_carries_left_out`: the same on the H2 no-plan path.
   - `test_plan_diners_line`: after a card with 小王 and guest Alex → `diners` lists the user, 小王, Alex (guest), `others` 0.
   - `test_search_tool_result_unchanged_for_model`: the tool's JSON still has `left_out_unknown_allergens` as titles.
@@ -310,7 +310,7 @@ git commit -m "feat: diner card in the chat"
 
 **Interfaces:**
 - Consumes: `left_out_unknown_allergens` and `diners` / `others` of Task 6; `REPLAN_MESSAGE` wording (Task 3) — the zh and en strings are copied exactly into the messages files.
-- Produces: `ChatPlan.left_out_unknown_allergens: { id: number; title: string; lines: string[] }[]`; `normalizePlan` turns an old list of titles into entries with `id` 0 and `lines` [] (shown as titles only, no confirm button). `ChatPlan.diners`, `ChatPlan.others` optional (absent in old plans → no diners line).
+- Produces: `ChatPlan.left_out_details?: { id: number; title: string; lines: string[] }[]`; a plan without it (saved before 2b) shows `left_out_unknown_allergens` as titles only, with no confirm button. `ChatPlan.diners`, `ChatPlan.others` optional (absent in old plans → no diners line).
 - Produces: `PlanCard` prop `onReplan(): void`. The card groups left-out dishes by line name: "宫保鸡丁、麻辣香锅：花椒油（过敏原未知）" with "确认过敏原" per name. A name opens `LinkPanel` (unlinked line) or `ConfirmPanel` (entry with unknown allergens) — the backend's existing match endpoint (`POST /api/ingredients/match`) tells which. After at least one success the card shows "重新规划", which calls `onReplan`; `ChatPage` sends the `REPLAN_MESSAGE` for the locale. This works on plan, closest-attempt, early-stop, and no-plan replies.
 
 - [ ] **Step 1: Write the failing tests** in `PlanCard.test.tsx`: grouped left-out lines render with the dish titles; confirming a name shows "重新规划" and clicking it calls `onReplan`; an old plan (titles only) renders titles without a confirm button; the diners line reads "按 我、小王、Alex 排除" and is absent for a solo plan without `diners`; an early-stop plan with left-out dishes shows the list. Existing dictionary tests still pass after the move.

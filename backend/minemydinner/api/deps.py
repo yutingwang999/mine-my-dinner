@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from minemydinner.agent.labels import replace_nicknames, restore_labels
 from minemydinner.db import SessionFactory
 from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceeded
 from minemydinner.llm.config import load_llm_config
@@ -63,4 +64,10 @@ def contains_pattern(q: str) -> str:
 def get_llm_client() -> LLMClient:
     settings = get_settings()
     config = load_llm_config(model_overrides=settings.model_overrides())
-    return LLMClient(config, SessionFactory, settings.llm_monthly_cap_usd)
+    return LLMClient(
+        config,
+        SessionFactory,
+        settings.llm_monthly_cap_usd,
+        pre_hooks=(replace_nicknames,),
+        post_hooks=(restore_labels,),
+    )

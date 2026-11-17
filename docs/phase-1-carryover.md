@@ -202,3 +202,9 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The allergy check posts on every keystroke in the review form; a ~300 ms debounce would cut the chatter (database-only, no model cost).
 - An empty Content-Type is treated as HTML in the web import, yielding `no_main_text` instead of the more accurate `not_html`.
 - `GET /api/recipes` loads ingredients, cookware, and images per row (N+1); use `selectinload` when the library grows.
+
+## Deferred from Phase 1 plan 2b
+
+Findings judged safe to defer during plan 2b's task reviews. The final whole-branch review triages them again before merge.
+
+- **Label matching edge cases (Task 2 review).** In `agent/labels.py`, when case folding changes a text's length (rare characters such as ß), the fallback compares the unfolded text with a folded nickname, so a mixed-case Latin nickname can be missed; `term.casefold()` can likewise change a food term's length, making the "longer food term" guard slightly inexact. Two saved friends with the same nickname: only the first is ever matched (worth a uniqueness note on the people page). `restore_labels` turns "Diner 1's" into "你's" in an English note.

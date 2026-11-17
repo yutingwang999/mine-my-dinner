@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +11,9 @@ from minemydinner.constants import STOCK_LEVELS
 from minemydinner.extraction.normalize import match_ingredient
 from minemydinner.models import AlwaysInStock, Cookware, CookwareOwned, Ingredient, Inventory
 from minemydinner.planning.context import PlanningContext, diner_codes
+
+if TYPE_CHECKING:
+    from minemydinner.agent.labels import LabelTable
 
 
 @dataclass(frozen=True)
@@ -110,9 +113,12 @@ def update_inventory(session: Session, changes: list[InventoryChange]) -> dict:
     return {"applied": applied, "unmatched": unmatched, "rejected": rejected}
 
 
-def meal_preferences(session: Session, ctx: PlanningContext) -> list[str]:
-    """Constraint lines for the selected diners only, under anonymous codes."""
-    codes = diner_codes(ctx.constraints)
+def meal_preferences(
+    session: Session, ctx: PlanningContext, table: "LabelTable | None" = None
+) -> list[str]:
+    """Constraint lines for the selected diners only, under anonymous codes (the
+    conversation's labels when a table is given)."""
+    codes = diner_codes(ctx.constraints, table)
     ids = {rule.ingredient_id for rule in ctx.rules if rule.ingredient_id is not None}
     names = {
         entry.id: _name(entry)
@@ -123,7 +129,10 @@ def meal_preferences(session: Session, ctx: PlanningContext) -> list[str]:
         subject = rule.allergen or names.get(rule.ingredient_id) or rule.text or ""
         verb = {"allergy": "allergy", "dislike": "dislikes"}.get(rule.rule_type, "does not eat")
         lines.append(f"{codes[rule.diner_key]}: {verb} {subject}")
-    # Unconfirmed diners have no rules to number from, so they continue after the known codes.
-    for number in range(len(codes) + 1, len(codes) + ctx.constraints.unconfirmed_diners + 1):
+    # Unconfirmed diners have no rules to number from, so they continue after the highest
+    # label in use. They are not added to the table: restoring an unknown label gives
+    # "another diner", which is what they are.
+    highest = table.highest_number() if table is not None else len(codes)
+    for number in range(highest + 1, highest + ctx.constraints.unconfirmed_diners + 1):
         lines.append(f"Diner {number}: dietary limits unconfirmed")
     return lines

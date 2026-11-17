@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +12,9 @@ from minemydinner.models import (
     Ingredient,
     Inventory,
 )
+
+if TYPE_CHECKING:
+    from minemydinner.agent.labels import LabelTable
 
 
 @dataclass(frozen=True)
@@ -88,10 +92,19 @@ def load_planning_context(session: Session, constraints: MealConstraints) -> Pla
     )
 
 
-def diner_codes(constraints: MealConstraints) -> dict[str, str]:
-    """Anonymous codes in diner_ids order, with temporary guests continuing the numbering."""
+def diner_codes(
+    constraints: MealConstraints, table: "LabelTable | None" = None
+) -> dict[str, str]:
+    """Anonymous codes for the selected diners, then temporary guests.
+
+    With the conversation's label table, each key gets its label there (new keys are
+    assigned the next number). Without one, codes follow diner_ids order, with guests
+    continuing the numbering.
+    """
     keys = [f"diner:{diner_id}" for diner_id in constraints.diner_ids]
     for item in constraints.guest_rules:
         if item.diner_key not in keys:
             keys.append(item.diner_key)
+    if table is not None:
+        return {key: table.label_for(key) for key in keys}
     return {key: f"Diner {number}" for number, key in enumerate(keys, start=1)}

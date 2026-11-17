@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from minemydinner.agent.checkpoint import open_checkpointer
 from minemydinner.agent.graph import CLOSEST_NOTE_EN, CLOSEST_NOTE_ZH, GraphDeps, build_graph
+from minemydinner.agent.labels import replace_nicknames, restore_labels
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import ParsedRequest, set_request_style
 from minemydinner.llm.client import LLMClient
@@ -1270,7 +1271,13 @@ def main(argv: list[str] | None = None) -> int:
     llm_config = load_llm_config(model_overrides=settings.model_overrides())
     if args.planning_model:
         llm_config = pin_task_model(llm_config, EVAL_TASK, args.planning_model)
-    client = LLMClient(llm_config, factory, settings.llm_monthly_cap_usd)
+    client = LLMClient(
+        llm_config,
+        factory,
+        settings.llm_monthly_cap_usd,
+        pre_hooks=(replace_nicknames,),
+        post_hooks=(restore_labels,),
+    )
     print(f"Planning evaluation of {len(scenarios)} scenarios (task {EVAL_TASK})")
     started = datetime.now(timezone.utc)
     saved: Path | None = None
