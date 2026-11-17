@@ -91,7 +91,7 @@ class Friend:
     nickname: str
 
 
-def _is_cjk(char: str) -> bool:
+def is_cjk(char: str) -> bool:
     code = ord(char)
     return (
         0x3040 <= code <= 0x30FF  # kana
@@ -103,7 +103,7 @@ def _is_cjk(char: str) -> bool:
 
 
 def _is_latin_word_char(char: str) -> bool:
-    return char.isalnum() and not _is_cjk(char)
+    return char.isalnum() and not is_cjk(char)
 
 
 def _whole_word(text: str, start: int, end: int) -> bool:
@@ -143,7 +143,7 @@ def find_friends(
         nickname = friend.nickname.strip().casefold()
         if not nickname:
             continue
-        latin = not any(_is_cjk(char) for char in nickname)
+        latin = not any(is_cjk(char) for char in nickname)
         covers = [
             (start, start + len(term))
             for term in (term.casefold() for term in food_terms)
@@ -230,6 +230,14 @@ def restore_labels(text: str) -> str:
     return LABEL_PATTERN.sub(restored, text)
 
 
+def food_terms(session: Session) -> frozenset[str]:
+    """Every ingredient name and alias, personal aliases included, and every recipe title,
+    longer than one character."""
+    terms = {term for entry in session.scalars(select(Ingredient)) for term in all_terms(entry)}
+    terms.update(session.scalars(select(Recipe.title)))
+    return frozenset(term for term in terms if len(term) > 1)
+
+
 def load_label_context(
     session: Session, table: LabelTable, locale: str, restore: bool = True
 ) -> LabelContext:
@@ -242,7 +250,4 @@ def load_label_context(
             select(Diner).where(Diner.is_self.is_(False)).order_by(Diner.id)
         )
     ]
-    terms = {term for entry in session.scalars(select(Ingredient)) for term in all_terms(entry)}
-    terms.update(session.scalars(select(Recipe.title)))
-    food_terms = frozenset(term for term in terms if len(term) > 1)
-    return LabelContext(table, friends, food_terms, locale, restore)
+    return LabelContext(table, friends, food_terms(session), locale, restore)

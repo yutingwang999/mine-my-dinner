@@ -7,8 +7,9 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from minemydinner.agent.labels import food_terms, is_cjk
 from minemydinner.api.deps import ApiError
-from minemydinner.constants import ALLERGENS, RULE_TYPES
+from minemydinner.constants import ALLERGENS, DIET_WORDS, RULE_TYPES
 from minemydinner.db import get_session
 from minemydinner.models import DietaryRule, Diner, Ingredient
 
@@ -34,6 +35,7 @@ class DinerOut(BaseModel):
     id: int
     display_name: str
     is_self: bool
+    nickname_warning: bool = False
 
 
 class RuleIn(BaseModel):
@@ -78,6 +80,19 @@ def _diner(session: Session, diner_id: int) -> Diner:
     return diner
 
 
+def _diner_out(diner: Diner, terms: frozenset[str]) -> DinerOut:
+    """A short or food-like nickname can be mistaken for food in a request, so warn about it.
+    The user's own row never warns."""
+    name = diner.display_name.strip().casefold()
+    warning = not diner.is_self and (
+        (len(name) == 1 and is_cjk(name))
+        or any(name in term.casefold() for term in terms)
+    )
+    out = DinerOut.model_validate(diner)
+    out.nickname_warning = warning
+    return out
+
+
 def _rule_out(rule: DietaryRule) -> RuleOut:
     ingredient = rule.ingredient
     return RuleOut(
@@ -95,7 +110,8 @@ def _rule_out(rule: DietaryRule) -> RuleOut:
 @router.get("/diners")
 def list_diners(session: SessionDep) -> list[DinerOut]:
     query = select(Diner).order_by(Diner.is_self.desc(), Diner.id)
-    return [DinerOut.model_validate(diner) for diner in session.scalars(query)]
+    terms = food_terms(session)
+    return [_diner_out(diner, terms) for diner in session.scalars(query)]
 
 
 @router.post("/diners", status_code=201)
@@ -103,7 +119,7 @@ def create_diner(data: DinerIn, session: SessionDep) -> DinerOut:
     diner = Diner(display_name=data.display_name, is_self=False)
     session.add(diner)
     session.commit()
-    return DinerOut.model_validate(diner)
+    return _diner_out(diner, food_terms(session))
 
 
 @router.patch("/diners/{diner_id}")
@@ -111,7 +127,7 @@ def rename_diner(diner_id: int, data: DinerIn, session: SessionDep) -> DinerOut:
     diner = _diner(session, diner_id)
     diner.display_name = data.display_name
     session.commit()
-    return DinerOut.model_validate(diner)
+    return _diner_out(diner, food_terms(session))
 
 
 @router.delete("/diners/{diner_id}", status_code=204)
@@ -135,6 +151,9 @@ def list_rules(diner_id: int, session: SessionDep) -> list[RuleOut]:
 @router.post("/diners/{diner_id}/rules", status_code=201)
 def create_rule(diner_id: int, data: RuleIn, session: SessionDep) -> RuleOut:
     _diner(session, diner_id)
+    folded = (data.text or "").casefold()
+    if data.text is not None and any(word.casefold() in folded for word in DIET_WORDS):
+        raise ApiError(422, "diet_word")
     if data.ingredient_id is not None and session.get(Ingredient, data.ingredient_id) is None:
         raise ApiError(422, "unknown_ingredient")
     rule = DietaryRule(diner_id=diner_id, **data.model_dump())

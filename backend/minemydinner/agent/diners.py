@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from minemydinner.agent.labels import LABEL_PATTERN, LabelTable
 from minemydinner.agent.request import ParsedRequest, StatedRules
 from minemydinner.api.diners import RuleIn, RuleOut
-from minemydinner.constants import RULE_TYPES
+from minemydinner.constants import DIET_WORDS, RULE_TYPES
 from minemydinner.extraction.normalize import match_ingredient
 from minemydinner.models import DietaryRule, Diner, Ingredient
 from minemydinner.planning.context import MealConstraints, RuleRef
@@ -25,8 +25,6 @@ RESTRICTION_WORDS: tuple[str, ...] = (
     "过敏", "不吃", "不能吃", "忌口", "吃素", "素食",
     "allergic", "allergy", "vegetarian", "vegan", "don't eat", "can't eat", "avoid",
 )
-# Diet words have no working rule form (spec 5.4): they are flagged, never made into rules.
-DIET_WORDS: tuple[str, ...] = ("吃素", "素食", "全素", "vegetarian", "vegan")
 
 
 class ProposedRule(BaseModel):

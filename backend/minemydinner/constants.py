@@ -57,5 +57,7 @@ UNIT_AMOUNT_TYPES = {
 SOURCE_TYPES = ("text", "web", "screenshot", "batch", "manual")
 DICTIONARY_SOURCES = ("seed", "user")
 RULE_TYPES = ("allergy", "dietary restriction", "dislike")
+# Diet words have no working rule form (spec 5.4): they are flagged, never made into rules.
+DIET_WORDS: tuple[str, ...] = ("吃素", "素食", "全素", "vegetarian", "vegan")
 LANGUAGES = ("zh", "en")
 EMBEDDING_DIMENSION = 768
