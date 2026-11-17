@@ -199,6 +199,27 @@ def test_ask_first_does_not_ask_twice_for_one_request(graph_env, veg):
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
 
 
+def test_parse_request_sends_questions(graph_env, veg):
+    from minemydinner.agent.questions import question_text
+    from minemydinner.agent.request import load_prompt
+
+    set_request_style(graph_env.session, "ask_first")
+    out = plan(graph_env, "今晚做饭", parse={"mode": "shopping"}, locale="zh")
+    asked = out["__interrupt__"][0].value
+    assert asked == {"kind": "question", "fields": ["composition"]}
+    graph_env.model.replies = [final_proposal([veg.id])]
+    resume(graph_env, "两个", parse={"mode": "shopping", "dishes": 2})
+    sent = [s for s in graph_env.model.sent if s and s[0].type == "system"]
+    parse_calls = [s for s in sent if s[0].content == load_prompt("parse")]
+    route_calls = [s for s in sent if s[0].content == load_prompt("route")]
+    assert len(parse_calls) == 2 and route_calls
+    last = parse_calls[-1]
+    assert [m.type for m in last] == ["system", "human", "ai", "human"]
+    assert [m.content for m in last[1:]] == ["今晚做饭", question_text(asked, "zh"), "两个"]
+    # The route input is unchanged: no question in it.
+    assert all(m.type != "ai" for s in route_calls for m in s)
+
+
 def test_contradiction_interrupts_with_its_problem(graph_env, veg):
     # The fixture's style is plan_then_adjust: contradictions are asked regardless of style.
     contradiction = {"dishes": 2, "meat_dishes": 3}

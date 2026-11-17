@@ -4,10 +4,11 @@ ask first, or plan then adjust."""
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from minemydinner.constants import ALLERGENS
 from minemydinner.models import AppPreference
 from minemydinner.planning.composition import Bound, ranges_for
 from minemydinner.planning.context import MealConstraints
@@ -15,9 +16,12 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
 # One version per prompt, so route, parse, and planner change independently. A version any
 # record has used is never edited; a change makes the next version of that prompt.
-PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v3", "planner": "planner_v4"}
+PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v4", "planner": "planner_v4"}
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
+
+# The fixed message of "plan again" (spec 5.7); parse_v4 reads it as the previous request.
+REPLAN_MESSAGE = {"zh": "按同样的要求重新规划", "en": "Plan again with the same request"}
 
 REQUEST_STYLE_KEY = "request_style"
 REQUEST_STYLES = ("ask_first", "plan_then_adjust")
@@ -45,6 +49,67 @@ def prompt_files() -> list[Path]:
 def load_prompt(kind: Literal["route", "parse", "planner"]) -> str:
     """The current version of one prompt."""
     return (PROMPT_DIR / f"{PROMPT_VERSIONS[kind]}.md").read_text(encoding="utf-8")
+
+
+class AvoidItem(BaseModel):
+    """A named ingredient or ingredient group a person avoids."""
+
+    name: str = Field(
+        min_length=1, max_length=40, description="The ingredient or group as the user said it."
+    )
+    kind: Literal["restriction", "dislike"] = Field(
+        description=(
+            "restriction for doesn't eat, can't eat, or an allergy outside the allergen list; "
+            "dislike for doesn't like."
+        )
+    )
+
+
+class StatedRules(BaseModel):
+    """Rules the user stated in the chat for one person. Nothing here applies before the
+    diner card is confirmed."""
+
+    allergens: list[Literal[ALLERGENS]] = Field(  # type: ignore[valid-type]
+        default_factory=list,
+        description="Allergies from the fixed list only; any other allergy is an avoid item.",
+    )
+    avoid: list[AvoidItem] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "Named ingredients or ingredient groups only. Taste preferences (spicy, light) go "
+            "to query and diet words go to diet_words, never here."
+        ),
+    )
+    diet_words: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Diet words as said (\"吃素\", \"vegetarian\", \"vegan\"), never in avoid.",
+    )
+
+    @field_validator("allergens", mode="before")
+    @classmethod
+    def _known_allergens(cls, value):
+        # An allergen outside the fixed list is dropped, not a failure of the whole parse.
+        if isinstance(value, list):
+            return [item for item in value if item in ALLERGENS]
+        return value
+
+
+class StatedGuest(StatedRules):
+    """Someone eating who is not a saved friend (saved friends appear as "Diner N")."""
+
+    name: str | None = Field(
+        default=None, description="The person as the user named them, or null when unnamed."
+    )
+
+
+class StatedFriendRules(StatedRules):
+    """A new rule the user stated for a saved friend."""
+
+    code: str = Field(
+        description="The friend's label as it appears in the chat, such as \"Diner 2\"."
+    )
 
 
 class ParsedRequest(BaseModel):
@@ -130,6 +195,30 @@ class ParsedRequest(BaseModel):
     )
     exclude_recent_days: int | None = Field(
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
+    )
+    guests: list[StatedGuest] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "People eating who are named or described but are not saved friends (never a "
+            "\"Diner N\" label), each with the allergies, avoided ingredients, and diet words "
+            "the user stated. Taste preferences go to query, never to avoid."
+        ),
+    )
+    friend_rules: list[StatedFriendRules] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "New allergies, avoided ingredients, or diet words the user states for a saved "
+            "friend, who appears as a \"Diner N\" label. Taste preferences go to query."
+        ),
+    )
+    self_rules: StatedRules | None = Field(
+        default=None,
+        description=(
+            "Allergies, avoided ingredients, or diet words the user states for themselves; "
+            "null when none. Taste preferences go to query, never to avoid."
+        ),
     )
 
 

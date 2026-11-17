@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
+from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
@@ -565,7 +566,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return "parse_request" if state["intent"] == "plan" else "other"
 
     def parse_request(state: ChatState) -> dict:
-        messages = [SystemMessage(load_prompt("parse")), *state["messages"]]
+        # The parse also reads the assistant's questions, so a short answer such as "两个"
+        # sits next to the question it answers (spec 5.6). The route input is unchanged.
+        conversation = parse_messages(
+            state["messages"], state.get("questions") or [], state.get("locale", "en")
+        )
+        messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         return {
             "request": result.parsed.model_dump(),
@@ -595,7 +601,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return "load_context"
 
     def _question(state: ChatState, value: dict) -> dict:
-        # For display only: `at` is the message count when the question was asked.
+        # Shown in the chat and rendered into the parse input (parse_messages): `at` is the
+        # message count when the question was asked.
         return {"at": len(state["messages"]), "value": value}
 
     def ask_style(state: ChatState) -> dict:

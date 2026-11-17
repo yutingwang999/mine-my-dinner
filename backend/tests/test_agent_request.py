@@ -5,6 +5,7 @@ from minemydinner.agent.request import (
     PROMPT_DIR,
     PROMPT_VERSION,
     PROMPT_VERSIONS,
+    REPLAN_MESSAGE,
     ParsedRequest,
     apply_defaults,
     default_composition,
@@ -14,6 +15,7 @@ from minemydinner.agent.request import (
     prompt_files,
     request_problem,
 )
+from minemydinner.agent.questions import parse_messages, question_text
 from minemydinner.planning.composition import side_ranges
 from minemydinner.planning.validate import PlanSpec
 
@@ -35,7 +37,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v2+parse_v3+planner_v4"
+    assert PROMPT_VERSION == "route_v2+parse_v4+planner_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -373,3 +375,114 @@ def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
     )
     v4 = (PROMPT_DIR / "planner_v4.md").read_text(encoding="utf-8")
     assert "Do not count or list" in v4 and "one sentence" in v4
+
+
+def test_prompt_versions_label():
+    assert PROMPT_VERSION == "route_v2+parse_v4+planner_v4"
+    assert PROMPT_VERSIONS["parse"] == "parse_v4"
+
+
+def test_parse_v4_is_no_longer_than_parse_v3():
+    v3 = (PROMPT_DIR / "parse_v3.md").read_text(encoding="utf-8").splitlines()
+    v4 = load_prompt("parse")
+    assert len(v4.splitlines()) <= len(v3) == 79
+    for field in ("guests", "friend_rules", "self_rules", "diet_words"):
+        assert field in v4
+    assert "三个菜，不要素菜" in v4 and REPLAN_MESSAGE["zh"] in v4
+
+
+def test_parsed_request_drops_unknown_allergen_values():
+    request = ParsedRequest.model_validate(
+        {"guests": [{"name": "Alex", "allergens": ["peanut", "mango"]}]}
+    )
+    assert request.guests[0].name == "Alex"
+    assert request.guests[0].allergens == ["peanut"]
+
+
+def test_parsed_request_stated_rules_shape():
+    request = ParsedRequest.model_validate(
+        {
+            "friend_rules": [
+                {"code": "Diner 2", "avoid": [{"name": "羊肉", "kind": "restriction"}]}
+            ],
+            "self_rules": {"avoid": [{"name": "芒果", "kind": "restriction"}]},
+            "guests": [{"diet_words": ["吃素"]}],
+        }
+    )
+    assert request.friend_rules[0].code == "Diner 2"
+    assert request.friend_rules[0].avoid[0].kind == "restriction"
+    assert request.self_rules.avoid[0].name == "芒果" and request.self_rules.allergens == []
+    assert request.guests[0].name is None and request.guests[0].diet_words == ["吃素"]
+    with pytest.raises(ValidationError):
+        ParsedRequest.model_validate({"self_rules": {"avoid": [{"name": "x", "kind": "maybe"}]}})
+    with pytest.raises(ValidationError):
+        ParsedRequest.model_validate({"guests": [{}] * 11})
+
+
+def test_parsed_request_old_shape_still_loads():
+    old = {
+        "others_mentioned": True, "headcount": 2, "dishes": 2, "soups": 1,
+        "meat_dishes": None, "vegetable_dishes": None, "meat_bound": None,
+        "vegetable_bound": None, "staples": None, "desserts": None, "snacks": None,
+        "range_fields": [], "mode": "fridge_only", "time_limit_min": None, "query": None,
+        "must_use": [], "prefer_use": [], "all_use": [], "exclude_recent_days": None,
+    }
+    request = ParsedRequest.model_validate(old)
+    assert request.guests == [] and request.friend_rules == []
+    assert request.self_rules is None
+    assert request.headcount == 2 and request.mode == "fridge_only"
+
+
+def _chat_strings(locale: str) -> dict:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "frontend" / "messages" / f"{locale}.json"
+    return json.loads(path.read_text(encoding="utf-8"))["chat"]
+
+
+# MessageList joins the field strings with Intl.ListFormat, type disjunction.
+LIST_OR = {"zh": "或", "en": " or "}
+
+
+@pytest.mark.parametrize("locale", ["zh", "en"])
+def test_question_text_matches_chat_wording(locale):
+    chat = _chat_strings(locale)
+    strings = chat["question"]
+    hint = strings["hint"]
+    for name in ("mode", "composition"):
+        value = {"kind": "question", "fields": [name]}
+        assert question_text(value, locale) == hint.replace("{fields}", strings[name])
+    both = {"kind": "question", "fields": ["mode", "composition"]}
+    joined = strings["mode"] + LIST_OR[locale] + strings["composition"]
+    assert question_text(both, locale) == hint.replace("{fields}", joined)
+    for problem, text in chat["problem"].items():
+        value = {"kind": "question", "fields": ["composition"], "problem": problem}
+        assert question_text(value, locale) == text
+    assert question_text({"kind": "request_style"}, locale) is None
+    assert question_text({"kind": "diners", "people": []}, locale) is None
+
+
+def test_question_text_falls_back_to_english():
+    value = {"kind": "question", "fields": ["mode"]}
+    assert question_text(value, "fr") == question_text(value, "en")
+
+
+def test_parse_messages_interleaves_questions():
+    from langchain_core.messages import HumanMessage
+
+    messages = [HumanMessage("今晚做饭"), HumanMessage("两个")]
+    asked = {"kind": "question", "fields": ["composition"]}
+    questions = [
+        {"at": 1, "value": {"kind": "request_style"}},
+        {"at": 1, "value": asked},
+    ]
+    out = parse_messages(messages, questions, "zh")
+    assert [m.type for m in out] == ["human", "ai", "human"]
+    assert out[0] is messages[0] and out[2] is messages[1]
+    assert out[1].content == question_text(asked, "zh")
+    # A question with no answer yet comes last; the input list is not changed.
+    out = parse_messages(messages, [{"at": 2, "value": asked}], "zh")
+    assert [m.type for m in out] == ["human", "human", "ai"]
+    assert len(messages) == 2
+    assert parse_messages(messages, [], "zh") == messages

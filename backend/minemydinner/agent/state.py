@@ -43,7 +43,9 @@ class ChatState(TypedDict):
     retries: int
     current_plan: dict | None
     plan_versions: list[dict]
-    # Display only, never sent to a model: each plan by the id of the assistant reply it
-    # belongs to, and the questions the assistant asked ({"at": message count, "value": dict}).
+    # reply_plans is display only, never sent to a model: each plan by the id of the assistant
+    # reply it belongs to. questions are the questions the assistant asked ({"at": message
+    # count, "value": dict}): shown in the chat and also rendered into the parse input
+    # (agent/questions.py); the route and the planner never see them.
     reply_plans: dict[str, dict]
     questions: list[dict]
