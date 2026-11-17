@@ -481,3 +481,13 @@ def test_get_preferences_uses_the_conversation_labels(invoke, session, seeded):
     with labels_scope(LabelContext(table, [], frozenset(), "zh")):
         prefs = invoke("get_preferences", diner_ids=[me.id, friend.id])
     assert prefs == {"preferences": ["Diner 3: allergy peanut"]}
+
+
+def test_search_tool_result_unchanged_for_model(invoke, session, seeded):
+    odd = make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+    me = self_diner(session)
+    rule(session, me.id, "allergy", allergen="egg")
+    result = invoke("search_recipes", {}, diner_ids=[me.id])
+    # Titles only: the ingredient lines go to the plan card, never to the model.
+    assert result["left_out_unknown_allergens"] == [odd.title]
+    assert "某种酱" not in json.dumps(result, ensure_ascii=False)

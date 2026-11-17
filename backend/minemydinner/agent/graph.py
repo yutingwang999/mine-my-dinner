@@ -13,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from minemydinner.agent.diners import (
     DinerAnswer,
@@ -63,8 +64,9 @@ from minemydinner.planning.context import (
     diner_codes,
     load_planning_context,
 )
-from minemydinner.planning.feasibility import Shortfall, check_feasibility
+from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
 from minemydinner.planning.inventory import meal_preferences
+from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
 from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
 from minemydinner.planning.stock import compute_missing, missing_cookware
 from minemydinner.planning.tools import PlannerDeps
@@ -571,15 +573,51 @@ def _split_text(spec: dict) -> str:
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
 
 
-def _merge_notes(notes: dict | None, titles: list[str], paused: bool) -> dict:
-    """Search notes with `titles` added (once each) and `paused` or-ed in."""
+def _merge_notes(
+    notes: dict | None,
+    titles: list[str],
+    paused: bool,
+    excluded: Sequence[ExcludedRecipe] = (),
+) -> dict:
+    """Search notes with `titles` and `excluded` added (once each) and `paused` or-ed in.
+    `left_out_details` holds the ingredient lines per recipe; notes saved before it existed
+    have titles only."""
     notes = notes or {}
     left_out = list(notes.get("left_out_unknown_allergens", []))
+    details = list(notes.get("left_out_details", []))
+    known = {d["id"] for d in details}
+    for item in excluded:
+        if item.id not in known:
+            known.add(item.id)
+            details.append({"id": item.id, "title": item.title, "lines": list(item.lines)})
+    titles = [*titles, *(item.title for item in excluded)]
     left_out += [t for t in dict.fromkeys(titles) if t not in left_out]
     return {
         "left_out_unknown_allergens": left_out,
+        "left_out_details": details,
         "semantic_paused": bool(notes.get("semantic_paused", False)) or paused,
     }
+
+
+def diners_line(session: Session, settled: dict | None, constraints: dict) -> tuple[list, int]:
+    """The plan card's diners line: the user, then saved friends, then guests, by display
+    name (shown to the user only, never sent to a model), and the unmatched people count.
+    Without a settled set the user alone eats; the others are unconfirmed."""
+    self_row = session.scalar(select(Diner).where(Diner.is_self))
+    diners = [{"name": None, "is_self": True, "guest": False}]
+    if settled is None:
+        return diners, int(constraints.get("unconfirmed_diners") or 0)
+    ids = [i for i in settled.get("diner_ids") or [] if self_row is None or i != self_row.id]
+    rows = session.execute(select(Diner.id, Diner.display_name).where(Diner.id.in_(ids)))
+    names = {row.id: row.display_name for row in rows}
+    diners += [
+        {"name": names[i], "is_self": False, "guest": False} for i in ids if i in names
+    ]
+    diners += [
+        {"name": name, "is_self": False, "guest": True}
+        for name in (settled.get("guest_names") or {}).values()
+    ]
+    return diners, int(settled.get("others") or 0)
 
 
 # ---- the graph ----
@@ -831,7 +869,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "best": None,
             "blocked_codes": [],
             "shortfalls": [],
-            "search_notes": {"left_out_unknown_allergens": [], "semantic_paused": False},
+            "search_notes": {
+                "left_out_unknown_allergens": [],
+                "left_out_details": [],
+                "semantic_paused": False,
+            },
             "planner_opening": None,
             "shortlist_ids": [],
         }
@@ -842,6 +884,20 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         with deps.session_factory() as session:
             ctx = load_planning_context(session, _constraints(state))
             found: list[Shortfall] = check_feasibility(session, ctx, spec)
+            # The planner never searches on a stop, so the reply names the dishes left out
+            # for unknown allergens among the types the request needs.
+            notes = (
+                _merge_notes(
+                    state.get("search_notes"),
+                    [],
+                    False,
+                    unknown_allergen_exclusions(
+                        session, ctx, dish_types=needed_dish_types(spec)
+                    ),
+                )
+                if found
+                else None
+            )
         if not found:
             return Command(update={"shortfalls": []}, goto="planner")
         dumped = [asdict(shortfall) for shortfall in found]
@@ -852,7 +908,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 "shortfalls": map_strings(dumped, deps.client.prepare_text),
             },
         )
-        return Command(update={"shortfalls": dumped}, goto="present_plan")
+        return Command(update={"shortfalls": dumped, "search_notes": notes}, goto="present_plan")
 
     def request_summary(state: ChatState, preferences: list[str]) -> str:
         spec, parsed = state["spec"], state["request"]
@@ -943,7 +999,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     entries = found.entries
                     complete = found.complete
                     notes = _merge_notes(
-                        notes, found.left_out_unknown_allergens, found.semantic_paused
+                        notes, [], found.semantic_paused, found.left_out_unknown_allergens
                     )
                 opening = planner_opening(entries, summary, complete)
                 update["planner_opening"] = opening
@@ -1040,6 +1096,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         constraints = _constraints(state)
         headcount = state["constraints"]["headcount"]
         notes = state.get("search_notes") or {}
+        with deps.session_factory() as session:
+            plan_diners, plan_others = diners_line(
+                session, state.get("settled_diners"), state["constraints"]
+            )
         if shortfalls:
             shown = None
         elif final["passed"]:
@@ -1060,7 +1120,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "headcount": headcount,
             "servings_notes": [],
             "left_out_unknown_allergens": notes.get("left_out_unknown_allergens", []),
+            "left_out_details": notes.get("left_out_details", []),
             "semantic_paused": notes.get("semantic_paused", False),
+            "diners": plan_diners,
+            "others": plan_others,
             "reasons": [],
             "passed": final["passed"],
         }

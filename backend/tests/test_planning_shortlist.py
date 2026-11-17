@@ -345,7 +345,7 @@ def test_shortlist_result_carries_the_search_notes(session, seeded):
         {},
     )
     assert ids(result.entries["vegetable dish"]) == [ok.id]
-    assert result.left_out_unknown_allergens == ["神秘菜"]
+    assert [e.title for e in result.left_out_unknown_allergens] == ["神秘菜"]
     assert result.semantic_paused is True
     calm = build_shortlist_result(
         session, FakeEmbedClient(), ctx_for(session), spec(dishes=1), ParsedRequest(), {}

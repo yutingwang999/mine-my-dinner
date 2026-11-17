@@ -1719,3 +1719,71 @@ def test_graph_card_summary_is_read_before_the_commit(
     # The failure came before apply_answer, so no friend was created.
     session.expire_all()
     assert session.scalars(select(Diner).where(Diner.display_name == "Alex")).first() is None
+
+
+def _unknown_dish(session):
+    rule(session, self_diner(session).id, "allergy", allergen="egg")
+    return make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+
+
+def test_feasibility_stop_carries_left_out(graph_env, session):
+    _early_stop_env(graph_env, session)
+    odd = _unknown_dish(session)
+    current = plan(graph_env, "dinner")["current_plan"]
+    assert current["reasons"]
+    assert current["left_out_unknown_allergens"] == ["神秘菜"]
+    assert current["left_out_details"] == [{"id": odd.id, "title": "神秘菜", "lines": ["某种酱"]}]
+
+
+def test_stop_ignores_unknown_dishes_of_unrequested_types(graph_env, session):
+    _early_stop_env(graph_env, session)
+    rule(session, self_diner(session).id, "allergy", allergen="egg")
+    make_recipe(session, "神秘甜点", "dessert", [L("某种酱", linked=False)])
+    current = plan(graph_env, "dinner")["current_plan"]
+    assert current["reasons"] and current["left_out_unknown_allergens"] == []
+
+
+def test_successful_plan_lists_only_what_search_reached(graph_env, session, veg):
+    rule(session, self_diner(session).id, "allergy", allergen="egg")
+    make_recipe(session, "神秘甜点", "dessert", [L("某种酱", linked=False)])
+    current = plan(graph_env, "dinner", replies=[final_proposal([veg.id])])["current_plan"]
+    assert current["passed"] is True
+    assert current["left_out_unknown_allergens"] == []
+    assert current["left_out_details"] == []
+
+
+def test_no_valid_plan_carries_left_out(graph_env, session, veg):
+    odd = _unknown_dish(session)
+    stock(session, "鸡蛋", count=6)
+    egg = make_recipe(session, "番茄炒蛋", "meat dish", [L("鸡蛋")])
+    current = plan(graph_env, "dinner", replies=[final_proposal([egg.id])])["current_plan"]
+    assert current["recipes"] == [] and [u["code"] for u in current["unmet"]] == ["H2"]
+    assert current["left_out_unknown_allergens"] == ["神秘菜"]
+    assert current["left_out_details"] == [{"id": odd.id, "title": "神秘菜", "lines": ["某种酱"]}]
+
+
+def test_plan_without_a_card_lists_the_user_alone(graph_env, veg):
+    current = plan(graph_env, "dinner", replies=[final_proposal([veg.id])])["current_plan"]
+    assert current["diners"] == [{"name": None, "is_self": True, "guest": False}]
+    assert current["others"] == 0
+    assert current["left_out_details"] == []
+
+
+def test_plan_diners_line(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    parse = {"headcount": 3, "dishes": 1, "mode": "shopping", "guests": [{"name": "Alex"}]}
+    out = plan(env, "我、小王和 Alex 吃饭", parse=parse)
+    (card,) = out["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    chosen = {"selected": [me.id, wang.id], "guests": [{"name": "Alex", "rules": []}]}
+    out = resume(env, {card.id: chosen})
+    assert out["current_plan"]["diners"] == [
+        {"name": None, "is_self": True, "guest": False},
+        {"name": "小王", "is_self": False, "guest": False},
+        {"name": "Alex", "is_self": False, "guest": True},
+    ]
+    assert out["current_plan"]["others"] == 0
+    # The record keeps the replaced form of the names.
+    assert "小王" not in json.dumps(run_record(env).final_plan, ensure_ascii=False)
