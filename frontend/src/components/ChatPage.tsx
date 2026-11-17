@@ -1,15 +1,18 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatWelcome } from "@/components/ChatWelcome";
 import { Composer } from "@/components/Composer";
+import type { DinerDraft } from "@/components/DinerCard";
 import { MessageList } from "@/components/MessageList";
 import { RequestStyleSwitch } from "@/components/RequestStyleSwitch";
 import { ApiError } from "@/lib/api";
 import {
   type ChatEvent,
+  type DinerAnswer,
+  dinerSummary,
   getRequestStyle,
   loadThread,
   type Locale,
@@ -57,6 +60,15 @@ export function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [draft, setDraft] = useState("");
+  // The diner card's edits for the pending value they belong to, so a failed confirm, which
+  // brings the same pending value back, shows them again.
+  const [dinerDraft, setDinerDraft] = useState<{ pending: Pending; draft: DinerDraft } | null>(null);
+  const keepDinerDraft = useCallback(
+    (next: DinerDraft) => {
+      if (pending) setDinerDraft({ pending, draft: next });
+    },
+    [pending],
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   // Follow the newest item, unless the user scrolled up to read.
@@ -225,11 +237,24 @@ export function ChatPage() {
     // Skipping saves "plan then adjust" on the server (design 6.2), so the setting shows it.
     const previousStyle = style;
     setStyle(value ?? "plan_then_adjust");
-    const answered: ThreadItem | null = pending ? { type: "question", value: pending } : null;
+    const answered: ThreadItem | null =
+      pending?.kind === "request_style" ? { type: "question", value: pending } : null;
     if (answered) setItems((current) => [...current, answered]);
     void run((id) => resume(id, value, locale), answered).then((ok) => {
       if (!ok) setStyle(previousStyle);
     });
+  }
+
+  function confirmDiners(answer: DinerAnswer) {
+    if (pending?.kind !== "diners") return;
+    // The history keeps only who was confirmed, as the thread read returns it.
+    const answered: ThreadItem = {
+      type: "question",
+      value: { kind: "diners", summary: dinerSummary(pending, answer) },
+    };
+    setItems((current) => [...current, answered]);
+    followRef.current = true;
+    void run((id) => resume(id, answer, locale), answered);
   }
 
   function newConversation() {
@@ -238,6 +263,7 @@ export function ChatPage() {
     storeThreadId(null);
     setItems([]);
     setPending(null);
+    setDinerDraft(null);
     setError(null);
     setDraft("");
   }
@@ -266,6 +292,9 @@ export function ChatPage() {
           busy={busy}
           onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))}
           onChooseStyle={chooseStyle}
+          onConfirmDiners={confirmDiners}
+          dinerDraft={dinerDraft && dinerDraft.pending === pending ? dinerDraft.draft : undefined}
+          onDinerDraft={keepDinerDraft}
         />
       </div>
       <div className="chat-bottom">

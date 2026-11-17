@@ -2,9 +2,10 @@
 
 import { useFormatter, useTranslations } from "next-intl";
 
+import { DinerCard, type DinerDraft } from "@/components/DinerCard";
 import { PlanCard } from "@/components/PlanCard";
 import { RequestStylePrompt } from "@/components/RequestStylePrompt";
-import type { NextAction, Pending, RequestStyle, ThreadItem } from "@/lib/chat";
+import type { AskedQuestion, DinerAnswer, NextAction, Pending, RequestStyle, ThreadItem } from "@/lib/chat";
 import { useErrorText } from "@/lib/errors";
 
 type Props = {
@@ -16,6 +17,10 @@ type Props = {
   busy: boolean;
   onAction: (action: NextAction) => void;
   onChooseStyle: (value: RequestStyle | null) => void;
+  onConfirmDiners: (answer: DinerAnswer) => void;
+  /** The pending card's edits, kept across a failed confirm. */
+  dinerDraft?: DinerDraft;
+  onDinerDraft?: (draft: DinerDraft) => void;
 };
 
 /** The assistant's words for a question: the hint that used to sit above the input. */
@@ -33,11 +38,37 @@ function useQuestionText() {
         });
 }
 
-export function MessageList({ items, pending, streaming, step, error, busy, onAction, onChooseStyle }: Props) {
+/** The history line of an answered diner card: who was confirmed (the user is not named). */
+function useDinersText() {
+  const t = useTranslations("chat.diners");
+  const format = useFormatter();
+  return (value: Extract<AskedQuestion, { kind: "diners" }>): string => {
+    const summary = value.summary;
+    if (!summary) return t("asked");
+    const parts = [...summary.names];
+    if (summary.others > 0) parts.push(t("more", { count: summary.others }));
+    return parts.length ? t("answeredNames", { names: format.list(parts, { type: "conjunction" }) }) : t("answered");
+  };
+}
+
+export function MessageList({
+  items,
+  pending,
+  streaming,
+  step,
+  error,
+  busy,
+  onAction,
+  onChooseStyle,
+  onConfirmDiners,
+  dinerDraft,
+  onDinerDraft,
+}: Props) {
   const t = useTranslations("chat");
   const tStyle = useTranslations("chat.requestStyle");
   const errorText = useErrorText();
   const questionText = useQuestionText();
+  const dinersText = useDinersText();
 
   // The newest plan stays actionable until a newer one replaces it (design 5.1).
   let newestPlan = -1;
@@ -61,7 +92,13 @@ export function MessageList({ items, pending, streaming, step, error, busy, onAc
             return (
               <li key={index} className="chat-message chat-assistant">
                 <strong className="sr-only">{t("assistant")}</strong>
-                <p>{item.value.kind === "request_style" ? tStyle("title") : questionText(item.value)}</p>
+                <p>
+                  {item.value.kind === "request_style"
+                    ? tStyle("title")
+                    : item.value.kind === "diners"
+                      ? dinersText(item.value)
+                      : questionText(item.value)}
+                </p>
               </li>
             );
           }
@@ -84,6 +121,18 @@ export function MessageList({ items, pending, streaming, step, error, busy, onAc
           <li className="chat-message chat-assistant">
             <strong className="sr-only">{t("assistant")}</strong>
             <p>{questionText(pending)}</p>
+          </li>
+        )}
+        {pending?.kind === "diners" && (
+          <li className="chat-message chat-assistant">
+            <strong className="sr-only">{t("assistant")}</strong>
+            <DinerCard
+              pending={pending}
+              busy={busy}
+              onConfirm={onConfirmDiners}
+              draft={dinerDraft}
+              onDraft={onDinerDraft}
+            />
           </li>
         )}
         {pending?.kind === "request_style" && (

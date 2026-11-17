@@ -638,6 +638,94 @@ describe("ChatPage", () => {
     expect(texts[2]).toMatch(/yes/);
   });
 
+  it("shows the diner card for a diners interrupt and resumes with the answer object", async () => {
+    const diners = {
+      kind: "diners",
+      headcount: 2,
+      rows: [
+        { diner_id: 1, name: null, is_self: true, selected: true, rules: [], proposed: [], diet_words: [] },
+        { diner_id: 2, name: "Xiao Wang", is_self: false, selected: true, rules: [], proposed: [], diet_words: [] },
+      ],
+      guests: [],
+      others: 0,
+      nudge: false,
+    };
+    setup({
+      "POST /api/chat/threads/t1/messages": () => stream(frame("interrupt", diners), DONE),
+      "POST /api/chat/threads/t1/resume": () =>
+        stream(frame("message", { role: "assistant", text: "Planning for two." }), DONE),
+    });
+    await send("dinner with Xiao Wang");
+    const confirm = await screen.findByRole("button", { name: "Confirm and start planning" });
+    expect(screen.getByRole("checkbox", { name: "Xiao Wang" })).toBeChecked();
+    await userEvent.click(confirm);
+    expect(await screen.findByText("Planning for two.")).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/chat/threads/t1/resume")[0].body).toEqual({
+      value: { selected: [1, 2], stated: {}, guests: [], others: 0, others_answer: null },
+      locale: "en",
+    });
+    expect(screen.queryByRole("button", { name: "Confirm and start planning" })).toBeNull();
+    expect(screen.getByText("Diners confirmed: Xiao Wang.")).toBeInTheDocument();
+  });
+
+  it("keeps the diner card's edits when confirming fails", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(
+          frame("interrupt", {
+            kind: "diners",
+            headcount: 2,
+            rows: [{ diner_id: 1, name: null, is_self: true, selected: true, rules: [], proposed: [], diet_words: [] }],
+            guests: [],
+            others: 1,
+            nudge: false,
+          }),
+          DONE,
+        ),
+      "POST /api/chat/threads/t1/resume": () => reply(500, { code: "unknown" }),
+    });
+    await send("dinner for two");
+    await userEvent.click(await screen.findByRole("button", { name: "Add a person" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Mia");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm and start planning" }));
+    await screen.findByRole("alert");
+    expect(await screen.findByLabelText("Name")).toHaveValue("Mia");
+    expect(screen.queryByText(/Diners confirmed/)).toBeNull();
+  });
+
+  it("sends a typed message as a new message while the diner card is pending", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({
+      "GET /api/chat/threads/t5": () => ({
+        items: [{ type: "user", text: "dinner" }],
+        pending: { kind: "diners", headcount: 1, rows: [], guests: [], others: 1, nudge: false },
+      }),
+      "POST /api/chat/threads/t5/messages": () => stream(DONE),
+    });
+    await screen.findByRole("button", { name: "Confirm and start planning" });
+    await send("never mind");
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/chat/threads/t5/messages")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/chat/threads/t5/resume")).toHaveLength(0);
+  });
+
+  it("shows the summary of an answered diner card in a stored thread", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t6");
+    setup({
+      "GET /api/chat/threads/t6": () => ({
+        items: [
+          { type: "user", text: "dinner" },
+          { type: "question", value: { kind: "diners", summary: { names: ["Xiao Wang", "Alex"], others: 2 } } },
+          { type: "question", value: { kind: "diners", summary: null } },
+        ],
+        pending: null,
+      }),
+    });
+    expect(
+      await screen.findByText("Diners confirmed: Xiao Wang, Alex, and 2 more people."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Who is eating?")).toBeInTheDocument();
+  });
+
   it("renders the same first markup as the server when a thread is remembered", () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     calls = mockFetch({

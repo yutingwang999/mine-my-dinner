@@ -1,4 +1,12 @@
-import { ApiError, type DishType, type TimeSource } from "@/lib/api";
+import {
+  type Allergen,
+  ApiError,
+  type DishType,
+  type Rule,
+  type RuleType,
+  type RuleWrite,
+  type TimeSource,
+} from "@/lib/api";
 
 export type Locale = "zh" | "en";
 export type NextAction =
@@ -62,8 +70,65 @@ export type ChatPlan = {
   passed: boolean;
 };
 
+/** A rule the user stated in the chat, proposed on the diner card (backend agent/diners.py). */
+export type ProposedRule = {
+  rule_type: RuleType;
+  allergen: Allergen | null;
+  ingredient_id: number | null;
+  /** The dictionary name the stated name matched, for display. */
+  ingredient_name: string | null;
+  text: string | null;
+  /** A text rule, which matches recipe lines by wording and may match loosely. */
+  by_wording: boolean;
+};
+
+/** The user (name null) or a saved friend on the diner card. */
+export type DinerRow = {
+  diner_id: number;
+  name: string | null;
+  is_self: boolean;
+  selected: boolean;
+  rules: Rule[];
+  proposed: ProposedRule[];
+  /** Diet words ("vegetarian") the person stated: shown as a hint, never as a rule. */
+  diet_words: string[];
+};
+
+/** A person from the conversation who is not a saved friend. */
+export type GuestRow = { name: string | null; proposed: ProposedRule[]; diet_words: string[] };
+
+/** The diner card's interrupt value (backend build_card). */
+export type DinersPending = {
+  kind: "diners";
+  headcount: number;
+  rows: DinerRow[];
+  guests: GuestRow[];
+  /** People eating who match no row. */
+  others: number;
+  /** The request mentions a restriction, but no rule was parsed. */
+  nudge: boolean;
+};
+
+/** A rule ticked or entered on the card; `save` writes it to the person's profile. */
+export type RuleChoice = RuleWrite & { save: boolean };
+
+export type GuestAnswer = { name: string | null; rules: RuleChoice[]; save: boolean };
+
+/** The confirmed diner card (backend DinerAnswer). */
+export type DinerAnswer = {
+  selected: number[];
+  stated: Record<number, RuleChoice[]>;
+  guests: GuestAnswer[];
+  others: number;
+  others_answer: "none" | "unsure" | null;
+};
+
+/** The history summary of a confirmed card: friends' and guests' names, and how many more. */
+export type DinerSummary = { names: string[]; others: number };
+
 export type Pending =
   | { kind: "request_style" }
+  | DinersPending
   | {
       kind: "question";
       fields: string[];
@@ -86,7 +151,12 @@ export type ChatEvent =
 export type ThreadItem =
   | { type: "user"; text: string }
   | { type: "assistant"; id: string | null; text: string; plan: ChatPlan | null }
-  | { type: "question"; value: Pending };
+  | { type: "question"; value: AskedQuestion };
+
+/** A question as the history records it; the diner card keeps only a summary (null when skipped). */
+export type AskedQuestion =
+  | Exclude<Pending, { kind: "diners" }>
+  | { kind: "diners"; summary: DinerSummary | null };
 
 export type ThreadState = {
   items: ThreadItem[];
@@ -195,8 +265,12 @@ export function sendMessage(threadId: string, text: string, locale: Locale): Pro
   return post(`/api/chat/threads/${threadId}/messages`, { text, locale });
 }
 
-/** Answers a pending question; a null value skips it. */
-export function resume(threadId: string, value: unknown, locale: Locale): Promise<Response> {
+/** Answers a pending question with text, or the diner card with its answer; null skips it. */
+export function resume(
+  threadId: string,
+  value: string | DinerAnswer | null,
+  locale: Locale,
+): Promise<Response> {
   return post(`/api/chat/threads/${threadId}/resume`, { value, locale });
 }
 
@@ -219,6 +293,21 @@ export async function loadThread(threadId: string): Promise<ThreadState> {
     items.push({ type: "assistant", id: null, text: "", plan: normalizePlan(raw.current_plan) });
   }
   return { items, pending: raw.pending ?? null };
+}
+
+/** The history summary of a confirmed card, built as the backend's answer_summary builds it. */
+export function dinerSummary(pending: DinersPending, answer: DinerAnswer): DinerSummary {
+  const friends = new Map<number, string>();
+  for (const row of pending.rows) {
+    if (!row.is_self && row.name) friends.set(row.diner_id, row.name);
+  }
+  const names = answer.selected.flatMap((id) => {
+    const name = friends.get(id);
+    return name ? [name] : [];
+  });
+  names.push(...answer.guests.flatMap((guest) => (guest.name ? [guest.name] : [])));
+  const unnamed = answer.guests.filter((guest) => !guest.name).length;
+  return { names, others: answer.others + unnamed };
 }
 
 export async function getRequestStyle(): Promise<RequestStyle | null> {

@@ -602,6 +602,53 @@ button.btn-danger:hover:not(:disabled) {
   border-bottom: none;
 }
 
+/* The diner card in the chat: compact rows, a muted heading over the guests. */
+.diner-card .diner {
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+}
+
+.diner-card .mini-field.inline {
+  font-size: 0.95rem;
+}
+
+.diner-card .row-list > li {
+  padding: 0.25rem 0;
+}
+
+.diner-rules,
+.diner-choices {
+  margin-left: 1.5rem;
+}
+
+.diner-diet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.875rem;
+}
+
+.diner-section {
+  font-size: 0.875rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.diner-others {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.diner-others button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Search results: chips in a wrapping row, with room below the search box. */
 .dictionary-search {
   display: flex;
