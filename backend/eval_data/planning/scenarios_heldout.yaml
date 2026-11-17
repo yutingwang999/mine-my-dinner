@@ -1,0 +1,230 @@
+# Held-out set, several diners (plan 2b). Run with library_diners.yaml.
+#
+# The requests were written by the user on 2026-11-17, in their own words, and are copied here
+# unchanged. Claude added the stock, cookware, friends, card answers, and expectations. This
+# set took no part in any tuning: in plan 2b it runs once, after the development set and the
+# code are final, and its results are recorded as they are. Do not edit it, and do not change
+# code or prompts in response to it within plan 2b. Implementers and reviewers do not read
+# this file.
+#
+# Keys added in plan 2b (the runner reads them from Task 11 on):
+# - friends: saved friends for the scenario, [{name, rules: [{type, allergen?, ingredient?, text?}]}].
+# - request_style: ask_first | plan_then_adjust (default plan_then_adjust).
+# - answers: replies to ask-first questions, in order.
+# - diners_answer: how the runner answers the diner card. Absent or "accept": the card's
+#   preselection and every proposed rule ticked for this meal only, unmatched people "none".
+#   A mapping overrides single parts of that default: selected (names, "me"), guests
+#   ([{name, rules, save}]), others (int), others_answer (none | unsure).
+# - expect_card: false (no card may appear), or the parts of the card to check:
+#   preselected (names, "me"; exactly these rows selected), others (int), nudge (bool),
+#   diet_words (bool: some row or guest shows the diet-word hint), guests ([{name?, allergens?,
+#   avoid?: [{name, kind?}], diet_words?: bool}]; each listed guest must be on the card with at
+#   least these values; kind may be left out to accept either), self_proposed ([{allergen? |
+#   ingredient?}]: proposed rules on the user's row).
+# - expect_rules_applied / expect_rules_not_applied: [{who: name | "me" | "guest", allergen? |
+#   ingredient?}] checked against the planning context's rules.
+#
+# Friends (the same in every scenario): 小王 is allergic to peanuts; 老李 does not eat beef
+# (a restriction on 牛肉, which covers 牛腩); Lily is allergic to crustaceans. The user
+# dislikes 香菜. 香煎鸡腿 has an unlinked line (秘制腌料), so it is left out whenever someone
+# at the table has an allergy.
+x-profiles:
+  rich: &rich {冬瓜: plenty, 土豆: 6, 大米: plenty, 姜: plenty, 嫩豆腐: 2, 小白菜: plenty, 带鱼: 2, 干辣椒: plenty, 排骨: plenty, 牛奶: plenty, 牛腩: plenty, 猪肉: plenty, 猪肉末: plenty, 番茄: 6, 紫菜: plenty, 红薯: 4, 羊排: 4, 羊肉: plenty, 胡萝卜: 3, 腰果: plenty, 花椒: plenty, 花生: plenty, 茄子: 3, 草鱼: 1, 菠菜: plenty, 葱: plenty, 蒜: plenty, 虾: plenty, 西兰花: 2, 豆瓣酱: plenty, 豆腐: 2, 青椒: 4, 面条: plenty, 面粉: plenty, 香菜: plenty, 鲈鱼: 1, 鸡肉: plenty, 鸡胸肉: 2, 鸡腿: 4, 鸡蛋: 12, 黄油: plenty, 黄瓜: 3}
+  all_cookware: &all_cookware [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+  friends: &friends
+    - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    - {name: 老李, rules: [{type: dietary restriction, ingredient: 牛肉}]}
+    - {name: Lily, rules: [{type: allergy, allergen: crustaceans}]}
+  me: &me [{type: dislike, ingredient: 香菜}]
+scenarios:
+  - name: diners_with_laoli
+    request: 今天和老李吃饭，设计
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me, 老李], others: 0}
+    expect_rules_applied: [{who: 老李, ingredient: 牛肉}]
+    expect_titles_none: [土豆炖牛腩, 番茄炖牛腩]
+    expect_counts: {dishes: 2, soups: 0}
+    max_model_calls: 5
+    expect: The card preselects the user and 老李; no beef dish; 2 people, so the default 2 dishes.
+  - name: diners_xiaowang_laoli_shopping
+    request: 小王老李今天来吃饭，给我一桌菜，荤素搭配，可以买菜
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me, 小王, 老李], others: 0}
+    expect_rules_applied: [{who: 小王, allergen: peanut}, {who: 老李, ingredient: 牛肉}]
+    expect_titles_none: [宫保鸡丁, 土豆炖牛腩, 番茄炖牛腩]
+    expect_left_out_include: [香煎鸡腿]
+    expect_spec: {mode: shopping}
+    max_model_calls: 5
+    expect: Three people, shopping; no peanut and no beef dish; 香煎鸡腿 left out for unknown allergens.
+  - name: diners_en_lily_lunch
+    request: Lily and me will have lunch today
+    locale: en
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me, Lily], others: 0}
+    expect_rules_applied: [{who: Lily, allergen: crustaceans}]
+    expect_titles_none: [油焖大虾]
+    expect_left_out_include: [香煎鸡腿]
+    expect_counts: {dishes: 2, soups: 0}
+    expect_locale_reply: en
+    max_model_calls: 5
+    expect: The card preselects the user and Lily (an English nickname); no shrimp dish; the reply in English with "Lily", never a label.
+  - name: diners_five_people_two_friends_unsure
+    request: 设计5人的晚饭，有小王和老李
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    diners_answer: {others_answer: unsure}
+    expect_card: {preselected: [me, 小王, 老李], others: 2}
+    expect_rules_applied: [{who: 小王, allergen: peanut}, {who: 老李, ingredient: 牛肉}]
+    expect_titles_none: [宫保鸡丁, 土豆炖牛腩, 番茄炖牛腩]
+    expect_warnings: [S8]
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 5
+    expect: 5 people with 2 friends named leaves 2 unmatched; answered "not sure", so S8 warns about them; the default for 5 is 3 dishes and 1 soup.
+  - name: diners_five_lunch_guest_fish_allergy
+    request: 5人份的午餐，别太复杂，有一个人对鱼过敏
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    diners_answer: {others_answer: none}
+    expect_card: {preselected: [me], guests: [{allergens: [fish]}], others: 3}
+    expect_rules_applied: [{who: guest, allergen: fish}]
+    expect_titles_none: [清蒸鲈鱼, 红烧带鱼, 水煮鱼片]
+    expect_left_out_include: [香煎鸡腿]
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 5
+    expect: An unnamed guest with a fish allergy, confirmed on the card; no fish dish; the other 3 answered "no restrictions".
+  - name: diners_friend_cannot_eat_nuts
+    request: 一个朋友今天来吃晚餐，她没法吃坚果，其他的都行
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me], guests: [{allergens: [tree nut]}], others: 0}
+    expect_rules_applied: [{who: guest, allergen: tree nut}]
+    expect_titles_none: [腰果鸡丁]
+    expect_counts: {dishes: 2, soups: 0}
+    max_model_calls: 5
+    expect: 坚果 maps to the tree nut allergen; the cashew dish is excluded.
+  - name: diners_three_people_one_no_lamb
+    request: 给我一顿3人餐的设计，有一个人不吃羊肉，尽量别带羊肉的
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    diners_answer: {others_answer: none}
+    expect_card: {preselected: [me], guests: [{avoid: [{name: 羊肉}]}], others: 1}
+    expect_rules_applied: [{who: guest, ingredient: 羊肉}]
+    expect_titles_none: [葱爆羊肉, 孜然羊排]
+    expect_counts: {dishes: 2, soups: 1}
+    max_model_calls: 5
+    expect: A guest who does not eat lamb (restriction or dislike both accepted); no lamb dish.
+  - name: diners_three_people_not_too_spicy
+    request: 3人，别太辣
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    diners_answer: {others_answer: none}
+    expect_card: {preselected: [me], guests: [], others: 2, nudge: false}
+    expect_counts: {dishes: 2, soups: 1}
+    max_model_calls: 5
+    expect: Three people, so a card; 别太辣 is a taste preference, so no rule and no guest; it stays in the query.
+  - name: diners_solo_no_pork
+    request: 来个午饭，快手一点，不想吃猪肉的
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_titles_none: [青椒肉丝, 红烧排骨, 麻婆豆腐, 冬瓜排骨汤, 炸春卷]
+    expect_counts: {dishes: 1, soups: 0}
+    max_model_calls: 5
+    expect: Either reading is accepted (user decision): a card proposing "no pork" for this meal (answered with the default), or no card with 不想吃猪肉 kept as a query term. Either way, no pork dish.
+  - name: diners_five_with_vegetarian
+    request: 今天来4个朋友，有一个人吃素，其他人啥都行
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    diners_answer: {others_answer: none}
+    expect_card: {preselected: [me], guests: [{diet_words: true}], others: 3, diet_words: true}
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 5
+    expect: 吃素 is a diet word, so the card shows the hint to add ingredients one by one and creates no rule from it; the plan is made for 5.
+  - name: diners_laoli_one_hour_fridge
+    request: 老李来蹭饭了，设计1小时内能做出来的，不想去买菜
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me, 老李], others: 0}
+    expect_rules_applied: [{who: 老李, ingredient: 牛肉}]
+    expect_titles_none: [土豆炖牛腩, 番茄炖牛腩]
+    expect_spec: {mode: fridge_only, time_limit_min: 60}
+    expect_not_assumed: [mode]
+    max_model_calls: 5
+    expect: Fridge only (stated), 60-minute limit, no beef dish.
+  - name: diners_feast_xiaowang_laoli_dessert
+    request: 和小王老李聚餐，丰盛些，4菜一汤吧，再来个甜品
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me, 小王, 老李], others: 0}
+    expect_rules_applied: [{who: 小王, allergen: peanut}, {who: 老李, ingredient: 牛肉}]
+    expect_titles_none: [宫保鸡丁, 土豆炖牛腩, 番茄炖牛腩]
+    expect_left_out_include: [香煎鸡腿]
+    expect_counts: {dishes: 4, soups: 1, desserts: 1}
+    max_model_calls: 5
+    expect: 4 dishes, 1 soup, 1 dessert for three; no peanut and no beef dish.
+  - name: diners_six_people_ask_first
+    request: 6个人的聚餐，老李和Lily也在，出个设计
+    locale: zh
+    request_style: ask_first
+    answers: [可以买菜]
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    diners_answer: {others_answer: unsure}
+    expect_card: {preselected: [me, 老李, Lily], others: 3}
+    expect_rules_applied: [{who: 老李, ingredient: 牛肉}, {who: Lily, allergen: crustaceans}]
+    expect_titles_none: [土豆炖牛腩, 番茄炖牛腩, 油焖大虾]
+    expect_spec: {mode: shopping}
+    expect_warnings: [S8]
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 6
+    expect: Ask first; the mode and composition question comes first and the short answer 可以买菜 sets shopping (the parse sees the question); then the card; 3 unmatched people "not sure"; the default for 6 is 3 dishes and 1 soup.
+  - name: diners_unknown_name_xiaodou
+    request: 今天和小豆吃饭，简单一点，2个菜一个主食就行了
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    friends: *friends
+    rules: *me
+    expect_card: {preselected: [me], guests: [{name: 小豆}], others: 0}
+    expect_counts: {dishes: 2, staples: 1, soups: 0}
+    max_model_calls: 5
+    expect: 小豆 is not a saved friend, so a guest row with no rules; 2 dishes and 1 staple.

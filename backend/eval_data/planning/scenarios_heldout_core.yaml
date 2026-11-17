@@ -1,0 +1,226 @@
+# Held-out set, core features (plans 1 and 2a), one diner. Run with library_diners.yaml.
+#
+# The requests were written by the user on 2026-11-17, in their own words, and are copied here
+# unchanged. Claude added the stock, cookware, and expectations. This set took no part in any
+# tuning: in plan 2b it runs once, after the development set and the code are final, and its
+# results are recorded as they are. Do not edit it, and do not change code or prompts in
+# response to it within plan 2b. Implementers and reviewers do not read this file.
+#
+# Stock profiles (anchors below):
+# - rich: every ingredient the library uses, so every dish is makeable in fridge-only mode.
+# - short: meat 青椒肉丝 only; vegetable 蒜蓉西兰花 and 清炒小白菜; no egg.
+# - leftovers: 番茄, 鸡蛋, 小白菜, 蒜.
+x-profiles:
+  rich: &rich {冬瓜: plenty, 土豆: 6, 大米: plenty, 姜: plenty, 嫩豆腐: 2, 小白菜: plenty, 带鱼: 2, 干辣椒: plenty, 排骨: plenty, 牛奶: plenty, 牛腩: plenty, 猪肉: plenty, 猪肉末: plenty, 番茄: 6, 紫菜: plenty, 红薯: 4, 羊排: 4, 羊肉: plenty, 胡萝卜: 3, 腰果: plenty, 花椒: plenty, 花生: plenty, 茄子: 3, 草鱼: 1, 菠菜: plenty, 葱: plenty, 蒜: plenty, 虾: plenty, 西兰花: 2, 豆瓣酱: plenty, 豆腐: 2, 青椒: 4, 面条: plenty, 面粉: plenty, 香菜: plenty, 鲈鱼: 1, 鸡肉: plenty, 鸡胸肉: 2, 鸡腿: 4, 鸡蛋: 12, 黄油: plenty, 黄瓜: 3}
+  short: &short {猪肉: plenty, 青椒: 4, 西兰花: 2, 蒜: plenty, 小白菜: plenty}
+  leftovers: &leftovers {番茄: 3, 鸡蛋: 6, 小白菜: plenty, 蒜: plenty}
+  all_cookware: &all_cookware [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+  no_oven: &no_oven [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+scenarios:
+  - name: core_quick_dinner_15_minutes
+    request: 快手的晚餐，15分钟内
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_spec: {time_limit_min: 15}
+    expect_counts: {dishes: 1, soups: 0}
+    expect_assumed: [dishes, soups]
+    max_model_calls: 5
+    expect_locale_reply: zh
+    expect: A 15-minute limit and no count, so the default of 1 dish; H6 keeps every dish with a stated time within 15 minutes.
+  - name: core_anything_for_lunch
+    request: 不知道吃什么，随便来个午饭吧
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 1, soups: 0}
+    expect_assumed: [headcount, dishes, soups]
+    max_model_calls: 5
+    expect: No count and no headcount, so the defaults (1 person, 1 dish), stated as assumed; no number invented from 随便.
+  - name: core_one_dessert
+    request: 想吃个甜品，推荐一个
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {desserts: 1, dishes: 0, soups: 0}
+    expect_titles_all: [焦糖烤布丁, 黄油曲奇, 蜜烤红薯]
+    max_model_calls: 5
+    expect: One dessert and nothing else.
+  - name: core_two_dishes_one_staple
+    request: 2菜一主食
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 2, staples: 1, soups: 0}
+    expect_not_assumed: [dishes, staples]
+    max_model_calls: 5
+    expect: Two dishes and one staple food, no soup.
+  - name: core_two_meat_dishes
+    request: 做两个肉菜
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 2, meat_dishes: 2, vegetable_dishes: 0, soups: 0}
+    max_model_calls: 5
+    expect: Exactly two meat dishes and nothing else.
+  - name: core_four_meat_two_vegetable_staple
+    request: 设计4荤2素的一顿，再来个主食
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 6, meat_dishes: 4, vegetable_dishes: 2, staples: 1, soups: 0}
+    max_model_calls: 5
+    expect: 4 meat dishes, 2 vegetable dishes, 1 staple food.
+  - name: core_at_least_two_meat_vegetable_optional
+    request: 设计一顿，至少两个荤菜，素菜随便，有没有都行
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_count_range: {meat_dishes: [2, 12]}
+    expect_counts: {soups: 0}
+    max_model_calls: 5
+    expect: At least 2 meat dishes; vegetable dishes unconstrained; the total comes from the headcount default raised to 2 and is stated as assumed.
+  - name: core_four_dishes_at_least_two_vegetable
+    request: 做4个菜，至少两个是素的
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 4, soups: 0}
+    expect_count_range: {vegetable_dishes: [2, 4]}
+    max_model_calls: 5
+    expect: 4 dishes, at least 2 of them vegetable dishes.
+  - name: core_three_or_four_dishes
+    request: 晚饭，三个四个菜都行
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 3, soups: 0}
+    expect_assumed: [dishes]
+    max_model_calls: 5
+    expect: A range takes its lower end, 3 dishes, stated as assumed.
+  - name: core_every_dish_with_potato
+    request: 消耗家里的土豆，做3个菜，每一个都要用土豆
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 3, soups: 0}
+    expect_titles_all: [酸辣土豆丝, 青椒土豆片, 土豆烧鸡块, 土豆炖牛腩]
+    max_model_calls: 5
+    expect: all_use 土豆; every one of the 3 dishes uses potato (4 potato dishes in the library).
+  - name: core_prefer_tomato_two_dishes
+    request: 西红柿快坏了，尽量用西红柿吧，做2个菜
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 2, soups: 0}
+    expect_titles_any: [番茄炒蛋, 番茄炖牛腩]
+    max_model_calls: 5
+    expect: prefer_use 西红柿 (a preference, not a rule); 2 dishes, and the tomato dishes rank first, so at least one is chosen.
+  - name: core_must_fish_two_dishes_staple
+    request: 设计2菜1主食，一定要有鱼
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 2, staples: 1, soups: 0}
+    expect_titles_any: [清蒸鲈鱼, 红烧带鱼, 水煮鱼片]
+    max_model_calls: 5
+    expect: must_use 鱼 (H7); 2 dishes and 1 staple, at least one fish dish.
+  - name: core_use_up_leftovers
+    request: 消耗家里剩的这些东西，能做什么就做什么
+    locale: zh
+    inventory: *leftovers
+    cookware: *all_cookware
+    expect_counts: {dishes: 1, soups: 0}
+    expect_assumed: [dishes]
+    expect_titles_all: [番茄炒蛋, 清炒小白菜, 煎荷包蛋, 嫩滑蒸蛋, 白煮蛋, 鸡蛋饼]
+    max_model_calls: 5
+    expect: Fridge only (stated or by default), no count so the default 1 dish, and only dishes makeable from the leftovers.
+  - name: core_feast_four_dishes_staple_shopping
+    request: 出一桌菜，4菜一主食，一会儿我就去商店了
+    locale: zh
+    inventory: {}
+    cookware: *all_cookware
+    expect_spec: {mode: shopping}
+    expect_counts: {dishes: 4, staples: 1, soups: 0}
+    expect_not_assumed: [mode]
+    max_model_calls: 5
+    expect: Going to the shop means shopping mode (stated indirectly); 4 dishes and 1 staple food.
+  - name: core_simple_30_minutes_one_meat_one_vegetable_staple
+    request: 简单吃点儿，30分钟内1荤一素1主食
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_spec: {time_limit_min: 30}
+    expect_counts: {dishes: 2, meat_dishes: 1, vegetable_dishes: 1, staples: 1, soups: 0}
+    max_model_calls: 5
+    expect: 1 meat dish, 1 vegetable dish, 1 staple, within 30 minutes.
+  - name: core_dessert_without_oven
+    request: 想做个甜品
+    locale: zh
+    inventory: *rich
+    cookware: *no_oven
+    expect_plan: false
+    expect_reasons: [no_cookware]
+    expect_next_actions: [register_cookware]
+    max_model_calls: 3
+    expect: "User's situation: no oven. Every dessert needs one, so an early stop with no_cookware and the register-cookware link."
+  - name: core_two_meat_two_vegetable_fridge_short
+    request: 设计两荤两素，不想去买
+    locale: zh
+    inventory: *short
+    cookware: *all_cookware
+    expect_plan: false
+    expect_reasons: [not_enough_dishes]
+    expect_reason_detail: [{reason: not_enough_dishes, category: meat_dishes, needed: 2, available: 1}]
+    expect_next_actions: [switch_to_shopping]
+    expect_not_assumed: [mode]
+    max_model_calls: 3
+    expect: "User's situation: the fridge is not enough. Fridge only (stated), 1 makeable meat dish against 2: early stop with not_enough_dishes and switch_to_shopping."
+  - name: core_two_meat_one_vegetable_then_one_dish
+    request: 能做两荤一素么，不想出门
+    follow_up: 那能做一道菜也行
+    locale: zh
+    inventory: *short
+    cookware: *all_cookware
+    expect_first_reasons: [not_enough_dishes]
+    expect_counts: {dishes: 1, soups: 0}
+    max_model_calls: 7
+    expect: The first turn stops (1 makeable meat dish against 2); the second turn asks for one dish, which the fridge can make.
+  - name: core_something_light
+    request: 清淡点儿
+    locale: zh
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 1, soups: 0}
+    expect_assumed: [dishes, soups]
+    max_model_calls: 5
+    expect: 清淡 is a query term, not a count; the defaults apply.
+  - name: core_en_one_meat_one_vegetable
+    request: 2 dishes， 1 meat 1 vegetable
+    locale: en
+    inventory: *rich
+    cookware: *all_cookware
+    expect_counts: {dishes: 2, meat_dishes: 1, vegetable_dishes: 1, soups: 0}
+    expect_locale_reply: en
+    max_model_calls: 5
+    expect: One meat and one vegetable dish; the reply in English.
+  - name: core_en_dinner_with_fish
+    request: dinner, at least 1 fish,
+    locale: en
+    inventory: *rich
+    cookware: *all_cookware
+    expect_titles_any: [清蒸鲈鱼, 红烧带鱼, 水煮鱼片]
+    expect_locale_reply: en
+    max_model_calls: 5
+    expect: The plan includes at least one fish dish; the reply in English.
+  - name: core_en_spicy_shopping
+    request: I want to have some spicy food today, shopping allowed
+    locale: en
+    inventory: {}
+    cookware: *all_cookware
+    expect_spec: {mode: shopping}
+    expect_not_assumed: [mode]
+    expect_titles_any: [水煮鱼片, 辣子鸡, 酸辣土豆丝, 宫保鸡丁, 麻婆豆腐]
+    expect_locale_reply: en
+    max_model_calls: 5
+    expect: Shopping mode, spicy as a query term, so a spicy dish is chosen; the reply in English.
