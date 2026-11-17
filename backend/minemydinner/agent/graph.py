@@ -1,6 +1,8 @@
+import dataclasses
+import inspect
 import json
 import uuid
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -12,6 +14,25 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from minemydinner.agent.diners import (
+    build_card,
+    card_needed,
+    guest_key,
+    not_yet_known,
+    profile_rules,
+    settled_rules,
+    stated_friend_rules,
+    stated_to_rules,
+)
+from minemydinner.agent.labels import (
+    Friend,
+    LabelTable,
+    current_labels,
+    current_table,
+    find_friends,
+    labels_scope,
+    load_label_context,
+)
 from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
 from minemydinner.agent.questions import parse_messages
@@ -123,6 +144,25 @@ def _constraints(state: ChatState) -> MealConstraints:
     return MealConstraints(
         diner_ids=tuple(data["diner_ids"]), unconfirmed_diners=data["unconfirmed_diners"]
     )
+
+
+def _matched_friend_ids(
+    texts: Sequence[str],
+    friends: Sequence[Friend],
+    food_terms: Collection[str],
+    parsed: ParsedRequest,
+    labels: LabelTable,
+) -> list[int]:
+    """Saved friends named in the current request's own words, then those the parse gave a
+    stated rule by label, in that order, once each."""
+    found = [
+        friend.diner_id
+        for text in texts
+        for _, _, friend in find_friends(text, friends, food_terms)
+    ]
+    found += list(stated_friend_rules(parsed, labels))
+    existing = {friend.diner_id for friend in friends}
+    return [diner_id for diner_id in dict.fromkeys(found) if diner_id in existing]
 
 
 def _current_request(messages: list) -> list[str]:
@@ -574,12 +614,26 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         return {
-            "request": result.parsed.model_dump(),
+            "request": _restore_parsed(result.parsed.model_dump()),
             "model_calls": [
                 *(state.get("model_calls") or []),
                 _model_call_event(deps.client, "parse", messages, result),
             ],
         }
+
+    def _restore_parsed(parsed: dict) -> dict:
+        """The parse runs without the post-hook so friend_rules codes stay labels for code to
+        resolve; every other field gets its labels restored here, so no label reaches a
+        text shown to the user (a named ingredient, the query, a guest's name)."""
+        ctx = current_labels.get()
+        if ctx is None:
+            return parsed
+        codes = [item["code"] for item in parsed.get("friend_rules") or []]
+        with labels_scope(dataclasses.replace(ctx, restore=True)):
+            restored = map_strings(parsed, deps.client.restore_text)
+        for item, code in zip(restored.get("friend_rules") or [], codes, strict=True):
+            item["code"] = code
+        return restored
 
     def unclear(state: ChatState) -> dict:
         reply = UNCLEAR_REPLY_ZH if _zh(state.get("locale", "en")) else UNCLEAR_REPLY_EN
@@ -598,7 +652,58 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return "ask_style"
         if not state.get("asked_question") and needs_question(parsed, style):
             return "ask_question"
+        if diner_card_needed(state, parsed):
+            return "select_diners"
         return "load_context"
+
+    def diner_card_needed(state: ChatState, parsed: ParsedRequest) -> bool:
+        """Spec 5.1, read from the database; no model call."""
+        settled = state.get("settled_diners")
+        with deps.session_factory() as session:
+            self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+            table = LabelTable.from_state(state.get("diner_labels"), self_id)
+            ctx = load_label_context(session, table, state.get("locale", "en"), restore=False)
+            matched = _matched_friend_ids(
+                _current_request(state["messages"]), ctx.friends, ctx.food_terms, parsed, table
+            )
+            by_friend = stated_friend_rules(parsed, table)
+            saved = profile_rules(session, [i for i in (self_id, *by_friend) if i is not None])
+            new_self_rules = []
+            if self_id is not None:
+                new_self_rules = not_yet_known(
+                    stated_to_rules(session, parsed.self_rules),
+                    [*saved[self_id], *settled_rules(settled, f"diner:{self_id}")],
+                )
+            # Stated rules of the others that neither a profile nor the settled set holds.
+            uncovered = []
+            for diner_id, items in by_friend.items():
+                known = [*saved[diner_id], *settled_rules(settled, f"diner:{diner_id}")]
+                for item in items:
+                    uncovered += not_yet_known(stated_to_rules(session, item), known)
+            for guest in parsed.guests:
+                key = guest_key(settled, guest.name)
+                known = settled_rules(settled, key) if key else []
+                uncovered += not_yet_known(stated_to_rules(session, guest), known)
+        return card_needed(
+            parsed,
+            matched,
+            new_self_rules,
+            settled,
+            {friend.diner_id for friend in ctx.friends},
+            self_id=self_id,
+            uncovered_rules=uncovered,
+        )
+
+    def select_diners(state: ChatState) -> dict:
+        """The diner card (spec 5.2). The answer is returned raw; it is not applied yet."""
+        parsed = ParsedRequest.model_validate(state["request"])
+        ctx = current_labels.get()
+        texts = _current_request(state["messages"])
+        with deps.session_factory() as session:
+            matched = _matched_friend_ids(texts, ctx.friends, ctx.food_terms, parsed, ctx.table)
+            card = build_card(session, parsed, ctx.table, matched, "\n".join(texts))
+        answer = interrupt(card)
+        return {"diners_answer": answer}
 
     def _question(state: ChatState, value: dict) -> dict:
         # Shown in the chat and rendered into the parse input (parse_messages): `at` is the
@@ -741,7 +846,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     def retry_message(state: ChatState, session, ctx) -> str:
         """The violations of the previous attempt, then a short summary of it."""
-        codes = diner_codes(_constraints(state))
+        codes = diner_codes(_constraints(state), current_table())
         ids = state["proposal"]["recipe_ids"]
         problems = [_violation_for_model(v, codes) for v in state["validation"]["violations"]]
         known = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(ids)))) if ids else set()
@@ -784,7 +889,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             ctx = load_planning_context(session, constraints)
             if opening is None:
                 # Built once per run and stored, so every attempt sends the same bytes.
-                summary = request_summary(state, meal_preferences(session, ctx))
+                summary = request_summary(
+                    state, meal_preferences(session, ctx, current_table())
+                )
                 entries = None
                 complete: frozenset[str] = frozenset()
                 if deps.use_shortlist:
@@ -1017,28 +1124,62 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "messages": [AIMessage(note, id=reply_id)],
         }
 
+    def with_labels(node: Callable, restore: bool = True) -> Callable:
+        """Run `node` with the conversation's label table as the current label context, so
+        the client hooks replace saved nicknames in every model call the node makes. The
+        scope is set inside the node's own run, in the thread that makes its model calls;
+        LangGraph copies the context into any thread it starts from there. The node's update
+        gets `diner_labels` when the table changed (it only grows). A thread saved before
+        the table existed starts one with the user as "Diner 1"."""
+        takes_config = "config" in inspect.signature(node).parameters
+
+        def run(state: ChatState, config: RunnableConfig):
+            with deps.session_factory() as session:
+                self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+                table = LabelTable.from_state(state.get("diner_labels"), self_id)
+                ctx = load_label_context(session, table, state.get("locale", "en"), restore)
+            with labels_scope(ctx):
+                result = node(state, config) if takes_config else node(state)
+            labels = table.to_state()
+            if labels == state.get("diner_labels"):
+                return result
+            if isinstance(result, Command):
+                update = {**(result.update or {}), "diner_labels": labels}
+                return dataclasses.replace(result, update=update)
+            return {**(result or {}), "diner_labels": labels}
+
+        return run
+
     builder = StateGraph(ChatState)
-    builder.add_node("route_intent", route_intent)
-    builder.add_node("other", other)
-    builder.add_node("parse_request", parse_request)
-    builder.add_node("ask_style", ask_style)
-    builder.add_node("ask_question", ask_question)
-    builder.add_node("unclear", unclear)
-    builder.add_node("load_context", load_context)
-    builder.add_node("planner", planner)
+    builder.add_node("route_intent", with_labels(route_intent))
+    builder.add_node("other", with_labels(other))
+    # The parse output keeps labels as labels (friend_rules codes are resolved by code), so
+    # no nickname reaches the state's request through the post-hook.
+    builder.add_node("parse_request", with_labels(parse_request, restore=False))
+    builder.add_node("ask_style", with_labels(ask_style))
+    builder.add_node("ask_question", with_labels(ask_question))
+    builder.add_node("select_diners", with_labels(select_diners))
+    builder.add_node("unclear", with_labels(unclear))
+    builder.add_node("load_context", with_labels(load_context))
+    builder.add_node("planner", with_labels(planner))
     builder.add_node(
-        "check_feasibility", feasibility_step, destinations=("planner", "present_plan")
+        "check_feasibility",
+        with_labels(feasibility_step),
+        destinations=("planner", "present_plan"),
     )
     builder.add_node(
-        "validate_plan", check_plan, destinations=("check_feasibility", "present_plan")
+        "validate_plan",
+        with_labels(check_plan),
+        destinations=("check_feasibility", "present_plan"),
     )
-    builder.add_node("present_plan", present_plan)
+    builder.add_node("present_plan", with_labels(present_plan))
     builder.add_edge(START, "route_intent")
     builder.add_conditional_edges("route_intent", choose, ["parse_request", "other"])
-    gates = ["ask_style", "ask_question", "load_context", "unclear"]
+    gates = ["ask_style", "ask_question", "select_diners", "load_context", "unclear"]
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")
+    builder.add_edge("select_diners", "load_context")
     builder.add_edge("load_context", "check_feasibility")
     builder.add_edge("planner", "validate_plan")
     builder.add_edge("present_plan", END)

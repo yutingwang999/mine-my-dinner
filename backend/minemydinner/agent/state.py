@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -49,3 +49,10 @@ class ChatState(TypedDict):
     # (agent/questions.py); the route and the planner never see them.
     reply_plans: dict[str, dict]
     questions: list[dict]
+    # The conversation's label table (LabelTable.to_state()): diner keys to "Diner N". It only
+    # grows; a thread saved before it existed starts one with the user as "Diner 1".
+    diner_labels: dict | None
+    # The confirmed diner set, reused by later requests that do not change who eats.
+    settled_diners: dict | None
+    # The raw answer to the diner card, until the answer is applied.
+    diners_answer: Any

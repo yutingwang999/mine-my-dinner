@@ -81,9 +81,8 @@ class CallLayerMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         messages = self.client.prepare_messages(request.messages)
+        # The system prompt is fixed text and is sent and recorded as written.
         system = request.system_message
-        if system is not None:
-            system = self.client.prepare_messages([system])[0]
         used: dict[str, str] = {}
 
         def attempt(

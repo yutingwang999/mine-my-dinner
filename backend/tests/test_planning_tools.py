@@ -463,3 +463,21 @@ def test_search_tool_returns_only_makeable_recipes_in_fridge_mode(
     assert [h["id"] for h in hits] == [recipes[name].id for name in expected]
     if mode == "fridge_only":
         assert all(h["missing"] == [] for h in hits)
+
+
+def test_get_preferences_uses_the_conversation_labels(invoke, session, seeded):
+    from minemydinner.agent.labels import LabelContext, LabelTable, labels_scope
+    from minemydinner.models import Diner
+
+    me = self_diner(session)
+    friend = Diner(display_name="小王", is_self=False)
+    session.add(friend)
+    session.flush()
+    rule(session, friend.id, "allergy", allergen="peanut")
+    # The thread numbered someone else first, so 小王 is Diner 3, not Diner 2 by selection.
+    table = LabelTable.from_state(None, me.id)
+    table.label_for("diner:999999")
+    table.label_for(f"diner:{friend.id}")
+    with labels_scope(LabelContext(table, [], frozenset(), "zh")):
+        prefs = invoke("get_preferences", diner_ids=[me.id, friend.id])
+    assert prefs == {"preferences": ["Diner 3: allergy peanut"]}

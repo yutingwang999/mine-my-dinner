@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from minemydinner.extraction.normalize import all_terms, match_ingredient
 from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceeded
 from minemydinner.models import MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
+from minemydinner.agent.labels import current_table
 from minemydinner.planning.context import PlanningContext, diner_codes
 from minemydinner.planning.dietary import DietaryCheck, check_recipes
 from minemydinner.planning.named import recipes_using, uses_clause
@@ -252,7 +253,7 @@ def _facts(
         for recipe_id, name in rows:
             if name not in expiring[recipe_id]:
                 expiring[recipe_id].append(name)
-    codes = diner_codes(ctx.constraints)
+    codes = diner_codes(ctx.constraints, current_table())
     dislikes: dict[int, list[str]] = {recipe_id: [] for recipe_id in recipe_ids}
     for conflict in check.dislikes:
         if conflict.recipe_id not in dislikes:

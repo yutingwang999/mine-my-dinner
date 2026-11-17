@@ -466,6 +466,13 @@ def test_prepare_messages_and_restore_text_apply_hooks(llm_hooked):
     assert llm_hooked.restore_text("Diner 1 eats") == "小李 eats"
 
 
+def test_prepare_messages_leaves_system_prompts_as_written(llm_hooked):
+    from langchain_core.messages import SystemMessage
+
+    prepared = llm_hooked.prepare_messages([SystemMessage("小李 eats"), HumanMessage("小李")])
+    assert [m.content for m in prepared] == ["小李 eats", "Diner 1"]
+
+
 class BrokenLogFactory:
     """Reads work, but writing the call log fails."""
 

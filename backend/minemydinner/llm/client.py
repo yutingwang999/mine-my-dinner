@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -200,8 +200,12 @@ class LLMClient:
         )
 
     def prepare_messages(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]:
-        """Apply the pre-hooks to a copy of the messages."""
-        return [self._prepare_message(message) for message in messages]
+        """Apply the pre-hooks to a copy of the messages. System prompts are left as written:
+        they are fixed text with no user data, and a hook must not rewrite their examples."""
+        return [
+            message if isinstance(message, SystemMessage) else self._prepare_message(message)
+            for message in messages
+        ]
 
     def prepare_text(self, text: str) -> str:
         """Apply the pre-hooks to text bound for a model."""

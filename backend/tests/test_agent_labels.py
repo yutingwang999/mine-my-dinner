@@ -172,3 +172,14 @@ def test_load_label_context(session, seeded):
     assert "汤" not in ctx.food_terms
     assert all(len(term) > 1 for term in ctx.food_terms)
     assert ctx.locale == "zh" and ctx.restore is True
+
+
+def test_label_for_assigns_distinct_numbers_across_threads():
+    from concurrent.futures import ThreadPoolExecutor
+
+    table = LabelTable.from_state(None, self_id=1)
+    keys = [f"diner:{n}" for n in range(2, 202)]
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        labels = list(pool.map(table.label_for, keys))
+    assert len(set(labels)) == len(keys)
+    assert sorted(int(label.split()[1]) for label in labels) == list(range(2, 202))

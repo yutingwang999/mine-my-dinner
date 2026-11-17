@@ -541,6 +541,10 @@ def test_closest_note_is_fixed_text_in_the_locale_even_without_a_model_note(
 def test_servings_note_when_headcount_differs(graph_env, veg):
     parse = {"others_mentioned": True, "headcount": 3, "dishes": 1, "soups": 0, "mode": "shopping"}
     out = plan(graph_env, "dinner for three", parse=parse, replies=[final_proposal([veg.id])])
+    # The diner card is skipped: the user plans alone and the rest stay unconfirmed.
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    out = resume(graph_env, {card.id: None})
     current = out["current_plan"]
     assert current["servings_notes"] == [{"recipe_id": veg.id, "servings": 2, "headcount": 3}]
     assert current["headcount"] == 3 and current["passed"]
@@ -1355,3 +1359,198 @@ def test_query_vectors_of_a_failed_run_are_dropped_by_the_next_run(
     assert len(env.deps.run_query_vectors) == 1
     plan(env, "清淡的", parse={"dishes": 1, "query": "清淡"}, replies=[final_proposal([veg.id])])
     assert env.deps.run_query_vectors == {}
+
+
+# ---- the diner card and the label table (plan 2b) ----
+
+
+def labelled_env(tmp_path, session, model=None, embeddings=None) -> GraphEnv:
+    """A graph whose client has the app's nickname hooks."""
+    from minemydinner.agent.labels import replace_nicknames, restore_labels
+
+    session.execute(delete(AppPreference))
+    session.flush()
+    set_request_style(session, "plan_then_adjust")
+    model = model or ScriptedChatModel(
+        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]}
+    )
+    factory = rollback_session_factory(session)
+    client = make_llm_client(
+        tmp_path,
+        factory,
+        model,
+        embeddings=embeddings,
+        pre_hooks=(replace_nicknames,),
+        post_hooks=(restore_labels,),
+    )
+    deps = GraphDeps(factory, client, PlanningRecorder(factory))
+    env = GraphEnv(build_graph(deps, InMemorySaver()), model, session, thread("labels-1"))
+    env.deps = deps
+    return env
+
+
+def add_friend(session, name: str):
+    from minemydinner.models import Diner
+
+    diner = Diner(display_name=name, is_self=False)
+    session.add(diner)
+    session.flush()
+    return diner
+
+
+def sent_text(env: GraphEnv) -> str:
+    """Every message the model received, system prompts left out (they hold no user data)."""
+    return json.dumps(
+        [[m.content for m in sent if m.type != "system"] for sent in env.model.sent],
+        ensure_ascii=False,
+    )
+
+
+def test_graph_solo_request_has_no_card(tmp_path, session, seeded, veg):
+    from minemydinner.agent.request import load_prompt
+
+    add_friend(session, "鱼")
+    make_recipe(session, "鱼香肉丝", "meat dish")
+    env = labelled_env(tmp_path, session)
+    out = plan(env, "想吃鱼香肉丝", parse={"query": "鱼香肉丝"}, replies=[final_proposal([veg.id])])
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    parse_calls = [
+        s for s in env.model.sent if s and s[0].type == "system"
+        and s[0].content == load_prompt("parse")
+    ]
+    assert parse_calls and parse_calls[-1][-1].content == "想吃鱼香肉丝"
+    assert "Diner 2" not in sent_text(env)
+
+
+def test_graph_card_after_style_and_question_gates(tmp_path, session, seeded, veg):
+    env = labelled_env(tmp_path, session)
+    set_request_style(session, None)
+    guest = {"guests": [{"name": "Alex"}], "others_mentioned": True, "dishes": 2}
+    out = plan(env, "我和 Alex 吃两个菜", parse=guest)
+    assert [i.value for i in out["__interrupt__"]] == [{"kind": "request_style"}]
+    out = resume(env, "ask_first")
+    assert [i.value for i in out["__interrupt__"]] == [{"kind": "question", "fields": ["mode"]}]
+    out = resume(env, "都行", parse={**guest, "mode": "shopping"})
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    assert [g["name"] for g in card.value["guests"]] == ["Alex"]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {"selected": []})
+    assert "__interrupt__" not in out and out["diners_answer"] == {"selected": []}
+    assert out["current_plan"] is not None
+
+
+def test_graph_old_thread_without_labels_plans(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    env = labelled_env(tmp_path, session)
+    # A thread saved before plan 2b: no diner_labels, no settled_diners.
+    env.graph.update_state(
+        env.config,
+        {
+            "messages": [HumanMessage("dinner"), AIMessage("Here is your dinner.")],
+            "locale": "en",
+            "plan_versions": [],
+            "questions": [],
+        },
+        as_node="present_plan",
+    )
+    values = env.graph.get_state(env.config).values
+    assert "diner_labels" not in values and "settled_diners" not in values
+    out = plan(env, "dinner again", replies=[final_proposal([veg.id])])
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert out["diner_labels"] == {"labels": {f"diner:{me.id}": "Diner 1"}, "names": {}}
+
+
+def test_graph_nickname_never_sent(tmp_path, session, seeded, veg):
+    add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    parse = {
+        "headcount": 2,
+        "dishes": 1,
+        "others_mentioned": True,
+        "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}],
+    }
+    out = plan(env, "我和小王吃饭，小王对花生过敏", parse=parse)
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    state = env.graph.get_state(env.config).values
+    assert state["request"]["friend_rules"][0]["code"] == "Diner 2"
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: None})
+    assert "__interrupt__" not in out
+    record = run_record(env)
+    model_calls = [e for e in record.events if e["kind"] == "model_call"]
+    assert [e["step"] for e in model_calls] == ["route", "parse", "planner"]
+    assert "小王" not in json.dumps(record.events, ensure_ascii=False)
+    assert "小王" not in json.dumps(record.request, ensure_ascii=False)
+    assert "小王" not in sent_text(env)
+    assert "Diner 2" in json.dumps(model_calls[1]["messages"], ensure_ascii=False)
+    assert out["request"]["friend_rules"][0]["code"] == "Diner 2"
+
+
+def test_graph_planner_call_sees_the_label_context(tmp_path, session, seeded, veg):
+    # The parse is scripted to return the nickname in its query, so the planner's opening
+    # carries it: the middleware's call must still replace it.
+    friend = add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    parse = {"headcount": 2, "dishes": 1, "query": "小王爱吃的清淡菜"}
+    (card,) = plan(env, "两个人吃", parse=parse)["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id], note="Diner 2 会喜欢这道菜")]
+    out = resume(env, {card.id: None})
+    (call,) = planner_calls(env)
+    opening = [m for m in call if m.type == "human"][0].content
+    assert "Diner 2爱吃的清淡菜" in opening and "小王" not in opening
+    # The planner's note is restored for the user.
+    assert out["messages"][-1].content == "小王 会喜欢这道菜"
+    assert out["diner_labels"]["labels"][f"diner:{friend.id}"] == "Diner 2"
+
+
+def test_graph_planner_tool_calls_see_the_label_context(tmp_path, session, seeded, veg):
+    # The tool node runs each tool call in a worker thread; the search query the tool
+    # embeds there still has the nickname replaced.
+    import threading
+
+    add_friend(session, "小王")
+    threads = []
+
+    class ThreadRecordingEmbeddings(FakeEmbeddings):
+        def embed_documents(self, texts):
+            threads.append(threading.current_thread())
+            return super().embed_documents(texts)
+
+    embeddings = ThreadRecordingEmbeddings()
+    env = labelled_env(tmp_path, session, embeddings=embeddings)
+    replies = [tool_call("search_recipes", {"query": "小王爱吃的"}), final_proposal([veg.id])]
+    plan(env, "dinner", parse={"dishes": 1}, replies=replies)
+    assert embeddings.embedded == ["Diner 2爱吃的"]
+    assert threads and threads[0] is not threading.main_thread()
+
+
+def test_graph_parse_fields_are_restored_but_friend_codes_stay(tmp_path, session, seeded):
+    add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    # "小王酱" is no food term, so the model sees "Diner 2酱" and echoes it.
+    parse = {
+        "must_use": ["Diner 2酱"],
+        "query": "Diner 2爱吃的",
+        "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}],
+    }
+    out = plan(env, "要用小王酱，小王对花生过敏", parse=parse)
+    assert out["__interrupt__"][0].value["kind"] == "diners"
+    request = env.graph.get_state(env.config).values["request"]
+    assert request["must_use"] == ["小王酱"] and request["query"] == "小王爱吃的"
+    assert request["friend_rules"][0]["code"] == "Diner 2"
+    # The parse event, recorded later with the run, keeps the replaced form.
+    (event,) = [e for e in env.graph.get_state(env.config).values["model_calls"]
+                if e["step"] == "parse"]
+    assert event["response"]["must_use"] == ["Diner 2酱"]
+    assert "小王" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_graph_solo_self_rule_card_shows_only_the_user(tmp_path, session, seeded):
+    me = self_diner(session)
+    add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    out = plan(env, "我对花生过敏", parse={"self_rules": {"allergens": ["peanut"]}})
+    (card,) = out["__interrupt__"]
+    assert [row["diner_id"] for row in card.value["rows"]] == [me.id]

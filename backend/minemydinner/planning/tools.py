@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from minemydinner.agent.labels import current_table
 from minemydinner.constants import CATEGORIES, DISH_TYPES, STOCK_LEVELS
 from minemydinner.llm.client import LLMClient
 from minemydinner.models import Recipe
@@ -355,7 +356,7 @@ def get_preferences(runtime: ToolRuntime[PlannerDeps]) -> dict:
 
     def body(session: Session) -> dict:
         ctx = load_planning_context(session, deps.constraints)
-        return {"preferences": meal_preferences(session, ctx)}
+        return {"preferences": meal_preferences(session, ctx, current_table())}
 
     return _run(deps, body)
 

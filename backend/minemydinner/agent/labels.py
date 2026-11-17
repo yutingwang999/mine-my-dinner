@@ -6,6 +6,7 @@ serves every thread, so the label table of the current call comes from a context
 """
 
 import re
+import threading
 from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -41,15 +42,21 @@ class LabelTable:
     labels: dict[str, str] = field(default_factory=dict)
     # Key to the name shown to the user: a guest's name; None for the user and unnamed guests.
     names: dict[str, str | None] = field(default_factory=dict)
+    # Planner tool calls run in worker threads and share the table, so assigning a new
+    # number is done under a lock.
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     def label_for(self, key: str) -> str:
         """The key's label, assigning the next number when the key is new. "Diner 1" is
         reserved for the user, whose key is set by `from_state`."""
-        label = self.labels.get(key)
-        if label is None:
-            label = f"Diner {self.highest_number() + 1}"
-            self.labels[key] = label
-        return label
+        with self._lock:
+            label = self.labels.get(key)
+            if label is None:
+                label = f"Diner {self.highest_number() + 1}"
+                self.labels[key] = label
+            return label
 
     def highest_number(self) -> int:
         """The highest label number in use; at least 1, which is the user's."""
@@ -166,6 +173,13 @@ class LabelContext:
 
 
 current_labels: ContextVar[LabelContext | None] = ContextVar("current_labels", default=None)
+
+
+def current_table() -> LabelTable | None:
+    """The label table of the conversation whose graph node is running, or None outside one
+    (code then numbers diners by selection order)."""
+    ctx = current_labels.get()
+    return ctx.table if ctx is not None else None
 
 
 @contextmanager
