@@ -59,14 +59,14 @@ def test_package_data_glob_matches_every_prompt_file():
 
 
 def test_apply_defaults_reports_each_default():
-    spec, constraints, defaults_used = apply_defaults(parsed())
+    spec, constraints, defaults_used, _ = apply_defaults(parsed())
     assert defaults_used == ["headcount", "dishes", "soups", "mode"]
     assert (spec.mode, spec.dishes, spec.soups, spec.time_limit_min) == ("fridge_only", 1, 0, None)
     assert constraints.unconfirmed_diners == 0 and constraints.diner_ids == ()
 
 
 def test_stated_values_are_kept_and_not_reported():
-    spec, _, defaults_used = apply_defaults(
+    spec, _, defaults_used, _ = apply_defaults(
         parsed(headcount=2, dishes=3, soups=1, mode="shopping", time_limit_min=30)
     )
     assert defaults_used == []
@@ -89,7 +89,7 @@ def test_stated_values_are_kept_and_not_reported():
     ],
 )
 def test_defaults_apply_only_when_no_count_was_stated(request_, spec_counts, defaults):
-    spec, _, defaults_used = apply_defaults(request_)
+    spec, _, defaults_used, _ = apply_defaults(request_)
     for name, value in spec_counts.items():
         assert getattr(spec, name) == value
     others = {"dishes", "soups", "staples", "desserts", "snacks"} - spec_counts.keys()
@@ -98,36 +98,36 @@ def test_defaults_apply_only_when_no_count_was_stated(request_, spec_counts, def
 
 
 def test_split_without_total_sets_the_total():
-    spec, _, defaults_used = apply_defaults(P(headcount=2, meat_dishes=2, mode="shopping"))
+    spec, _, defaults_used, _ = apply_defaults(P(headcount=2, meat_dishes=2, mode="shopping"))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (2, 2, None)
     assert (spec.meat_bound, spec.vegetable_bound) == ("exact", None)
     assert spec.soups == 0 and defaults_used == []
-    spec, _, _ = apply_defaults(P(meat_dishes=1, vegetable_dishes=1))
+    spec, _, _, _ = apply_defaults(P(meat_dishes=1, vegetable_dishes=1))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (2, 1, 1)
     assert (spec.meat_bound, spec.vegetable_bound) == ("exact", "exact")
 
 
 def test_split_inside_the_total_stays_exact():
-    spec, _, _ = apply_defaults(P(dishes=8, meat_dishes=2))
+    spec, _, _, _ = apply_defaults(P(dishes=8, meat_dishes=2))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (8, 2, None)
     assert (spec.meat_bound, spec.vegetable_bound) == ("exact", None)
 
 
 def test_named_split_below_the_total_becomes_minimums():
-    spec, _, _ = apply_defaults(P(dishes=3, meat_dishes=1, vegetable_dishes=1))
+    spec, _, _, _ = apply_defaults(P(dishes=3, meat_dishes=1, vegetable_dishes=1))
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (3, 1, 1)
     assert (spec.meat_bound, spec.vegetable_bound) == ("at_least", "at_least")
 
 
 def test_parsed_bounds_reach_the_spec():
-    spec, _, _ = apply_defaults(P(dishes=8, meat_dishes=2, meat_bound="at_least"))
+    spec, _, _, _ = apply_defaults(P(dishes=8, meat_dishes=2, meat_bound="at_least"))
     assert (spec.meat_dishes, spec.meat_bound, spec.vegetable_bound) == (2, "at_least", None)
-    spec, _, _ = apply_defaults(
+    spec, _, _, _ = apply_defaults(
         P(dishes=4, meat_dishes=1, meat_bound="at_least", vegetable_dishes=2, vegetable_bound="at_most")
     )
     assert (spec.meat_bound, spec.vegetable_bound) == ("at_least", "at_most")
     # A bound without its count is ignored.
-    spec, _, _ = apply_defaults(P(dishes=3, meat_bound="at_most"))
+    spec, _, _, _ = apply_defaults(P(dishes=3, meat_bound="at_most"))
     assert (spec.meat_dishes, spec.meat_bound) == (None, None)
 
 
@@ -147,16 +147,16 @@ def test_more_than_twelve_is_a_problem():
 
 
 def test_range_fields_are_reported_as_assumed():
-    _, _, defaults_used = apply_defaults(
+    _, _, defaults_used, _ = apply_defaults(
         P(headcount=2, dishes=2, mode="shopping", range_fields=["dishes"])
     )
     assert defaults_used == ["dishes"]
-    _, _, defaults_used = apply_defaults(P(dishes=2, soups=1, range_fields=["soups", "dishes"]))
+    _, _, defaults_used, _ = apply_defaults(P(dishes=2, soups=1, range_fields=["soups", "dishes"]))
     assert defaults_used == ["headcount", "dishes", "soups", "mode"]
 
 
 def test_a_stated_zero_total_falls_back_to_the_default_composition():
-    spec, _, defaults_used = apply_defaults(P(headcount=2, dishes=0, soups=0, mode="shopping"))
+    spec, _, defaults_used, _ = apply_defaults(P(headcount=2, dishes=0, soups=0, mode="shopping"))
     assert (spec.dishes, spec.soups) == (2, 0)
     assert defaults_used == ["dishes", "soups"]
 
@@ -171,9 +171,9 @@ def test_plan_spec_rejects_zero_and_over_twelve():
 
 
 def test_named_ingredient_lists_reach_the_spec():
-    spec, _, _ = apply_defaults(P(prefer_use=["鸡蛋"], must_use=["番茄"], all_use=["葱"], dishes=2))
+    spec, _, _, _ = apply_defaults(P(prefer_use=["鸡蛋"], must_use=["番茄"], all_use=["葱"], dishes=2))
     assert (spec.prefer_use, spec.must_use, spec.all_use) == (["鸡蛋"], ["番茄"], ["葱"])
-    spec, _, _ = apply_defaults(P(dishes=2))
+    spec, _, _, _ = apply_defaults(P(dishes=2))
     assert spec.prefer_use == spec.must_use == spec.all_use == []
 
 
@@ -185,12 +185,27 @@ def test_parsed_request_limits():
 
 
 def test_other_people_are_unconfirmed_until_diner_selection():
-    _, constraints, defaults_used = apply_defaults(
+    _, constraints, defaults_used, _ = apply_defaults(
         parsed(others_mentioned=True, headcount=3), self_diner_id=7
     )
     assert constraints.diner_ids == (7,) and constraints.guest_rules == ()
     assert constraints.unconfirmed_diners == 2
     assert "headcount" not in defaults_used
+
+
+def test_apply_defaults_headcount_from_card():
+    spec, constraints, defaults_used, headcount = apply_defaults(
+        parsed(others_mentioned=True), self_diner_id=7, headcount=3
+    )
+    assert headcount == 3
+    assert (spec.dishes, spec.soups) == (2, 1)
+    assert "headcount" not in defaults_used
+    assert constraints.unconfirmed_diners == 2
+    # The card's headcount wins over the parse's.
+    _, _, _, headcount = apply_defaults(parsed(headcount=2), headcount=4)
+    assert headcount == 4
+    _, _, defaults_used, headcount = apply_defaults(parsed())
+    assert headcount == 1 and "headcount" in defaults_used
 
 
 def test_ask_first_asks_only_for_unstated():
@@ -212,7 +227,7 @@ def test_other_styles_never_ask(style):
 
 
 def test_zero_total_fallback_drops_the_stated_split():
-    spec, _, _ = apply_defaults(
+    spec, _, _, _ = apply_defaults(
         P(headcount=2, dishes=0, meat_dishes=0, vegetable_dishes=0, mode="shopping")
     )
     assert (spec.dishes, spec.meat_dishes, spec.vegetable_dishes) == (2, None, None)
@@ -220,7 +235,7 @@ def test_zero_total_fallback_drops_the_stated_split():
 
 
 def test_range_fields_of_unstated_counts_are_ignored():
-    _, _, defaults_used = apply_defaults(
+    _, _, defaults_used, _ = apply_defaults(
         P(headcount=2, dishes=2, mode="shopping", range_fields=["soups", "dishes"])
     )
     assert defaults_used == ["dishes"]
@@ -246,7 +261,7 @@ def test_dish_total_with_a_bound_and_no_total_uses_the_headcount():
     # "三个人，最多一个素菜": the default 2 dishes, assumed, no soup added.
     request = P(headcount=3, vegetable_dishes=1, vegetable_bound="at_most", mode="shopping")
     assert dish_total(request, 3) == 2
-    spec, _, defaults_used = apply_defaults(request)
+    spec, _, defaults_used, _ = apply_defaults(request)
     assert (spec.dishes, spec.soups) == (2, 0)
     assert (spec.vegetable_dishes, spec.vegetable_bound) == (1, "at_most")
     assert defaults_used == ["dishes"]
@@ -255,7 +270,7 @@ def test_dish_total_with_a_bound_and_no_total_uses_the_headcount():
 def test_dish_total_is_raised_to_the_lower_bounds():
     request = P(headcount=1, meat_dishes=2, meat_bound="at_least", mode="shopping")
     assert dish_total(request, 1) == 2
-    spec, _, defaults_used = apply_defaults(request)
+    spec, _, defaults_used, _ = apply_defaults(request)
     assert (spec.dishes, spec.soups, spec.meat_dishes) == (2, 0, 2)
     assert defaults_used == ["dishes"]
 
@@ -290,7 +305,7 @@ def test_bounds_inside_the_total_are_no_problem():
 
 def test_at_least_one_soup_is_one_soup_assumed():
     # "至少一个汤"
-    spec, _, defaults_used = apply_defaults(P(soups=1, range_fields=["soups"]))
+    spec, _, defaults_used, _ = apply_defaults(P(soups=1, range_fields=["soups"]))
     assert (spec.soups, spec.dishes) == (1, 0)
     assert "soups" in defaults_used
 
@@ -319,7 +334,7 @@ def test_dish_total_is_lowered_to_the_upper_bounds():
     )
     assert dish_total(request, 5) == 2
     assert request_problem(request) is None
-    spec, _, defaults_used = apply_defaults(request)
+    spec, _, defaults_used, _ = apply_defaults(request)
     assert (spec.dishes, spec.soups) == (2, 0)
     assert side_ranges(spec) == {"meat_dishes": (1, 1), "vegetable_dishes": (1, 1)}
     assert defaults_used == ["dishes"]

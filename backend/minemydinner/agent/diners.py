@@ -5,18 +5,20 @@ confirmed: stated rules are only proposed on the card.
 """
 
 from collections.abc import Collection, Sequence
-from typing import Literal
+from dataclasses import asdict, dataclass
+from typing import Literal, Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from minemydinner.agent.labels import LABEL_PATTERN, LabelTable
 from minemydinner.agent.request import ParsedRequest, StatedRules
-from minemydinner.api.diners import RuleOut
+from minemydinner.api.diners import RuleIn, RuleOut
 from minemydinner.constants import RULE_TYPES
 from minemydinner.extraction.normalize import match_ingredient
-from minemydinner.models import DietaryRule, Diner
+from minemydinner.models import DietaryRule, Diner, Ingredient
+from minemydinner.planning.context import MealConstraints, RuleRef
 
 # A restriction word in the request with no rule parsed shows the card's notice (spec 5.2).
 RESTRICTION_WORDS: tuple[str, ...] = (
@@ -338,4 +340,215 @@ def build_card(
         "others": max(0, headcount - preselected - len(guests)),
         "nudge": nudge,
     }
+
+
+# ---- applying the answer (spec 5.3, 5.4) ----
+
+
+def _diet_text(text: str | None) -> bool:
+    return text is not None and text.strip().casefold() in {w.casefold() for w in DIET_WORDS}
+
+
+class RuleChoice(RuleIn):
+    """A rule ticked or entered on the card. `save` writes it to the person's profile;
+    otherwise it applies to this meal only."""
+
+    save: bool = False
+
+    @model_validator(mode="after")
+    def no_diet_word(self) -> Self:
+        if _diet_text(self.text):
+            raise ValueError("a diet word is not a rule; add the ingredients one by one")
+        return self
+
+
+class GuestAnswer(BaseModel):
+    """A person on the card who is not a saved friend. `save` creates a friend with the
+    name as given and these rules."""
+
+    name: str | None = Field(default=None, max_length=40)
+    rules: list[RuleChoice] = Field(default_factory=list, max_length=20)
+    save: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+    @model_validator(mode="after")
+    def save_needs_name(self) -> Self:
+        if self.save and self.name is None:
+            raise ValueError("saving a guest as a friend needs a name")
+        return self
+
+
+class DinerAnswer(BaseModel):
+    """The confirmed diner card. `selected` holds diner ids (the user included when eating);
+    `stated` the ticked rules per selected diner; `others` the people still not matched,
+    with "none" (no dietary limits) or "unsure" for them together."""
+
+    selected: list[int] = Field(max_length=50)
+    stated: dict[int, list[RuleChoice]] = Field(default_factory=dict)
+    guests: list[GuestAnswer] = Field(default_factory=list, max_length=20)
+    others: int = Field(default=0, ge=0, le=50)
+    others_answer: Literal["none", "unsure"] | None = None
+
+    @model_validator(mode="after")
+    def someone_eats(self) -> Self:
+        self.selected = list(dict.fromkeys(self.selected))
+        if not self.selected and not self.guests and not self.others:
+            raise ValueError("at least one person eats")
+        if set(self.stated) - set(self.selected):
+            raise ValueError("stated rules belong to selected diners only")
+        if self.others and self.others_answer is None:
+            # Unmatched people with no answer count as unsure, so S8 warns about them.
+            self.others_answer = "unsure"
+        return self
+
+
+@dataclass
+class SettledDiners:
+    """The confirmed diner set of a conversation (spec 5.1, 5.3). `meal_rules` are the
+    meal-only rules: selected diners' under "diner:<id>" and guests' under "guest:<n>".
+    `guest_names` holds the guests not saved as friends."""
+
+    diner_ids: list[int]
+    meal_rules: list[RuleRef]
+    guest_names: dict[str, str | None]
+    others: int
+    others_answer: str | None
+    headcount: int
+
+    def to_state(self) -> dict:
+        return {
+            "diner_ids": list(self.diner_ids),
+            "meal_rules": [asdict(rule) for rule in self.meal_rules],
+            "guest_names": dict(self.guest_names),
+            "others": self.others,
+            "others_answer": self.others_answer,
+            "headcount": self.headcount,
+        }
+
+    @classmethod
+    def from_state(cls, data: dict) -> "SettledDiners":
+        return cls(
+            diner_ids=list(data.get("diner_ids") or []),
+            meal_rules=[RuleRef(**rule) for rule in data.get("meal_rules") or []],
+            guest_names=dict(data.get("guest_names") or {}),
+            others=int(data.get("others") or 0),
+            others_answer=data.get("others_answer"),
+            headcount=int(data["headcount"]),
+        )
+
+
+def constraints_from(settled: SettledDiners) -> MealConstraints:
+    unconfirmed = settled.others if settled.others_answer == "unsure" else 0
+    return MealConstraints(
+        diner_ids=tuple(settled.diner_ids),
+        guest_rules=tuple(settled.meal_rules),
+        unconfirmed_diners=unconfirmed,
+    )
+
+
+def _next_guest_number(labels: LabelTable) -> int:
+    """One past every guest number in the table, so guests settled earlier in the thread
+    keep their keys."""
+    numbers = [
+        int(key.split(":", 1)[1])
+        for key in (*labels.labels, *labels.names)
+        if key.startswith("guest:") and key.split(":", 1)[1].isdigit()
+    ]
+    return max(numbers, default=0) + 1
+
+
+def _check_rule(session: Session, rule: RuleChoice) -> None:
+    # The card never sends a diet word as a rule; refuse one anyway (spec 5.4).
+    if _diet_text(rule.text):
+        raise ValueError("a diet word is not a rule")
+    if rule.ingredient_id is not None and session.get(Ingredient, rule.ingredient_id) is None:
+        raise ValueError(f"unknown ingredient {rule.ingredient_id}")
+
+
+def _rule_fields(rule: RuleChoice) -> dict:
+    return rule.model_dump(include={"rule_type", "allergen", "ingredient_id", "text"})
+
+
+def _add_meal_rule(meal_rules: list[RuleRef], key: str, rule: RuleChoice) -> None:
+    same_key = [other for other in meal_rules if other.diner_key == key]
+    if not any(_same_target(rule, other) for other in same_key):
+        meal_rules.append(RuleRef(key, rule.rule_type, rule.allergen, rule.ingredient_id,
+                                  rule.text))
+
+
+def apply_answer(session: Session, answer: DinerAnswer, labels: LabelTable) -> SettledDiners:
+    """Apply the confirmed card: write saved rules to profiles, create saved guests as
+    friends (they join the selected diners), label the selected diners and the guests in the
+    conversation's table, and return the settled set. Commits the session.
+
+    Raises ValueError for an unknown diner or ingredient, or a diet word as a text rule."""
+    for rules in (*answer.stated.values(), *(guest.rules for guest in answer.guests)):
+        for rule in rules:
+            _check_rule(session, rule)
+    known = set(session.scalars(select(Diner.id).where(Diner.id.in_(answer.selected))))
+    if missing := [i for i in answer.selected if i not in known]:
+        raise ValueError(f"unknown diners {missing}")
+    diner_ids = list(answer.selected)
+    saved = profile_rules(session, diner_ids)
+    meal_rules: list[RuleRef] = []
+    for diner_id in diner_ids:
+        for rule in answer.stated.get(diner_id, []):
+            if any(_same_target(rule, other) for other in saved[diner_id]):
+                continue
+            if rule.save:
+                row = DietaryRule(diner_id=diner_id, **_rule_fields(rule))
+                session.add(row)
+                saved[diner_id].append(row)
+            else:
+                _add_meal_rule(meal_rules, f"diner:{diner_id}", rule)
+    guest_names: dict[str, str | None] = {}
+    for guest in answer.guests:
+        if guest.save:
+            diner = Diner(display_name=guest.name, is_self=False)
+            session.add(diner)
+            session.flush()
+            kept: list[RuleChoice] = []
+            for rule in guest.rules:
+                if not any(_same_target(rule, other) for other in kept):
+                    kept.append(rule)
+                    session.add(DietaryRule(diner_id=diner.id, **_rule_fields(rule)))
+            diner_ids.append(diner.id)
+            continue
+        key = f"guest:{_next_guest_number(labels)}"
+        labels.names[key] = guest.name
+        labels.label_for(key)
+        guest_names[key] = guest.name
+        for rule in guest.rules:
+            _add_meal_rule(meal_rules, key, rule)
+    session.commit()
+    for diner_id in diner_ids:
+        labels.label_for(f"diner:{diner_id}")
+    return SettledDiners(
+        diner_ids=diner_ids,
+        meal_rules=meal_rules,
+        guest_names=guest_names,
+        others=answer.others,
+        others_answer=answer.others_answer if answer.others else None,
+        headcount=len(diner_ids) + len(guest_names) + answer.others,
+    )
+
+
+def answer_summary(session: Session, answer: DinerAnswer) -> dict:
+    """The card's history summary: the selected friends' and the guests' names (the user is
+    left out), and how many people are shown without a name (unmatched or unnamed). Read
+    before `apply_answer`, so nothing that can fail runs after its commit."""
+    friends = {
+        diner.id: diner.display_name
+        for diner in session.scalars(
+            select(Diner).where(Diner.id.in_(answer.selected), Diner.is_self.is_(False))
+        )
+    }
+    names = [friends[i] for i in answer.selected if i in friends]
+    names += [guest.name for guest in answer.guests if guest.name]
+    unnamed = sum(1 for guest in answer.guests if not guest.name)
+    return {"names": names, "others": answer.others + unnamed}
 

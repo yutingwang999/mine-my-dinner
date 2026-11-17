@@ -311,22 +311,27 @@ def _stated_counts(parsed: ParsedRequest) -> bool:
 
 
 def apply_defaults(
-    parsed: ParsedRequest, self_diner_id: int | None = None
-) -> tuple[PlanSpec, MealConstraints, list[str]]:
-    """Fill unstated details (design 5.1). Returns the spec, the meal constraints, and the
-    assumed fields: "headcount", the count fields in COUNT_FIELDS order, and "mode".
+    parsed: ParsedRequest, self_diner_id: int | None = None, headcount: int | None = None
+) -> tuple[PlanSpec, MealConstraints, list[str], int]:
+    """Fill unstated details (design 5.1). Returns the spec, the meal constraints, the
+    assumed fields ("headcount", the count fields in COUNT_FIELDS order, and "mode"), and the
+    headcount.
+
+    A given `headcount` (the confirmed diner card's) wins over the parse's and is not
+    assumed; the caller then replaces the constraints with the card's.
 
     Dishes and soups come from the headcount only when no count at all was stated; then an
     unstated count is 0. A range taken at its lower end is reported as assumed too, and so
     is a dish total taken from the headcount for a side named "at least" or "at most".
 
-    Only the self diner's rules are known in this plan; everyone else counts as an
-    unconfirmed diner until diner selection exists, so S8 warns about them.
+    Without the card, only the self diner's rules are known; everyone else counts as an
+    unconfirmed diner, so S8 warns about them.
     """
     assumed: set[str] = {
         name for name in parsed.range_fields if getattr(parsed, name) is not None
     }
-    headcount = parsed.headcount
+    if headcount is None:
+        headcount = parsed.headcount
     if headcount is None:
         headcount = 1
         assumed.add("headcount")
@@ -380,7 +385,7 @@ def apply_defaults(
         diner_ids=(self_diner_id,) if self_diner_id is not None else (),
         unconfirmed_diners=headcount - 1,
     )
-    return spec, constraints, defaults_used
+    return spec, constraints, defaults_used, headcount
 
 
 def needs_question(parsed: ParsedRequest, style: str | None) -> list[str]:

@@ -454,7 +454,7 @@ Import confirmation shows the duration and its source. A changed duration become
 | H4 | Allowed. The edited plan is what counts |
 | H5 | Not allowed |
 
-**Edit log:** `meal_plans.edits` records each manual edit: the action, `recipe_id`, time, and any rule overridden, identified by `diner_id` and allergen or ingredient, never by name. A dish with a confirmed H2 override is not sent back for replanning or silently replaced by later validation, and the override covers only that diner and rule, so a new conflict asks again. The log is used to review overrides and to analyze how often users change model plans. It does not change preferences by itself; any preference inferred from it goes through the usual user confirmation.
+**Edit log:** `meal_plans.edits` records each manual edit: the action, `recipe_id`, time, and any rule overridden, identified by `diner_id` and allergen or ingredient, never by name. A dish with a confirmed H2 override is not sent back for replanning or silently replaced by later validation. For a rule conflict, the override covers only that diner and rule, so a new conflict, including one from a diner added later, asks again. A confirmation for an ingredient of unknown allergens covers the dish for the whole plan: it is not asked again for anyone, including diners who join later, whose known allergens H2 still checks. The log is used to review overrides and to analyze how often users change model plans. It does not change preferences by itself; any preference inferred from it goes through the usual user confirmation.
 
 **Planning metrics:** computed only on plans as the model produced them, before manual edits:
 
@@ -480,8 +480,10 @@ Import confirmation shows the duration and its source. A changed duration become
 - The card lists all saved friends, sorted by the most recent saved plan that included them.
 - Saved friends' names are matched by local code against nicknames and are not sent to a model for recognition. Code writes the constraints after the user confirms the final list.
 - When fewer people are selected than the total headcount, ask whether the rest have dietary limits, with the options "No / Yes, I'll enter them / Not sure". "Not sure" allows planning to continue with an S8 warning.
+- One card holds all of it: the selection, the people not yet matched, and the save choices, so the user is not asked several times in a row.
+- The confirmed diners carry over in the conversation. A later request reuses them without the card until it changes who eats (a new friend or guest, a new rule, a different headcount, or "only me", which clears them). A conversation whose confirmed diners include a friend deleted since then shows the card again.
 
-**Saving friend information:** when the user mentions a new friend's rule, ask once, with the options "Use for this meal only (default) / Save to friend profiles", and remind the user to get the friend's agreement before saving. After "Use for this meal only", do not ask again in this conversation. The friend profile page supports viewing, editing, and deleting, and deleting a person also deletes their rules.
+**Saving friend information:** when the user mentions a new friend's rule, ask once, with the options "Use for this meal only (default) / Save to friend profiles", and remind the user to get the friend's agreement before saving. After "Use for this meal only", do not ask again in this conversation. Rules the user states in the chat, for anyone including the user, are proposed on the card and apply to this meal only by default; saving to the profile is a choice per person. The friend profile page supports viewing, editing, and deleting, and deleting a person also deletes their rules.
 
 **Deleting a friend:** in one transaction, code deletes the person and their rules, and removes their `diner_id` and related allergen and rule details from `meal_plans.constraints` and `meal_plans.edits`.
 

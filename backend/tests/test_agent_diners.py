@@ -223,3 +223,187 @@ def test_build_card_headcount_when_others_are_mentioned_without_a_number(session
     parsed = ParsedRequest(others_mentioned=True)
     card = build_card(session, parsed, LabelTable.from_state(None, me.id), [], "我和朋友吃饭")
     assert card["headcount"] == 2 and card["others"] == 1
+
+
+# ---- applying the answer (spec 5.3, 5.4) ----
+
+
+def answer(**kwargs):
+    from minemydinner.agent.diners import DinerAnswer
+
+    return DinerAnswer.model_validate(kwargs)
+
+
+def profile(session, diner_id: int) -> list[tuple]:
+    from sqlalchemy import select
+
+    from minemydinner.models import DietaryRule
+
+    session.expire_all()
+    rows = session.scalars(
+        select(DietaryRule).where(DietaryRule.diner_id == diner_id).order_by(DietaryRule.id)
+    )
+    return [(row.rule_type, row.allergen, row.ingredient_id, row.text) for row in rows]
+
+
+PEANUT = {"rule_type": "allergy", "allergen": "peanut"}
+
+
+def test_apply_answer_meal_only_rule_not_saved(session, seeded):
+    from minemydinner.agent.diners import apply_answer
+    from minemydinner.planning.context import RuleRef
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    table = LabelTable.from_state(None, me.id)
+    settled = apply_answer(
+        session, answer(selected=[me.id, wang.id], stated={wang.id: [PEANUT]}), table
+    )
+    assert settled.diner_ids == [me.id, wang.id]
+    assert settled.meal_rules == [RuleRef(f"diner:{wang.id}", "allergy", "peanut", None, None)]
+    assert profile(session, wang.id) == []
+    assert settled.headcount == 2 and settled.guest_names == {}
+    # A selected friend gets a label in the conversation's table.
+    assert table.labels[f"diner:{wang.id}"] == "Diner 2"
+
+
+def test_apply_answer_save_rule_writes_profile(session, seeded):
+    from minemydinner.agent.diners import apply_answer
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    table = LabelTable.from_state(None, me.id)
+    chosen = answer(selected=[me.id, wang.id], stated={wang.id: [{**PEANUT, "save": True}]})
+    settled = apply_answer(session, chosen, table)
+    assert profile(session, wang.id) == [("allergy", "peanut", None, None)]
+    assert settled.meal_rules == []
+    # Saving the same rule again does not duplicate it.
+    apply_answer(session, chosen, table)
+    assert profile(session, wang.id) == [("allergy", "peanut", None, None)]
+
+
+def test_apply_answer_saves_guest_as_friend(session, seeded):
+    from sqlalchemy import select
+
+    from minemydinner.agent.diners import apply_answer
+
+    me = self_diner(session)
+    table = LabelTable.from_state(None, me.id)
+    chosen = answer(
+        selected=[me.id], guests=[{"name": "Alex", "rules": [PEANUT], "save": True}]
+    )
+    settled = apply_answer(session, chosen, table)
+    alex = session.scalars(select(Diner).where(Diner.display_name == "Alex")).one()
+    assert not alex.is_self
+    assert profile(session, alex.id) == [("allergy", "peanut", None, None)]
+    assert settled.diner_ids == [me.id, alex.id]
+    assert settled.meal_rules == [] and settled.guest_names == {}
+    assert settled.headcount == 2
+
+
+def test_apply_answer_guest_rules_for_this_meal(session, seeded):
+    from minemydinner.agent.diners import apply_answer
+    from minemydinner.planning.context import RuleRef
+
+    me = self_diner(session)
+    table = LabelTable.from_state(None, me.id)
+    # A guest settled earlier in the thread keeps guest:1.
+    table.label_for("guest:1")
+    table.names["guest:1"] = "Bob"
+    settled = apply_answer(
+        session,
+        answer(selected=[me.id], guests=[{"name": "Alex", "rules": [PEANUT]}, {"name": None}]),
+        table,
+    )
+    assert settled.guest_names == {"guest:2": "Alex", "guest:3": None}
+    assert settled.meal_rules == [RuleRef("guest:2", "allergy", "peanut", None, None)]
+    assert table.names["guest:2"] == "Alex" and table.labels["guest:2"] == "Diner 3"
+    assert "guest:3" in table.labels
+    assert settled.headcount == 3
+
+
+def test_apply_answer_user_not_eating(session, seeded):
+    from minemydinner.agent.diners import apply_answer, constraints_from
+    from minemydinner.planning.context import RuleRef, load_planning_context
+
+    me = self_diner(session)
+    rule(session, me.id, "allergy", allergen="egg")
+    table = LabelTable.from_state(None, me.id)
+    settled = apply_answer(
+        session, answer(selected=[], guests=[{"name": "Alex", "rules": [PEANUT]}]), table
+    )
+    assert settled.diner_ids == [] and settled.headcount == 1
+    ctx = load_planning_context(session, constraints_from(settled))
+    assert ctx.rules == (RuleRef("guest:1", "allergy", "peanut", None, None),)
+
+
+def test_constraints_unsure_vs_none(session, seeded):
+    from minemydinner.agent.diners import apply_answer, constraints_from
+
+    me = self_diner(session)
+    for others_answer, unconfirmed in (("unsure", 2), ("none", 0)):
+        table = LabelTable.from_state(None, me.id)
+        chosen = answer(
+            selected=[me.id], guests=[{"name": "Alex"}], others=2, others_answer=others_answer
+        )
+        settled = apply_answer(session, chosen, table)
+        assert settled.headcount == 4
+        constraints = constraints_from(settled)
+        assert constraints.unconfirmed_diners == unconfirmed
+        assert constraints.diner_ids == (me.id,)
+
+
+def test_settled_diners_state_round_trip(session, seeded):
+    from minemydinner.agent.diners import SettledDiners, apply_answer
+
+    me = self_diner(session)
+    table = LabelTable.from_state(None, me.id)
+    settled = apply_answer(
+        session,
+        answer(selected=[me.id], guests=[{"name": "Alex", "rules": [PEANUT]}], others=1,
+               others_answer="unsure"),
+        table,
+    )
+    data = settled.to_state()
+    assert set(data) == {
+        "diner_ids", "meal_rules", "guest_names", "others", "others_answer", "headcount"
+    }
+    assert data["meal_rules"][0]["diner_key"] == "guest:1"
+    assert SettledDiners.from_state(data) == settled
+
+
+def test_diner_answer_validation():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        answer(selected=[])  # nobody eats
+    with pytest.raises(ValidationError):
+        answer(selected=[1], others=-1)
+    with pytest.raises(ValidationError):
+        answer(selected=[1], guests=[{"name": None, "save": True}])  # save needs a name
+    with pytest.raises(ValidationError):
+        answer(selected=[1], stated={1: [{"rule_type": "allergy", "text": "芒果"}]})
+    with pytest.raises(ValidationError):
+        answer(selected=[1], stated={2: [PEANUT]})  # stated rules only for selected diners
+    with pytest.raises(ValidationError):
+        answer(selected=[1], stated={1: [{"rule_type": "dietary restriction", "text": "Vegan"}]})
+    assert answer(selected=[], others=1).others_answer == "unsure"
+
+
+def test_apply_answer_refuses_diet_word_text_rule(session, seeded):
+    import pytest
+
+    from minemydinner.agent.diners import DinerAnswer, GuestAnswer, RuleChoice, apply_answer
+
+    me = self_diner(session)
+    diet = RuleChoice.model_construct(
+        rule_type="dietary restriction", allergen=None, ingredient_id=None, text="素食",
+        save=False,
+    )
+    guest = GuestAnswer.model_construct(name="Alex", rules=[diet], save=False)
+    chosen = DinerAnswer.model_construct(
+        selected=[me.id], stated={}, guests=[guest], others=0, others_answer=None
+    )
+    with pytest.raises(ValueError):
+        apply_answer(session, chosen, LabelTable.from_state(None, me.id))

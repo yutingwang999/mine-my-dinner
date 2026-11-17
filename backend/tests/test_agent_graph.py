@@ -1435,8 +1435,9 @@ def test_graph_card_after_style_and_question_gates(tmp_path, session, seeded, ve
     assert card.value["kind"] == "diners"
     assert [g["name"] for g in card.value["guests"]] == ["Alex"]
     env.model.replies = [final_proposal([veg.id])]
-    out = resume(env, {"selected": []})
-    assert "__interrupt__" not in out and out["diners_answer"] == {"selected": []}
+    out = resume(env, {card.id: {"selected": [], "guests": [{"name": "Alex"}]}})
+    assert "__interrupt__" not in out
+    assert out["settled_diners"]["guest_names"] == {"guest:1": "Alex"}
     assert out["current_plan"] is not None
 
 
@@ -1554,3 +1555,167 @@ def test_graph_solo_self_rule_card_shows_only_the_user(tmp_path, session, seeded
     out = plan(env, "我对花生过敏", parse={"self_rules": {"allergens": ["peanut"]}})
     (card,) = out["__interrupt__"]
     assert [row["diner_id"] for row in card.value["rows"]] == [me.id]
+
+
+# ---- applying the diner card's answer (plan 2b, spec 5.1, 5.3) ----
+
+PEANUT_RULE = {"rule_type": "allergy", "allergen": "peanut"}
+ALEX_PARSE = {
+    "headcount": 2,
+    "others_mentioned": True,
+    "dishes": 1,
+    "mode": "shopping",
+    "guests": [{"name": "Alex", "allergens": ["peanut"]}],
+}
+
+
+def plan_with_alex(tmp_path, session, veg):
+    """"我和 Alex，他对花生过敏" planned after the card accepts Alex with peanut."""
+    me = self_diner(session)
+    stock(session, "花生", level="plenty")
+    nuts = make_recipe(session, "凉拌花生", "vegetable dish", [L("花生")])
+    env = labelled_env(tmp_path, session)
+    out = plan(env, "我和 Alex，他对花生过敏", parse=ALEX_PARSE)
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    env.model.replies = [final_proposal([veg.id])]
+    chosen = {"selected": [me.id], "guests": [{"name": "Alex", "rules": [PEANUT_RULE]}]}
+    out = resume(env, {card.id: chosen})
+    return env, me, nuts, out
+
+
+GUEST_PEANUT = {
+    "diner_key": "guest:1",
+    "rule_type": "allergy",
+    "allergen": "peanut",
+    "ingredient_id": None,
+    "text": None,
+}
+
+
+def test_graph_card_answer_plans_with_guest_rule(tmp_path, session, seeded, veg):
+    env, me, nuts, out = plan_with_alex(tmp_path, session, veg)
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    constraints = out["constraints"]
+    assert constraints["diner_ids"] == [me.id] and constraints["guest_rules"] == [GUEST_PEANUT]
+    assert constraints["headcount"] == 2 and constraints["unconfirmed_diners"] == 0
+    assert run_record(env).has_temporary_guests is True
+    shortlist = shortlist_of(out["planner_opening"])
+    offered = [e["id"] for group in shortlist.values() for e in group["candidates"]]
+    assert veg.id in offered and nuts.id not in offered
+    assert "Diner 2: allergy peanut" in out["planner_opening"]
+    assert "Alex" not in out["planner_opening"]
+    assert out["diner_labels"]["names"] == {"guest:1": "Alex"}
+    (question,) = out["questions"]
+    assert question["value"] == {"kind": "diners", "summary": {"names": ["Alex"], "others": 0}}
+
+
+def test_graph_follow_up_reuses_settled(tmp_path, session, seeded, veg):
+    env, me, _, first = plan_with_alex(tmp_path, session, veg)
+    out = plan(env, "荤素都行", parse={"dishes": 1, "mode": "shopping"})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert out["constraints"] == first["constraints"]
+    assert run_record(env).has_temporary_guests is True
+
+
+def test_graph_settled_friend_deleted_asks_again(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    out = plan(env, "我和小王吃饭", parse={"headcount": 2, "dishes": 1})
+    (card,) = out["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: {"selected": [me.id, wang.id]}})
+    assert out["settled_diners"]["diner_ids"] == [me.id, wang.id]
+    session.delete(wang)
+    session.flush()
+    out = plan(env, "再来一个", parse={"dishes": 1})
+    assert out["__interrupt__"][0].value["kind"] == "diners"
+
+
+def test_graph_alone_clears_settled(tmp_path, session, seeded, veg):
+    env, me, _, _ = plan_with_alex(tmp_path, session, veg)
+    out = plan(env, "就我自己吃", parse={"headcount": 1, "dishes": 1, "mode": "shopping"})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert out["constraints"]["diner_ids"] == [me.id]
+    assert out["constraints"]["guest_rules"] == []
+    assert out["constraints"]["unconfirmed_diners"] == 0
+    assert out["constraints"]["headcount"] == 1
+    assert out["settled_diners"] is None
+    assert run_record(env).has_temporary_guests is False
+
+
+def test_graph_skipped_card_clears_settled(tmp_path, session, seeded, veg):
+    env, me, _, _ = plan_with_alex(tmp_path, session, veg)
+    out = plan(env, "再加两个人", parse={"headcount": 4, "dishes": 1, "mode": "shopping"})
+    (card,) = out["__interrupt__"]
+    out = resume(env, {card.id: None})
+    assert out["settled_diners"] is None
+    assert out["constraints"]["diner_ids"] == [me.id]
+    assert out["constraints"]["guest_rules"] == []
+    assert out["constraints"]["unconfirmed_diners"] == 3
+    assert out["questions"][-1]["value"] == {"kind": "diners", "summary": None}
+
+
+def test_graph_reply_never_shows_label(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    out = plan(env, "我和小王吃饭，小王对花生过敏", parse={"headcount": 2, "dishes": 1})
+    (card,) = out["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id], note="Diner 2 不吃花生，宫保鸡丁已避开")]
+    chosen = {"selected": [me.id, wang.id], "stated": {wang.id: [PEANUT_RULE]}}
+    out = resume(env, {card.id: chosen})
+    assert out["messages"][-1].content == "小王 不吃花生，宫保鸡丁已避开"
+    assert out["constraints"]["guest_rules"] == [
+        {**GUEST_PEANUT, "diner_key": f"diner:{wang.id}"}
+    ]
+
+
+def test_graph_saved_guest_still_marks_temporary_guests(tmp_path, session, seeded, veg):
+    # Alex's name reached the provider in the route and parse calls, though Alex is saved
+    # as a friend on the card.
+    me = self_diner(session)
+    env = labelled_env(tmp_path, session)
+    (card,) = plan(env, "我和 Alex，他对花生过敏", parse=ALEX_PARSE)["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    chosen = {
+        "selected": [me.id],
+        "guests": [{"name": "Alex", "rules": [PEANUT_RULE], "save": True}],
+    }
+    out = resume(env, {card.id: chosen})
+    assert out["settled_diners"]["guest_names"] == {}
+    assert len(out["constraints"]["diner_ids"]) == 2
+    assert run_record(env).has_temporary_guests is True
+
+
+def test_graph_skipped_card_with_a_guest_marks_temporary_guests(tmp_path, session, seeded, veg):
+    self_diner(session)
+    env = labelled_env(tmp_path, session)
+    (card,) = plan(env, "我和 Alex，他对花生过敏", parse=ALEX_PARSE)["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: None})
+    assert out["settled_diners"] is None
+    assert run_record(env).has_temporary_guests is True
+
+
+def test_graph_card_summary_is_read_before_the_commit(
+    tmp_path, session, seeded, veg, monkeypatch
+):
+    from minemydinner.agent import graph as graph_module
+    from minemydinner.models import Diner
+
+    me = self_diner(session)
+    env = labelled_env(tmp_path, session)
+    (card,) = plan(env, "我和 Alex", parse=ALEX_PARSE)["__interrupt__"]
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("summary failed")
+
+    monkeypatch.setattr(graph_module, "answer_summary", broken)
+    chosen = {"selected": [me.id], "guests": [{"name": "Alex", "save": True}]}
+    with pytest.raises(RuntimeError):
+        resume(env, {card.id: chosen})
+    # The failure came before apply_answer, so no friend was created.
+    session.expire_all()
+    assert session.scalars(select(Diner).where(Diner.display_name == "Alex")).first() is None

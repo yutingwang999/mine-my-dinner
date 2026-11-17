@@ -15,8 +15,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from minemydinner.agent.diners import (
+    DinerAnswer,
+    SettledDiners,
+    answer_summary,
+    apply_answer,
     build_card,
     card_needed,
+    constraints_from,
     guest_key,
     not_yet_known,
     profile_rules,
@@ -52,7 +57,12 @@ from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
 from minemydinner.planning.composition import composition_gap, ranges_for, side_ranges
-from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
+from minemydinner.planning.context import (
+    MealConstraints,
+    RuleRef,
+    diner_codes,
+    load_planning_context,
+)
 from minemydinner.planning.feasibility import Shortfall, check_feasibility
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
@@ -142,7 +152,9 @@ def _zh(locale: str) -> bool:
 def _constraints(state: ChatState) -> MealConstraints:
     data = state["constraints"]
     return MealConstraints(
-        diner_ids=tuple(data["diner_ids"]), unconfirmed_diners=data["unconfirmed_diners"]
+        diner_ids=tuple(data["diner_ids"]),
+        guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
+        unconfirmed_diners=data["unconfirmed_diners"],
     )
 
 
@@ -590,6 +602,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return {
             "intent": result.parsed.intent,
             "asked_question": False,
+            "card_answered": False,
             # A new turn starts the buffer fresh, so events left by a turn that failed
             # before load_context are never recorded under this run.
             "model_calls": [_model_call_event(deps.client, "route", messages, result)],
@@ -695,7 +708,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         )
 
     def select_diners(state: ChatState) -> dict:
-        """The diner card (spec 5.2). The answer is returned raw; it is not applied yet."""
+        """The diner card (spec 5.2, 5.3). A confirmed answer (a dict) is applied by code and
+        becomes the conversation's settled diner set; guests get labels in the table. A
+        skipped card (None or text) plans as before the card existed: the user alone with
+        the parse's headcount, the rest unconfirmed, and no settled set."""
         parsed = ParsedRequest.model_validate(state["request"])
         ctx = current_labels.get()
         texts = _current_request(state["messages"])
@@ -703,7 +719,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             matched = _matched_friend_ids(texts, ctx.friends, ctx.food_terms, parsed, ctx.table)
             card = build_card(session, parsed, ctx.table, matched, "\n".join(texts))
         answer = interrupt(card)
-        return {"diners_answer": answer}
+        update: dict[str, Any] = {"settled_diners": None, "card_answered": True}
+        if not isinstance(answer, dict):
+            asked = {"kind": "diners", "summary": None}
+            update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
+            return update
+        chosen = DinerAnswer.model_validate(answer)
+        with deps.session_factory() as session:
+            # Everything that can fail runs before apply_answer commits: a node re-run after
+            # the commit would create a saved guest twice.
+            asked = {"kind": "diners", "summary": answer_summary(session, chosen)}
+            update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
+            update["settled_diners"] = apply_answer(session, chosen, ctx.table).to_state()
+        return update
 
     def _question(state: ChatState, value: dict) -> dict:
         # Shown in the chat and rendered into the parse input (parse_messages): `at` is the
@@ -746,9 +774,18 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         parsed = ParsedRequest.model_validate(state["request"])
         with deps.session_factory() as session:
             self_id = session.scalar(select(Diner.id).where(Diner.is_self))
-        spec, constraints, defaults_used = apply_defaults(parsed, self_id)
-        # The self diner plus everyone not yet confirmed (apply_defaults' headcount).
-        headcount = constraints.unconfirmed_diners + 1
+        update: dict[str, Any] = {}
+        data = state.get("settled_diners")
+        if data and parsed.headcount == 1 and not state.get("card_answered"):
+            # "就我自己吃" without the card: only the user eats, so the set is cleared.
+            data = None
+            update["settled_diners"] = None
+        settled = SettledDiners.from_state(data) if data else None
+        spec, constraints, defaults_used, headcount = apply_defaults(
+            parsed, self_id, settled.headcount if settled else None
+        )
+        if settled is not None:
+            constraints = constraints_from(settled)
         request = {
             "messages": [deps.client.prepare_text(t) for t in _current_request(state["messages"])],
             "parsed": map_strings(parsed.model_dump(), deps.client.prepare_text),
@@ -763,7 +800,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             defaults_used=defaults_used,
             prompt_version=PROMPT_VERSION,
             tools_version=TOOLS_VERSION,
-            has_temporary_guests=False,
+            # Guests' names cannot be anonymized (design 6, 7.6): true when this run's parse
+            # listed a guest (their names reached the provider) or an unsaved guest eats.
+            has_temporary_guests=bool(parsed.guests or (settled and settled.guest_names)),
         )
         # Bound the cache: a run that failed after its planner started (for example in a
         # validation or feasibility re-check) never reached present_plan, so drop every
@@ -774,10 +813,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         for event in state.get("model_calls") or []:
             deps.recorder.add_event(run_id, event)
         return {
+            **update,
             "model_calls": [],
             "spec": spec.model_dump(),
             "constraints": {
                 "diner_ids": list(constraints.diner_ids),
+                "guest_rules": [asdict(rule) for rule in constraints.guest_rules],
                 "unconfirmed_diners": constraints.unconfirmed_diners,
                 "headcount": headcount,
             },

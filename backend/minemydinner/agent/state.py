@@ -1,4 +1,4 @@
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -11,7 +11,8 @@ class ChatState(TypedDict):
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
     defaults_used: list[str]
-    # PlanSpec as a dict, and the meal constraints: diner_ids, unconfirmed_diners, headcount.
+    # PlanSpec as a dict, and the meal constraints: diner_ids, guest_rules (RuleRef dicts),
+    # unconfirmed_diners, headcount.
     spec: dict | None
     constraints: dict | None
     # Set when the user skipped the request-style question in this conversation.
@@ -52,7 +53,9 @@ class ChatState(TypedDict):
     # The conversation's label table (LabelTable.to_state()): diner keys to "Diner N". It only
     # grows; a thread saved before it existed starts one with the user as "Diner 1".
     diner_labels: dict | None
-    # The confirmed diner set, reused by later requests that do not change who eats.
+    # The confirmed diner set (SettledDiners.to_state()), reused by later requests that do
+    # not change who eats; None after a skipped card or a request where only the user eats.
     settled_diners: dict | None
-    # The raw answer to the diner card, until the answer is applied.
-    diners_answer: Any
+    # True once the diner card was answered for the current request (reset by each new
+    # message), so a solo request that asked the card keeps the set it just settled.
+    card_answered: bool
