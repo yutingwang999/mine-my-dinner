@@ -216,7 +216,9 @@ describe("DinerCard", () => {
     const guest = screen.getByTestId("guest-row-0");
     const save = within(guest).getByRole("checkbox", { name: /Save to friend profiles/ });
     expect(save).toBeDisabled();
-    await userEvent.type(within(guest).getByLabelText("Name"), "Mia");
+    const name = within(guest).getByRole("textbox", { name: "Name" });
+    expect(name).toHaveAttribute("placeholder", "Name");
+    await userEvent.type(name, "Mia");
     expect(save).toBeEnabled();
     await userEvent.click(save);
     const answer = await confirm(onConfirm);
@@ -293,5 +295,16 @@ describe("DinerCard", () => {
     return userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" })).then(() => {
       expect(screen.getByText("1 person is not matched yet")).toBeInTheDocument();
     });
+  });
+
+  it("toggles a person's checkbox from the name, but not from the Edit button", async () => {
+    setup(card());
+    const row = screen.getByTestId("diner-row-3");
+    const box = screen.getByRole("checkbox", { name: "Lao Li" });
+    expect(box).not.toBeChecked();
+    await userEvent.click(within(row).getByText("Lao Li"));
+    expect(box).toBeChecked();
+    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    expect(box).toBeChecked();
   });
 });

@@ -124,6 +124,7 @@ function warningText(
   tUnit: ReturnType<typeof useTranslations>,
   finding: PlanFinding,
   titles: Map<number, string>,
+  tDish: ReturnType<typeof useTranslations>,
 ): string[] {
   const d = finding.detail;
   const title = finding.recipe_id === null ? "" : (titles.get(finding.recipe_id) ?? "");
@@ -146,7 +147,8 @@ function warningText(
     case "S4":
       return [text("S4", { score: Number(d.score) })];
     case "S5":
-      return [text("S5")];
+      // Counts only meat and vegetable dishes, so say how many and which type.
+      return [text("S5", { count: Number(d.count), dishType: tDish(String(d.dish_type)) })];
     case "S6":
       return [text("S6", { name: String(d.name) })];
     case "S7":
@@ -170,9 +172,13 @@ function DinersLine({ plan }: { plan: ChatPlan }) {
   const diners = plan.diners ?? [];
   const others = plan.others ?? 0;
   if (!diners.some((diner) => !diner.is_self) && others === 0) return null;
-  const names = diners
-    .map((diner) => (diner.is_self ? t("dinerSelf") : (diner.name ?? t("dinerGuest"))))
-    .join(t("nameSeparator"));
+  // Named people one by one; guests without a name counted together ("3 位客人").
+  const unnamed = diners.filter((diner) => !diner.is_self && !diner.name).length;
+  const parts = diners
+    .filter((diner) => diner.is_self || diner.name)
+    .map((diner) => (diner.is_self ? t("dinerSelf") : (diner.name as string)));
+  if (unnamed > 0) parts.push(t("dinerGuests", { count: unnamed }));
+  const names = parts.join(t("nameSeparator"));
   let text: string;
   if (diners.length === 0) text = t("dinersOthersOnly", { count: others });
   else if (others > 0) text = t("dinersLineOthers", { names, count: others });
@@ -257,6 +263,7 @@ function LeftOutRow({
           </button>
         </span>
       )}
+      <div className="left-out-panel">
       {state.kind === "checking" && <p className="hint">{t("leftOutChecking")}</p>}
       {error !== null && (
         <p role="alert" className="notice notice-warning">
@@ -264,20 +271,29 @@ function LeftOutRow({
         </p>
       )}
       {state.kind === "link" && (
-        <>
-          <button type="button" onClick={() => setState({ kind: "create" })}>
-            {t("leftOutCreateInstead")}
-          </button>
-          <LinkPanel name={name} onCancel={idle} onResolved={linked} />
-        </>
+        <LinkPanel
+          name={name}
+          onCancel={idle}
+          onResolved={linked}
+          switchTo={
+            <button type="button" className="btn-text" onClick={() => setState({ kind: "create" })}>
+              {t("leftOutCreateInstead")}
+            </button>
+          }
+        />
       )}
       {state.kind === "create" && (
-        <>
-          <button type="button" onClick={() => setState({ kind: "link" })}>
-            {t("leftOutLinkInstead")}
-          </button>
-          <ConfirmPanel name={name} target={{ name }} onCancel={idle} onResolved={done} />
-        </>
+        <ConfirmPanel
+          name={name}
+          target={{ name }}
+          onCancel={idle}
+          onResolved={done}
+          switchTo={
+            <button type="button" className="btn-text" onClick={() => setState({ kind: "link" })}>
+              {t("leftOutLinkInstead")}
+            </button>
+          }
+        />
       )}
       {state.kind === "entry" && (
         <ConfirmPanel
@@ -298,6 +314,7 @@ function LeftOutRow({
       {linkNotice !== null && (state.kind === "done" || state.kind === "entry") && (
         <p className="notice notice-info">{tDictionary("linkNotRemembered", linkNotice)}</p>
       )}
+      </div>
     </li>
   );
 }
@@ -336,8 +353,8 @@ function LeftOutDishes({
 
   if (groups.size === 0) {
     return (
-      <div>
-        <p className="hint">{t("leftOut", { count })}</p>
+      <div className="left-out-box">
+        <h3>{t("leftOut", { count })}</h3>
         <span className="dish-toggles">
           <button type="button" aria-expanded={showTitles} onClick={() => setShowTitles(!showTitles)}>
             {t("showLeftOut")}
@@ -355,8 +372,8 @@ function LeftOutDishes({
   }
 
   return (
-    <div className="left-out">
-      <p className="hint">{t("leftOut", { count })}</p>
+    <div className="left-out left-out-box">
+      <h3>{t("leftOut", { count })}</h3>
       <ul aria-label={t("leftOutTitles")} className="left-out-list">
         {[...groups].map(([name, groupTitles]) => (
           <LeftOutRow key={name} name={name} titles={groupTitles} onResolved={() => setResolved(true)} />
@@ -393,14 +410,46 @@ export function PlanCard({ plan, onAction, onReplan, busy = false, actionable = 
   const locale = useLocale();
   const actions = plan.next_actions.filter((action) => KNOWN_ACTIONS.includes(action));
   const reasonTexts = [...new Set(plan.reasons.map((reason) => reason.text))];
-  const warnings = plan.warnings.flatMap((finding) => warningText(tWarning, tUnit, finding, titles));
+  const warnings = plan.warnings.flatMap((finding) => warningText(tWarning, tUnit, finding, titles, tDish));
+
+  const redBoxes = [
+    reasonTexts.length > 0 ? "reasons" : null,
+    plan.unmet.length > 0 ? "unmet" : null,
+  ].filter((box) => box !== null);
+  const lastRed = redBoxes[redBoxes.length - 1];
+
+  const actionsRow =
+    actions.length > 0 ? (
+      <div className="actions" aria-label={t("nextActions")} role="group">
+        {actions.map((action) => {
+          const href = LINK_ACTIONS[action];
+          return href ? (
+            actionable ? (
+              <Link key={action} href={`/${locale}${href}`}>
+                {tAction(action)}
+              </Link>
+            ) : (
+              <span key={action} aria-disabled="true" className="hint">
+                {tAction(action)}
+              </span>
+            )
+          ) : (
+            <button key={action} type="button" disabled={busy || !actionable} onClick={() => onAction?.(action)}>
+              {tAction(action)}
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
+
+  const showInfo = warnings.length > 0 || plan.servings_notes.length > 0 || plan.semantic_paused;
+  // The card is never empty: with no dishes and nothing explaining why, say so.
+  const showNoDishes = plan.recipes.length === 0 && redBoxes.length === 0;
 
   return (
     <section className="card plan-card">
       <h2>{t("title")}</h2>
-      {plan.recipes.length === 0 ? (
-        <p className="hint">{t("noDishes")}</p>
-      ) : (
+      {plan.recipes.length > 0 && (
         <ul className="card-list">
           {plan.recipes.map((recipe) => {
             const missing = plan.missing[String(recipe.id)] ?? [];
@@ -429,31 +478,7 @@ export function PlanCard({ plan, onAction, onReplan, busy = false, actionable = 
           })}
         </ul>
       )}
-      {/* What was asked and assumed: its own block, not part of the last dish. */}
-      <div className="plan-conditions">
-        <Asked plan={plan} />
-        <Assumed plan={plan} />
-        <DinersLine plan={plan} />
-      </div>
-      {plan.servings_notes.map((note) => (
-        <p key={note.recipe_id} className="hint">
-          {t("servingsNote", {
-            title: titles.get(note.recipe_id) ?? "",
-            servings: note.servings,
-            headcount: note.headcount,
-          })}
-        </p>
-      ))}
-      {warnings.length > 0 && (
-        <div className="notice notice-info">
-          <h3>{t("warnings")}</h3>
-          <ul>
-            {warnings.map((text, index) => (
-              <li key={index}>{text}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {showNoDishes && <p className="hint">{t("noDishes")}</p>}
       {reasonTexts.length > 0 && (
         <div className="notice notice-warning">
           <h3>{t("reasons")}</h3>
@@ -462,6 +487,7 @@ export function PlanCard({ plan, onAction, onReplan, busy = false, actionable = 
               <li key={text}>{text}</li>
             ))}
           </ul>
+          {lastRed === "reasons" && actionsRow}
         </div>
       )}
       {plan.unmet.length > 0 && (
@@ -472,33 +498,41 @@ export function PlanCard({ plan, onAction, onReplan, busy = false, actionable = 
               <li key={index}>{item.text}</li>
             ))}
           </ul>
+          {lastRed === "unmet" && actionsRow}
         </div>
       )}
-      {actions.length > 0 && (
-        <div className="actions" aria-label={t("nextActions")} role="group">
-          {actions.map((action) => {
-            const href = LINK_ACTIONS[action];
-            return href ? (
-              actionable ? (
-                <Link key={action} href={`/${locale}${href}`}>
-                  {tAction(action)}
-                </Link>
-              ) : (
-                <span key={action} aria-disabled="true" className="hint">
-                  {tAction(action)}
-                </span>
-              )
-            ) : (
-              <button key={action} type="button" disabled={busy || !actionable} onClick={() => onAction?.(action)}>
-                {tAction(action)}
-              </button>
-            );
-          })}
+      {lastRed === undefined && actionsRow}
+      {showInfo && (
+        <div className="notice notice-info">
+          {/* Warnings, servings notes and the search pause: one list, one style. */}
+          <h3>{t("warnings")}</h3>
+          <ul>
+            {warnings.map((text, index) => (
+              <li key={`warning-${index}`}>{text}</li>
+            ))}
+            {plan.servings_notes.map((note) => (
+              <li key={`servings-${note.recipe_id}`}>
+                {t("servingsNote", {
+                  title: titles.get(note.recipe_id) ?? "",
+                  servings: note.servings,
+                  headcount: note.headcount,
+                })}
+              </li>
+            ))}
+            {plan.semantic_paused && <li>{t("semanticPaused")}</li>}
+          </ul>
         </div>
       )}
       <LeftOutDishes plan={plan} onReplan={onReplan} replanDisabled={busy || !actionable} />
-      {plan.semantic_paused && <p className="notice notice-info">{t("semanticPaused")}</p>}
-      <AllergenNotice />
+      {/* What was asked and assumed, then the allergen notice: one quiet footer. */}
+      <footer className="plan-footer">
+        <div className="plan-conditions">
+          <Asked plan={plan} />
+          <Assumed plan={plan} />
+          <DinersLine plan={plan} />
+        </div>
+        <AllergenNotice />
+      </footer>
     </section>
   );
 }

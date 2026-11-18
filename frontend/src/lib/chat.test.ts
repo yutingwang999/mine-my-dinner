@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type ChatEvent,
   type ChatPlan,
+  type DinersPending,
+  dinerSummary,
   loadThread,
   normalizePlan,
   readEvents,
@@ -157,5 +159,28 @@ describe("loadThread", () => {
     const state = await loadThread("t");
     expect(state.items).toHaveLength(2);
     expect(state.items[1]).toMatchObject({ type: "assistant", id: null, text: "" });
+  });
+});
+
+describe("dinerSummary", () => {
+  const pending = {
+    kind: "diners",
+    headcount: 2,
+    rows: [
+      { diner_id: 1, name: null, is_self: true, selected: true, rules: [], proposed: [], diet_words: [] },
+      { diner_id: 2, name: "Xiao Wang", is_self: false, selected: true, rules: [], proposed: [], diet_words: [] },
+    ],
+    guests: [],
+    others: 0,
+    nudge: false,
+  } as DinersPending;
+  const answer = (selected: number[]) => ({ selected, stated: {}, guests: [], others: 0, others_answer: null });
+
+  it("includes the user when selected", () => {
+    expect(dinerSummary(pending, answer([1, 2]))).toEqual({ self: true, names: ["Xiao Wang"], others: 0 });
+  });
+
+  it("marks the user as not eating when deselected", () => {
+    expect(dinerSummary(pending, answer([2]))).toEqual({ self: false, names: ["Xiao Wang"], others: 0 });
   });
 });

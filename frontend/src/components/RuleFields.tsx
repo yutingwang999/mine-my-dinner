@@ -113,11 +113,12 @@ export function AddRule({ onAdd }: AddRuleProps) {
             </button>
           </span>
         ) : (
-          <DictionarySearch
-            search={api.searchIngredients}
-            onChoose={setIngredient}
-            onCancel={() => setIngredient(null)}
-          />
+          // Labelled like the other fields so the row's controls line up; no cancel button,
+          // since there is nothing chosen yet to cancel.
+          <div className="mini-field rule-ingredient">
+            {t("ingredientField")}
+            <DictionarySearch search={api.searchIngredients} onChoose={setIngredient} />
+          </div>
         ))}
       {current === "text" && (
         <label className="mini-field">
@@ -144,7 +145,7 @@ export type ShownRule = Pick<Rule, "rule_type" | "allergen" | "ingredient_id" | 
 };
 
 /** "Allergy: Peanut", in the current language. */
-export function useRuleText(): (rule: ShownRule) => string {
+export function useRuleText(wide = false): (rule: ShownRule) => string {
   const tRule = useTranslations("ruleType");
   const tAllergen = useTranslations("allergen");
   const locale = useLocale();
@@ -164,10 +165,12 @@ export function useRuleText(): (rule: ShownRule) => string {
             locale,
           )
         : rule.text;
-    return `${tRule(rule.rule_type)}: ${target}`;
+    // Chinese rules use a full-width colon (the diner card and the People page pass `wide`).
+    const colon = wide && locale.startsWith("zh") ? "：" : ": ";
+    return `${tRule(rule.rule_type)}${colon}${target}`;
   };
 }
 
-export function RuleText({ rule }: { rule: ShownRule }) {
-  return <>{useRuleText()(rule)}</>;
+export function RuleText({ rule, wide = false }: { rule: ShownRule; wide?: boolean }) {
+  return <>{useRuleText(wide)(rule)}</>;
 }

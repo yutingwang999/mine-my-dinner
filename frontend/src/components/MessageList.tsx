@@ -40,14 +40,14 @@ function useQuestionText() {
         });
 }
 
-/** The history line of an answered diner card: who was confirmed (the user is not named). */
+/** The history line of an answered diner card: who was confirmed (the user as "me"). */
 function useDinersText() {
   const t = useTranslations("chat.diners");
   const format = useFormatter();
   return (value: Extract<AskedQuestion, { kind: "diners" }>): string => {
     const summary = value.summary;
     if (!summary) return t("asked");
-    const parts = [...summary.names];
+    const parts = [...(summary.self ? [t("summarySelf")] : []), ...summary.names];
     if (summary.others > 0) parts.push(t("more", { count: summary.others }));
     return parts.length ? t("answeredNames", { names: format.list(parts, { type: "conjunction" }) }) : t("answered");
   };
@@ -128,7 +128,7 @@ export function MessageList({
           </li>
         )}
         {pending?.kind === "diners" && (
-          <li className="chat-message chat-assistant">
+          <li className="chat-message chat-assistant chat-wide">
             <strong className="sr-only">{t("assistant")}</strong>
             <DinerCard
               pending={pending}

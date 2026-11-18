@@ -407,3 +407,21 @@ def test_apply_answer_refuses_diet_word_text_rule(session, seeded):
     )
     with pytest.raises(ValueError):
         apply_answer(session, chosen, LabelTable.from_state(None, me.id))
+
+
+def test_answer_summary_names_the_user_and_the_friends(session, seeded):
+    from minemydinner.agent.diners import answer_summary
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    summary = answer_summary(session, answer(selected=[me.id, wang.id]))
+    assert summary == {"self": True, "names": ["小王"], "others": 0}
+
+
+def test_answer_summary_when_the_user_is_not_eating(session, seeded):
+    from minemydinner.agent.diners import answer_summary
+
+    self_diner(session)
+    wang = friend(session, "小王")
+    summary = answer_summary(session, answer(selected=[wang.id]))
+    assert summary == {"self": False, "names": ["小王"], "others": 0}

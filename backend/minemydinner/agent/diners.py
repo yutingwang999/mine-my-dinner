@@ -536,9 +536,10 @@ def apply_answer(session: Session, answer: DinerAnswer, labels: LabelTable) -> S
 
 
 def answer_summary(session: Session, answer: DinerAnswer) -> dict:
-    """The card's history summary: the selected friends' and the guests' names (the user is
-    left out), and how many people are shown without a name (unmatched or unnamed). Read
-    before `apply_answer`, so nothing that can fail runs after its commit."""
+    """The card's history summary: whether the user eats (`self`), the selected friends' and
+    the guests' names, and how many people are shown without a name (unmatched or unnamed).
+    Read before `apply_answer`, so nothing that can fail runs after its commit."""
+    me = session.scalars(select(Diner.id).where(Diner.is_self.is_(True))).first()
     friends = {
         diner.id: diner.display_name
         for diner in session.scalars(
@@ -548,5 +549,5 @@ def answer_summary(session: Session, answer: DinerAnswer) -> dict:
     names = [friends[i] for i in answer.selected if i in friends]
     names += [guest.name for guest in answer.guests if guest.name]
     unnamed = sum(1 for guest in answer.guests if not guest.name)
-    return {"names": names, "others": answer.others + unnamed}
+    return {"self": me in answer.selected, "names": names, "others": answer.others + unnamed}
 

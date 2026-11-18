@@ -215,3 +215,16 @@ Findings judged safe to defer during plan 2b's task reviews. The final whole-bra
 - **People API (Task 7 review).** `list_diners`, create, and rename load every dictionary term and recipe title once per request to compute `nickname_warning` (fine at personal scale; cache if the dictionary grows). A one-letter Latin nickname ("a") always warns, since it appears inside many terms. `imports/web.py` keeps its own `_is_cjk` next to the public `agent.labels.is_cjk`.
 - **Diner card UI (Task 8 review).** Guest rows have no select checkbox (Remove covers it; the mock shows one). A failed confirm keeps the card's edits but closes any open rule editor. The frontend keeps its own copy of the diet words (`DinerCard.tsx`, commented to change together with `constants.DIET_WORDS`), matching by substring like the rule API, while `RuleChoice` matches exactly. Next.js printed a security-advisory warning during `npm run build` (2026-11-17) suggesting `next upgrade`; packages are upgraded only by the user.
 - **Plan card left-out dishes (Task 9 review).** The plan card infers a left-out line's state from its name through `POST /api/ingredients/match`, not from the line itself, so a line linked elsewhere by a link that was not remembered can need the dictionary page. After "linking found no line" the row has no retry or cancel control (the message points to the dictionary page). The row's link notice is not cleared when the row returns to idle. Two left-out dishes with the same title give duplicate React keys in the list. Missing tests: "Plan again" disabled on an older or busy card, a plan with details plus extra titles, the confirm button on an early-stop reply. The panel's layout inside the list row is checked only in the browser (Task 10). Since 2026-11-18 `npm run build` exits 1 after compiling: Next.js's own security check reports an advisory against the installed version (the code compiles; only the user upgrades packages).
+- **People page and the browser check (Task 10 review).** The browser check (2026-11-18) reworked the plan card, the diner card, and the People page with the user. Left over:
+  - `useRuleText(wide)` is now true for every caller; drop the parameter.
+  - The rule editor's dictionary dropdown has a fixed 18rem width and can run past the right edge on a phone.
+  - The guest row's name area shows a pointer cursor although it is not a label.
+  - `LeftOutRow` in `PlanCard.tsx` has children not indented under `.left-out-panel`.
+  - `.chat-assistant.chat-wide` sits in the diner section of `globals.css`, away from the chat rules.
+  - Rename on the People page has no cancel, and a double Enter can send two renames.
+  - An old plan's title-only left-out list still has bullets.
+  - A diet word refused in the rule editor shows in the editor's own boxed notice, not in the small warning line under the person.
+  - A diet-word text rule saved before the refusal existed shows no hint.
+  - The nickname warning line has no `role="status"`.
+  - Phone-width layouts of the diner card, plan card, and People page were not checked in a browser.
+  - On this machine Windows reserves ports 2940-3039 (Hyper-V/WSL), so `next dev` on 3000 can fail with EACCES; the check ran the frontend on 3400 with `ALLOWED_ORIGINS` overridden for that run.

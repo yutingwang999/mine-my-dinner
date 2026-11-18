@@ -119,7 +119,7 @@ describe("PlanCard", () => {
     expect(screen.getByText("Missing cookware: 炒锅")).toBeInTheDocument();
     expect(screen.getByText("葱花蛋: the cooking time (15 min) is only an estimate.")).toBeInTheDocument();
     expect(screen.getByText(/2 other diners have unknown dietary limits/)).toBeInTheDocument();
-    expect(screen.getByText("葱花蛋 makes 2 servings; you are cooking for 3 people.")).toBeInTheDocument();
+    expect(screen.getByText("The 葱花蛋 recipe serves 2; you're cooking for 3 people, so scale up the ingredients.")).toBeInTheDocument();
   });
 
   it("localizes known units in the stock warning and falls back to the raw unit", () => {
@@ -384,6 +384,87 @@ describe("PlanCard what was asked, reasons, and links", () => {
   });
 });
 
+describe("PlanCard layout order", () => {
+  const noPlan = {
+    recipes: [],
+    passed: false,
+    reasons: [{ reason: "no_cookware", category: null, needed: null, available: null, text: "No cookware registered." }],
+    next_actions: ["fewer_dishes"] as never[],
+  };
+
+  it("drops the no-dishes line for a card with reasons and puts the actions inside the reasons box", () => {
+    renderWithProviders(<PlanCard plan={plan(noPlan)} />);
+    expect(screen.queryByText(/No dishes/i)).toBeNull();
+    const box = screen.getByText("No cookware registered.").closest(".notice") as HTMLElement;
+    expect(box).toHaveClass("notice-warning");
+    expect(box).toContainElement(screen.getByRole("group"));
+  });
+
+  it("keeps the no-dishes line when a card has no dishes, reasons, or unmet rules", () => {
+    renderWithProviders(<PlanCard plan={plan({ recipes: [], passed: false })} />);
+    expect(screen.getByText(/No dishes|no plan|could not/i)).toBeInTheDocument();
+  });
+
+  it("puts the actions inside the last red box, after the unmet list", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          ...noPlan,
+          unmet: [{ code: "H2", recipe_id: null, text: "Every plan found broke a rule" }],
+        })}
+      />,
+    );
+    const reasons = screen.getByText("No cookware registered.").closest(".notice") as HTMLElement;
+    const unmet = screen.getByText("Every plan found broke a rule").closest(".notice") as HTMLElement;
+    expect(reasons).not.toContainElement(screen.getByRole("group"));
+    expect(unmet).toContainElement(screen.getByRole("group"));
+  });
+
+  it("puts asked, assumed, and the diners line in the footer before the allergen notice", () => {
+    const { container } = renderWithProviders(
+      <PlanCard
+        plan={plan({
+          defaults_used: ["headcount"],
+          spec: spec({ dishes: 2 }),
+          diners: [
+            { name: null, is_self: true, guest: false },
+            { name: null, is_self: false, guest: true },
+          ],
+          others: 0,
+        })}
+      />,
+    );
+    const footer = container.querySelector(".plan-footer") as HTMLElement;
+    const asked = screen.getByText(/As you asked/);
+    const assumed = screen.getByText(/Assumed:/);
+    const diners = screen.getByText(/Checked against/);
+    const notice = screen.getByText(/check the actual ingredients for allergens/);
+    const order = [asked, assumed, diners, notice];
+    for (const node of order) expect(footer).toContainElement(node);
+    for (let i = 0; i < order.length - 1; i += 1) {
+      expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it("renders the servings note inside the info box", () => {
+    renderWithProviders(
+      <PlanCard plan={plan({ headcount: 3, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }] })} />,
+    );
+    const box = screen.getByText(/recipe serves 2/).closest(".notice") as HTMLElement;
+    expect(box).toHaveClass("notice-info");
+  });
+
+  it("puts the left-out dishes in their own box after the problem boxes", () => {
+    const { container } = renderWithProviders(
+      <PlanCard plan={plan({ ...noPlan, left_out_unknown_allergens: ["秘制酱鸡"] })} />,
+    );
+    const red = container.querySelector(".notice-warning:not(.allergen-notice)") as HTMLElement;
+    const box = container.querySelector(".left-out-box") as HTMLElement;
+    expect(red.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(box).getByRole("heading", { level: 3 })).toHaveTextContent(/left out/);
+  });
+});
+
 describe("PlanCard unknown actions", () => {
   it("skips next actions the UI does not know", () => {
     renderWithProviders(
@@ -532,7 +613,7 @@ describe("PlanCard diners and left-out dishes", () => {
     const row = within(screen.getByTestId("left-out-秘制酱"));
     await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
     expect(await row.findByRole("checkbox", { name: "Remember this link" })).toBeChecked();
-    await userEvent.click(row.getByRole("button", { name: "Create a new entry instead" }));
+    await userEvent.click(row.getByRole("button", { name: "Not listed? Create a new entry" }));
     await userEvent.click(await row.findByRole("button", { name: "Confirm selected allergens" }));
     await userEvent.click(row.getByRole("button", { name: "Save allergens" }));
     await waitFor(() => expect(callsTo(calls, "POST", "/api/allergens/resolve")).toHaveLength(1));
@@ -667,6 +748,34 @@ describe("PlanCard diners and left-out dishes", () => {
     expect(
       screen.getByText("Checked against: you, a guest; 2 more people have unknown limits"),
     ).toBeInTheDocument();
+  });
+
+  it("says how many dishes share one type, in one list with the servings notes", () => {
+    zhCard(
+      plan({
+        warnings: [{ code: "S5", recipe_id: null, detail: { dish_type: "vegetable dish", count: 2 } }],
+        servings_notes: [{ recipe_id: 1, servings: 1, headcount: 4 }],
+      }),
+    );
+    const box = screen.getByRole("heading", { name: "需要注意" }).parentElement as HTMLElement;
+    const items = within(box).getAllByRole("listitem").map((item) => item.textContent);
+    expect(items[0]).toBe("2 道菜都是素菜。");
+    expect(items[1]).toMatch(/的菜谱是 1 人份，这顿 4 人吃/);
+  });
+
+  it("counts guests without a name together on the diners line", () => {
+    zhCard(
+      plan({
+        diners: [
+          { name: null, is_self: true, guest: false },
+          { name: "Alex", is_self: false, guest: true },
+          { name: null, is_self: false, guest: true },
+          { name: null, is_self: false, guest: true },
+        ],
+        others: 0,
+      }),
+    );
+    expect(screen.getByText("按 我、Alex、2 位客人 排除")).toBeInTheDocument();
   });
 
   it("shows no diners line for a solo plan", () => {

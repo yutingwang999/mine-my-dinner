@@ -92,7 +92,7 @@ function Choices({
   const t = useTranslations("chat.diners");
   if (choices.length === 0) return null;
   return (
-    <ul className="row-list diner-choices">
+    <ul className="diner-items">
       {choices.map((choice, index) => (
         <li key={index}>
           <label className="mini-field inline">
@@ -103,7 +103,7 @@ function Choices({
               onChange={() => onChange(index, { ...choice, ticked: !choice.ticked })}
             />
             <span>
-              <RuleText rule={shown(choice.rule)} />
+              <RuleText rule={shown(choice.rule)} wide />
             </span>
             {choice.rule.by_wording && (
               <span className="badge" title={t("byWordingHint")}>
@@ -299,8 +299,8 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
           const isSelected = selected.has(row.diner_id);
           return (
             <li key={row.diner_id} data-testid={`diner-row-${row.diner_id}`} className="diner">
-              <div className="actions diner-head">
-                <label className="mini-field inline">
+              <div className="diner-line">
+                <label className="diner-who">
                   <input
                     type="checkbox"
                     checked={isSelected}
@@ -309,45 +309,47 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
                   />
                   <strong>{name}</strong>
                 </label>
-                <button type="button" disabled={busy} onClick={() => toggleEditing(editKey)}>
+                <div className="diner-info">
+                  {saved.length === 0 ? (
+                    <p className="hint">{t("noRules")}</p>
+                  ) : (
+                    <ul className="diner-items">
+                      {saved.map((rule) => (
+                        <li key={rule.id}>
+                          <span>
+                            <RuleText rule={rule} wide />
+                          </span>
+                          {isEditing && (
+                            <button
+                              type="button"
+                              className="btn-danger btn-small"
+                              disabled={busy}
+                              onClick={() => removeRule(row.diner_id, rule.id)}
+                            >
+                              {tCommon("remove")}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <Choices
+                    choices={stated[row.diner_id] ?? []}
+                    withSave
+                    disabled={busy || !isSelected}
+                    onChange={(index, choice) =>
+                      setStated((current) => ({
+                        ...current,
+                        [row.diner_id]: current[row.diner_id].map((old, at) => (at === index ? choice : old)),
+                      }))
+                    }
+                  />
+                  <DietHint words={row.diet_words} />
+                </div>
+                <button type="button" className="btn-text" disabled={busy} onClick={() => toggleEditing(editKey)}>
                   {isEditing ? t("done") : t("edit")}
                 </button>
               </div>
-              {saved.length === 0 ? (
-                <p className="hint">{t("noRules")}</p>
-              ) : (
-                <ul className="row-list diner-rules">
-                  {saved.map((rule) => (
-                    <li key={rule.id}>
-                      <span>
-                        <RuleText rule={rule} />
-                      </span>
-                      {isEditing && (
-                        <button
-                          type="button"
-                          className="btn-danger"
-                          disabled={busy}
-                          onClick={() => removeRule(row.diner_id, rule.id)}
-                        >
-                          {tCommon("remove")}
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <Choices
-                choices={stated[row.diner_id] ?? []}
-                withSave
-                disabled={busy || !isSelected}
-                onChange={(index, choice) =>
-                  setStated((current) => ({
-                    ...current,
-                    [row.diner_id]: current[row.diner_id].map((old, at) => (at === index ? choice : old)),
-                  }))
-                }
-              />
-              <DietHint words={row.diet_words} />
               {isEditing && (
                 <div className="diner-edit">
                   <p className="hint">{t("profileNote")}</p>
@@ -366,63 +368,69 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
             const named = guest.name.trim() !== "";
             return (
               <li key={guest.key} data-testid={`guest-row-${index}`} className="diner">
-                <div className="line-fields">
-                  <label className="mini-field">
-                    {t("guestName")}
+                <div className="diner-line">
+                  <div className="diner-who">
+                    <span className="diner-spacer" aria-hidden="true" />
                     <input
+                      className="diner-guest-name"
+                      aria-label={t("guestName")}
                       value={guest.name}
-                      placeholder={t("guestNamePlaceholder")}
+                      placeholder={t("guestName")}
                       maxLength={40}
                       disabled={busy}
                       onChange={(event) => updateGuest(guest.key, (old) => ({ ...old, name: event.target.value }))}
                     />
-                  </label>
-                  <label className="mini-field inline">
-                    <input
-                      type="checkbox"
-                      checked={guest.save && named}
-                      disabled={busy || !named}
-                      onChange={() => updateGuest(guest.key, (old) => ({ ...old, save: !old.save }))}
+                  </div>
+                  <div className="diner-info">
+                    <Choices
+                      choices={guest.choices}
+                      withSave={false}
+                      disabled={busy}
+                      onChange={(at, choice) =>
+                        updateGuest(guest.key, (old) => ({
+                          ...old,
+                          choices: old.choices.map((item, position) => (position === at ? choice : item)),
+                        }))
+                      }
                     />
-                    {t("saveFriend")}
-                  </label>
-                  <button type="button" disabled={busy} onClick={() => toggleEditing(editKey)}>
-                    {editing.has(editKey) ? t("done") : t("edit")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-danger"
-                    disabled={busy}
-                    onClick={() => setGuests((current) => current.filter((old) => old.key !== guest.key))}
-                  >
-                    {tCommon("remove")}
-                  </button>
+                    {guest.choices.length === 0 && guest.dietWords.length === 0 && (
+                      <span className="hint">{t("noRules")}</span>
+                    )}
+                    <DietHint words={guest.dietWords} />
+                    <label className="diner-save">
+                      <input
+                        type="checkbox"
+                        checked={guest.save && named}
+                        disabled={busy || !named}
+                        onChange={() => updateGuest(guest.key, (old) => ({ ...old, save: !old.save }))}
+                      />
+                      {t("saveFriend")}
+                    </label>
+                  </div>
+                  <div className="diner-ends">
+                    <button type="button" className="btn-text" disabled={busy} onClick={() => toggleEditing(editKey)}>
+                      {editing.has(editKey) ? t("done") : t("edit")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-text btn-danger"
+                      disabled={busy}
+                      onClick={() => setGuests((current) => current.filter((old) => old.key !== guest.key))}
+                    >
+                      {tCommon("remove")}
+                    </button>
+                  </div>
                 </div>
-                <Choices
-                  choices={guest.choices}
-                  withSave={false}
-                  disabled={busy}
-                  onChange={(at, choice) =>
-                    updateGuest(guest.key, (old) => ({
-                      ...old,
-                      choices: old.choices.map((item, position) => (position === at ? choice : item)),
-                    }))
-                  }
-                />
-                <DietHint words={guest.dietWords} />
                 {editing.has(editKey) && (
-                  <AddRule onAdd={(write, entry) => addGuestRule(guest.key, write, entry)} />
+                  <div className="diner-edit">
+                    <AddRule onAdd={(write, entry) => addGuestRule(guest.key, write, entry)} />
+                  </div>
                 )}
               </li>
             );
           })}
         </ul>
       )}
-      <div className="actions">
-        <button type="button" disabled={busy || roomForGuests < 1} onClick={() => addGuests(1)}>
-          {t("addGuest")}
-        </button>
-      </div>
       {others > 0 && (
         <div className="diner-others">
           <p>{t("unmatched", { count: others })}</p>
@@ -454,13 +462,12 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
           {errorText(error)}
         </p>
       )}
-      <div className="actions">
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={busy}
-          onClick={() => onConfirm(answer())}
-        >
+      <div className="diner-footer">
+        <button type="button" className="btn-text" disabled={busy || roomForGuests < 1} onClick={() => addGuests(1)}>
+          <span aria-hidden="true">+ </span>
+          {t("addGuest")}
+        </button>
+        <button type="button" className="btn-primary" disabled={busy} onClick={() => onConfirm(answer())}>
           {t("confirm")}
         </button>
       </div>

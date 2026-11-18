@@ -1607,7 +1607,10 @@ def test_graph_card_answer_plans_with_guest_rule(tmp_path, session, seeded, veg)
     assert "Alex" not in out["planner_opening"]
     assert out["diner_labels"]["names"] == {"guest:1": "Alex"}
     (question,) = out["questions"]
-    assert question["value"] == {"kind": "diners", "summary": {"names": ["Alex"], "others": 0}}
+    assert question["value"] == {
+        "kind": "diners",
+        "summary": {"self": True, "names": ["Alex"], "others": 0},
+    }
 
 
 def test_graph_follow_up_reuses_settled(tmp_path, session, seeded, veg):

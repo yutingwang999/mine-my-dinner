@@ -200,7 +200,13 @@ export type InventoryWrite = {
   expires_on: string | null;
 };
 
-export type Diner = { id: number; display_name: string; is_self: boolean };
+export type Diner = {
+  id: number;
+  display_name: string;
+  is_self: boolean;
+  /** The nickname is short or also an ingredient name, so planning may misread it (spec 5.5). */
+  nickname_warning?: boolean;
+};
 
 export type Rule = {
   id: number;

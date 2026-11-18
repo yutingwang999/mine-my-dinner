@@ -1,7 +1,7 @@
 "use client";
 
 import { useLocale, useTranslations } from "next-intl";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { AllergenPicker } from "@/components/AllergenPicker";
 import { DictionarySearch } from "@/components/DictionarySearch";
@@ -24,11 +24,14 @@ export function ConfirmPanel({
   target,
   onCancel,
   onResolved,
+  switchTo,
 }: {
   name: string;
   target: Target;
   onCancel: () => void;
   onResolved: () => void;
+  /** A link at the left of the action row to the other way of resolving the name. */
+  switchTo?: ReactNode;
 }) {
   const t = useTranslations("dictionary");
   const tCommon = useTranslations("common");
@@ -68,6 +71,7 @@ export function ConfirmPanel({
         </p>
       )}
       <div className="panel-actions">
+        {switchTo && <span className="panel-switch">{switchTo}</span>}
         <button type="button" disabled={busy} onClick={onCancel}>
           {tCommon("cancel")}
         </button>
@@ -84,9 +88,12 @@ export function LinkPanel({
   name,
   onCancel,
   onResolved,
+  switchTo,
 }: {
   name: string;
   onCancel: () => void;
+  /** A link at the left of the action row to the other way of resolving the name. */
+  switchTo?: ReactNode;
   /**
    * Gets the link notice to show when the name could not be remembered, else null, and the
    * link result (the entry, with how many lines were linked).
@@ -120,7 +127,7 @@ export function LinkPanel({
 
   return (
     <div className="dish-panel form-panel">
-      <DictionarySearch search={api.searchIngredients} onChoose={setChosen} />
+      <DictionarySearch search={api.searchIngredients} onChoose={setChosen} selectedId={chosen?.id ?? null} />
       {chosen !== null && <p role="status">{t("linkChosen", { entry: entryName(chosen, locale) })}</p>}
       <label className="mini-field inline">
         <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
@@ -132,6 +139,7 @@ export function LinkPanel({
         </p>
       )}
       <div className="panel-actions">
+        {switchTo && <span className="panel-switch">{switchTo}</span>}
         <button type="button" disabled={busy} onClick={onCancel}>
           {tCommon("cancel")}
         </button>

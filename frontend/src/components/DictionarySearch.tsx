@@ -23,6 +23,8 @@ type Props<T extends DictionaryEntry> = {
   /** When given, the typed text can be added as a new entry, under this label. */
   onAddUnlisted?: (name: string) => void;
   unlistedLabel?: (name: string) => string;
+  /** The entry the caller has chosen, shown as the pressed chip among the results. */
+  selectedId?: number | null;
 };
 
 export function DictionarySearch<T extends DictionaryEntry>({
@@ -31,6 +33,7 @@ export function DictionarySearch<T extends DictionaryEntry>({
   onCancel,
   onAddUnlisted,
   unlistedLabel,
+  selectedId,
 }: Props<T>) {
   const t = useTranslations("line");
   const locale = useLocale();
@@ -92,6 +95,7 @@ export function DictionarySearch<T extends DictionaryEntry>({
                 type="button"
                 className="chip"
                 aria-label={`${t("choose")} ${name}`}
+                aria-pressed={selectedId === undefined ? undefined : selectedId === entry.id}
                 onClick={() => onChoose(entry, query)}
               >
                 {name}

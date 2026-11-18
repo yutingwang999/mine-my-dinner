@@ -704,7 +704,7 @@ describe("ChatPage", () => {
       locale: "en",
     });
     expect(screen.queryByRole("button", { name: "Confirm and start planning" })).toBeNull();
-    expect(screen.getByText("Diners confirmed: Xiao Wang.")).toBeInTheDocument();
+    expect(screen.getByText("Diners confirmed: you and Xiao Wang.")).toBeInTheDocument();
   });
 
   it("keeps the diner card's edits when confirming fails", async () => {
@@ -753,15 +753,17 @@ describe("ChatPage", () => {
       "GET /api/chat/threads/t6": () => ({
         items: [
           { type: "user", text: "dinner" },
-          { type: "question", value: { kind: "diners", summary: { names: ["Xiao Wang", "Alex"], others: 2 } } },
+          { type: "question", value: { kind: "diners", summary: { self: true, names: ["Xiao Wang", "Alex"], others: 2 } } },
+          { type: "question", value: { kind: "diners", summary: { self: false, names: ["Alex"], others: 0 } } },
           { type: "question", value: { kind: "diners", summary: null } },
         ],
         pending: null,
       }),
     });
     expect(
-      await screen.findByText("Diners confirmed: Xiao Wang, Alex, and 2 more people."),
+      await screen.findByText("Diners confirmed: you, Xiao Wang, Alex, and 2 more people."),
     ).toBeInTheDocument();
+    expect(screen.getByText("Diners confirmed: Alex.")).toBeInTheDocument();
     expect(screen.getByText("Who is eating?")).toBeInTheDocument();
   });
 

@@ -136,7 +136,8 @@ export type DinerAnswer = {
 };
 
 /** The history summary of a confirmed card: friends' and guests' names, and how many more. */
-export type DinerSummary = { names: string[]; others: number };
+/** `self` is absent in histories saved before it existed (treated as false). */
+export type DinerSummary = { self?: boolean; names: string[]; others: number };
 
 export type Pending =
   | { kind: "request_style" }
@@ -310,8 +311,10 @@ export async function loadThread(threadId: string): Promise<ThreadState> {
 /** The history summary of a confirmed card, built as the backend's answer_summary builds it. */
 export function dinerSummary(pending: DinersPending, answer: DinerAnswer): DinerSummary {
   const friends = new Map<number, string>();
+  let selfId: number | null = null;
   for (const row of pending.rows) {
-    if (!row.is_self && row.name) friends.set(row.diner_id, row.name);
+    if (row.is_self) selfId = row.diner_id;
+    else if (row.name) friends.set(row.diner_id, row.name);
   }
   const names = answer.selected.flatMap((id) => {
     const name = friends.get(id);
@@ -319,7 +322,7 @@ export function dinerSummary(pending: DinersPending, answer: DinerAnswer): Diner
   });
   names.push(...answer.guests.flatMap((guest) => (guest.name ? [guest.name] : [])));
   const unnamed = answer.guests.filter((guest) => !guest.name).length;
-  return { names, others: answer.others + unnamed };
+  return { self: selfId !== null && answer.selected.includes(selfId), names, others: answer.others + unnamed };
 }
 
 export async function getRequestStyle(): Promise<RequestStyle | null> {
