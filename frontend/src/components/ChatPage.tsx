@@ -291,6 +291,10 @@ export function ChatPage() {
           error={error}
           busy={busy}
           onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))}
+          onReplan={() => {
+            followRef.current = true;
+            void submit(t("replanMessage"));
+          }}
           onChooseStyle={chooseStyle}
           onConfirmDiners={confirmDiners}
           dinerDraft={dinerDraft && dinerDraft.pending === pending ? dinerDraft.draft : undefined}

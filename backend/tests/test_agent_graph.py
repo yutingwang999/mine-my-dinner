@@ -1787,3 +1787,20 @@ def test_plan_diners_line(tmp_path, session, seeded, veg):
     assert out["current_plan"]["others"] == 0
     # The record keeps the replaced form of the names.
     assert "小王" not in json.dumps(run_record(env).final_plan, ensure_ascii=False)
+
+
+def test_plan_diners_line_without_the_user(tmp_path, session, seeded, veg):
+    """A user who deselected themselves on the card is not on the diners line."""
+    self_diner(session)
+    wang = add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    parse = {"headcount": 2, "dishes": 1, "mode": "shopping", "guests": [{"name": "Alex"}]}
+    out = plan(env, "给小王和 Alex 做饭", parse=parse)
+    (card,) = out["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    chosen = {"selected": [wang.id], "guests": [{"name": "Alex", "rules": []}]}
+    out = resume(env, {card.id: chosen})
+    assert out["current_plan"]["diners"] == [
+        {"name": "小王", "is_self": False, "guest": False},
+        {"name": "Alex", "is_self": False, "guest": True},
+    ]

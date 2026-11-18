@@ -552,7 +552,22 @@
       "assumedSnacks": "{count} 道小吃",
       "assumedMeat": "{count} 道荤菜",
       "assumedVegetable": "{count} 道素菜",
-      "reasons": "做不出方案的原因"
+      "reasons": "做不出方案的原因",
+      "dinersLine": "按 {names} 排除",
+      "dinersLineOthers": "按 {names} 排除，另外 {count} 人的忌口未知",
+      "dinersOthersOnly": "另外 {count} 人的忌口未知",
+      "dinerSelf": "我",
+      "dinerGuest": "一位客人",
+      "nameSeparator": "、",
+      "leftOutLine": "{titles}：{name}（过敏原未知）",
+      "leftOutConfirm": "确认过敏原",
+      "leftOutChecking": "正在查词典…",
+      "leftOutConfirmed": "已确认",
+      "leftOutKnown": "词典里有这个名称，但这道菜的这行食材没有关联到它，所以这道菜仍被排除。请在下面把它关联到一个条目。",
+      "leftOutNothingLinked": "没有找到这个名称下未关联的食材行，这道菜仍被排除。请到词典页面查看。",
+      "leftOutCreateInstead": "改为新建条目",
+      "leftOutLinkInstead": "改为关联到已有条目",
+      "replan": "重新规划"
     },
     "warning": {
       "S1": "{name}：{parts}，共需 {needed} {unit}，库存 {have} {unit}。",
@@ -568,6 +583,7 @@
       "S8lines": "{title}：有些食材没有识别出来（{list}）。",
       "other": "{title}：请留意 {code}。"
     },
+    "replanMessage": "按同样的要求重新规划",
     "actionMessage": {
       "switch_to_shopping": "允许购物",
       "fewer_dishes": "少做几道菜",

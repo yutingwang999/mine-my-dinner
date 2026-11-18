@@ -5,8 +5,11 @@ import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { AllergenNotice } from "@/components/AllergenNotice";
+import { ConfirmPanel, type LinkNotice, LinkPanel, type LinkResult } from "@/components/AllergenResolvePanels";
 import { RecipeToggles } from "@/components/RecipeToggles";
+import { api } from "@/lib/api";
 import { type ChatPlan, KNOWN_ACTIONS, type NextAction, type PlanFinding } from "@/lib/chat";
+import { useErrorText } from "@/lib/errors";
 
 type Props = {
   plan: ChatPlan;
@@ -15,6 +18,8 @@ type Props = {
   busy?: boolean;
   /** False for an older plan: every action button and link action is disabled. */
   actionable?: boolean;
+  /** Plans again with the same request, offered once a left-out ingredient is confirmed. */
+  onReplan?: () => void;
 };
 
 const LINK_ACTIONS: Partial<Record<NextAction, string>> = {
@@ -159,14 +164,230 @@ function warningText(
   }
 }
 
-export function PlanCard({ plan, onAction, busy = false, actionable = true }: Props) {
+/** Whose rules the plan was checked against; none for a solo plan or one saved before 2b. */
+function DinersLine({ plan }: { plan: ChatPlan }) {
+  const t = useTranslations("chat.plan");
+  const diners = plan.diners ?? [];
+  const others = plan.others ?? 0;
+  if (!diners.some((diner) => !diner.is_self) && others === 0) return null;
+  const names = diners
+    .map((diner) => (diner.is_self ? t("dinerSelf") : (diner.name ?? t("dinerGuest"))))
+    .join(t("nameSeparator"));
+  let text: string;
+  if (diners.length === 0) text = t("dinersOthersOnly", { count: others });
+  else if (others > 0) text = t("dinersLineOthers", { names, count: others });
+  else text = t("dinersLine", { names });
+  return <p className="hint">{text}</p>;
+}
+
+type RowState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  /** A name with no dictionary entry: link it, or create an entry with its allergens. */
+  | { kind: "link" }
+  | { kind: "create" }
+  /** An entry whose allergens are unknown. */
+  | { kind: "entry"; id: number }
+  /**
+   * The name matches an entry whose allergens are known, so the dish's line is not linked
+   * to it (an unknown-allergen line is unlinked or on an entry with unknown allergens).
+   */
+  | { kind: "known" }
+  /** A link found no unlinked line with this name: nothing changed for the dish. */
+  | { kind: "unchanged" }
+  | { kind: "done" };
+
+/** One ingredient name with the dishes it left out, and the way to confirm its allergens. */
+function LeftOutRow({
+  name,
+  titles,
+  onResolved,
+}: {
+  name: string;
+  titles: string[];
+  onResolved: () => void;
+}) {
+  const t = useTranslations("chat.plan");
+  const tDictionary = useTranslations("dictionary");
+  const errorText = useErrorText();
+  const [state, setState] = useState<RowState>({ kind: "idle" });
+  const [error, setError] = useState<unknown>(null);
+  // Shown when a link was asked to be remembered but the name belongs to another entry.
+  const [linkNotice, setLinkNotice] = useState<LinkNotice | null>(null);
+  const idle = () => setState({ kind: "idle" });
+  const done = () => {
+    setState({ kind: "done" });
+    onResolved();
+  };
+  // A link fixes the dish only when it linked a line to an entry whose allergens are known.
+  const linked = (notice: LinkNotice | null, result: LinkResult) => {
+    setLinkNotice(notice);
+    if (result.linked_lines === 0) setState({ kind: "unchanged" });
+    else if (result.allergens === null) setState({ kind: "entry", id: result.id });
+    else done();
+  };
+
+  async function check() {
+    setState({ kind: "checking" });
+    setError(null);
+    try {
+      // The dictionary decides the panel: no entry, an entry with unknown allergens, or known ones.
+      const { matches } = await api.matchIngredients([name]);
+      const entry = matches.find((match) => match.name === name)?.entry;
+      if (entry === undefined) {
+        setState({ kind: "link" });
+      } else if (entry.allergens === null) {
+        setState({ kind: "entry", id: entry.id });
+      } else {
+        setState({ kind: "known" });
+      }
+    } catch (caught) {
+      setError(caught);
+      idle();
+    }
+  }
+
+  return (
+    <li data-testid={`left-out-${name}`}>
+      <span>{t("leftOutLine", { titles: titles.join(t("nameSeparator")), name })}</span>
+      {state.kind === "idle" && (
+        <span className="actions">
+          <button type="button" onClick={check}>
+            {t("leftOutConfirm")}
+          </button>
+        </span>
+      )}
+      {state.kind === "checking" && <p className="hint">{t("leftOutChecking")}</p>}
+      {error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(error)}
+        </p>
+      )}
+      {state.kind === "link" && (
+        <>
+          <button type="button" onClick={() => setState({ kind: "create" })}>
+            {t("leftOutCreateInstead")}
+          </button>
+          <LinkPanel name={name} onCancel={idle} onResolved={linked} />
+        </>
+      )}
+      {state.kind === "create" && (
+        <>
+          <button type="button" onClick={() => setState({ kind: "link" })}>
+            {t("leftOutLinkInstead")}
+          </button>
+          <ConfirmPanel name={name} target={{ name }} onCancel={idle} onResolved={done} />
+        </>
+      )}
+      {state.kind === "entry" && (
+        <ConfirmPanel
+          name={name}
+          target={{ ingredient_id: state.id }}
+          onCancel={idle}
+          onResolved={done}
+        />
+      )}
+      {state.kind === "known" && (
+        <>
+          <p role="status">{t("leftOutKnown")}</p>
+          <LinkPanel name={name} onCancel={idle} onResolved={linked} />
+        </>
+      )}
+      {state.kind === "unchanged" && <p role="status">{t("leftOutNothingLinked")}</p>}
+      {state.kind === "done" && <p role="status">{t("leftOutConfirmed")}</p>}
+      {linkNotice !== null && (state.kind === "done" || state.kind === "entry") && (
+        <p className="notice notice-info">{tDictionary("linkNotRemembered", linkNotice)}</p>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Dishes left out for unknown allergens. A plan saved before their ingredient names were
+ * kept lists titles only; otherwise each name can be confirmed, and then planning again.
+ */
+function LeftOutDishes({
+  plan,
+  onReplan,
+  replanDisabled,
+}: {
+  plan: ChatPlan;
+  onReplan?: () => void;
+  replanDisabled: boolean;
+}) {
+  const t = useTranslations("chat.plan");
+  const [showTitles, setShowTitles] = useState(false);
+  const [resolved, setResolved] = useState(false);
+  const titles = plan.left_out_unknown_allergens;
+  const details = plan.left_out_details ?? [];
+  if (titles.length === 0 && details.length === 0) return null;
+
+  // Grouped by ingredient name, in order of first appearance.
+  const groups = new Map<string, string[]>();
+  for (const dish of details) {
+    for (const line of new Set(dish.lines)) {
+      const group = groups.get(line) ?? [];
+      if (!group.includes(dish.title)) group.push(dish.title);
+      groups.set(line, group);
+    }
+  }
+  const grouped = new Set([...groups.values()].flat());
+  const count = new Set([...titles, ...details.map((dish) => dish.title)]).size;
+
+  if (groups.size === 0) {
+    return (
+      <div>
+        <p className="hint">{t("leftOut", { count })}</p>
+        <span className="dish-toggles">
+          <button type="button" aria-expanded={showTitles} onClick={() => setShowTitles(!showTitles)}>
+            {t("showLeftOut")}
+          </button>
+        </span>
+        {showTitles && (
+          <ul aria-label={t("leftOutTitles")}>
+            {titles.map((title) => (
+              <li key={title}>{title}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="left-out">
+      <p className="hint">{t("leftOut", { count })}</p>
+      <ul aria-label={t("leftOutTitles")} className="left-out-list">
+        {[...groups].map(([name, groupTitles]) => (
+          <LeftOutRow key={name} name={name} titles={groupTitles} onResolved={() => setResolved(true)} />
+        ))}
+        {/* Titles kept without their ingredient names (an older reply in the same thread). */}
+        {titles
+          .filter((title) => !grouped.has(title))
+          .map((title) => (
+            <li key={`title-${title}`}>
+              <span>{title}</span>
+            </li>
+          ))}
+      </ul>
+      {resolved && onReplan && (
+        <div className="actions">
+          <button type="button" className="btn-primary" disabled={replanDisabled} onClick={onReplan}>
+            {t("replan")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PlanCard({ plan, onAction, onReplan, busy = false, actionable = true }: Props) {
   const t = useTranslations("chat.plan");
   const tWarning = useTranslations("chat.warning");
   const tAction = useTranslations("chat.action");
   const tDish = useTranslations("dishType");
   const tSource = useTranslations("timeSource");
   const tUnit = useTranslations("unit");
-  const [showLeftOut, setShowLeftOut] = useState(false);
 
   const titles = new Map(plan.recipes.map((recipe) => [recipe.id, recipe.title]));
   const locale = useLocale();
@@ -212,6 +433,7 @@ export function PlanCard({ plan, onAction, busy = false, actionable = true }: Pr
       <div className="plan-conditions">
         <Asked plan={plan} />
         <Assumed plan={plan} />
+        <DinersLine plan={plan} />
       </div>
       {plan.servings_notes.map((note) => (
         <p key={note.recipe_id} className="hint">
@@ -274,23 +496,7 @@ export function PlanCard({ plan, onAction, busy = false, actionable = true }: Pr
           })}
         </div>
       )}
-      {plan.left_out_unknown_allergens.length > 0 && (
-        <div>
-          <p className="hint">{t("leftOut", { count: plan.left_out_unknown_allergens.length })}</p>
-          <span className="dish-toggles">
-            <button type="button" aria-expanded={showLeftOut} onClick={() => setShowLeftOut(!showLeftOut)}>
-              {t("showLeftOut")}
-            </button>
-          </span>
-          {showLeftOut && (
-            <ul aria-label={t("leftOutTitles")}>
-              {plan.left_out_unknown_allergens.map((title) => (
-                <li key={title}>{title}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      <LeftOutDishes plan={plan} onReplan={onReplan} replanDisabled={busy || !actionable} />
       {plan.semantic_paused && <p className="notice notice-info">{t("semanticPaused")}</p>}
       <AllergenNotice />
     </section>

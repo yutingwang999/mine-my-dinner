@@ -207,6 +207,45 @@ describe("ChatPage", () => {
     });
   });
 
+  it("plan again sends the fixed replan message after an allergen is confirmed", async () => {
+    const entry = {
+      id: 9, name_zh: "花椒油", name_en: null, aliases_zh: [], aliases_en: [], user_aliases_zh: [],
+      user_aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null,
+      parent_id: null,
+    };
+    setup({
+      "POST /api/chat/threads/t1/messages": (body) =>
+        (body as { text: string }).text === "Plan again with the same request"
+          ? stream(frame("message", { role: "assistant", text: "Planned again." }), DONE)
+          : stream(
+              frame("plan", {
+                ...plan({ recipes: [], passed: false, left_out_unknown_allergens: ["宫保鸡丁"] }),
+                left_out_details: [{ id: 11, title: "宫保鸡丁", lines: ["花椒油"] }],
+              }),
+              DONE,
+            ),
+      "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry }] }),
+      "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => entry,
+    });
+    await send("dinner");
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm allergens" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm it contains none" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save allergens" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Plan again" }));
+    expect(await screen.findByText("Planned again.")).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")[1].body).toEqual({
+      text: "Plan again with the same request",
+      locale: "en",
+    });
+  });
+
+  it("has the backend's replan wording in both languages", async () => {
+    const zh = (await import("../../messages/zh.json")).default;
+    expect(zh.chat.replanMessage).toBe("按同样的要求重新规划");
+    expect(en.chat.replanMessage).toBe("Plan again with the same request");
+  });
+
   it.each<[NextAction, string, string]>([
     ["relax_split", "Any mix is fine", "Any mix of meat and vegetable dishes is fine"],
     ["relax_named", "Named ingredients optional", "The named ingredients are optional"],

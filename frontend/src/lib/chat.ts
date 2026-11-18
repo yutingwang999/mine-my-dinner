@@ -30,6 +30,12 @@ export type PlanFinding = {
 /** How a named meat or vegetable count binds (design 5.11). */
 export type Bound = "exact" | "at_least" | "at_most";
 
+/** A dish left out because an ingredient's allergens are unknown (backend _merge_notes). */
+export type LeftOutDish = { id: number; title: string; lines: string[] };
+
+/** One person on the plan's diners line (backend diners_line); the user has no name. */
+export type PlanDiner = { name: string | null; is_self: boolean; guest: boolean };
+
 export type ChatPlan = {
   recipes: {
     id: number;
@@ -66,6 +72,12 @@ export type ChatPlan = {
   headcount: number;
   servings_notes: { recipe_id: number; servings: number; headcount: number }[];
   left_out_unknown_allergens: string[];
+  /** Per left-out dish, the ingredient line names that caused it; absent before plan 2b. */
+  left_out_details?: LeftOutDish[];
+  /** Whose rules the plan was checked against: the user first, then friends, then guests. */
+  diners?: PlanDiner[];
+  /** People eating who match no diner; their limits are unknown. */
+  others?: number;
   semantic_paused: boolean;
   passed: boolean;
 };

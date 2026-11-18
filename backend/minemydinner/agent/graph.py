@@ -602,12 +602,17 @@ def _merge_notes(
 def diners_line(session: Session, settled: dict | None, constraints: dict) -> tuple[list, int]:
     """The plan card's diners line: the user, then saved friends, then guests, by display
     name (shown to the user only, never sent to a model), and the unmatched people count.
-    Without a settled set the user alone eats; the others are unconfirmed."""
+    Without a settled set the user alone eats; the others are unconfirmed. A user who
+    deselected themselves on the card is left off."""
     self_row = session.scalar(select(Diner).where(Diner.is_self))
-    diners = [{"name": None, "is_self": True, "guest": False}]
+    me = {"name": None, "is_self": True, "guest": False}
     if settled is None:
-        return diners, int(constraints.get("unconfirmed_diners") or 0)
-    ids = [i for i in settled.get("diner_ids") or [] if self_row is None or i != self_row.id]
+        return [me], int(constraints.get("unconfirmed_diners") or 0)
+    settled_ids = settled.get("diner_ids") or []
+    # Without a self row the card could not offer deselecting the user.
+    eats = self_row is None or self_row.id in settled_ids
+    diners = [me] if eats else []
+    ids = [i for i in settled_ids if self_row is None or i != self_row.id]
     rows = session.execute(select(Diner.id, Diner.display_name).where(Diner.id.in_(ids)))
     names = {row.id: row.display_name for row in rows}
     diners += [

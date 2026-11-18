@@ -16,6 +16,8 @@ type Props = {
   error: unknown;
   busy: boolean;
   onAction: (action: NextAction) => void;
+  /** Sends the fixed "plan again" message after a left-out ingredient is confirmed. */
+  onReplan: () => void;
   onChooseStyle: (value: RequestStyle | null) => void;
   onConfirmDiners: (answer: DinerAnswer) => void;
   /** The pending card's edits, kept across a failed confirm. */
@@ -59,6 +61,7 @@ export function MessageList({
   error,
   busy,
   onAction,
+  onReplan,
   onChooseStyle,
   onConfirmDiners,
   dinerDraft,
@@ -112,6 +115,7 @@ export function MessageList({
                   busy={busy || pending !== null}
                   actionable={index === newestPlan}
                   onAction={onAction}
+                  onReplan={onReplan}
                 />
               )}
             </li>

@@ -552,7 +552,22 @@
       "assumedSnacks": "{count, plural, one {# snack} other {# snacks}}",
       "assumedMeat": "{count, plural, one {# meat dish} other {# meat dishes}}",
       "assumedVegetable": "{count, plural, one {# vegetable dish} other {# vegetable dishes}}",
-      "reasons": "Why this plan could not be made"
+      "reasons": "Why this plan could not be made",
+      "dinersLine": "Checked against: {names}",
+      "dinersLineOthers": "Checked against: {names}; {count, plural, one {# more person has} other {# more people have}} unknown limits",
+      "dinersOthersOnly": "{count, plural, one {# person has} other {# people have}} unknown limits",
+      "dinerSelf": "you",
+      "dinerGuest": "a guest",
+      "nameSeparator": ", ",
+      "leftOutLine": "{titles}: {name} (allergens unknown)",
+      "leftOutConfirm": "Confirm allergens",
+      "leftOutChecking": "Checking the dictionary…",
+      "leftOutConfirmed": "Confirmed",
+      "leftOutKnown": "The dictionary knows this name, but this dish's ingredient line is not linked to it, so the dish stays left out. Link the line to an entry below.",
+      "leftOutNothingLinked": "No unlinked line with this name was found, so the dish stays left out. Check it on the dictionary page.",
+      "leftOutCreateInstead": "Create a new entry instead",
+      "leftOutLinkInstead": "Link to an existing entry instead",
+      "replan": "Plan again"
     },
     "warning": {
       "S1": "{name}: {parts}, {needed} {unit} needed, {have} {unit} in stock.",
@@ -568,6 +583,7 @@
       "S8lines": "{title}: some ingredients were not recognized ({list}).",
       "other": "{title}: check {code}."
     },
+    "replanMessage": "Plan again with the same request",
     "actionMessage": {
       "switch_to_shopping": "Allow shopping",
       "fewer_dishes": "Fewer dishes",
