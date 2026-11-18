@@ -228,3 +228,10 @@ Findings judged safe to defer during plan 2b's task reviews. The final whole-bra
   - The nickname warning line has no `role="status"`.
   - Phone-width layouts of the diner card, plan card, and People page were not checked in a browser.
   - On this machine Windows reserves ports 2940-3039 (Hyper-V/WSL), so `next dev` on 3000 can fail with EACCES; the check ran the frontend on 3400 with `ALLOWED_ORIGINS` overridden for that run.
+- **Evaluation runner for diners (Task 11 review).**
+  - Nothing checks that "plan again" after an allergen confirmation shows no second diner card; `cards_shown` is recorded only.
+  - A turn that never reaches `load_context` records no route or parse events, so `nickname_sent` cannot see it. Such a scenario already counts as a mismatch for other reasons.
+  - With a friend named "鱼", `nickname_sent` can flag a bare "鱼" the planner writes itself. This is the accepted false-match behaviour of short nicknames.
+  - `reset_scenario_state` deletes every user-created ingredient to undo `between_turns`. That is safe only because the runner refuses any database but the empty test database.
+  - Spec 5.9's `expect_guests` became `expect_card.guests`, and the label check looks for "Diner N" only, since the code makes no other label form.
+  - `scenarios_heldout.yaml` did not parse as committed in Task 1: an expectation note Claude wrote held an unquoted ": ". With the user's approval (2026-11-18) that one value was quoted; nothing else in the file changed.

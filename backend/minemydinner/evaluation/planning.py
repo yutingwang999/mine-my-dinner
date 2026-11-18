@@ -16,7 +16,7 @@ import time
 import uuid
 from collections import Counter
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -25,15 +25,25 @@ from typing import Any
 
 import yaml
 from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy import create_engine, delete, func, inspect, select, text
+from langgraph.types import Command
+from sqlalchemy import create_engine, delete, func, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from minemydinner.agent.checkpoint import open_checkpointer
 from minemydinner.agent.graph import CLOSEST_NOTE_EN, CLOSEST_NOTE_ZH, GraphDeps, build_graph
-from minemydinner.agent.labels import replace_nicknames, restore_labels
+from minemydinner.agent.diners import DinerAnswer, GuestAnswer, RuleChoice
+from minemydinner.agent.labels import (
+    Friend,
+    find_friends,
+    food_terms,
+    replace_nicknames,
+    restore_labels,
+)
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.agent.request import ParsedRequest, set_request_style
+from minemydinner.agent.request import REQUEST_STYLES, ParsedRequest, set_request_style
+from minemydinner.dictionary.service import resolve_allergens
+from minemydinner.extraction.normalize import all_terms, find_term_owner
 from minemydinner.llm.client import LLMClient
 from minemydinner.llm.config import (
     ConfigError,
@@ -56,7 +66,7 @@ from minemydinner.models import (
 )
 from minemydinner.recipes.embedding import try_embed_recipe
 from minemydinner.planning.composition import count_categories
-from minemydinner.planning.context import MealConstraints, load_planning_context
+from minemydinner.planning.context import MealConstraints, RuleRef, load_planning_context
 from minemydinner.planning.shortlist import (
     SHORTLIST_SAME_MAIN,
     build_shortlist_result,
@@ -129,6 +139,11 @@ class RunOutcome:
     reply_note: str = ""
     note_flags: list[str] = field(default_factory=list)
     note_checked: bool = False
+    # Whether a diner card appeared, how many did (over every turn), and the first card's
+    # value. The card holds names, so it stays out of summary.json.
+    card_shown: bool = False
+    cards_shown: int = 0
+    card: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -177,6 +192,26 @@ class Scenario:
     # Check-only: build the shortlist for this many dishes (shopping mode) and assert that
     # no main ingredient dominates it. The model is not used and the planner not run.
     shortlist_spread: int | None = None
+    # ---- plan 2b: diners (spec 5.9) ----
+    # Saved friends: [{name, rules: [{type, allergen?, ingredient?, text?}]}].
+    friends: list[dict[str, Any]] = field(default_factory=list)
+    request_style: str = "plan_then_adjust"  # or ask_first
+    # Replies to ask-first (and contradiction) questions, in order.
+    answers: list[str] = field(default_factory=list)
+    # How the runner answers the diner card: None or "accept" ticks the card's preselection
+    # and every proposed rule for this meal only, with unmatched people "none"; a mapping
+    # overrides parts of that (selected, guests, others, others_answer).
+    diners_answer: str | dict[str, Any] | None = None
+    # None: the card is not checked. False: no card may appear. True or a mapping: the first
+    # card must appear, with the parts given (preselected, others, nudge, diet_words,
+    # guests, self_proposed).
+    expect_card: bool | dict[str, Any] | None = None
+    # [{who: name | "me" | "guest", allergen? | ingredient? | text?}] against the planning
+    # context's rules of the judged turn.
+    expect_rules_applied: list[dict[str, Any]] = field(default_factory=list)
+    expect_rules_not_applied: list[dict[str, Any]] = field(default_factory=list)
+    # Database actions before the follow-up: [{confirm_allergens: {name, allergens: []}}].
+    between_turns: list[dict[str, Any]] = field(default_factory=list)
 
 
 def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
@@ -418,6 +453,221 @@ def shown_model_note(reply: str, locale: str, has_plan: bool) -> str:
     return reply.removeprefix(closest + "\n\n")
 
 
+# ---- diners and privacy checks (plan 2b, spec 5.9) ----
+
+_RULE_KINDS = {"restriction": "dietary restriction", "dislike": "dislike"}
+
+
+def _fold(value: Any) -> str:
+    return str(value).strip().casefold()
+
+
+def _rule_names(rule: dict[str, Any], ingredient_names: dict[int, set[str]]) -> set[str]:
+    """Every name a card or context rule answers to: its text, its shown ingredient name,
+    and the dictionary names of its ingredient, folded."""
+    names = {rule.get("text"), rule.get("ingredient_name")}
+    names.update(ingredient_names.get(rule.get("ingredient_id"), set()))
+    return {_fold(name) for name in names if name}
+
+
+def _rule_matches(
+    rule: dict[str, Any], wanted: dict[str, Any], ingredient_names: dict[int, set[str]]
+) -> bool:
+    """A rule matches `wanted` on each of allergen, ingredient (a dictionary name or a text
+    rule's wording), text, and kind (restriction | dislike) that `wanted` gives."""
+    if "allergen" in wanted and rule.get("allergen") != wanted["allergen"]:
+        return False
+    for key in ("ingredient", "name", "text"):
+        if key in wanted and _fold(wanted[key]) not in _rule_names(rule, ingredient_names):
+            return False
+    kind = wanted.get("kind")
+    return kind is None or rule.get("rule_type") == _RULE_KINDS.get(kind, kind)
+
+
+def _row_key(row: dict[str, Any]) -> str:
+    return "me" if row.get("is_self") else _fold(row.get("name") or "")
+
+
+def _guest_fits(
+    guest: dict[str, Any], wanted: dict[str, Any], ingredient_names: dict[int, set[str]]
+) -> bool:
+    if "name" in wanted and _fold(guest.get("name") or "") != _fold(wanted["name"] or ""):
+        return False
+    proposed = guest.get("proposed") or []
+    if any(
+        not any(r.get("allergen") == allergen for r in proposed)
+        for allergen in wanted.get("allergens") or []
+    ):
+        return False
+    if any(
+        not any(r.get("allergen") is None and _rule_matches(r, item, ingredient_names)
+                for r in proposed)
+        for item in wanted.get("avoid") or []
+    ):
+        return False
+    return "diet_words" not in wanted or bool(guest.get("diet_words")) == wanted["diet_words"]
+
+
+def _match_guests(
+    wanted: list[dict[str, Any]],
+    guests: list[dict[str, Any]],
+    ingredient_names: dict[int, set[str]],
+) -> bool:
+    """Whether each wanted guest fits a different guest on the card."""
+    if not wanted:
+        return True
+    first, rest = wanted[0], wanted[1:]
+    return any(
+        _guest_fits(guest, first, ingredient_names)
+        and _match_guests(rest, guests[:i] + guests[i + 1:], ingredient_names)
+        for i, guest in enumerate(guests)
+    )
+
+
+CARD_KEYS = {"preselected", "others", "nudge", "diet_words", "guests", "self_proposed"}
+
+
+def card_failures(
+    expect: bool | dict[str, Any] | None,
+    cards: list[dict[str, Any]],
+    ingredient_names: dict[int, set[str]],
+) -> list[str]:
+    """What about the diner cards did not match `expect_card`. None checks nothing; False
+    means no card may appear in any turn; True or a mapping means a card must appear, and
+    the mapping's parts are checked against the first card. Pure."""
+    if expect is None:
+        return []
+    if expect is False:
+        return [f"a diner card appeared ({len(cards)}), expected none"] if cards else []
+    if not cards:
+        return ["no diner card appeared"]
+    if expect is True:
+        return []
+    card = cards[0]
+    rows = card.get("rows") or []
+    guests = card.get("guests") or []
+    failures = []
+    if "preselected" in expect:
+        got = sorted(_row_key(row) for row in rows if row.get("selected"))
+        wanted = sorted(_fold(name) for name in expect["preselected"])
+        if got != wanted:
+            failures.append(f"card preselected {got}, expected {wanted}")
+    for key in ("others", "nudge"):
+        if key in expect and card.get(key) != expect[key]:
+            failures.append(f"card {key} {card.get(key)}, expected {expect[key]}")
+    if "diet_words" in expect:
+        shown = any(row.get("diet_words") for row in rows) or any(
+            guest.get("diet_words") for guest in guests
+        )
+        if shown != expect["diet_words"]:
+            failures.append(f"card diet-word hint {shown}, expected {expect['diet_words']}")
+    if "guests" in expect and not _match_guests(expect["guests"], guests, ingredient_names):
+        shown = [
+            {key: g.get(key) for key in ("name", "proposed", "diet_words")} for g in guests
+        ]
+        failures.append(f"card guests do not match {expect['guests']}; got {shown}")
+    if "self_proposed" in expect:
+        me = next((row for row in rows if row.get("is_self")), {})
+        proposed = me.get("proposed") or []
+        missing = [
+            item for item in expect["self_proposed"]
+            if not any(_rule_matches(r, item, ingredient_names) for r in proposed)
+        ]
+        if missing:
+            failures.append(f"not proposed on the user's row: {missing}; got {proposed}")
+    return failures
+
+
+def _who(key: str, diner_names: dict[str, str]) -> str:
+    if key.startswith("guest:"):
+        return "guest"
+    return _fold(diner_names.get(key, key))
+
+
+def rule_failures(
+    applied: list[dict[str, Any]],
+    not_applied: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    diner_names: dict[str, str],
+    ingredient_names: dict[int, set[str]],
+) -> list[str]:
+    """Check the planning context's rules (RuleRef dicts). `diner_names` maps "diner:<id>"
+    to "me" or the friend's name; any "guest:<n>" key is "guest". Pure."""
+
+    def found(wanted: dict[str, Any]) -> bool:
+        who = _fold(wanted["who"])
+        target = {k: v for k, v in wanted.items() if k != "who"}
+        return any(
+            _who(rule["diner_key"], diner_names) == who
+            and _rule_matches(rule, target, ingredient_names)
+            for rule in rules
+        )
+
+    failures = [f"rule not applied: {w}" for w in applied if not found(w)]
+    failures += [f"rule applied but should not be: {w}" for w in not_applied if found(w)]
+    return failures
+
+
+def _strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item)
+
+
+def _model_bound_texts(messages: Any) -> Iterator[str]:
+    """The user-data text of recorded messages: each message's content and its tool calls'
+    arguments. System prompts are skipped (fixed text the pre-hook leaves as written, whose
+    examples may hold names), as are the record's own fields (type, name, ids)."""
+    for message in messages or []:
+        if not isinstance(message, dict) or message.get("type") == "system":
+            continue
+        yield from _strings(message.get("content"))
+        for call in message.get("tool_calls") or []:
+            if isinstance(call, dict):
+                yield from _strings(call.get("args"))
+
+
+def nickname_failures(
+    runs_events: list[list[dict[str, Any]]],
+    nicknames: Sequence[str],
+    terms: frozenset[str],
+) -> list[str]:
+    """The `nickname_sent` check: a saved nickname in any model-bound message (the content
+    and tool-call arguments of the non-system `messages` of every `model_call` event: route,
+    parse, and planner) of any planning run of the thread. An occurrence inside a longer
+    food word ("鱼" in "鱼香肉丝") is not naming the friend, the same rule the nickname
+    replacement follows. Pure."""
+    friends = [Friend(-i, name) for i, name in enumerate(nicknames, start=1)]
+    by_name: dict[str, list[str]] = {}
+    for number, events in enumerate(runs_events, start=1):
+        for event in events:
+            if event.get("kind") != "model_call":
+                continue
+            for text in _model_bound_texts(event.get("messages")):
+                for _, _, friend in find_friends(text, friends, terms):
+                    where = f"run {number} {event.get('step', 'planner')}"
+                    places = by_name.setdefault(friend.nickname, [])
+                    if where not in places:
+                        places.append(where)
+    return [f"nickname sent: {name} in {', '.join(places)}" for name, places in by_name.items()]
+
+
+# A "Diner N" label in text shown to the user, also without a space ("Diner2"). An ASCII
+# lookbehind instead of \b, so "和Diner 2" (no \b between CJK and Latin) also counts.
+LABEL_SHOWN = re.compile(r"(?<![A-Za-z0-9])diner\s*\d+", re.IGNORECASE)
+
+
+def label_failures(texts: Sequence[str]) -> list[str]:
+    """The `label_shown` check over the texts shown to the user. Pure."""
+    found = list(dict.fromkeys(m.group(0) for t in texts for m in LABEL_SHOWN.finditer(t)))
+    return [f"label shown: {found}"] if found else []
+
+
 def check_shortlist_spread(
     ids: list[int], groups: dict[int, frozenset[int] | None], max_same: int
 ) -> list[str]:
@@ -489,8 +739,37 @@ def load_scenarios(path: Path) -> list[Scenario]:
             raise ValueError(f"Bad scenario {item.get('name', '?')}: {error}") from error
         if scenario.locale not in ("zh", "en"):
             raise ValueError(f"Scenario {scenario.name}: locale must be zh or en")
+        _check_diner_keys(scenario)
         scenarios.append(scenario)
     return scenarios
+
+
+DINERS_ANSWER_KEYS = {"selected", "guests", "others", "others_answer"}
+
+
+def _check_diner_keys(scenario: Scenario) -> None:
+    """Refuse a plan 2b key with a value the runner would not understand."""
+
+    def bad(what: str) -> ValueError:
+        return ValueError(f"Scenario {scenario.name}: {what}")
+
+    if scenario.request_style not in REQUEST_STYLES:
+        raise bad(f"request_style must be one of {list(REQUEST_STYLES)}")
+    answer = scenario.diners_answer
+    if isinstance(answer, str) and answer != "accept":
+        raise bad('diners_answer must be "accept" or a mapping')
+    if isinstance(answer, dict):
+        if set(answer) - DINERS_ANSWER_KEYS:
+            raise bad(f"diners_answer keys must be among {sorted(DINERS_ANSWER_KEYS)}")
+        if answer.get("others_answer") not in (None, "none", "unsure"):
+            raise bad("diners_answer.others_answer must be none or unsure")
+    if isinstance(scenario.expect_card, dict) and set(scenario.expect_card) - CARD_KEYS:
+        raise bad(f"expect_card keys must be among {sorted(CARD_KEYS)}")
+    if scenario.between_turns and not scenario.follow_up:
+        raise bad("between_turns runs before the follow-up, so it needs follow_up")
+    for action in scenario.between_turns:
+        if not isinstance(action, dict) or set(action) != {"confirm_allergens"}:
+            raise bad("between_turns items must be {confirm_allergens: {name, allergens}}")
 
 
 def load_library(session: Session, dishes: list[dict[str, Any]]) -> list[Recipe]:
@@ -540,11 +819,35 @@ def _one(session: Session, model: type, name_zh: str):
     return row
 
 
+def _rule_row(session: Session, diner_id: int, item: dict[str, Any]) -> DietaryRule:
+    ingredient = item.get("ingredient")
+    return DietaryRule(
+        diner_id=diner_id,
+        rule_type=item["type"],
+        allergen=item.get("allergen"),
+        ingredient_id=_one(session, Ingredient, ingredient).id if ingredient else None,
+        text=item.get("text"),
+    )
+
+
 def reset_scenario_state(session: Session, scenario: Scenario) -> None:
-    """Make inventory, owned cookware, rules, and the request style the scenario's own."""
+    """Make inventory, owned cookware, the user's rules, the saved friends (deleted and
+    created again, with their rules), and the request style the scenario's own. The user's
+    own diner row is kept. What an earlier scenario's `between_turns` did is undone: the
+    dictionary entries it created (the only user entries in an evaluation) are removed and
+    the recipe lines it linked to them are unlinked again."""
+    created = select(Ingredient.id).where(Ingredient.source == "user")
+    session.execute(
+        update(RecipeIngredient)
+        .where(RecipeIngredient.ingredient_id.in_(created))
+        .values(ingredient_id=None)
+        .execution_options(synchronize_session=False)
+    )
+    session.execute(delete(Ingredient).where(Ingredient.source == "user"))
     session.execute(delete(Inventory))
     session.execute(delete(CookwareOwned))
     session.execute(delete(DietaryRule))
+    session.execute(delete(Diner).where(Diner.is_self.is_(False)))
     for name, amount in scenario.inventory.items():
         ingredient = _one(session, Ingredient, name)
         by_level = isinstance(amount, str)
@@ -559,18 +862,15 @@ def reset_scenario_state(session: Session, scenario: Scenario) -> None:
         session.add(CookwareOwned(cookware_id=_one(session, Cookware, name).id))
     diner_id = session.scalar(select(Diner.id).where(Diner.is_self))
     for item in scenario.rules:
-        ingredient = item.get("ingredient")
-        session.add(
-            DietaryRule(
-                diner_id=diner_id,
-                rule_type=item["type"],
-                allergen=item.get("allergen"),
-                ingredient_id=_one(session, Ingredient, ingredient).id if ingredient else None,
-                text=item.get("text"),
-            )
-        )
+        session.add(_rule_row(session, diner_id, item))
+    for friend in scenario.friends:
+        diner = Diner(display_name=friend["name"], is_self=False)
+        session.add(diner)
+        session.flush()
+        for item in friend.get("rules") or []:
+            session.add(_rule_row(session, diner.id, item))
     session.commit()
-    set_request_style(session, "plan_then_adjust")
+    set_request_style(session, scenario.request_style)
 
 
 # ---- running ----
@@ -619,6 +919,189 @@ def _spread_outcome(
     )
 
 
+def _proposed_choice(rule: dict[str, Any]) -> RuleChoice:
+    """A rule proposed on the card, ticked for this meal only."""
+    return RuleChoice(
+        rule_type=rule["rule_type"],
+        allergen=rule.get("allergen"),
+        ingredient_id=rule.get("ingredient_id"),
+        text=rule.get("text"),
+    )
+
+
+def _scenario_choice(item: dict[str, Any], ingredient_id: Callable[[str], int]) -> RuleChoice:
+    """A rule in the scenario format ({type, allergen?, ingredient?, text?}), meal only."""
+    ingredient = item.get("ingredient")
+    return RuleChoice(
+        rule_type=item["type"],
+        allergen=item.get("allergen"),
+        ingredient_id=ingredient_id(ingredient) if ingredient else None,
+        text=item.get("text"),
+    )
+
+
+def diner_answer(
+    card: dict[str, Any],
+    how: str | dict[str, Any] | None,
+    ingredient_id: Callable[[str], int],
+) -> DinerAnswer:
+    """The runner's answer to a diner card. The default ("accept", or no `diners_answer`)
+    keeps the card's preselection, ticks every proposed rule of the selected rows and of the
+    guests for this meal only, and answers "none" for the unmatched people. A mapping
+    replaces single parts: `selected` (names, "me"; each selected row's proposed rules are
+    ticked), `guests` ([{name, rules, save}]), `others`, and `others_answer`.
+
+    Raises ValueError for a selected name that is not on the card."""
+    how = {} if how in (None, "accept") else dict(how)
+    rows = card.get("rows") or []
+    if "selected" in how:
+        by_key = {_row_key(row): row for row in rows}
+        missing = [name for name in how["selected"] if _fold(name) not in by_key]
+        if missing:
+            raise ValueError(f"diners_answer selects people not on the card: {missing}")
+        chosen = [by_key[_fold(name)] for name in how["selected"]]
+    else:
+        chosen = [row for row in rows if row.get("selected")]
+    stated = {
+        row["diner_id"]: [_proposed_choice(rule) for rule in row["proposed"]]
+        for row in chosen
+        if row.get("proposed")
+    }
+    if "guests" in how:
+        guests = [
+            GuestAnswer(
+                name=guest.get("name"),
+                rules=[_scenario_choice(rule, ingredient_id) for rule in guest.get("rules") or []],
+                save=guest.get("save", False),
+            )
+            for guest in how["guests"]
+        ]
+    else:
+        guests = [
+            GuestAnswer(
+                name=guest.get("name"),
+                rules=[_proposed_choice(rule) for rule in guest.get("proposed") or []],
+            )
+            for guest in card.get("guests") or []
+        ]
+    others = int(how.get("others", card.get("others") or 0))
+    return DinerAnswer(
+        selected=[row["diner_id"] for row in chosen],
+        stated=stated,
+        guests=guests,
+        others=others,
+        others_answer=how.get("others_answer", "none") if others else None,
+    )
+
+
+# More questions than this in one turn means the conversation is going in circles.
+MAX_ANSWERS_PER_TURN = 8
+
+
+def _drive(
+    graph,
+    factory: sessionmaker[Session],
+    config: dict[str, Any],
+    scenario: Scenario,
+    text: str,
+    answers: list[str],
+    cards: list[dict[str, Any]],
+) -> str:
+    """Send one user message and answer what the graph asks, the way the chat API resumes:
+    the diner card from `diners_answer` (every card shown is added to `cards`), and other
+    questions with the next of `answers` (consumed). Returns "" when the turn ended, or a
+    note when it stopped at a question the scenario does not answer."""
+    graph.invoke({"messages": [HumanMessage(text)], "locale": scenario.locale}, config)
+    for _ in range(MAX_ANSWERS_PER_TURN):
+        pending = graph.get_state(config).interrupts
+        if not pending:
+            return ""
+        value = pending[0].value
+        kind = value.get("kind") if isinstance(value, dict) else None
+        if kind == "diners":
+            cards.append(value)
+            with factory() as session:
+                answer = diner_answer(
+                    value, scenario.diners_answer, lambda name: _one(session, Ingredient, name).id
+                )
+            resume: Any = answer.model_dump(mode="json")
+        elif kind == "question" and answers:
+            resume = answers.pop(0)
+        else:
+            return f"stopped at a question: {kind}"
+        # By interrupt id, as the chat API does.
+        graph.invoke(Command(resume={pending[0].id: resume}), config)
+    return "stopped: too many questions in one turn"
+
+
+def run_between_turns(factory: sessionmaker[Session], actions: list[dict[str, Any]]) -> None:
+    """Database actions before the follow-up. `confirm_allergens` confirms the allergens of
+    an unmatched recipe line's name the way the dictionary API does: a new user entry with
+    those allergens, and matching unlinked lines linked to it. The next scenario's reset
+    undoes it, so a name some entry already owns is refused (that change could not be undone
+    exactly)."""
+    with factory() as session:
+        for action in actions:
+            item = action["confirm_allergens"]
+            if find_term_owner(session, Ingredient, item["name"]) is not None:
+                raise ValueError("confirm_allergens takes only an unmatched line's name")
+            resolve_allergens(session, item["name"], None, list(item.get("allergens") or []))
+        session.commit()
+
+
+def _diner_failures(
+    session: Session,
+    scenario: Scenario,
+    state: dict[str, Any],
+    cards: list[dict[str, Any]],
+    runs_events: list[list[dict[str, Any]]],
+) -> list[str]:
+    """The diner expectations and the two privacy checks, read after the scenario ran."""
+    rules: list[dict[str, Any]] = []
+    data = state.get("constraints")
+    if data:
+        constraints = MealConstraints(
+            diner_ids=tuple(data["diner_ids"]),
+            guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
+            unconfirmed_diners=data["unconfirmed_diners"],
+        )
+        rules = [asdict(rule) for rule in load_planning_context(session, constraints).rules]
+    diner_names = {
+        f"diner:{diner.id}": "me" if diner.is_self else diner.display_name
+        for diner in session.scalars(select(Diner))
+    }
+    ids = {rule.get("ingredient_id") for rule in rules}
+    for card in cards:
+        for person in [*(card.get("rows") or []), *(card.get("guests") or [])]:
+            ids.update(rule.get("ingredient_id") for rule in person.get("proposed") or [])
+    ids.discard(None)
+    ingredient_names = {
+        entry.id: set(all_terms(entry))
+        for entry in session.scalars(select(Ingredient).where(Ingredient.id.in_(ids)))
+    }
+    shown = [
+        str(m.content)
+        for m in state.get("messages") or []
+        if isinstance(m, AIMessage) and isinstance(m.content, str)
+    ]
+    shown += [text for card in cards for text in _strings(card)]
+    shown += list(_strings(state.get("current_plan")))
+    return [
+        *card_failures(scenario.expect_card, cards, ingredient_names),
+        *rule_failures(
+            scenario.expect_rules_applied,
+            scenario.expect_rules_not_applied,
+            rules,
+            diner_names,
+            ingredient_names,
+        ),
+        *nickname_failures(
+            runs_events, [friend["name"] for friend in scenario.friends], food_terms(session)
+        ),
+        *label_failures(shown),
+    ]
+
+
 def run_scenario(
     graph,
     factory: sessionmaker[Session],
@@ -640,22 +1123,18 @@ def run_scenario(
     config = {"configurable": {"thread_id": thread_id}}
     note = ""
     first_plan = None
+    cards: list[dict[str, Any]] = []
+    answers = list(scenario.answers)
     try:
-        graph.invoke(
-            {"messages": [HumanMessage(scenario.request)], "locale": scenario.locale}, config
-        )
-        pending = graph.get_state(config).interrupts
-        if pending:
-            note = f"stopped at a question: {pending[0].value.get('kind')}"
-        elif scenario.follow_up:
+        note = _drive(graph, factory, config, scenario, scenario.request, answers, cards)
+        if not note and scenario.follow_up:
             first_plan = graph.get_state(config).values.get("current_plan")
-            graph.invoke(
-                {"messages": [HumanMessage(scenario.follow_up)], "locale": scenario.locale},
-                config,
+            run_between_turns(factory, scenario.between_turns)
+            note = _drive(
+                graph, factory, config, scenario, scenario.follow_up, answers, cards
             )
-            pending = graph.get_state(config).interrupts
-            if pending:
-                note = f"stopped at a question after the follow-up: {pending[0].value.get('kind')}"
+            if note:
+                note = note.replace("at a question", "at a question after the follow-up")
     except Exception as error:
         # Includes AllModelsFailed and MonthlyCapExceeded: record it and go on.
         note = f"failed: {type(error).__name__}"
@@ -681,6 +1160,7 @@ def run_scenario(
             "planning_runs": [_run_row(r) for r in runs],
             "llm_calls": [_call_row(r) for r in all_rows],
         }
+        diner_checks = _diner_failures(session, scenario, state, cards, [r.events for r in runs])
     plan = state.get("current_plan")
     passed = bool(run and run.final_passed)
     first_passed = bool(run and run.first_passed)
@@ -695,6 +1175,7 @@ def run_scenario(
     failures = check_expectations(
         scenario, plan, passed, len(rows), first_passed, reply, library_titles, first_plan
     )
+    failures += diner_checks
     titles = [r["title"] for r in (plan or {}).get("recipes", [])]
     model_note = shown_model_note(reply, scenario.locale, bool(titles))
     flags = note_flags(model_note, titles, list(library_titles), scenario.locale)
@@ -730,6 +1211,9 @@ def run_scenario(
         reply_note=model_note,
         note_flags=flags if model_note.strip() else [],
         note_checked=bool(model_note.strip()),
+        card_shown=bool(cards),
+        cards_shown=len(cards),
+        card=cards[0] if cards else None,
     )
 
 
@@ -1155,6 +1639,7 @@ def build_summary(
         item = _entry(outcome)
         item.pop("detail")
         item.pop("reply_note")
+        item.pop("card")
         scenarios.append(item)
     return {
         "run_id": run_id,

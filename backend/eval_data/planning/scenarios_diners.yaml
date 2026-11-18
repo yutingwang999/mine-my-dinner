@@ -1,0 +1,269 @@
+# Plan 2b development set: several diners, nicknames, ask-first answers, and plan again after
+# an allergen confirmation (spec 5.9). Run with library_diners.yaml.
+#
+# This is the development set: Claude wrote these requests, and they are used while building.
+# Tuning against it is allowed only in plan 2b Task 12, with the user's approval of each round.
+# It shares no request with the held-out sets (scenarios_heldout.yaml,
+# scenarios_heldout_core.yaml), which are never tuned against.
+#
+# Every scenario also gets the two automatic checks: no saved nickname in any model-bound
+# message (nickname_sent) and no "Diner N" label in what the user sees (label_shown).
+scenarios:
+  # ---- a saved friend named by nickname, with an allergy ----
+  - name: friend_named_with_allergy
+    request: 今晚小王来家里吃饭，我们俩做两个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+      - {name: 老李, rules: [{type: dietary restriction, ingredient: 牛肉}]}
+    expect_card: {preselected: [me, 小王], others: 0, nudge: false}
+    expect_rules_applied: [{who: 小王, allergen: peanut}]
+    expect_rules_not_applied: [{who: 老李, ingredient: 牛肉}]
+    expect_titles_none: [宫保鸡丁]
+    expect_counts: {dishes: 2}
+    expect_locale_reply: zh
+    max_model_calls: 5
+    expect: The card preselects the user and 小王 (named), not 老李. The peanut dish is excluded for 小王; 老李's beef rule does not apply.
+
+  # ---- a guest's allergy stated in the request ----
+  - name: guest_allergy_in_request
+    request: 今天晚上同学 Leo 过来一起吃，他吃花生会过敏。做两个菜就够了，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    expect_card:
+      preselected: [me]
+      others: 0
+      guests: [{name: Leo, allergens: [peanut]}]
+    expect_rules_applied: [{who: guest, allergen: peanut}]
+    expect_titles_none: [宫保鸡丁]
+    expect_counts: {dishes: 2}
+    max_model_calls: 5
+    expect: Leo is a guest on the card with a proposed peanut allergy; accepted for this meal, the peanut dish is excluded.
+  - name: guest_allergy_in_request_en
+    request: My friend Leo is joining me for dinner tonight and he has a peanut allergy. Two dishes, and I can go shopping.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    expect_card:
+      preselected: [me]
+      guests: [{name: Leo, allergens: [peanut]}]
+    expect_rules_applied: [{who: guest, allergen: peanut}]
+    expect_titles_none: [宫保鸡丁]
+    expect_counts: {dishes: 2}
+    expect_locale_reply: en
+    max_model_calls: 5
+    expect: The English twin of the guest allergy case; the reply stays in English.
+
+  # ---- a guest's dislike: a warning, not an exclusion ----
+  - name: guest_dislike_is_a_warning
+    request: 今晚我和同事 Mia 两个人，只做一个凉拌菜，用家里现有的食材。Mia 不太爱吃香菜。
+    locale: zh
+    inventory: {黄瓜: 2, 香菜: plenty, 蒜: plenty}
+    cookware: [炒锅]
+    expect_card:
+      preselected: [me]
+      guests: [{name: Mia, avoid: [{name: 香菜, kind: dislike}]}]
+    expect_rules_applied: [{who: guest, ingredient: 香菜}]
+    expect_titles_exact: [凉拌黄瓜]
+    expect_warnings: [S2]
+    max_model_calls: 5
+    expect: The cucumber salad is the only dish the stock makes; it uses coriander, which Mia dislikes, so it stays with an S2 warning.
+
+  # ---- a saved friend who is not named ----
+  - name: friend_not_named_not_applied
+    request: 今晚我和小王吃饭，两个菜，可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: egg}]}
+      - {name: 老李, rules: [{type: allergy, allergen: fish}]}
+    expect_card: {preselected: [me, 小王], others: 0}
+    expect_rules_applied: [{who: 小王, allergen: egg}]
+    expect_rules_not_applied: [{who: 老李, allergen: fish}]
+    expect_titles_none: [番茄炒蛋, 番茄蛋花汤, 蛋炒饭, 煎荷包蛋, 嫩滑蒸蛋, 白煮蛋, 鸡蛋饼]
+    expect_counts: {dishes: 2}
+    max_model_calls: 5
+    expect: 老李 is on the card but not preselected, so the fish rule is not applied; 小王's egg allergy is.
+
+  # ---- more people than named, each answer for the unmatched ones ----
+  - name: unmatched_people_none
+    request: 这周六家里一共四个人吃饭，我和小王都在。三个菜一个汤，可以去买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    expect_card: {preselected: [me, 小王], others: 2}
+    expect_rules_applied: [{who: 小王, allergen: peanut}]
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 5
+    expect: Four eat but only the user and 小王 are named (a bare count, so the parse lists no guest); the two unmatched people get the default answer "none" plans for four (an S8 warning about them would be wrong; read the plan, as absence is not machine-checked).
+  - name: unmatched_people_unsure
+    request: 这周六家里一共四个人吃饭，我和小王都在。三个菜一个汤，可以去买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    diners_answer: {others_answer: unsure}
+    expect_card: {preselected: [me, 小王], others: 2}
+    expect_warnings: [S8]
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 5
+    expect: The same request answered "not sure" for the two unmatched people, so the plan carries the S8 warning.
+  - name: unmatched_people_filled_in
+    request: 这周六家里一共四个人吃饭，我和小王都在。三个菜一个汤，可以去买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    diners_answer:
+      guests:
+        - {name: null, rules: [{type: allergy, allergen: crustaceans}]}
+      others: 1
+      others_answer: none
+    expect_card: {preselected: [me, 小王], others: 2}
+    expect_rules_applied: [{who: guest, allergen: crustaceans}, {who: 小王, allergen: peanut}]
+    expect_titles_none: [油焖大虾, 宫保鸡丁]
+    expect_counts: {dishes: 3, soups: 1}
+    max_model_calls: 5
+    expect: The user fills in one of the two unmatched people (shellfish allergy, unnamed) and answers "none" for the other; the shrimp dish is excluded.
+
+  # ---- the user does not eat ----
+  - name: user_deselected
+    request: 帮小王和老李准备晚饭，我今晚不在家吃。两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    rules:
+      - {type: allergy, allergen: crustaceans}
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+      - {name: 老李, rules: [{type: dietary restriction, ingredient: 牛肉}]}
+    diners_answer: {selected: [小王, 老李]}
+    expect_rules_applied: [{who: 小王, allergen: peanut}, {who: 老李, ingredient: 牛肉}]
+    expect_rules_not_applied: [{who: me, allergen: crustaceans}]
+    expect_titles_none: [宫保鸡丁, 土豆炖牛腩, 番茄炖牛腩]
+    expect_counts: {dishes: 2}
+    max_model_calls: 5
+    expect: The user unticks their own row on the card; the friends' rules apply and the user's shellfish allergy does not.
+
+  # ---- a food-like nickname ----
+  - name: food_like_nickname_no_card
+    request: 今晚我一个人吃，想做一道清蒸鲈鱼，食材可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 蒸锅]
+    friends:
+      - {name: 鱼, rules: [{type: allergy, allergen: egg}]}
+    expect_card: false
+    expect_rules_not_applied: [{who: 鱼, allergen: egg}]
+    expect_titles_include: [清蒸鲈鱼]
+    expect_counts: {dishes: 1}
+    max_model_calls: 5
+    expect: The friend nicknamed "鱼" is not named by "鲈鱼" (a longer food word), so a solo meal shows no card, the dish name reaches the model unchanged, and the nickname check does not flag it.
+
+  # ---- one person: nothing about friends ----
+  - name: solo_meal_with_saved_friends
+    request: 今晚就我自己，随便做一个菜，可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    expect_card: false
+    expect_rules_not_applied: [{who: 小王, allergen: peanut}]
+    expect_counts: {dishes: 1}
+    max_model_calls: 5
+    expect: A solo meal with saved friends shows no card and applies no friend's rule.
+
+  # ---- the user's own new rule ----
+  - name: self_rule_on_a_solo_meal
+    request: 我最近不吃羊肉了，今晚一个人吃一个荤菜，可以去买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    expect_card: {preselected: [me], self_proposed: [{ingredient: 羊肉}]}
+    expect_rules_applied: [{who: me, ingredient: 羊肉}]
+    expect_titles_none: [葱爆羊肉, 孜然羊排]
+    expect_counts: {meat_dishes: 1}
+    max_model_calls: 5
+    expect: A rule the user states about themselves shows the card for a solo meal, with the rule proposed on the user's row; accepted for this meal, lamb dishes are excluded.
+
+  # ---- a guest's diet word ----
+  - name: guest_diet_word_hint
+    request: 明天中午 Nina 来吃饭，她吃素。我们两个人，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅]
+    expect_card:
+      preselected: [me]
+      diet_words: true
+      guests: [{name: Nina, diet_words: true}]
+    expect_counts: {dishes: 2}
+    max_model_calls: 5
+    expect: A diet word is not a rule; the card shows the hint next to Nina instead.
+
+  # ---- short answers after ask-first questions ----
+  - name: ask_first_short_count_answer
+    request: 今晚我一个人吃，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅]
+    request_style: ask_first
+    answers: [两个]
+    expect_card: false
+    expect_counts: {dishes: 2}
+    expect_not_assumed: [dishes]
+    max_model_calls: 6
+    expect: Only the number of dishes is asked; "两个" right after "做几个菜？" means two dishes.
+  - name: ask_first_mode_either
+    request: 今晚我一个人吃，做一个素菜。
+    locale: zh
+    inventory: {小白菜: plenty}
+    cookware: [炒锅, 平底锅, 汤锅]
+    request_style: ask_first
+    answers: [都行]
+    expect_card: false
+    expect_spec: {mode: shopping}
+    expect_counts: {vegetable_dishes: 1}
+    max_model_calls: 6
+    expect: Only the mode is asked; "都行" after the mode question means shopping is allowed.
+
+  # ---- plan again after an allergen confirmation ----
+  - name: plan_again_after_confirmation
+    request: 今晚我和小王两个人，就做一个香煎鸡腿，食材可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    expect_card: {preselected: [me, 小王]}
+    between_turns:
+      - confirm_allergens: {name: 秘制腌料, allergens: []}
+    follow_up: 按同样的要求重新规划
+    expect_rules_applied: [{who: 小王, allergen: peanut}]
+    expect_titles_include: [香煎鸡腿]
+    expect_counts: {dishes: 1}
+    max_model_calls: 10
+    expect: The first plan leaves out the chicken legs (an unconfirmed marinade, and 小王 has an allergy). The runner confirms the marinade has no allergens; "plan again" keeps the settled diners (no second card; see cards_shown) and can now use the dish.
+
+  # ---- a friend's new rule stated in the chat ----
+  - name: friend_new_rule_in_chat
+    request: 小王最近不吃羊肉了。今晚我们俩吃两个荤菜，可以去买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小王, rules: [{type: allergy, allergen: peanut}]}
+    expect_card: {preselected: [me, 小王], others: 0}
+    expect_rules_applied: [{who: 小王, ingredient: 羊肉}, {who: 小王, allergen: peanut}]
+    expect_titles_none: [葱爆羊肉, 孜然羊排, 宫保鸡丁]
+    expect_counts: {meat_dishes: 2}
+    max_model_calls: 5
+    expect: The new rule is proposed on 小王's row; accepted for this meal only, the lamb dishes are excluded along with the saved peanut rule.

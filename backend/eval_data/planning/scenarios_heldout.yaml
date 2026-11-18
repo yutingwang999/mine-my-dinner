@@ -158,7 +158,7 @@ scenarios:
     expect_titles_none: [青椒肉丝, 红烧排骨, 麻婆豆腐, 冬瓜排骨汤, 炸春卷]
     expect_counts: {dishes: 1, soups: 0}
     max_model_calls: 5
-    expect: Either reading is accepted (user decision): a card proposing "no pork" for this meal (answered with the default), or no card with 不想吃猪肉 kept as a query term. Either way, no pork dish.
+    expect: 'Either reading is accepted (user decision): a card proposing "no pork" for this meal (answered with the default), or no card with 不想吃猪肉 kept as a query term. Either way, no pork dish.'
   - name: diners_five_with_vegetarian
     request: 今天来4个朋友，有一个人吃素，其他人啥都行
     locale: zh
