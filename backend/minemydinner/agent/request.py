@@ -16,11 +16,11 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
 # One version per prompt, so route, parse, and planner change independently. A version any
 # record has used is never edited; a change makes the next version of that prompt.
-PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v4", "planner": "planner_v4"}
+PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v5", "planner": "planner_v4"}
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
-# The fixed message of "plan again" (spec 5.7); parse_v4 reads it as the previous request.
+# The fixed message of "plan again" (spec 5.7); the parse reads it as the previous request.
 REPLAN_MESSAGE = {"zh": "按同样的要求重新规划", "en": "Plan again with the same request"}
 
 REQUEST_STYLE_KEY = "request_style"
