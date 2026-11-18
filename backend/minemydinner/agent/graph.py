@@ -45,6 +45,7 @@ from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
+    REPLAN_MESSAGE,
     REQUEST_STYLES,
     ParsedRequest,
     apply_defaults,
@@ -177,6 +178,19 @@ def _matched_friend_ids(
     found += list(stated_friend_rules(parsed, labels))
     existing = {friend.diner_id for friend in friends}
     return [diner_id for diner_id in dict.fromkeys(found) if diner_id in existing]
+
+
+def _reuses_parse(state: ChatState) -> bool:
+    """True when the latest message is the fixed "plan again" message (spec 5.7) and the
+    thread holds a parsed request: code reuses that request instead of a route and a parse
+    call. The fixed text as a thread's first message takes the normal path."""
+    last = state["messages"][-1]
+    return (
+        state.get("request") is not None
+        and isinstance(last, HumanMessage)
+        and isinstance(last.content, str)
+        and last.content.strip() in REPLAN_MESSAGE.values()
+    )
 
 
 def _current_request(messages: list) -> list[str]:
@@ -639,13 +653,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return planner_agent
 
     def route_intent(state: ChatState) -> dict:
+        # Each new message is a new request, which may be asked about once.
+        fresh = {"asked_question": False, "card_answered": False}
+        if _reuses_parse(state):
+            # "Plan again": the previous parsed request stands as this turn's parse, with
+            # no model call; choose sends the turn on as after a parse.
+            return {**fresh, "intent": "plan", "model_calls": [{"kind": "parse_reused"}]}
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
-        # Each new message is a new request, which may be asked about once.
         return {
+            **fresh,
             "intent": result.parsed.intent,
-            "asked_question": False,
-            "card_answered": False,
             # A new turn starts the buffer fresh, so events left by a turn that failed
             # before load_context are never recorded under this run.
             "model_calls": [_model_call_event(deps.client, "route", messages, result)],
@@ -659,7 +677,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
 
     def choose(state: ChatState) -> str:
-        return "parse_request" if state["intent"] == "plan" else "other"
+        if state["intent"] != "plan":
+            return "other"
+        return after_parse(state) if _reuses_parse(state) else "parse_request"
 
     def parse_request(state: ChatState) -> dict:
         # The parse also reads the assistant's questions, so a short answer such as "两个"
@@ -1283,8 +1303,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     )
     builder.add_node("present_plan", with_labels(present_plan))
     builder.add_edge(START, "route_intent")
-    builder.add_conditional_edges("route_intent", choose, ["parse_request", "other"])
     gates = ["ask_style", "ask_question", "select_diners", "load_context", "unclear"]
+    builder.add_conditional_edges("route_intent", choose, ["parse_request", "other", *gates])
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")

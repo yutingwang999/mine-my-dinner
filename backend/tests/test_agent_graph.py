@@ -26,7 +26,12 @@ from minemydinner.agent.graph import (
     reason_text,
 )
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.agent.request import PROMPT_VERSION, get_request_style, set_request_style
+from minemydinner.agent.request import (
+    PROMPT_VERSION,
+    REPLAN_MESSAGE,
+    get_request_style,
+    set_request_style,
+)
 from minemydinner.planning.feasibility import Shortfall
 from minemydinner.models import AppPreference, LlmCall, PlanningRun
 from minemydinner.agent.planner import TOOLS_VERSION
@@ -1807,3 +1812,66 @@ def test_plan_diners_line_without_the_user(tmp_path, session, seeded, veg):
         {"name": "小王", "is_self": False, "guest": False},
         {"name": "Alex", "is_self": False, "guest": True},
     ]
+
+
+# ---- planning again with the fixed message (spec 5.7) ----
+
+
+def route_and_parse_calls(env: GraphEnv, since: int) -> list[str]:
+    """The route and parse model calls made after the first `since` calls, by step."""
+    from minemydinner.agent.request import load_prompt
+
+    steps = {load_prompt("route"): "route", load_prompt("parse"): "parse"}
+    return [steps[s[0].content] for s in env.model.sent[since:] if s[0].content in steps]
+
+
+@pytest.mark.parametrize(
+    ("text", "locale"),
+    [(REPLAN_MESSAGE["zh"], "zh"), (f"  {REPLAN_MESSAGE['en']} ", "en")],
+)
+def test_replan_message_reuses_the_previous_parse(tmp_path, session, seeded, veg, text, locale):
+    env, _, _, first = plan_with_alex(tmp_path, session, veg)
+    first_parsed = run_record(env).request["parsed"]
+    since = len(env.model.sent)
+    # A parse call would return a different request.
+    out = plan(env, text, parse={"dishes": 5, "query": "红烧肉"}, locale=locale)
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert route_and_parse_calls(env, since) == []
+    assert len(planner_calls(env)) == 2
+    assert out["request"] == first["request"]
+    assert out["constraints"] == first["constraints"]
+    record = run_record(env)
+    assert record.request["parsed"] == first_parsed
+    assert record.request["locale"] == locale
+    assert [e for e in record.events if e.get("step") in ("route", "parse")] == []
+    assert record.events[0] == {"kind": "parse_reused"}
+
+
+def test_replan_message_as_first_message_routes_and_parses(graph_env, veg):
+    out = plan(
+        graph_env,
+        REPLAN_MESSAGE["zh"],
+        parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([veg.id])],
+        locale="zh",
+    )
+    assert out["current_plan"]["passed"]
+    assert route_and_parse_calls(graph_env, 0) == ["route", "parse"]
+    steps = [e.get("step") for e in run_record(graph_env).events]
+    assert steps[:2] == ["route", "parse"]
+    assert {"kind": "parse_reused"} not in run_record(graph_env).events
+
+
+def test_replan_message_with_more_words_routes_and_parses(tmp_path, session, seeded, veg):
+    env, _, _, _ = plan_with_alex(tmp_path, session, veg)
+    since = len(env.model.sent)
+    out = plan(
+        env,
+        f"{REPLAN_MESSAGE['zh']}，换个辣的",
+        parse={"dishes": 1, "mode": "shopping", "query": "辣"},
+        locale="zh",
+    )
+    assert out["current_plan"]["passed"]
+    assert route_and_parse_calls(env, since) == ["route", "parse"]
+    assert out["request"]["query"] == "辣"
+    assert {"kind": "parse_reused"} not in run_record(env).events
