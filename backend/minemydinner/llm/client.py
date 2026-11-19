@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -274,18 +274,38 @@ class LLMClient:
         return text
 
     def _prepare_message(self, message: BaseMessage) -> BaseMessage:
+        """The pre-hooks applied to the text, the text blocks, and the tool-call arguments
+        (both `tool_calls` and tool_use blocks): an earlier model reply in the history holds
+        its arguments in their restored form."""
+        hook = self._apply_pre_hooks
+        update: dict[str, Any] = {}
         content = message.content
         if isinstance(content, str):
-            return message.model_copy(update={"content": self._apply_pre_hooks(content)})
-        parts = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(self._apply_pre_hooks(part))
-            elif part.get("type") == "text":
-                parts.append({**part, "text": self._apply_pre_hooks(part["text"])})
-            else:
-                parts.append(part)
-        return message.model_copy(update={"content": parts})
+            update["content"] = hook(content)
+        else:
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(hook(part))
+                elif part.get("type") == "text":
+                    parts.append({**part, "text": hook(part["text"])})
+                elif part.get("type") == "tool_use" and "input" in part:
+                    parts.append({**part, "input": map_strings(part["input"], hook)})
+                else:
+                    parts.append(part)
+            update["content"] = parts
+        if isinstance(message, AIMessage):
+            if message.tool_calls:
+                update["tool_calls"] = [
+                    {**call, "args": map_strings(call["args"], hook)}
+                    for call in message.tool_calls
+                ]
+            if message.invalid_tool_calls:
+                update["invalid_tool_calls"] = [
+                    {**call, "args": hook(call["args"]) if call.get("args") else call.get("args")}
+                    for call in message.invalid_tool_calls
+                ]
+        return message.model_copy(update=update)
 
     def _restore[T: BaseModel](self, parsed: T, schema: type[T]) -> T:
         if not self.post_hooks:

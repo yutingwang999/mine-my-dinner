@@ -26,6 +26,7 @@ from minemydinner.agent.diners import (
     guest_key,
     not_yet_known,
     profile_rules,
+    settled_friend_deleted,
     settled_rules,
     stated_friend_rules,
     stated_to_rules,
@@ -654,7 +655,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     def route_intent(state: ChatState) -> dict:
         # Each new message is a new request, which may be asked about once.
-        fresh = {"asked_question": False, "card_answered": False}
+        fresh = {"asked_question": False}
         if _reuses_parse(state):
             # "Plan again": the previous parsed request stands as this turn's parse, with
             # no model call; choose sends the turn on as after a parse.
@@ -728,9 +729,24 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return "ask_style"
         if not state.get("asked_question") and needs_question(parsed, style):
             return "ask_question"
-        if diner_card_needed(state, parsed):
+        # "Plan again" reuses the request the diners were settled for: the card shows only
+        # when a friend in the settled set was deleted since (never drop a person silently).
+        if _reuses_parse(state):
+            if friend_deleted_since(state):
+                return "select_diners"
+        elif diner_card_needed(state, parsed):
             return "select_diners"
         return "load_context"
+
+    def friend_deleted_since(state: ChatState) -> bool:
+        """A friend in the settled set no longer exists; read from the database."""
+        settled = state.get("settled_diners")
+        if not settled:
+            return False
+        with deps.session_factory() as session:
+            self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+            existing = set(session.scalars(select(Diner.id).where(Diner.is_self.is_(False))))
+        return settled_friend_deleted(settled, existing, self_id)
 
     def diner_card_needed(state: ChatState, parsed: ParsedRequest) -> bool:
         """Spec 5.1, read from the database; no model call."""
@@ -768,6 +784,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             {friend.diner_id for friend in ctx.friends},
             self_id=self_id,
             uncovered_rules=uncovered,
+            self_diet_words=parsed.self_rules.diet_words if parsed.self_rules else (),
         )
 
     def select_diners(state: ChatState) -> dict:
@@ -782,7 +799,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             matched = _matched_friend_ids(texts, ctx.friends, ctx.food_terms, parsed, ctx.table)
             card = build_card(session, parsed, ctx.table, matched, "\n".join(texts))
         answer = interrupt(card)
-        update: dict[str, Any] = {"settled_diners": None, "card_answered": True}
+        update: dict[str, Any] = {"settled_diners": None}
         if not isinstance(answer, dict):
             asked = {"kind": "diners", "summary": None}
             update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
@@ -793,7 +810,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # the commit would create a saved guest twice.
             asked = {"kind": "diners", "summary": answer_summary(session, chosen)}
             update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
-            update["settled_diners"] = apply_answer(session, chosen, ctx.table).to_state()
+            settled = apply_answer(session, chosen, ctx.table, stated_headcount=parsed.headcount)
+            update["settled_diners"] = settled.to_state()
         return update
 
     def _question(state: ChatState, value: dict) -> dict:
@@ -837,12 +855,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         parsed = ParsedRequest.model_validate(state["request"])
         with deps.session_factory() as session:
             self_id = session.scalar(select(Diner.id).where(Diner.is_self))
-        update: dict[str, Any] = {}
+        # The settled set stands until a confirmed card replaces it or a skipped card clears
+        # it; a change in who eats always shows the card (spec 5.1).
         data = state.get("settled_diners")
-        if data and parsed.headcount == 1 and not state.get("card_answered"):
-            # "就我自己吃" without the card: only the user eats, so the set is cleared.
-            data = None
-            update["settled_diners"] = None
         settled = SettledDiners.from_state(data) if data else None
         spec, constraints, defaults_used, headcount = apply_defaults(
             parsed, self_id, settled.headcount if settled else None
@@ -876,7 +891,6 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         for event in state.get("model_calls") or []:
             deps.recorder.add_event(run_id, event)
         return {
-            **update,
             "model_calls": [],
             "spec": spec.model_dump(),
             "constraints": {

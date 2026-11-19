@@ -82,8 +82,10 @@ def test_card_needed_for_new_self_rule_alone():
     assert card_needed(ParsedRequest(headcount=1), [], [peanut()], None, set())
 
 
-def settled(diner_ids, headcount, guest_names=None, meal_rules=None) -> dict:
-    return {
+def settled(diner_ids, headcount, guest_names=None, meal_rules=None, stated=None) -> dict:
+    """A settled set as stored; `stated` is the headcount the parse gave when it was
+    confirmed. Sets saved before that field existed have no `stated_headcount` key."""
+    data = {
         "diner_ids": diner_ids,
         "meal_rules": meal_rules or [],
         "guest_names": guest_names or {},
@@ -91,11 +93,15 @@ def settled(diner_ids, headcount, guest_names=None, meal_rules=None) -> dict:
         "others_answer": None,
         "headcount": headcount,
     }
+    if stated is not None:
+        data["stated_headcount"] = stated
+    return data
 
 
 def test_card_not_needed_when_settled_covers():
-    # Settled: the user (1) and 小王 (7); the follow-up "换个辣的" names no one.
-    follow_up = ParsedRequest(query="辣的")
+    # Settled: the user (1) and 小王 (7); the follow-up "换个辣的" names no one, and its parse
+    # (which reads the conversation) still has others mentioned.
+    follow_up = ParsedRequest(query="辣的", others_mentioned=True)
     assert not card_needed(follow_up, [], [], settled([1, 7], 2), {7}, self_id=1)
     # 小王 named again, with the same headcount, is still covered.
     again = ParsedRequest(headcount=2, others_mentioned=True)
@@ -119,9 +125,32 @@ def test_card_needed_when_settled_friend_deleted():
     assert card_needed(ParsedRequest(), [], [], settled([1, 7], 2), set(), self_id=1)
 
 
-def test_card_not_needed_when_only_the_user_eats_even_with_a_settled_set():
+def test_card_needed_when_only_the_user_eats_after_a_shared_set():
+    # "就我自己吃" after {me, 小王} changes who eats: the card asks (decided 2026-11-18).
     alone = ParsedRequest(headcount=1)
-    assert not card_needed(alone, [], [], settled([1, 7], 2), {7}, self_id=1)
+    assert card_needed(alone, [], [], settled([1, 7], 2, stated=2), {7}, self_id=1)
+
+
+def test_card_compares_with_the_headcount_stated_when_the_set_was_confirmed():
+    # "我和朋友" (2) confirmed with the total edited to 3: a follow-up repeating 2 is no change.
+    edited = settled([1, 7], 3, stated=2)
+    assert not card_needed(ParsedRequest(headcount=2), [], [], edited, {7}, self_id=1)
+    assert card_needed(ParsedRequest(headcount=3), [], [], edited, {7}, self_id=1)
+    # No headcount in the follow-up (others still mentioned): nothing to compare.
+    assert not card_needed(ParsedRequest(others_mentioned=True), [], [], edited, {7}, self_id=1)
+    # "给小王做饭" (1) settled as {小王}: a follow-up with 1 that names 小王 again keeps it; one
+    # that names nobody says nobody else eats, so the card asks (decided 2026-11-19).
+    wang_only = settled([7], 1, stated=1)
+    assert not card_needed(ParsedRequest(headcount=1), [7], [], wang_only, {7}, self_id=1)
+    assert card_needed(ParsedRequest(headcount=1), [], [], wang_only, {7}, self_id=1)
+
+
+def test_card_compares_an_old_set_with_its_confirmed_headcount():
+    old = settled([1, 7], 3)  # saved before stated_headcount existed
+    assert not card_needed(ParsedRequest(headcount=3), [], [], old, {7}, self_id=1)
+    assert card_needed(ParsedRequest(headcount=2), [], [], old, {7}, self_id=1)
+    assert card_needed(ParsedRequest(headcount=2), [], [], {**old, "stated_headcount": None},
+                       {7}, self_id=1)
 
 
 # ---- what the card shows ----
@@ -363,11 +392,14 @@ def test_settled_diners_state_round_trip(session, seeded):
         answer(selected=[me.id], guests=[{"name": "Alex", "rules": [PEANUT]}], others=1,
                others_answer="unsure"),
         table,
+        stated_headcount=2,
     )
     data = settled.to_state()
     assert set(data) == {
-        "diner_ids", "meal_rules", "guest_names", "others", "others_answer", "headcount"
+        "diner_ids", "meal_rules", "guest_names", "others", "others_answer", "headcount",
+        "stated_headcount",
     }
+    assert data["stated_headcount"] == 2 and data["headcount"] == 3
     assert data["meal_rules"][0]["diner_key"] == "guest:1"
     assert SettledDiners.from_state(data) == settled
 
@@ -389,6 +421,19 @@ def test_diner_answer_validation():
     with pytest.raises(ValidationError):
         answer(selected=[1], stated={1: [{"rule_type": "dietary restriction", "text": "Vegan"}]})
     assert answer(selected=[], others=1).others_answer == "unsure"
+
+
+def test_diner_answer_headcount_sets_the_unmatched_people():
+    # The card's confirmed total: the unmatched people are what the selection does not cover.
+    chosen = answer(selected=[1, 2], guests=[{"name": "Alex"}], others=7, headcount=5)
+    assert chosen.others == 2 and chosen.others_answer == "unsure"
+    assert answer(selected=[1], headcount=1, others=3).others == 0
+    # Without a headcount (the evaluation runner, older clients) `others` is used as sent.
+    assert answer(selected=[1], others=3).others == 3
+    # A total below the people on the card is not applied here; the API refuses it.
+    low = answer(selected=[1, 2], headcount=1)
+    assert low.headcount_too_low and low.others == 0
+    assert not chosen.headcount_too_low
 
 
 def test_apply_answer_refuses_diet_word_text_rule(session, seeded):
@@ -425,3 +470,81 @@ def test_answer_summary_when_the_user_is_not_eating(session, seeded):
     wang = friend(session, "小王")
     summary = answer_summary(session, answer(selected=[wang.id]))
     assert summary == {"self": False, "names": ["小王"], "others": 0}
+
+
+# ---- final review fixes ----
+
+
+def test_card_needed_when_headcount_one_names_a_friend_or_guest():
+    # "给小王做饭" may parse as headcount 1; the matched friend still asks.
+    assert card_needed(ParsedRequest(headcount=1), [7], [], None, {7})
+    assert card_needed(ParsedRequest(headcount=1, guests=[{"name": "Alex"}]), [], [], None, set())
+    assert card_needed(ParsedRequest(headcount=1, others_mentioned=True), [], [], None, set())
+
+
+def test_card_needed_for_self_diet_words_without_a_settled_set():
+    # "我吃素，今晚吃什么": no rule, but the solo card shows the diet-word hint (spec 5.4).
+    alone = ParsedRequest(headcount=1)
+    assert card_needed(alone, [], [], None, set(), self_diet_words=["吃素"])
+    assert not card_needed(
+        alone, [], [], settled([1], 1), set(), self_id=1, self_diet_words=["吃素"]
+    )
+
+
+def test_build_card_solo_diet_words_on_the_self_row(session, seeded):
+    me = self_diner(session)
+    friend(session, "小王")
+    parsed = ParsedRequest(self_rules={"diet_words": ["吃素"]})
+    card = build_card(session, parsed, LabelTable.from_state(None, me.id), [], "我吃素")
+    (row,) = card["rows"]
+    assert row["diner_id"] == me.id and row["diet_words"] == ["吃素"]
+    assert row["proposed"] == []
+
+
+
+def test_settled_diners_from_an_old_state_has_no_stated_headcount():
+    from minemydinner.agent.diners import SettledDiners
+
+    old = SettledDiners.from_state(settled([1, 7], 2))
+    assert old.stated_headcount is None and old.headcount == 2
+    assert old.to_state()["stated_headcount"] is None
+
+
+# ---- "nobody else eats" after a shared set (decided by the user, 2026-11-19) ----
+
+
+def test_card_when_the_parse_says_nobody_else_eats_after_a_shared_set():
+    # "今晚我和朋友吃饭" settled {me, 小王} (no stated number); "就我自己吃" parsed with no
+    # headcount, no guest, no one else mentioned: who eats changed, so the card asks.
+    shared = settled([1, 7], 2)
+    alone = ParsedRequest()
+    assert card_needed(alone, [], [], shared, {7}, self_id=1)
+    # The same for a set with a guest, or with unmatched people.
+    with_guest = settled([1], 2, guest_names={"guest:1": "Alex"})
+    assert card_needed(alone, [], [], with_guest, set(), self_id=1)
+    with_others = {**settled([1], 2), "others": 1}
+    assert card_needed(alone, [], [], with_others, set(), self_id=1)
+
+
+def test_no_card_when_the_parse_still_mentions_others():
+    # "换个辣的" whose parse carries others_mentioned (it reads the conversation).
+    shared = settled([1, 7], 2, stated=2)
+    assert not card_needed(ParsedRequest(others_mentioned=True), [], [], shared, {7}, self_id=1)
+
+
+def test_no_card_for_a_solo_set_when_nobody_else_eats():
+    # A solo set (the user alone, with a meal-only rule) is not affected by the rule.
+    rule_ = {"diner_key": "diner:1", "rule_type": "allergy", "allergen": "peanut",
+             "ingredient_id": None, "text": None}
+    solo = settled([1], 1, meal_rules=[rule_], stated=1)
+    assert not card_needed(ParsedRequest(), [], [], solo, set(), self_id=1)
+    assert not card_needed(ParsedRequest(headcount=1), [], [], solo, set(), self_id=1)
+
+
+def test_no_card_when_the_settled_friend_is_named_again():
+    # {小王} alone (the user unticked); "再给小王做个汤" matches 小王.
+    wang_only = settled([7], 1, stated=1)
+    assert not card_needed(ParsedRequest(headcount=1), [7], [], wang_only, {7}, self_id=1)
+    # A friend rule stated for a settled friend also says someone else eats.
+    by_rule = ParsedRequest(friend_rules=[{"code": "Diner 2", "avoid": []}])
+    assert not card_needed(by_rule, [7], [], wang_only, {7}, self_id=1)

@@ -7,7 +7,7 @@ It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning
 ## 1. When it runs
 
 - After the request is parsed and its defaults applied, **before the first planner model call**.
-- Again **before every retry**, so a request that turns out impossible does not keep retrying. Within one planning run its inputs do not change today, so this second check always repeats the first; it is kept for when stock or diners can change during a run (an inventory-changing planner tool, diner selection in plan 2b). See `docs/phase-1-carryover.md`.
+- Again **before every retry**, so a request that turns out impossible does not keep retrying. Within one planning run its inputs do not change today, so this second check always repeats the first; it is kept for when stock can change during a run (an inventory-changing planner tool). Plan 2b's diner card settles the diners before the run starts, so they do not change within it either. See `docs/phase-1-carryover.md`.
 
 It only reads the database and computes; it calls no model. On the chat page it shows as the step "Checking the fridge and dietary rules".
 
@@ -26,7 +26,7 @@ Six reasons, checked in this order. All reasons that hold are reported, not only
 
 How each is decided:
 
-- **"Safe"** means what search allows: allergy and dietary exclusions apply, and dishes left out for unknown allergens do not count.
+- **"Safe"** means what search allows: the allergy and dietary exclusions of every diner of the meal apply (the user, selected friends, guests, and meal-only rules from the diner card), and dishes left out for unknown allergens do not count.
 - **"Makeable"** follows the stock rules in `docs/planner-stock-rules.md`, exactly as validation (H1) and the plan card judge it.
 - **The whole library is checked**, not the candidate list.
 - **The time limit in fridge-only mode** is judged on the makeable recipes, because only those reach the candidate list and the planner's searches. If every makeable soup is over the limit, the check stops with the time limit even when a quicker soup exists that would need shopping. When nothing of a type is makeable (already "not enough from the fridge"), the time limit is judged on every safe recipe, so the user also learns whether shopping alone would meet it.
@@ -50,6 +50,7 @@ The plan card shows no dishes. It shows, in the user's language:
   - "No 鸡蛋 in the fridge" / "冰箱里没有鸡蛋" (only when eggs are really absent from stock), or "No dish that can be made from the fridge uses 鸡蛋" / "用现有的食材做不出用到鸡蛋的菜" (eggs in stock, but no makeable dish uses them)
   - "Only 0 vegetable dishes with 鸡蛋 can be made; this meal needs 2 vegetable dishes"
 - **next-step buttons that fit the reason** (Section 4);
+- **the dishes left out for unknown allergens** among the dish types the request needs (only when a diner has an allergy), with the ingredient responsible, the confirmation panel, and "Plan again" (plan 2b, spec 5.7), since the planner never searches on a stop and unknown allergens are often why the request cannot be met;
 - **a fixed note**, not model text.
 
 The planning record gets a `feasibility` event listing the reasons (names replaced as in the rest of the record), and the run is marked failed.

@@ -4,9 +4,15 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 
+def _latest(_old: str, new: str) -> str:
+    return new
+
+
 class ChatState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
-    locale: str
+    # The latest value wins: a resume retried after a failed run writes the locale again in
+    # the step where the failed resume's write is still pending.
+    locale: Annotated[str, _latest]
     intent: str | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
@@ -54,8 +60,5 @@ class ChatState(TypedDict):
     # grows; a thread saved before it existed starts one with the user as "Diner 1".
     diner_labels: dict | None
     # The confirmed diner set (SettledDiners.to_state()), reused by later requests that do
-    # not change who eats; None after a skipped card or a request where only the user eats.
+    # not change who eats; replaced by the next confirmed card, None after a skipped card.
     settled_diners: dict | None
-    # True once the diner card was answered for the current request (reset by each new
-    # message), so a solo request that asked the card keeps the set it just settled.
-    card_answered: bool

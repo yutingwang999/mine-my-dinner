@@ -150,6 +150,40 @@ def _guests_covered(parsed: ParsedRequest, settled: dict) -> bool:
     return unnamed <= unnamed_room
 
 
+def settled_friend_deleted(
+    settled: dict | None, existing_friend_ids: Collection[int], self_id: int | None
+) -> bool:
+    """True when a friend in the settled set no longer exists (deleted on the people page
+    since the card was confirmed). The user's own id is never counted."""
+    if not settled:
+        return False
+    friends = set(settled.get("diner_ids") or []) - {self_id}
+    return bool(friends - set(existing_friend_ids))
+
+
+def _others_in_set(settled: dict, self_id: int | None) -> bool:
+    """The settled set holds someone besides the user: a friend, a guest, or unmatched
+    people."""
+    return bool(
+        set(settled.get("diner_ids") or []) - {self_id}
+        or settled.get("guest_names")
+        or int(settled.get("others") or 0) > 0
+    )
+
+
+def _nobody_else_eats(parsed: ParsedRequest, matched_friend_ids: Collection[int]) -> bool:
+    """The parse says only the user eats: nobody else mentioned, no guest, no friend rule,
+    no saved friend named in the current request, and no headcount above 1. The headcount
+    may be missing ("就我自己吃" parsed with none)."""
+    return not (
+        parsed.others_mentioned
+        or parsed.guests
+        or parsed.friend_rules
+        or matched_friend_ids
+        or (parsed.headcount or 1) >= 2
+    )
+
+
 def card_needed(
     parsed: ParsedRequest,
     matched_friend_ids: list[int],
@@ -159,25 +193,35 @@ def card_needed(
     *,
     self_id: int | None = None,
     uncovered_rules: Collection[ProposedRule] = (),
+    self_diet_words: Collection[str] = (),
 ) -> bool:
-    """Whether to show the diner card (spec 5.1).
+    """Whether to show the diner card (spec 5.1; decided by the user, 2026-11-18).
 
-    A new rule the user states about themselves always asks, even for a solo meal. A
-    request where only the user eats (headcount 1) never asks otherwise. With a settled set
-    the card asks again only when the request changes who eats: a matched friend or a guest
-    not in it, a stated guest or friend rule not on it (`uncovered_rules`), a different
-    headcount, or one of its friends deleted since. Without one it asks when more than one
-    person eats. `self_id` is the user's diner id, which is never counted as a deleted
-    friend.
+    A new rule the user states about themselves always asks, even for a solo meal; so does
+    a diet word the user states about themselves (`self_diet_words`) when no set is settled,
+    so the card can show its diet-word hint (spec 5.4).
+
+    With a settled set, any stated change in who eats or how many asks again; nothing is
+    cleared without the card: a matched friend or a guest not in the set, a stated guest or
+    friend rule not on it (`uncovered_rules`), one of its friends deleted since, or a stated
+    headcount different from the one the parse gave when the set was confirmed (a set saved
+    before that was kept compares with its confirmed headcount). A set with anyone besides
+    the user also asks when the parse says nobody else eats (no one else mentioned, no
+    guest, no friend named or given a rule), with or without a headcount (decided by the
+    user, 2026-11-19); a set of the user alone is not affected. `self_id` is the user's
+    diner id, which is never counted as a deleted friend.
+
+    Without a settled set the card asks when anyone besides the user may eat: a headcount
+    of 2 or more, others mentioned, a parsed guest, a matched friend, or a stated rule of
+    someone else. A solo meal that states nothing about others needs no card.
     """
     if new_self_rules:
         return True
-    if parsed.headcount == 1:
-        return False
+    if self_diet_words and settled is None:
+        return True
     if settled is not None:
         settled_ids = set(settled.get("diner_ids") or [])
-        friends = settled_ids - {self_id}
-        if friends - set(existing_friend_ids):
+        if settled_friend_deleted(settled, existing_friend_ids, self_id):
             return True
         if set(matched_friend_ids) - settled_ids:
             return True
@@ -185,7 +229,16 @@ def card_needed(
             return True
         if uncovered_rules:
             return True
-        return parsed.headcount is not None and parsed.headcount != settled.get("headcount")
+        if _others_in_set(settled, self_id) and _nobody_else_eats(parsed, matched_friend_ids):
+            # "就我自己吃" after a set with someone else, even with no headcount parsed: the
+            # parse's own reading says nobody else eats (decided by the user, 2026-11-19).
+            return True
+        if parsed.headcount is None:
+            return False
+        known = settled.get("stated_headcount")
+        if known is None:
+            known = settled.get("headcount")
+        return parsed.headcount != known
     return bool(
         (parsed.headcount or 1) >= 2
         or parsed.others_mentioned
@@ -380,20 +433,38 @@ class GuestAnswer(BaseModel):
         return self
 
 
+MAX_OTHERS = 50
+
+
 class DinerAnswer(BaseModel):
     """The confirmed diner card. `selected` holds diner ids (the user included when eating);
     `stated` the ticked rules per selected diner; `others` the people still not matched,
-    with "none" (no dietary limits) or "unsure" for them together."""
+    with "none" (no dietary limits) or "unsure" for them together.
+
+    `headcount` is the card's confirmed total (spec 5.2). When given, `others` is derived
+    from it (the total less the selected people and the guests, at most 50); a total below
+    them is left unapplied and flagged by `headcount_too_low`, which the API refuses. When
+    absent (the evaluation runner, older clients), `others` is used as sent."""
 
     selected: list[int] = Field(max_length=50)
     stated: dict[int, list[RuleChoice]] = Field(default_factory=dict)
     guests: list[GuestAnswer] = Field(default_factory=list, max_length=20)
-    others: int = Field(default=0, ge=0, le=50)
+    others: int = Field(default=0, ge=0, le=MAX_OTHERS)
     others_answer: Literal["none", "unsure"] | None = None
+    headcount: int | None = Field(default=None, ge=0, le=200)
+
+    @property
+    def headcount_too_low(self) -> bool:
+        return self.headcount is not None and self.headcount < self._on_card()
+
+    def _on_card(self) -> int:
+        return len(self.selected) + len(self.guests)
 
     @model_validator(mode="after")
     def someone_eats(self) -> Self:
         self.selected = list(dict.fromkeys(self.selected))
+        if self.headcount is not None:
+            self.others = min(MAX_OTHERS, max(0, self.headcount - self._on_card()))
         if not self.selected and not self.guests and not self.others:
             raise ValueError("at least one person eats")
         if set(self.stated) - set(self.selected):
@@ -416,6 +487,10 @@ class SettledDiners:
     others: int
     others_answer: str | None
     headcount: int
+    # The headcount the parse gave when the set was confirmed (None when it gave none, or in
+    # a set saved before this was kept). Later requests compare their stated headcount with
+    # it, so a total edited on the card does not ask again for the same words.
+    stated_headcount: int | None = None
 
     def to_state(self) -> dict:
         return {
@@ -425,6 +500,7 @@ class SettledDiners:
             "others": self.others,
             "others_answer": self.others_answer,
             "headcount": self.headcount,
+            "stated_headcount": self.stated_headcount,
         }
 
     @classmethod
@@ -436,6 +512,7 @@ class SettledDiners:
             others=int(data.get("others") or 0),
             others_answer=data.get("others_answer"),
             headcount=int(data["headcount"]),
+            stated_headcount=data.get("stated_headcount"),
         )
 
 
@@ -459,12 +536,17 @@ def _next_guest_number(labels: LabelTable) -> int:
     return max(numbers, default=0) + 1
 
 
+class CardOutOfDate(ValueError):
+    """A diner or ingredient on the confirmed card no longer exists: it changed between
+    showing the card and confirming it, so the request must be sent again."""
+
+
 def _check_rule(session: Session, rule: RuleChoice) -> None:
     # The card never sends a diet word as a rule; refuse one anyway (spec 5.4).
     if _diet_text(rule.text):
         raise ValueError("a diet word is not a rule")
     if rule.ingredient_id is not None and session.get(Ingredient, rule.ingredient_id) is None:
-        raise ValueError(f"unknown ingredient {rule.ingredient_id}")
+        raise CardOutOfDate(f"unknown ingredient {rule.ingredient_id}")
 
 
 def _rule_fields(rule: RuleChoice) -> dict:
@@ -478,18 +560,25 @@ def _add_meal_rule(meal_rules: list[RuleRef], key: str, rule: RuleChoice) -> Non
                                   rule.text))
 
 
-def apply_answer(session: Session, answer: DinerAnswer, labels: LabelTable) -> SettledDiners:
+def apply_answer(
+    session: Session,
+    answer: DinerAnswer,
+    labels: LabelTable,
+    stated_headcount: int | None = None,
+) -> SettledDiners:
     """Apply the confirmed card: write saved rules to profiles, create saved guests as
     friends (they join the selected diners), label the selected diners and the guests in the
     conversation's table, and return the settled set. Commits the session.
+    `stated_headcount` is the headcount the parse gave for the request the card answers.
 
-    Raises ValueError for an unknown diner or ingredient, or a diet word as a text rule."""
+    Raises CardOutOfDate for an unknown diner or ingredient, and ValueError for a diet word
+    as a text rule."""
     for rules in (*answer.stated.values(), *(guest.rules for guest in answer.guests)):
         for rule in rules:
             _check_rule(session, rule)
     known = set(session.scalars(select(Diner.id).where(Diner.id.in_(answer.selected))))
     if missing := [i for i in answer.selected if i not in known]:
-        raise ValueError(f"unknown diners {missing}")
+        raise CardOutOfDate(f"unknown diners {missing}")
     diner_ids = list(answer.selected)
     saved = profile_rules(session, diner_ids)
     meal_rules: list[RuleRef] = []
@@ -532,6 +621,7 @@ def apply_answer(session: Session, answer: DinerAnswer, labels: LabelTable) -> S
         others=answer.others,
         others_answer=answer.others_answer if answer.others else None,
         headcount=len(diner_ids) + len(guest_names) + answer.others,
+        stated_headcount=stated_headcount,
     )
 
 

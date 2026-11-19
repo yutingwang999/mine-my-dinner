@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -88,6 +88,16 @@ function soloWithOthers(): DinersPending {
   return card({ rows: [card().rows[0]], guests: [], others: 2, headcount: 3 });
 }
 
+/** "我和朋友吃饭": the user preselected, Xiao Wang not, one person not matched. */
+function meAndAFriend(): DinersPending {
+  const [me, wang] = card().rows;
+  return card({ rows: [me, { ...wang, selected: false, proposed: [] }], guests: [], headcount: 2, others: 1 });
+}
+
+function total(): HTMLElement {
+  return screen.getByRole("spinbutton", { name: "Number of people" });
+}
+
 function setup(pending: DinersPending) {
   const calls = mockFetch({
     "DELETE /api/rules/30": () => new Response(null, { status: 204 }),
@@ -108,7 +118,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("DinerCard", () => {
   it("renders the preselection as checked and lists each person's rules", () => {
     setup(card());
-    expect(screen.getByText("Who is eating? (3 in all)")).toBeInTheDocument();
+    expect(total()).toHaveValue(3);
     expect(screen.getByRole("checkbox", { name: "Me" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Xiao Wang" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Lao Li" })).not.toBeChecked();
@@ -146,6 +156,7 @@ describe("DinerCard", () => {
       ],
       others: 0,
       others_answer: null,
+      headcount: 3,
     });
   });
 
@@ -243,7 +254,7 @@ describe("DinerCard", () => {
 
   it("raises the headcount when more people are selected than stated", async () => {
     setup(card({ headcount: 2 }));
-    expect(screen.getByText("Who is eating? (3 in all)")).toBeInTheDocument();
+    expect(total()).toHaveValue(3);
     expect(screen.getByText("The number of people is now 3.")).toBeInTheDocument();
   });
 
@@ -286,7 +297,9 @@ describe("DinerCard", () => {
 
   it("sends at most 50 unmatched people", async () => {
     const { onConfirm } = setup(card({ rows: [card().rows[0]], guests: [], headcount: 80, others: 79 }));
-    expect((await confirm(onConfirm)).others).toBe(50);
+    const answer = await confirm(onConfirm);
+    expect(answer.others).toBe(50);
+    expect(answer.headcount).toBe(51);
   });
 
   it("counts a deselected person as not matched, so the headcount stays", () => {
@@ -295,6 +308,175 @@ describe("DinerCard", () => {
     return userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" })).then(() => {
       expect(screen.getByText("1 person is not matched yet")).toBeInTheDocument();
     });
+  });
+
+  it("prefills the editable total from the card", () => {
+    setup(card());
+    expect(total()).toHaveValue(3);
+    expect(screen.getByText("Who is eating?")).toBeInTheDocument();
+    expect(screen.getByText("people in all")).toBeInTheDocument();
+  });
+
+  it("fills an unmatched place when a friend not preselected is ticked", async () => {
+    // "我和朋友吃饭": two people, only the user preselected.
+    setup(meAndAFriend());
+    expect(total()).toHaveValue(2);
+    expect(screen.getByText("1 person is not matched yet")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(total()).toHaveValue(2);
+    expect(screen.queryByText(/not matched yet/)).toBeNull();
+  });
+
+  it("fills in the unmatched people as guest rows and keeps the total", async () => {
+    const { onConfirm } = setup(meAndAFriend());
+    await userEvent.click(screen.getByRole("button", { name: "Yes, I'll fill them in" }));
+    expect(screen.getByTestId("guest-row-0")).toBeInTheDocument();
+    expect(total()).toHaveValue(2);
+    expect(screen.queryByText(/not matched yet/)).toBeNull();
+    const answer = await confirm(onConfirm);
+    expect(answer.headcount).toBe(2);
+    expect(answer.others).toBe(0);
+  });
+
+  it("keeps the total when you untick yourself, so one person is not matched", async () => {
+    setup(card());
+    await userEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    expect(total()).toHaveValue(3);
+    expect(screen.getByText("1 person is not matched yet")).toBeInTheDocument();
+  });
+
+  it("removes unmatched people when the total is lowered", async () => {
+    setup(soloWithOthers());
+    expect(screen.getByText("2 people are not matched yet")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "One fewer person" }));
+    expect(total()).toHaveValue(2);
+    expect(screen.getByText("1 person is not matched yet")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "One fewer person" }));
+    expect(total()).toHaveValue(1);
+    expect(screen.queryByText(/not matched yet/)).toBeNull();
+  });
+
+  it("does not let the total go below the people ticked and added", async () => {
+    setup(card());
+    expect(screen.getByRole("button", { name: "One fewer person" })).toBeDisabled();
+    fireEvent.change(total(), { target: { value: "1" } });
+    fireEvent.blur(total());
+    expect(total()).toHaveValue(3);
+    await userEvent.click(screen.getByRole("button", { name: "One more person" }));
+    expect(total()).toHaveValue(4);
+    expect(screen.getByText("1 person is not matched yet")).toBeInTheDocument();
+    fireEvent.change(total(), { target: { value: "6" } });
+    fireEvent.blur(total());
+    expect(total()).toHaveValue(6);
+    expect(screen.getByText("3 people are not matched yet")).toBeInTheDocument();
+  });
+
+  it("lets a multi-digit total be typed and clamps it only when leaving the box", async () => {
+    const { onConfirm } = setup(card());
+    await userEvent.clear(total());
+    await userEvent.type(total(), "12");
+    expect(total()).toHaveValue(12);
+    await userEvent.tab();
+    expect(total()).toHaveValue(12);
+    expect(screen.getByText("9 people are not matched yet")).toBeInTheDocument();
+    const answer = await confirm(onConfirm);
+    expect(answer.headcount).toBe(12);
+    expect(answer.others).toBe(9);
+  });
+
+  it("raises a typed total below the people on the card when leaving the box", async () => {
+    setup(card());
+    await userEvent.clear(total());
+    await userEvent.type(total(), "1");
+    expect(total()).toHaveValue(1);
+    await userEvent.tab();
+    expect(total()).toHaveValue(3);
+  });
+
+  it("commits a typed total on Enter", async () => {
+    setup(card());
+    await userEvent.clear(total());
+    await userEvent.type(total(), "5{Enter}");
+    expect(total()).toHaveValue(5);
+    expect(screen.getByText("2 people are not matched yet")).toBeInTheDocument();
+  });
+
+  it("ignores a total that is not a number", async () => {
+    setup(card());
+    await userEvent.clear(total());
+    await userEvent.type(total(), "abc");
+    await userEvent.tab();
+    expect(total()).toHaveValue(3);
+  });
+
+  it("confirms with the clamped total while the box is still being edited", async () => {
+    const { onConfirm } = setup(card());
+    await userEvent.clear(total());
+    await userEvent.type(total(), "1");
+    const answer = await confirm(onConfirm);
+    expect(answer.headcount).toBe(3);
+    expect(answer.others).toBe(0);
+  });
+
+  it("keeps the total within the unmatched limit when someone is unticked", async () => {
+    const { onConfirm } = setup(card());
+    await userEvent.clear(total());
+    await userEvent.type(total(), "53");
+    await userEvent.tab();
+    expect(total()).toHaveValue(53);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(total()).toHaveValue(52);
+    const answer = await confirm(onConfirm);
+    expect(answer.headcount).toBe(52);
+    expect(answer.others).toBe(50);
+  });
+
+  it("says person for a total of one", () => {
+    setup(card({ rows: [card().rows[0]], guests: [], headcount: 1 }));
+    expect(screen.getByText("person in all")).toBeInTheDocument();
+  });
+
+  it("sends the confirmed total with the answer", async () => {
+    const { onConfirm } = setup(soloWithOthers());
+    await userEvent.click(screen.getByRole("button", { name: "One more person" }));
+    await userEvent.click(screen.getByRole("button", { name: "Not sure" }));
+    const answer = await confirm(onConfirm);
+    expect(answer.headcount).toBe(4);
+    expect(answer.others).toBe(3);
+    expect(answer.others_answer).toBe("unsure");
+  });
+
+  it("disables Confirm while nobody eats", async () => {
+    const { onConfirm } = setup(card({ guests: [], headcount: 2 }));
+    const button = screen.getByRole("button", { name: "Confirm and start planning" });
+    await userEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(button).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "One fewer person" }));
+    await userEvent.click(screen.getByRole("button", { name: "One fewer person" }));
+    expect(total()).toHaveValue(0);
+    expect(button).toBeDisabled();
+    await userEvent.click(button);
+    expect(onConfirm).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Add a person" }));
+    expect(total()).toHaveValue(1);
+    expect(button).toBeEnabled();
+  });
+
+  it("keeps Confirm enabled when unmatched people still eat", async () => {
+    setup(card({ guests: [], headcount: 2 }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(screen.getByText("2 people are not matched yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm and start planning" })).toBeEnabled();
+  });
+
+  it("shows the user's own diet word as the fixed hint on their row", () => {
+    const me = { ...card().rows[0], rules: [], diet_words: ["吃素"] };
+    setup(card({ rows: [me], guests: [], headcount: 1 }));
+    const row = screen.getByTestId("diner-row-1");
+    expect(within(row).getByText("吃素")).toBeInTheDocument();
+    expect(within(row).getByText(/Rules by food category are not supported yet/)).toBeInTheDocument();
   });
 
   it("toggles a person's checkbox from the name, but not from the Edit button", async () => {

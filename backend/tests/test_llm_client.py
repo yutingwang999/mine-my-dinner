@@ -473,6 +473,23 @@ def test_prepare_messages_leaves_system_prompts_as_written(llm_hooked):
     assert [m.content for m in prepared] == ["小李 eats", "Diner 1"]
 
 
+def test_prepare_messages_applies_hooks_to_tool_call_args(llm_hooked):
+    from langchain_core.messages import AIMessage
+
+    message = AIMessage(
+        content=[
+            {"type": "text", "text": "小李"},
+            {"type": "tool_use", "id": "t1", "name": "search", "input": {"query": "小李 likes"}},
+        ],
+        tool_calls=[{"name": "search", "args": {"query": "小李 likes", "n": 3}, "id": "t1"}],
+    )
+    (prepared,) = llm_hooked.prepare_messages([message])
+    assert prepared.tool_calls[0]["args"] == {"query": "Diner 1 likes", "n": 3}
+    assert prepared.content[0]["text"] == "Diner 1"
+    assert prepared.content[1]["input"] == {"query": "Diner 1 likes"}
+    assert message.tool_calls[0]["args"]["query"] == "小李 likes"
+
+
 class BrokenLogFactory:
     """Reads work, but writing the call log fails."""
 

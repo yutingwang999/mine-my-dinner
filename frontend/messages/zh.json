@@ -83,6 +83,8 @@
     "several_recipes": "一次只能粘贴一道菜。多道菜请用文本文件导入，用单独一行 --- 分隔。",
     "internal": "规划时出错了，可以再试一次。",
     "thread_not_found": "没有找到这段对话，请新建一段。",
+    "headcount_too_low": "人数少于卡片上勾选和添加的人，请调高后再确认。",
+    "card_out_of_date": "这张卡片显示后，上面的人或食材已被删除。请重新发送你的请求。",
     "nothing_pending": "现在没有等待回答的问题。"
   },
   "review": {
@@ -464,7 +466,12 @@
       "switchLabel": "信息不全时先问我"
     },
     "diners": {
-      "title": "这顿谁吃？（共 {count} 人）",
+      "title": "这顿谁吃？",
+      "totalBefore": "一共",
+      "totalAfter": "人",
+      "total": "用餐人数",
+      "totalFewer": "少一人",
+      "totalMore": "多一人",
       "asked": "这顿谁吃？",
       "me": "我",
       "summarySelf": "我",
@@ -519,7 +526,7 @@
       "timeUnknown": "时间未知",
       "missingIngredients": "缺少食材：{list}",
       "missingCookware": "缺少厨具：{list}",
-      "servingsNote": "{title}的菜谱是 {servings} 人份，这顿 {headcount} 人吃，食材记得按人数加量。",
+      "servingsNote": "{title}的菜谱是 {servings} 人份，这顿 {headcount} 人吃，食材记得按人数{direction, select, up {加量} other {减量}}。",
       "warnings": "需要注意",
       "unmet": "未满足",
       "nextActions": "你可以调整",

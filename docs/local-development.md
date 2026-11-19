@@ -133,7 +133,9 @@ Two automatic checks run on every scenario and count as mismatches:
 - `nickname sent`: a saved friend's nickname (from `friends`) in any model-bound message, that is the content and tool-call arguments of the non-system `messages` of every `model_call` event (route, parse, and planner) of every planning run of the thread. System prompts are skipped: they are fixed text the nickname replacement leaves as written, and their examples hold names. An occurrence inside a longer food word ("鱼" in "鲈鱼") does not count, the same rule the nickname replacement follows. A guest saved as a friend on the card is not checked: the parse saw their name as a guest's before the card, which the design accepts.
 - `label shown`: a "Diner N" label (`diner` and a number, with or without a space, any case) in what the user sees: every assistant message of the thread, every diner card shown, and the final plan.
 
-Each scenario records `card_shown`, `cards_shown` (cards over every turn; a "plan again" follow-up should not show a second one), and, in `results.jsonl` only, the first card's value (`card`; it holds names).
+Each scenario records `card_shown`, `cards_shown` (cards over every turn; a "plan again" follow-up should not show a second one, since it reuses the settled diners and asks again only when a friend in them was deleted), and, in `results.jsonl` only, the first card's value (`card`; it holds names).
+
+Friends' names in the exports are an accepted exception: the evaluation friends are fictional scenario data, `results.jsonl` (git-ignored) holds the first card with their display names, and a failure string in `summary.json` may name one (for example "rule not applied: Alex"). The rule that no saved nickname appears in any evaluation export is about model-bound text and the planning records of real users; the model-bound messages in an export are still checked by `nickname sent`.
 
 Run from `backend/`, with `DATABASE_URL` pointing at the test database (the script refuses the main database and a non-empty test database):
 
@@ -156,7 +158,7 @@ Each run writes a folder `backend/eval_data/planning/runs/<run id>/`, where the 
 
 - `summary.json` (committed): conditions (commit, data file hashes, the prompt version label, the version of each prompt and the SHA-256 of each prompt file in use, the tool version, models and prices, settings; see `docs/prompt-versions.md`), metrics by area, and each scenario's metrics. It holds no model text.
 - `prompts/` and `tools.json` (committed): only the prompt files in use, under their versioned names, and the model-facing tool definitions the run used.
-- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. The record's events include the route and parse model calls (`step` is `route`, `parse` or `planner`) as well as the planner's; the metrics in `summary.json` count `llm_calls` rows and are not affected by these events. `planning_runs` lists every planning run on the scenario's thread in order (two for a `follow_up` scenario); `planning_run` is the last one. Keep a private copy outside Git if the run matters.
+- `results.jsonl` (git-ignored): each scenario's full planning record and model calls, including model output. The record's events include the route and parse model calls (`step` is `route`, `parse` or `planner`) as well as the planner's; a "plan again" turn reuses the previous parsed request and has a `parse_reused` event in their place; the metrics in `summary.json` count `llm_calls` rows and are not affected by these events. `planning_runs` lists every planning run on the scenario's thread in order (two for a `follow_up` scenario); `planning_run` is the last one. Keep a private copy outside Git if the run matters.
 
 How to read the metrics in `summary.json`:
 

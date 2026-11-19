@@ -1,6 +1,6 @@
 # From Request to Plan: Who Decides the Dish Counts
 
-This explains how one planning request travels from the user's words to a checked plan, which steps are done by a model and which by code, and how the dish counts ("几荤几素") are read, stored, checked, and put into words along the way. It describes the behaviour after Phase 1 plan 2a, including the meat and vegetable bounds of Task 11. The design is in `docs/superpowers/specs/2026-11-14-phase-1-plan-2a-planner-efficiency-design.md`, Sections 5.1 and 5.11. Related: `docs/planner-feasibility-check.md` (stopping early), `docs/planner-shortlist-and-ranking.md` (the candidate list), `docs/planner-stock-rules.md` (what is in stock).
+This explains how one planning request travels from the user's words to a checked plan, which steps are done by a model and which by code, and how the dish counts ("几荤几素") are read, stored, checked, and put into words along the way. It describes the behaviour after Phase 1 plan 2a, including the meat and vegetable bounds of Task 11, with plan 2b's changes (the headcount from the diner card, the cold-dish count of `parse_v5`, and "plan again"). The design is in `docs/superpowers/specs/2026-11-14-phase-1-plan-2a-planner-efficiency-design.md`, Sections 5.1 and 5.11, and `docs/superpowers/specs/2026-11-17-phase-1-plan-2b-diners-design.md`. Related: `docs/planner-feasibility-check.md` (stopping early), `docs/planner-shortlist-and-ranking.md` (the candidate list), `docs/planner-stock-rules.md` (what is in stock).
 
 ## 1. The steps
 
@@ -8,7 +8,7 @@ A model does two things only: it understands the user's words, and it chooses th
 
 | Step | Who | Where | Takes | Gives |
 |---|---|---|---|---|
-| 1. Parse | Model (`parse_v3`) | `parse_request` in `agent/graph.py` | The conversation | The parsed request: what the user said, field by field; unstated fields stay empty |
+| 1. Parse | Model (`parse_v5`) | `parse_request` in `agent/graph.py` | The conversation | The parsed request: what the user said, field by field; unstated fields stay empty |
 | 2. Defaults | Code | `apply_defaults` in `agent/request.py` | The parsed request | The spec: the hard requirements every later step follows |
 | 3. Feasibility check | Code | `planning/feasibility.py` | The spec, the library, the fridge | Go ahead, or stop early with reasons |
 | 4. First message | Code | `agent/graph.py` | The spec and the candidate list | The text the planner reads (candidate list, then request summary) |
@@ -21,16 +21,18 @@ Two things follow from this:
 - **The spec is the one source of truth.** Feasibility, validation, and every piece of text are built from it. The parse step only says what the user said.
 - **The planner never sees the spec itself.** It reads the text that code writes from the spec (step 4) and from validation results (step 7). If that text is wrong, a correct spec and a correct check still produce a failed plan.
 
+When the diner card is shown (more than one person eats, or the user states a new rule or a diet word about themselves), it (`select_diners`) comes between steps 1 and 2, and its confirmed headcount replaces the parsed one. "Plan again" (the plan card's fixed message "按同样的要求重新规划") skips step 1: code reuses the thread's previous parsed request, with no route or parse call.
+
 ## 2. How the counts are read and stored
 
 The parsed request has a field for each count: `dishes` (meat plus vegetable dishes), `meat_dishes`, `vegetable_dishes`, `soups`, `staples`, `desserts`, `snacks`. A field the user did not mention stays empty (null). The meat and vegetable counts each have a bound, `meat_bound` and `vegetable_bound`: `exact` for a plain number, `at_least` for "至少", `at_most` for "最多". A count with no bound is exact; a bound with no count is ignored. The parse step does not do arithmetic: "8 dishes, 2 of them meat" gives `dishes 8, meat_dishes 2`, and the vegetable count stays empty.
 
-Only the meat and vegetable pair has bounds, because the dish total limits them. "至少一个汤" or "最多一个主食" is read as that number and listed as assumed (`range_fields`), as a range taken at its lower end is. Vague phrases ("多来点荤菜", "以素为主") are a query term, not a count.
+Only the meat and vegetable pair has bounds, because the dish total limits them. "至少一个汤" or "最多一个主食" is read as that number and listed as assumed (`range_fields`), as a range taken at its lower end is. Vague phrases ("多来点荤菜", "以素为主") are a query term, not a count. A cold dish ("凉菜", "凉拌菜") is a meat or vegetable dish, not a category: mentioned in passing it gives no count ("来个凉菜"), but a stated number of cold dishes is the dish total ("就做两个凉菜" is `dishes 2`; `parse_v5`).
 
 `apply_defaults` turns that into the spec:
 
 - **What the user stated is a hard requirement.**
-- **Defaults apply only when the user stated no count at all.** Then dishes and soups come from the headcount (1 person: 1 dish; 2: 2 dishes; 3 or 4: 2 dishes and a soup; 5 or more: 3 dishes and a soup), and they are listed as assumed. Once any count is stated, every unstated count is 0, because the user did not ask for it.
+- **Defaults apply only when the user stated no count at all.** Then dishes and soups come from the headcount (the diner card's confirmed total once the card was answered, otherwise the parsed one; 1 person: 1 dish; 2: 2 dishes; 3 or 4: 2 dishes and a soup; 5 or more: 3 dishes and a soup), and they are listed as assumed. Once any count is stated, every unstated count is 0, because the user did not ask for it.
 - **The dish total** (`dish_total` in `agent/request.py`, shared with the contradiction check):
   - a stated total is used as is;
   - with no total and every named side exact, the total is the sum of the named counts: "一荤一素" is 2 dishes, "两个荤菜" is 2;
@@ -103,7 +105,7 @@ The "plan has" side always reports what the plan contains.
 | 两个菜，三个荤菜 / 两个菜，至少三个荤菜 / 三个菜，最多一个荤菜，最多一个素菜 | a side's range is empty | none: the user is asked to restate the counts | — | — |
 | 两三个菜 | dishes 2 (range) | dishes 2, assumed | `[0, 2]`, `[0, 2]` | Split: none (any mix of meat and vegetable dishes) |
 
-The next-action buttons send fixed messages, and `parse_v3` has examples for the conversation they end: "一荤一素" then "荤素都行" gives dishes 2 with no split (the total is kept); "全做鸡蛋" then "不一定要用指定的食材" moves eggs from `all_use` to `prefer_use`.
+The next-action buttons send fixed messages, and the parse prompt (`parse_v3` and later) has examples for the conversation they end: "一荤一素" then "荤素都行" gives dishes 2 with no split (the total is kept); "全做鸡蛋" then "不一定要用指定的食材" moves eggs from `all_use` to `prefer_use`.
 
 ### The cases that went wrong, step by step
 
@@ -125,4 +127,4 @@ The wording fix changed only steps 4 and 7. Task 11 then closed two gaps the sam
 ## 6. Known gaps
 
 - **Questions written by the model** for vague amounts ("多来点荤菜", "以素为主") are out of scope; those phrases stay a query term (`docs/phase-1-carryover.md`).
-- **Whether a button changes the request depends on the model.** `parse_v3` has examples for the "荤素都行" and "不一定要用指定的食材" conversations, and the evaluation scenarios `relax_split_button` and `relax_named_button` (`backend/eval_data/planning/scenarios_counts.yaml`) check them with two user messages; the code does not enforce the change.
+- **Whether a button changes the request depends on the model.** The parse prompt (`parse_v3` and later) has examples for the "荤素都行" and "不一定要用指定的食材" conversations, and the evaluation scenarios `relax_split_button` and `relax_named_button` (`backend/eval_data/planning/scenarios_counts.yaml`) check them with two user messages; the code does not enforce the change.

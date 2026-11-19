@@ -620,11 +620,40 @@ button.btn-danger:hover:not(:disabled) {
   max-width: 100%;
 }
 
+/* Every part of a person's first line (name, rules, actions) is centred in one line height,
+   so an input (a guest's name), plain text and text buttons sit on the same line. */
 .diner-line {
+  --diner-line-height: 1.9rem;
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 0.25rem 0.75rem;
+}
+
+.diner-line > .diner-who,
+.diner-line > .btn-text {
+  min-height: var(--diner-line-height);
+}
+
+.diner-line > .diner-ends {
+  min-height: var(--diner-line-height);
+  align-items: center;
+}
+
+/* The rules column wraps (rules, then "save to friend profiles"), so its first-line items
+   carry the line height themselves; the list is `display: contents`, so its items count.
+   The diet-word hint is a full-width notice, not a first-line item. */
+.diner-line > .diner-info > :not(.diner-save):not(ul):not(.diner-diet),
+.diner-line > .diner-info > ul > li {
+  min-height: var(--diner-line-height);
+  display: inline-flex;
+  align-items: center;
+}
+
+/* "No rules." reads at the size of a rule, only muted, with no paragraph margin. */
+.diner-info > .hint {
+  margin: 0;
+  font-size: inherit;
 }
 
 .diner-who {
@@ -784,6 +813,81 @@ button.btn-small {
   .diner-edit {
     padding-left: 0;
   }
+}
+
+/* "Who is eating?  [−] [N] [+] people in all": the editable total (spec 5.2). */
+.diner-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.diner-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* The total is one compact stepper: a single border around −, the number and +, all one
+   height. The `:not(...)` chain repeats the base input rule's selectors so this outranks it. */
+.stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 1.9rem;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control);
+  overflow: hidden;
+}
+
+.stepper button {
+  min-height: 0;
+  width: 1.9rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.stepper button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--foreground);
+}
+
+.stepper input.stepper-value:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+  width: 2.6rem;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-inline: 1px solid var(--control-border);
+  border-radius: 0;
+  background: transparent;
+  text-align: center;
+  font-weight: 600;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.stepper input.stepper-value::-webkit-outer-spin-button,
+.stepper input.stepper-value::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stepper:focus-within {
+  border-color: var(--accent);
+}
+
+/* `overflow: hidden` clips an outer focus ring, so the focused part draws one inside. */
+.stepper button:focus-visible,
+.stepper input.stepper-value:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .diner-footer {

@@ -83,6 +83,8 @@
     "several_recipes": "Paste one recipe at a time. For several recipes, use the text file import with a line of --- between them.",
     "internal": "Something went wrong while planning. You can try again.",
     "thread_not_found": "This conversation was not found. Start a new one.",
+    "headcount_too_low": "The number of people is lower than the people ticked and added on the card. Raise it and confirm again.",
+    "card_out_of_date": "Someone or something on this card was deleted after it was shown. Send your request again.",
     "nothing_pending": "There is no question waiting for an answer."
   },
   "review": {
@@ -464,7 +466,12 @@
       "switchLabel": "Ask me first when details are missing"
     },
     "diners": {
-      "title": "Who is eating? ({count} in all)",
+      "title": "Who is eating?",
+      "totalBefore": "",
+      "totalAfter": "{count, plural, one {person} other {people}} in all",
+      "total": "Number of people",
+      "totalFewer": "One fewer person",
+      "totalMore": "One more person",
       "asked": "Who is eating?",
       "me": "Me",
       "summarySelf": "you",
@@ -519,7 +526,7 @@
       "timeUnknown": "time unknown",
       "missingIngredients": "Missing ingredients: {list}",
       "missingCookware": "Missing cookware: {list}",
-      "servingsNote": "The {title} recipe serves {servings}; you're cooking for {headcount, plural, one {# person} other {# people}}, so scale up the ingredients.",
+      "servingsNote": "The {title} recipe serves {servings}; you're cooking for {headcount, plural, one {# person} other {# people}}, so scale {direction, select, up {up} other {down}} the ingredients.",
       "warnings": "Things to know",
       "unmet": "Not met",
       "nextActions": "You can change",

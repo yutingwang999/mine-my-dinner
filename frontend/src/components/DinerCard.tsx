@@ -33,6 +33,7 @@ export type DinerDraft = {
   guests: Guest[];
   nextKey: number;
   othersAnswer: OthersAnswer | null;
+  headcount: number;
 };
 
 type Props = {
@@ -166,6 +167,18 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
   const [editing, setEditing] = useState<Set<string>>(new Set());
   const [othersAnswer, setOthersAnswer] = useState<OthersAnswer | null>(draft?.othersAnswer ?? null);
   const [error, setError] = useState<unknown>(null);
+  // The editable total (spec 5.2), prefilled with the card's headcount. It never falls below
+  // the people ticked and added, and rises with them (`raised` shows the notice).
+  const [initialTotal] = useState(() => {
+    const onCard = selected.size + guests.length;
+    const given = draft?.headcount ?? pending.headcount;
+    return { total: Math.min(Math.max(given, onCard), onCard + MAX_OTHERS), raised: onCard > given };
+  });
+  const [total, setTotal] = useState(initialTotal.total);
+  const [raised, setRaised] = useState(initialTotal.raised);
+  // What is typed in the total box while it is being edited (null otherwise); it is applied
+  // and clamped on leaving the box, on Enter, and on Confirm, so any number can be typed.
+  const [totalText, setTotalText] = useState<string | null>(null);
 
   // Saved rules may have changed since the interrupt (edited on this card before a reload or
   // a failed confirm, or on the people page), so read them again; a failed read keeps them.
@@ -185,14 +198,57 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
   }, [pending]);
 
   useEffect(() => {
-    onDraft?.({ selected: [...selected], stated, guests, nextKey, othersAnswer });
-  }, [onDraft, selected, stated, guests, nextKey, othersAnswer]);
+    onDraft?.({ selected: [...selected], stated, guests, nextKey, othersAnswer, headcount: total });
+  }, [onDraft, selected, stated, guests, nextKey, othersAnswer, total]);
 
   const eating = selected.size + guests.length;
-  const headcount = Math.max(pending.headcount, eating);
-  // The backend accepts at most 50 unmatched people; a larger stated headcount is cut there.
+  const headcount = Math.max(total, eating);
+  // The people the total holds beyond those ticked and added; the backend takes at most 50.
   const others = Math.min(MAX_OTHERS, headcount - eating);
   const roomForGuests = MAX_GUESTS - guests.length;
+
+  function clampTotal(value: number, onCard: number): number {
+    return Math.min(Math.max(value, onCard), onCard + MAX_OTHERS);
+  }
+
+  /**
+   * Keep the total fitting the people on the card when they change: it rises when more are
+   * ticked or added than it holds (with the notice), and falls to the unmatched limit.
+   */
+  function fitTotal(onCard: number) {
+    if (onCard > total) {
+      setTotal(onCard);
+      setRaised(true);
+    } else if (total > onCard + MAX_OTHERS) {
+      setTotal(onCard + MAX_OTHERS);
+    }
+  }
+
+  /** A total stepped or typed by the user, kept between the people on the card and the limit. */
+  function changeTotal(value: number) {
+    setTotal(clampTotal(value, eating));
+    setTotalText(null);
+    setRaised(false);
+  }
+
+  /** The whole number typed in the total box, or null when nothing usable is typed. */
+  function typedTotal(): number | null {
+    if (totalText === null || !/^\d+$/.test(totalText.trim())) return null;
+    return Number(totalText.trim());
+  }
+
+  function commitTotal() {
+    const typed = typedTotal();
+    if (typed !== null) changeTotal(typed);
+    setTotalText(null);
+  }
+
+  function confirmCard() {
+    const typed = typedTotal();
+    const confirmed = typed === null ? headcount : clampTotal(typed, eating);
+    commitTotal();
+    onConfirm(answer(confirmed));
+  }
 
   function toggleEditing(key: string) {
     setEditing((current) => {
@@ -203,11 +259,10 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
   }
 
   function toggleSelected(dinerId: number) {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (!next.delete(dinerId)) next.add(dinerId);
-      return next;
-    });
+    const next = new Set(selected);
+    if (!next.delete(dinerId)) next.add(dinerId);
+    setSelected(next);
+    fitTotal(next.size + guests.length);
   }
 
   function newGuests(count: number): Guest[] {
@@ -224,6 +279,12 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
     setGuests((current) => [...current, ...newGuests(count)]);
     setNextKey((current) => current + count);
     setOthersAnswer(null);
+    fitTotal(eating + count);
+  }
+
+  function removeGuest(key: number) {
+    setGuests((current) => current.filter((old) => old.key !== key));
+    fitTotal(eating - 1);
   }
 
   function updateGuest(key: number, change: (guest: Guest) => Guest) {
@@ -260,7 +321,8 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
     updateGuest(key, (guest) => ({ ...guest, choices: [...guest.choices, { rule, ticked: true, save: false }] }));
   }
 
-  function answer(): DinerAnswer {
+  function answer(confirmed: number): DinerAnswer {
+    const unmatched = Math.min(MAX_OTHERS, confirmed - eating);
     const ids = pending.rows.map((row) => row.diner_id).filter((id) => selected.has(id));
     const chosen: Record<number, RuleChoice[]> = {};
     for (const id of ids) {
@@ -278,17 +340,58 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
           save: guest.save && name !== null,
         };
       }),
-      others,
-      others_answer: others > 0 ? othersAnswer : null,
+      others: unmatched,
+      others_answer: unmatched > 0 ? othersAnswer : null,
+      headcount: eating + unmatched,
     };
   }
 
   return (
     <section className="card diner-card">
-      <p>
-        <strong>{t("title", { count: headcount })}</strong>
-      </p>
-      {headcount > pending.headcount && <p className="hint">{t("headcountChanged", { count: headcount })}</p>}
+      <div className="diner-title">
+        <strong>{t("title")}</strong>
+        <span className="diner-total">
+          {t("totalBefore") && <span>{t("totalBefore")}</span>}
+          {/* One bordered stepper: −, the number, + at the same height. */}
+          <span className="stepper">
+            <button
+              type="button"
+              aria-label={t("totalFewer")}
+              disabled={busy || headcount <= eating}
+              onClick={() => changeTotal(headcount - 1)}
+            >
+              −
+            </button>
+            <input
+              type="number"
+              className="stepper-value"
+              aria-label={t("total")}
+              min={eating}
+              max={eating + MAX_OTHERS}
+              value={totalText ?? String(headcount)}
+              disabled={busy}
+              onChange={(event) => setTotalText(event.target.value)}
+              onBlur={commitTotal}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitTotal();
+                }
+              }}
+            />
+            <button
+              type="button"
+              aria-label={t("totalMore")}
+              disabled={busy || others >= MAX_OTHERS}
+              onClick={() => changeTotal(headcount + 1)}
+            >
+              +
+            </button>
+          </span>
+          <span>{t("totalAfter", { count: headcount })}</span>
+        </span>
+      </div>
+      {raised && <p className="hint">{t("headcountChanged", { count: headcount })}</p>}
       {pending.nudge && <p className="notice notice-warning">{t("nudge")}</p>}
       <ul className="diner-list">
         {pending.rows.map((row) => {
@@ -415,7 +518,7 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
                       type="button"
                       className="btn-text btn-danger"
                       disabled={busy}
-                      onClick={() => setGuests((current) => current.filter((old) => old.key !== guest.key))}
+                      onClick={() => removeGuest(guest.key)}
                     >
                       {tCommon("remove")}
                     </button>
@@ -467,7 +570,13 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
           <span aria-hidden="true">+ </span>
           {t("addGuest")}
         </button>
-        <button type="button" className="btn-primary" disabled={busy} onClick={() => onConfirm(answer())}>
+        <button
+          type="button"
+          className="btn-primary"
+          // The backend refuses an answer where nobody eats.
+          disabled={busy || (eating === 0 && others === 0)}
+          onClick={confirmCard}
+        >
           {t("confirm")}
         </button>
       </div>

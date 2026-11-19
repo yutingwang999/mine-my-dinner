@@ -552,3 +552,50 @@ def test_resume_card_with_stated_rules(client, tmp_path, session, recipe):
         }
     ]
     assert values["settled_diners"]["diner_ids"] == [me.id, wang.id]
+
+
+def test_resume_card_out_of_date(client, tmp_path, session, recipe):
+    # A friend deleted (or an ingredient gone) between showing and confirming the card:
+    # the run ends with a clear code, again on a retry.
+    from minemydinner.models import Diner
+    from tests.planningfakes import self_diner
+
+    me = self_diner(session)
+    wang = Diner(display_name="小王", is_self=False)
+    session.add(wang)
+    session.flush()
+    card_env(tmp_path, session, recipe)
+    tid = new_thread(client)
+    sse(post_message(client, tid, "我和小王吃饭"))
+    gone_id = wang.id
+    session.delete(wang)
+    session.flush()
+    for attempt in range(2):
+        events = sse(post_resume(client, tid, {"selected": [me.id, gone_id]}))
+        assert of(events, "error") == [{"code": "card_out_of_date"}], attempt
+    bad_ingredient = {"rule_type": "dislike", "ingredient_id": 99999999}
+    answer = {"selected": [me.id], "stated": {me.id: [bad_ingredient]}}
+    events = sse(post_resume(client, tid, answer))
+    assert of(events, "error") == [{"code": "card_out_of_date"}]
+
+
+def test_resume_card_headcount(client, tmp_path, session, recipe):
+    # The card's confirmed total sets the unmatched people; a total below the people on the
+    # card is refused with its own code, and the card stays pending.
+    from tests.planningfakes import self_diner
+
+    me = self_diner(session)
+    card_env(tmp_path, session, recipe)
+    tid = new_thread(client)
+    sse(post_message(client, tid, "我和朋友吃饭"))
+    guest = {"name": "Alex", "rules": []}
+    r = post_resume(client, tid, {"selected": [me.id], "guests": [guest], "headcount": 1})
+    assert r.status_code == 422 and r.json()["code"] == "headcount_too_low"
+    answer = {"selected": [me.id], "guests": [guest], "headcount": 4, "others_answer": "none"}
+    events = sse(post_resume(client, tid, answer))
+    assert "plan" in names(events)
+    runtime = app.dependency_overrides[get_chat_runtime]()
+    values = runtime.graph.get_state({"configurable": {"thread_id": tid}}).values
+    assert values["settled_diners"]["others"] == 2
+    assert values["settled_diners"]["headcount"] == 4
+    assert values["settled_diners"]["stated_headcount"] == 2

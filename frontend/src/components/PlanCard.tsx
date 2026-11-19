@@ -516,6 +516,8 @@ export function PlanCard({ plan, onAction, onReplan, busy = false, actionable = 
                   title: titles.get(note.recipe_id) ?? "",
                   servings: note.servings,
                   headcount: note.headcount,
+                  // More people than the recipe serves: scale up; fewer: scale down.
+                  direction: note.headcount > note.servings ? "up" : "down",
                 })}
               </li>
             ))}

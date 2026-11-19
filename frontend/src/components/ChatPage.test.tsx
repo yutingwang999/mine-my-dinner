@@ -330,6 +330,14 @@ describe("ChatPage", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
+  it("asks to send the request again when the diner card is out of date", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () => stream(frame("error", { code: "card_out_of_date" }), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Send your request again");
+  });
+
   it("shows an internal error message", async () => {
     setup({
       "POST /api/chat/threads/t1/messages": () => stream(frame("error", { code: "internal" }), DONE),
@@ -700,7 +708,7 @@ describe("ChatPage", () => {
     await userEvent.click(confirm);
     expect(await screen.findByText("Planning for two.")).toBeInTheDocument();
     expect(callsTo(calls, "POST", "/api/chat/threads/t1/resume")[0].body).toEqual({
-      value: { selected: [1, 2], stated: {}, guests: [], others: 0, others_answer: null },
+      value: { selected: [1, 2], stated: {}, guests: [], others: 0, others_answer: null, headcount: 2 },
       locale: "en",
     });
     expect(screen.queryByRole("button", { name: "Confirm and start planning" })).toBeNull();

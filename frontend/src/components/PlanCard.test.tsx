@@ -122,6 +122,15 @@ describe("PlanCard", () => {
     expect(screen.getByText("The 葱花蛋 recipe serves 2; you're cooking for 3 people, so scale up the ingredients.")).toBeInTheDocument();
   });
 
+  it("asks to scale down when fewer people eat than the recipe serves", () => {
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard plan={plan({ headcount: 1, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 1 }] })} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByText(/的菜谱是 2 人份，这顿 1 人吃，食材记得按人数减量。/)).toBeInTheDocument();
+  });
+
   it("localizes known units in the stock warning and falls back to the raw unit", () => {
     renderWithProviders(
       <PlanCard

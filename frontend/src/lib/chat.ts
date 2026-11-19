@@ -133,6 +133,8 @@ export type DinerAnswer = {
   guests: GuestAnswer[];
   others: number;
   others_answer: "none" | "unsure" | null;
+  /** The card's confirmed total; the backend derives the unmatched people from it. */
+  headcount?: number;
 };
 
 /** The history summary of a confirmed card: friends' and guests' names, and how many more. */
