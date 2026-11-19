@@ -41,6 +41,7 @@
 
 **Files:**
 - Create: `backend/eval_data/planning/scenarios_revise_heldout.yaml`
+- Create: `backend/eval_data/planning/library_revise.yaml` (`library_diners.yaml` plus 松仁玉米, 鱼香肉丝, 辣椒炒肉, 家常烧肉, 清炒蘑菇, 白米饭; both revise sets run with it; frozen after this task)
 
 **Interfaces:**
 - Produces: the scenario keys Task 7 implements, defined in the header comment of `scenarios_revise_heldout.yaml` exactly as below:
@@ -53,6 +54,10 @@
   - `expect_unchanged: bool` — the dishes after the follow-up equal those before it.
   - `expect_removed: [titles]` — each is gone after the follow-up.
   - `expect_max_changed: int` — at most this many dishes of the plan before the follow-up are gone.
+  - `expect_removed_any: [titles]` — at least one of them is gone after the follow-up.
+  - `expect_any_of: [{expect_* keys}]` — met when the follow-up meets every key of at least one entry; keys outside the list are still all required.
+  - `library_exclude: [titles]` — these library dishes do not exist for this scenario (hidden before the first message, brought back after).
+  - `deferred_to: <plan>` — the expected result needs a later plan; the scenario is run and reported but left out of plan 3b-1's held-out threshold.
   - Existing keys keep their meaning, judged on the follow-up's plan (`expect_titles_include`, `expect_titles_none`, `expect_counts`, `expect_spec`, ...).
   - Locked dishes are checked for every scenario without a key: a dish locked before the follow-up and absent after it, not listed in `expect_removed`, counts as a wrongly removed locked dish.
 
@@ -62,8 +67,8 @@
 - [ ] **Step 4: User commit**
 
 ```powershell
-git add backend/eval_data/planning/scenarios_revise_heldout.yaml
-git commit -m "eval: plan 3b-1 held-out revision scenarios written by the user"
+git add backend/eval_data/planning/scenarios_revise_heldout.yaml backend/eval_data/planning/library_revise.yaml docs/superpowers/plans/2026-11-19-phase-1-plan-3b1-revise-plan.md
+git commit -m "eval: plan 3b-1 held-out revision scenarios and library"
 ```
 
 ### Task 2: Locks and overrides on every plan version
@@ -234,10 +239,10 @@ git commit -m "feat: the revise-or-plan choice card; edited cards no longer say 
 - Consumes: the key definitions in Task 1's header (implemented exactly as written there; the implementer reads only that header, not the scenarios); `apply_edit` (3a); `build_dishes_card`.
 - Produces: `RunOutcome` gains `route_intent: str | None` (the follow-up's route result), `locked_removed: int`, `changed: int`; `summarize` gains `route_as_expected` ("k/n" over scenarios with `expect_route`), `locked_removed` (sum) and `avg_changed`.
 
-- [ ] **Step 1: Write the failing tests** (no real model; scripted graph or stubbed `_drive` as the existing eval tests do): each new key is read and validated (unknown values refused, `first_plan` titles must exist in the library, `edits_between_turns` needs `follow_up`); `first_plan` replaces the first reply's dishes as a model version; `edits_between_turns` applies an add, a remove and a keep; `choice_answer` answers the card; each `expect_*` key reports a failure when unmet; `locked_removed` counts a locked dish gone without `expect_removed`.
+- [ ] **Step 1: Write the failing tests** (no real model; scripted graph or stubbed `_drive` as the existing eval tests do): each new key is read and validated (unknown values refused, `first_plan` titles must exist in the library, `edits_between_turns` needs `follow_up`); `first_plan` replaces the first reply's dishes as a model version; `edits_between_turns` applies an add, a remove and a keep; `choice_answer` answers the card; `library_exclude` hides the dishes for that scenario only; `expect_any_of` passes when one entry is met; `deferred_to` scenarios are reported but kept out of the held-out rate; each `expect_*` key reports a failure when unmet; `locked_removed` counts a locked dish gone without `expect_removed`.
 - [ ] **Step 2: Run** `$PY -m pytest -q tests/test_planning_eval.py` — expected FAIL.
 - [ ] **Step 3: Implement** the keys and metrics.
-- [ ] **Step 4: Write `scenarios_revise.yaml`** (development set, about 16 scenarios, `library_diners.yaml`): the user's five example sentences from the spec (Section 1) after a fixed `first_plan`, the same with a hand-added (locked) dish, a scope with an exception, a general wish that must leave a locked egg dish, a count change on a hand-grown plan, a two-soup "那道汤不要了" that must ask, a fridge-only wish that cannot be met (unchanged, reasons), a choice card answered `plan` and one answered `revise`, a revise with a new guest (diner card, then a new plan), and two first-message scenarios checking `route_v3` returns `plan`. Write new sentences; do not open the held-out file.
+- [ ] **Step 4: Write `scenarios_revise.yaml`** (development set, about 16 scenarios, `library_revise.yaml`): the user's five example sentences from the spec (Section 1) after a fixed `first_plan`, the same with a hand-added (locked) dish, a scope with an exception, a general wish that must leave a locked egg dish, a count change on a hand-grown plan, a two-soup "那道汤不要了" that must ask, a fridge-only wish that cannot be met (unchanged, reasons), a choice card answered `plan` and one answered `revise`, a revise with a new guest (diner card, then a new plan), and two first-message scenarios checking `route_v3` returns `plan`. Write new sentences; do not open the held-out file.
 - [ ] **Step 5: Run** the eval tests and a dry load of both revise files through the runner's loader (`load_scenarios`) — expected PASS.
 - [ ] **Step 6: User commit**
 
@@ -274,7 +279,7 @@ git commit -m "eval: follow-up scenarios with a fixed first plan, edits between 
   - Follow-up routing: `route_as_expected` at least 90% on the development set and on the held-out set.
   - First-message routing: no scenario of the existing sets (baseline, plan2a, counts, diners, held-out core and diners) is not as expected because of the route.
   - Locked dishes wrongly removed: 0 over every run.
-  - As expected: at least 90% of `scenarios_revise.yaml` and at least 80% of `scenarios_revise_heldout.yaml`.
+  - As expected: at least 90% of `scenarios_revise.yaml` and at least 80% of `scenarios_revise_heldout.yaml` (scenarios with `deferred_to` reported apart, not counted).
   - Average model calls per revise turn at most 4 (route, parse, revise attempts), with no turn over 7.
 
 - [ ] **Step 1: Estimate the cost** of the round (the two revise sets plus every existing set once, with the final prompt versions) and **give it to the user; wait for approval**.

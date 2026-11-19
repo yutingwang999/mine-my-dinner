@@ -1,0 +1,291 @@
+# Plan 3b-1 held-out revision set. Run with library_revise.yaml.
+#
+# Held-out set written by the user on 2026-11-20. Not used for tuning in plan 3b-1; do not edit.
+# The follow-up sentences and the expected results are the user's. The first requests, the
+# first plans and the stock that set each sentence up were filled in from the user's notes.
+#
+# Keys added for follow-up scenarios (implemented by the runner in plan 3b-1 Task 7):
+# - first_plan: [titles] - after the first message's turn, the runner replaces the newest
+#   reply's dishes with these library titles as a model version (not edited, no locks), so
+#   the follow-up starts from a known plan.
+# - edits_between_turns: [{add: title} | {remove: title} | {keep: title}] - 3a edits applied
+#   in order after `between_turns`, through `apply_edit` and `update_state` as the API does
+#   (an add that needs confirmation is confirmed).
+# - choice_answer: revise | plan - the answer to the choice card; with no answer the runner
+#   stops at the card.
+# - expect_route: plan | revise | unsure - the route result of the follow-up.
+# - expect_choice_card: bool - whether the choice card appeared on the follow-up.
+# - expect_question: bool - the follow-up ends with a question to the user and no new plan
+#   version.
+# - expect_unchanged: bool - the dishes after the follow-up equal those before it.
+# - expect_removed: [titles] - each is gone after the follow-up.
+# - expect_removed_any: [titles] - at least one of them is gone after the follow-up.
+# - expect_max_changed: int - at most this many dishes of the plan before the follow-up are
+#   gone.
+# - expect_any_of: [{expect_* keys}] - the scenario meets this when the follow-up meets every
+#   key of at least one entry. Keys outside the list are still all required.
+# - library_exclude: [titles] - these library dishes do not exist for this scenario (the
+#   runner hides them before the first message and brings them back after).
+# - deferred_to: <plan> - the expected result needs a later plan (3b-2 for diner changes in
+#   a revise turn). The scenario is run and reported, but left out of plan 3b-1's held-out
+#   threshold.
+# - Existing keys keep their meaning, judged on the follow-up's plan (expect_titles_include,
+#   expect_titles_none, expect_counts, expect_spec, ...).
+# - Locked dishes are checked for every scenario without a key: a dish locked before the
+#   follow-up and absent after it, not listed in expect_removed, counts as a wrongly removed
+#   locked dish.
+scenarios:
+  - name: drop_the_corn_dish_keep_the_rest
+    request: 两个人吃晚饭，三个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [松仁玉米, 青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤]
+    follow_up: 玉米的不要，其他的就这样吧
+    expect_route: revise
+    expect_removed: [松仁玉米]
+    expect_titles_exact: [青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤]
+    expect_locale_reply: zh
+    expect: The corn dish is removed with no replacement; the other three stay.
+
+  - name: add_a_dessert
+    request: 两个人吃晚饭，两个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 番茄蛋花汤]
+    follow_up: 再来个甜品
+    expect_route: revise
+    expect_max_changed: 0
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 番茄蛋花汤]
+    expect_counts: {dishes: 2, soups: 1, desserts: 1}
+    expect_locale_reply: zh
+    expect: The plan stays and gains one dessert.
+
+  - name: too_many_egg_dishes_shopping_now
+    request: 两个人吃晚饭，做四个菜，只用冰箱里有的。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 12, 面粉: plenty, 葱: plenty, 猪肉: plenty, 青椒: 4}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [番茄炒蛋, 嫩滑蒸蛋, 鸡蛋饼, 青椒肉丝]
+    follow_up: 鸡蛋的太多了，可以去买菜
+    expect_route: revise
+    expect_removed_any: [番茄炒蛋, 嫩滑蒸蛋, 鸡蛋饼]
+    expect_max_changed: 2
+    expect_titles_include: [青椒肉丝]
+    expect_counts: {dishes: 4}
+    expect_locale_reply: zh
+    expect: Some of the egg dishes are swapped for dishes without egg, now with shopping allowed; the count stays 4.
+
+  - name: noodles_to_rice
+    request: 两个人吃晚饭，两个菜一个主食，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [清汤面, 青椒肉丝, 蒜蓉西兰花]
+    follow_up: 把面换成饭
+    expect_route: revise
+    expect_removed: [清汤面]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花]
+    expect_titles_any: [蛋炒饭, 白米饭]
+    expect_locale_reply: zh
+    expect: The noodles become a rice dish; the other dishes stay.
+
+  - name: add_a_spicy_dish
+    request: 两个人吃晚饭，三个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [番茄炒蛋, 清炒小白菜, 红烧排骨]
+    follow_up: 再加一道辣的吧
+    expect_route: revise
+    expect_max_changed: 0
+    expect_counts: {dishes: 4}
+    expect_titles_any: [酸辣土豆丝, 水煮鱼片, 辣子鸡, 麻婆豆腐, 辣椒炒肉]
+    expect_locale_reply: zh
+    expect: The plan stays and gains one spicy dish.
+
+  - name: friend_joins_and_two_more_dishes
+    request: 今晚做三个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    friends:
+      - {name: 小李, rules: [{type: allergy, allergen: egg}]}
+    first_plan: [番茄炒蛋, 青椒肉丝, 清炒菠菜]
+    follow_up: 小李也来，再加2道吧
+    expect_route: revise
+    expect_rules_applied: [{who: 小李, allergen: egg}]
+    expect_titles_none: [番茄炒蛋]
+    expect_titles_include: [青椒肉丝, 清炒菠菜]
+    expect_counts: {dishes: 5}
+    deferred_to: 3b-2
+    expect_locale_reply: zh
+    expect: After the diner change is confirmed, the egg dish goes (小李 is allergic to egg) and the plan has the original count plus 2. Until 3b-2 a diner change plans from scratch.
+
+  - name: remove_what_does_not_suit_after_a_kept_egg_dish
+    request: 两个人吃晚饭，做四个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    rules:
+      - {type: allergy, allergen: egg}
+    first_plan: [青椒肉丝, 红烧茄子, 蒜蓉西兰花, 清炒小白菜]
+    edits_between_turns:
+      - {remove: 红烧茄子}
+      - {add: 番茄炒蛋}
+    follow_up: 还是把不适合的菜去掉吧
+    expect_route: revise
+    expect_removed: [番茄炒蛋]
+    expect_titles_exact: [青椒肉丝, 蒜蓉西兰花, 清炒小白菜]
+    expect_counts: {dishes: 3}
+    expect_locale_reply: zh
+    expect: The user is allergic to egg, removed the eggplant and added an egg dish by hand with the conflict confirmed. Asking to remove what does not suit leaves the 3 dishes without it.
+
+  - name: swap_for_a_dish_not_in_the_library
+    request: 两个人吃晚饭，两个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    library_exclude: [番茄炒蛋]
+    first_plan: [鱼香肉丝, 蒜蓉西兰花, 紫菜豆腐汤]
+    follow_up: 鱼香肉丝不要，换成西红柿炒鸡蛋
+    expect_route: revise
+    expect_unchanged: true
+    expect_locale_reply: zh
+    expect: The asked-for dish is not in the library, so the revision fails and the plan stays as it was, with the reason.
+
+  - name: swap_for_a_daikon_dish
+    request: 两个人吃晚饭，三个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [辣椒炒肉, 番茄炒蛋, 清炒小白菜]
+    follow_up: 辣椒炒肉不要，换成萝卜
+    expect_route: revise
+    expect_removed: [辣椒炒肉]
+    expect_max_changed: 1
+    expect_titles_include: [番茄炒蛋, 清炒小白菜, 家常烧肉]
+    expect_locale_reply: zh
+    expect: 萝卜 names no dish but is a main ingredient of 家常烧肉 (胡萝卜 is a different ingredient). The pepper pork becomes that dish; the others stay.
+
+  - name: another_version_is_a_new_plan
+    request: 两个人吃晚饭，两个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 番茄蛋花汤]
+    follow_up: 再来一版
+    expect_route: plan
+    expect_counts: {dishes: 2, soups: 1}
+    expect_locale_reply: zh
+    expect: Plans again from the request.
+
+  - name: no_eggplant
+    request: 两个人吃晚饭，两个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [红烧茄子, 青椒肉丝, 番茄蛋花汤]
+    follow_up: 不想吃茄子
+    expect_route: revise
+    expect_removed: [红烧茄子]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 番茄蛋花汤]
+    expect_counts: {dishes: 2, soups: 1}
+    expect_locale_reply: zh
+    expect: The eggplant dish is replaced by one without eggplant; the rest stays.
+
+  - name: drop_the_meat_dishes
+    request: 两个人吃晚饭，做四个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 红烧排骨, 蒜蓉西兰花, 清炒小白菜]
+    follow_up: 最近胖了，把肉菜去了吧
+    expect_route: revise
+    expect_removed: [青椒肉丝, 红烧排骨]
+    expect_titles_exact: [蒜蓉西兰花, 清炒小白菜]
+    expect_locale_reply: zh
+    expect: The meat dishes are removed; the other dishes stay unchanged.
+
+  - name: add_a_green_vegetable
+    request: 两个人吃晚饭，两个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 红烧排骨, 番茄蛋花汤]
+    follow_up: 加个青菜
+    expect_route: revise
+    expect_max_changed: 0
+    expect_counts: {dishes: 3, vegetable_dishes: 1, soups: 1}
+    expect_locale_reply: zh
+    expect: The plan stays and gains one vegetable dish.
+
+  - name: eaten_too_often_ambiguous
+    request: 两个人吃晚饭，两个菜一个汤，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [番茄炒蛋, 青椒肉丝, 紫菜豆腐汤]
+    follow_up: 最近总吃西红柿炒鸡蛋啊
+    expect_any_of:
+      - {expect_removed: [番茄炒蛋], expect_max_changed: 1}
+      - {expect_question: true, expect_unchanged: true}
+    expect_locale_reply: zh
+    expect: Ambiguous. Taking out the tomato and egg dish (and nothing else) is right; so is leaving the plan as it is and asking what to change.
+
+  - name: wants_mushroom
+    request: 两个人吃晚饭，三个菜，缺的可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 番茄炒蛋]
+    follow_up: 感觉想吃蘑菇
+    expect_route: revise
+    expect_max_changed: 1
+    expect_titles_include: [清炒蘑菇]
+    expect_counts: {dishes: 3}
+    expect_locale_reply: zh
+    expect: One dish becomes the mushroom dish; the count stays 3.
+
+  - name: no_meat_today_english
+    request: Dinner for two, three dishes, shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 红烧排骨, 清炒小白菜]
+    follow_up: I don't want to eat meat today.
+    expect_route: revise
+    expect_removed: [青椒肉丝, 红烧排骨]
+    expect_titles_include: [清炒小白菜]
+    expect_counts: {dishes: 3, meat_dishes: 0}
+    expect_locale_reply: en
+    expect: The meat dishes are replaced by vegetable dishes.
+
+  - name: too_many_tomatoes_english
+    request: Dinner for two, three dishes and a soup, shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [番茄炒蛋, 番茄蛋花汤, 番茄炖牛腩, 清炒小白菜]
+    follow_up: Too many tomatoes!!!!!!
+    expect_route: revise
+    expect_removed_any: [番茄炒蛋, 番茄蛋花汤, 番茄炖牛腩]
+    expect_max_changed: 2
+    expect_titles_include: [清炒小白菜]
+    expect_counts: {dishes: 3, soups: 1}
+    expect_locale_reply: en
+    expect: Three of the four dishes have tomato; some of them are swapped for dishes without tomato.
+
+  - name: too_many_tomatoes_but_the_plan_has_potatoes
+    request: Dinner for two, four dishes, shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [酸辣土豆丝, 青椒土豆片, 土豆烧鸡块, 清炒小白菜]
+    follow_up: Too many tomatoes!!!!!!
+    expect_unchanged: true
+    expect_locale_reply: en
+    expect: No dish has tomato (three have potato), so the wish names nothing in the plan. The plan stays; asking what to change is also right.
