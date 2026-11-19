@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
@@ -64,6 +64,14 @@ _edit_lock = threading.Lock()
 class SearchBody(BaseModel):
     query: str = Field(min_length=1, max_length=200)
     locale: Locale
+
+    @field_validator("query")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("query must not be blank")
+        return value
 
 
 class RemoveBody(BaseModel):

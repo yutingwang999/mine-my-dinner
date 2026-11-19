@@ -214,11 +214,14 @@ export function AddDish({
   threadId,
   edit,
   disabled,
+  planIds,
   buttonRef,
 }: {
   threadId: string;
   edit: PlanEdit;
   disabled: boolean;
+  /** The dishes now in the plan: a result's "already in the plan" mark follows them. */
+  planIds: number[];
   /** The "+ Add a dish" button, which gets focus after a dish is removed. */
   buttonRef?: Ref<HTMLButtonElement>;
 }) {
@@ -350,7 +353,7 @@ export function AddDish({
                       </span>
                     ))}
                   </div>
-                  {hit.in_plan ? (
+                  {planIds.includes(hit.id) ? (
                     <span className="hint plan-search-in">{t("inPlan")}</span>
                   ) : (
                     <button

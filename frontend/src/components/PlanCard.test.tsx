@@ -1180,4 +1180,34 @@ describe("PlanCard manual edits", () => {
       locale: "en",
     });
   });
+
+  it("offers the allergen panel for a dish red for unknown allergens, then keeps it again", async () => {
+    const ENTRY = {
+      id: 9, name_zh: "花椒油", name_en: null, aliases_zh: [], aliases_en: [], user_aliases_zh: [],
+      user_aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null,
+      parent_id: null,
+    };
+    let resolved = false;
+    const calls = mockFetch({
+      [`POST ${BASE}/keep`]: (body) =>
+        resolved && (body as { confirm: Conflict[] }).confirm.length === 0
+          ? { plan: edited({ recipes: TWO.recipes }) }
+          : reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: [unknownOil] }),
+      "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry: ENTRY }] }),
+      "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => {
+        resolved = true;
+        return { ...ENTRY, allergens: [] };
+      },
+    });
+    renderWithProviders(<Editable initial={withConflict([{ ...unknownOil, recipe_id: 2 }])} />);
+    await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    const dialog = await screen.findByRole("group", { name: "This dish conflicts with" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Confirm allergens" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Confirm it contains none" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save allergens" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/keep`)).toHaveLength(2));
+    expect(callsTo(calls, "POST", `${BASE}/keep`)[1].body).toEqual({ recipe_id: 2, confirm: [], locale: "en" });
+    await waitFor(() => expect(screen.queryByRole("group", { name: "This dish conflicts with" })).toBeNull());
+  });
 });

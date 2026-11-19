@@ -356,6 +356,22 @@ def _kept(
     return [c for c in found if c.override() in overrides]
 
 
+def _base(session: Session, values: dict, recipe_ids: list[int]) -> dict:
+    """The card's base keys, without a left-out entry for a dish that is now in the plan."""
+    base = card_base(values, session)
+    if not recipe_ids:
+        return base
+    in_plan = set(recipe_ids)
+    titles = set(
+        session.execute(select(Recipe.title).where(Recipe.id.in_(recipe_ids))).scalars().all()
+    )
+    base["left_out_details"] = [d for d in base["left_out_details"] if d["id"] not in in_plan]
+    base["left_out_unknown_allergens"] = [
+        t for t in base["left_out_unknown_allergens"] if t not in titles
+    ]
+    return base
+
+
 def _edited_card(
     session: Session,
     ctx: PlanningContext,
@@ -389,7 +405,7 @@ def _edited_card(
             "warnings": allowed + [w.model_dump(mode="json") for w in result.warnings],
             "violations": [],
         },
-        base=card_base(values, session),
+        base=_base(session, values, recipe_ids),
         locale=locale,
     )
     spec = PlanSpec.model_validate(values["spec"])
@@ -433,7 +449,7 @@ def _restored_card(
             "warnings": [w.model_dump(mode="json") for w in result.warnings],
             "violations": [v.model_dump(mode="json") for v in others],
         },
-        base=card_base(values, session),
+        base=_base(session, values, ids),
         locale=locale,
     )
     card.update(

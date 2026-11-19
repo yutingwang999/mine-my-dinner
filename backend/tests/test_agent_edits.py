@@ -616,3 +616,50 @@ def test_guest_conflict_named_by_guest_name(env):
     assert conflict["diner_key"] == "guest:1"
     assert conflict["diner_name"] == "阿美"
     assert "Diner" not in json.dumps(outcome.plan, ensure_ascii=False)
+
+
+def test_left_out_block_drops_dish_now_in_plan(env):
+    values = model_state(env, [env.veg.id])
+    values["search_notes"] = {
+        "left_out_unknown_allergens": ["番茄炒蛋", "红烧肉"],
+        "left_out_details": [
+            {"id": env.egg.id, "title": "番茄炒蛋", "lines": ["番茄"]},
+            {"id": env.meat.id, "title": "红烧肉", "lines": ["五花肉"]},
+        ],
+        "semantic_paused": False,
+    }
+    outcome, _, after = run(env, values, Add(recipe_id=env.egg.id, confirm=[]))
+    plan = outcome.plan
+    assert plan["left_out_unknown_allergens"] == ["红烧肉"]
+    assert [d["id"] for d in plan["left_out_details"]] == [env.meat.id]
+    # The restored model plan does not hold the dish, so the block lists it again.
+    outcome, _, _ = run(env, after, Restore())
+    assert outcome.plan["left_out_unknown_allergens"] == ["番茄炒蛋", "红烧肉"]
+    # Another left-out dish added by hand leaves the block the same way.
+    _, _, edited = run(env, values, Add(recipe_id=env.meat.id, confirm=[]))
+    assert edited["current_plan"]["left_out_unknown_allergens"] == ["番茄炒蛋"]
+
+
+def test_edit_after_a_newer_model_version(env):
+    values = model_state(env, [env.veg.id, env.egg.id])
+    _, _, after = run(env, values, Remove(recipe_id=env.veg.id))
+    assert [v.get("edited", False) for v in after["plan_versions"]] == [False, True]
+    # A later run appends a new model version and a newer reply.
+    newer = model_state(env, [env.meat.id, env.soup.id])
+    card = newer["current_plan"]
+    reply_id = str(uuid.uuid4())
+    later = {
+        **after,
+        "messages": [*after["messages"], HumanMessage("again", id="h2"), AIMessage("n", id=reply_id)],
+        "current_plan": card,
+        "plan_versions": [*after["plan_versions"], card],
+        "reply_plans": {**after["reply_plans"], reply_id: card},
+    }
+    _, update, after2 = run(env, later, Remove(recipe_id=env.meat.id))
+    versions = update["plan_versions"]
+    assert len(versions) == 4
+    assert versions[3]["edited"] is True
+    assert versions[3]["model_version"] == 2
+    outcome, _, _ = run(env, after2, Restore())
+    assert ids(outcome.plan) == [env.meat.id, env.soup.id]
+    assert outcome.plan["model_version"] == 2

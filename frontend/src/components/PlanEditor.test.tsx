@@ -102,6 +102,19 @@ describe("PlanEditor search", () => {
     expect(within(soup).getByRole("button", { name: "Add" })).toBeEnabled();
   });
 
+  it("follows the card's dishes: a dish removed while the search is open can be added again", async () => {
+    mockFetch({
+      [`POST ${BASE}/search`]: () => ({ hits: [hit({ in_plan: true })] }),
+      [`POST ${BASE}/remove`]: () => ({ plan: plan({ edited: true, model_version: 0, edit: ADDED.edit, count_notes: [], notes: [], recipes: ADDED.recipes.slice(0, 1) }) }),
+    });
+    renderWithProviders(<Editable initial={ADDED} />);
+    await searchFor("豆腐");
+    expect(await screen.findByText("Already in the plan")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Remove 小白菜豆腐汤" }));
+    expect(await screen.findByRole("button", { name: "Add" })).toBeEnabled();
+    expect(screen.queryByText("Already in the plan")).toBeNull();
+  });
+
   it("focuses the search box when the search opens", async () => {
     renderWithProviders(<Editable initial={plan()} />);
     await userEvent.click(screen.getByRole("button", { name: "+ Add a dish" }));

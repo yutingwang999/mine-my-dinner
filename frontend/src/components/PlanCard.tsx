@@ -373,6 +373,7 @@ function DishConflicts({
           disabled={disabled}
           onConfirm={() => void edit.confirm()}
           onCancel={edit.cancel}
+          onRecheck={() => void edit.keep(recipeId, [])}
         />
       )}
     </div>
@@ -469,7 +470,13 @@ export function PlanCard({
   // so a reply without a plan explains first, then offers building one.
   const addRow = controls ? (
     <>
-      <AddDish threadId={threadId as string} edit={edit} disabled={busy} buttonRef={addRef} />
+      <AddDish
+        threadId={threadId as string}
+        edit={edit}
+        disabled={busy}
+        planIds={plan.recipes.map((recipe) => recipe.id)}
+        buttonRef={addRef}
+      />
       {edit.error !== null && (
         <p role="alert" className="notice notice-warning">
           {errorText(edit.error)}

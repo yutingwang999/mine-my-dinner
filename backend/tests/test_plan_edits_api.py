@@ -446,3 +446,10 @@ def test_locale_and_body_validation(client, env):
         == 422
     )
     assert client.post(f"{url}/search", json={"query": "", "locale": "zh"}).status_code == 422
+
+
+def test_search_rejects_blank_query(client, env):
+    tid = planned_thread(client, env)
+    for query in ("", "   "):
+        assert edit(client, tid, "search", query=query).status_code == 422
+    assert edit(client, tid, "search", query="  白菜 ").status_code == 200
