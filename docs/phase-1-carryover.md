@@ -263,3 +263,9 @@ Each item's title or first sentence ends with where it goes next, such as "(→ 
   - **Notes naming dishes outside the plan returned (→ T1.10).** Four notes in round 8 named a dish the planner considered but did not choose (none in round 7). `planner_v4` did not change; watch it in the next round, and check whether a retry's note comes from the rejected proposal.
 - **Prompt file line endings (→ code health, any step; parked).** In the working tree, `parse_v5.md` is checked out with LF while the other prompt files have CRLF. Both are committed with LF, and loading normalises line endings, so the prompt text and its hash are the same. Parked.
 - **Parse prompt size (round 8) (→ T1.7 or T1.10, whichever changes the parse prompt first).** The parse call is now the largest call of a plan (about 5,200 tokens: the prompt and the `ParsedRequest` schema), larger than the planner's. Cost is small (97% cached), but more rules means more rules that interact (the cold-dish rule blocked "一个凉拌菜"). If held-out misses start to come from rule conflicts, slim it: remove what the prompt and the schema's field descriptions both say, or move the people fields to a separate call made only when others are mentioned (option B of spec section 4).
+
+## Deferred from Phase 1 plan 3a
+
+Findings judged safe to defer during plan 3a's task reviews (manual plan edits). Each ends with where it goes next.
+
+- **Plan-card builder tests (Task 1 review) (→ code health, any step).** `tests/test_plan_card.py` imports pytest fixtures (`graph_env`, `veg`, `meat`) from `tests/test_agent_graph.py` (`# noqa`, and pyflakes reports redefinitions); a shared `conftest.py` or fakes module would be sturdier. Its hand-built H4 violation repeats the graph's violation shape, so it would not catch drift in that shape.

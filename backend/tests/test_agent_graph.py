@@ -22,9 +22,8 @@ from minemydinner.agent.graph import (
     EARLY_STOP_NOTE_EN,
     EARLY_STOP_NOTE_ZH,
     build_graph,
-    next_actions,
-    reason_text,
 )
+from minemydinner.agent.card_text import next_actions, reason_text
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
@@ -682,7 +681,8 @@ def test_closest_attempt_breaks_ties_by_composition_gap(graph_env, session):
 
 
 def test_h4_and_h7_wording_for_the_model_and_the_user():
-    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+    from minemydinner.agent.card_text import unmet_for_user
+    from minemydinner.agent.graph import _violation_for_model
 
     # 3 dishes, at least 2 meat dishes (meat [2, 3], vegetable [0, 1]).
     h4 = {
@@ -698,7 +698,7 @@ def test_h4_and_h7_wording_for_the_model_and_the_user():
         "The plan has 2 dishes, 1 soup, 0 meat dishes, 2 vegetable dishes; the user wants "
         "3 dishes, 0 soups, at least 2 meat dishes, at most 1 vegetable dish."
     )
-    assert _unmet_for_user(h4, {}, "zh") == (
+    assert unmet_for_user(h4, {}, "zh") == (
         "方案有 2 道菜，1 道汤，0 道荤菜，2 道素菜，要求是 3 道菜，0 道汤，至少 2 道荤菜，最多 1 道素菜"
     )
     h7 = {
@@ -706,15 +706,15 @@ def test_h4_and_h7_wording_for_the_model_and_the_user():
         "recipe_id": None,
         "detail": {"name": "鸡蛋", "rule": "all", "recipes_without": [7]},
     }
-    assert _unmet_for_user(h7, {7: "白菜"}, "en") == 'These dishes do not use 鸡蛋: "白菜"'
-    assert _unmet_for_user(h7, {7: "白菜"}, "zh") == "这些菜没有用到鸡蛋：“白菜”"
+    assert unmet_for_user(h7, {7: "白菜"}, "en") == 'These dishes do not use 鸡蛋: "白菜"'
+    assert unmet_for_user(h7, {7: "白菜"}, "zh") == "这些菜没有用到鸡蛋：“白菜”"
     must = {**h7, "detail": {**h7["detail"], "rule": "must"}}
-    assert _unmet_for_user(must, {}, "en") == "No dish in the plan uses 鸡蛋"
+    assert unmet_for_user(must, {}, "en") == "No dish in the plan uses 鸡蛋"
     assert "7" in _violation_for_model(h7, {}) and "鸡蛋" in _violation_for_model(must, {})
 
 
 def test_counts_text_uses_singular_and_omits_unasked_zeros():
-    from minemydinner.agent.graph import _unmet_for_user
+    from minemydinner.agent.card_text import unmet_for_user
 
     h4 = {
         "code": "H4",
@@ -725,8 +725,8 @@ def test_counts_text_uses_singular_and_omits_unasked_zeros():
             "minimum": False,
         },
     }
-    assert _unmet_for_user(h4, {}, "en") == "The plan has 2 dishes, 0 soups; 1 dish, 1 soup were asked for"
-    assert _unmet_for_user(h4, {}, "zh") == "方案有 2 道菜，0 道汤，要求是 1 道菜，1 道汤"
+    assert unmet_for_user(h4, {}, "en") == "The plan has 2 dishes, 0 soups; 1 dish, 1 soup were asked for"
+    assert unmet_for_user(h4, {}, "zh") == "方案有 2 道菜，0 道汤，要求是 1 道菜，1 道汤"
 
 
 # ---- the planner's opening, retries, and the shortlist (Task 7) ----
@@ -1019,7 +1019,8 @@ def _h4_ranges(dishes: int, present: dict, meat: list[int], vegetable: list[int]
 
 
 def test_exact_one_sided_split_states_the_implied_side():
-    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+    from minemydinner.agent.card_text import unmet_for_user
+    from minemydinner.agent.graph import _violation_for_model
 
     h4 = _h4(
         {"dishes": 8, "soups": 0, "meat_dishes": 2},
@@ -1031,9 +1032,9 @@ def test_exact_one_sided_split_states_the_implied_side():
         "the user wants 8 dishes, 2 meat dishes, 6 vegetable dishes."
     )
     assert "0 vegetable dishes" not in text
-    assert "6 道素菜" in _unmet_for_user(h4, {}, "zh")
-    assert "要求是 8 道菜，2 道荤菜，6 道素菜" in _unmet_for_user(h4, {}, "zh")
-    assert "8 dishes, 2 meat dishes, 6 vegetable dishes were asked for" in _unmet_for_user(
+    assert "6 道素菜" in unmet_for_user(h4, {}, "zh")
+    assert "要求是 8 道菜，2 道荤菜，6 道素菜" in unmet_for_user(h4, {}, "zh")
+    assert "8 dishes, 2 meat dishes, 6 vegetable dishes were asked for" in unmet_for_user(
         h4, {}, "en"
     )
 
@@ -1048,7 +1049,8 @@ def test_exact_vegetable_only_split_implies_the_meat_side():
 
 
 def test_old_minimum_finding_states_the_tightened_ranges():
-    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+    from minemydinner.agent.card_text import unmet_for_user
+    from minemydinner.agent.graph import _violation_for_model
 
     h4 = _h4(
         {"dishes": 3, "meat_dishes": 2},
@@ -1059,12 +1061,13 @@ def test_old_minimum_finding_states_the_tightened_ranges():
     assert text.endswith(
         "the user wants 3 dishes, at least 2 meat dishes, at most 1 vegetable dish."
     )
-    zh = _unmet_for_user(h4, {}, "zh")
+    zh = unmet_for_user(h4, {}, "zh")
     assert zh.endswith("要求是 3 道菜，至少 2 道荤菜，最多 1 道素菜")
 
 
 def test_an_unconstrained_side_is_never_printed():
-    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+    from minemydinner.agent.card_text import unmet_for_user
+    from minemydinner.agent.graph import _violation_for_model
 
     # 8 dishes, at least 2 meat: the vegetable side is [0, 6], stated as at most 6.
     h4 = _h4_ranges(8, {"dishes": 7, "meat_dishes": 1, "vegetable_dishes": 6}, [2, 8], [0, 6])
@@ -1076,14 +1079,15 @@ def test_an_unconstrained_side_is_never_printed():
     assert _violation_for_model(plain, {}) == (
         "The plan has 1 dish, 1 meat dish; the user wants 2 dishes."
     )
-    assert _unmet_for_user(plain, {}, "en") == (
+    assert unmet_for_user(plain, {}, "en") == (
         "The plan has 1 dish, 1 meat dish; 2 dishes were asked for"
     )
-    assert "0" not in _unmet_for_user(plain, {}, "zh")
+    assert "0" not in unmet_for_user(plain, {}, "zh")
 
 
 def test_range_wording_in_retry_and_card():
-    from minemydinner.agent.graph import _unmet_for_user, _violation_for_model
+    from minemydinner.agent.card_text import unmet_for_user
+    from minemydinner.agent.graph import _violation_for_model
 
     # 4 dishes, at least 1 meat, at most 2 vegetable: meat [2, 4], vegetable [0, 2].
     h4 = _h4_ranges(4, {"dishes": 4, "meat_dishes": 1, "vegetable_dishes": 3}, [2, 4], [0, 2])
@@ -1091,12 +1095,12 @@ def test_range_wording_in_retry_and_card():
         "The plan has 4 dishes, 1 meat dish, 3 vegetable dishes; the user wants 4 dishes, "
         "at least 2 meat dishes, at most 2 vegetable dishes."
     )
-    assert _unmet_for_user(h4, {}, "zh") == (
+    assert unmet_for_user(h4, {}, "zh") == (
         "方案有 4 道菜，1 道荤菜，3 道素菜，要求是 4 道菜，至少 2 道荤菜，最多 2 道素菜"
     )
     # Both named below a total of 4: 1 to 3 of each.
     both = _h4_ranges(4, {"dishes": 4, "meat_dishes": 0, "vegetable_dishes": 4}, [1, 3], [1, 3])
-    assert _unmet_for_user(both, {}, "en").endswith(
+    assert unmet_for_user(both, {}, "en").endswith(
         "4 dishes, 1 to 3 meat dishes, 1 to 3 vegetable dishes were asked for"
     )
 
@@ -1117,7 +1121,7 @@ def test_range_wording_in_retry_and_card():
     ],
 )
 def test_side_phrase(low, high, total, category, en, zh):
-    from minemydinner.agent.graph import side_phrase
+    from minemydinner.agent.card_text import side_phrase
 
     assert side_phrase(low, high, total, category, False) == en
     assert side_phrase(low, high, total, category, True) == zh

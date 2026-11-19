@@ -13,8 +13,15 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
+from minemydinner.agent.card_text import (
+    counts_text,
+    is_zh,
+    next_actions,
+    no_plan_reason,
+    reason_text,
+    side_phrases,
+)
 from minemydinner.agent.diners import (
     DinerAnswer,
     SettledDiners,
@@ -41,6 +48,7 @@ from minemydinner.agent.labels import (
     load_label_context,
 )
 from minemydinner.agent.middleware import dump_message
+from minemydinner.agent.plan_card import build_dishes_card, card_base
 from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
 from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
@@ -59,7 +67,7 @@ from minemydinner.agent.request import (
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
-from minemydinner.planning.composition import composition_gap, ranges_for, side_ranges
+from minemydinner.planning.composition import composition_gap, side_ranges
 from minemydinner.planning.context import (
     MealConstraints,
     RuleRef,
@@ -70,7 +78,7 @@ from minemydinner.planning.feasibility import Shortfall, check_feasibility, need
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
 from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
-from minemydinner.planning.stock import compute_missing, missing_cookware
+from minemydinner.planning.stock import compute_missing
 from minemydinner.planning.tools import PlannerDeps
 from minemydinner.planning.validate import PlanSpec, ValidationResult, validate_plan
 
@@ -149,10 +157,6 @@ def other_reply(locale: str) -> str:
     return OTHER_REPLY_ZH if locale == "zh" else OTHER_REPLY_EN
 
 
-def _zh(locale: str) -> bool:
-    return locale == "zh"
-
-
 def _constraints(state: ChatState) -> MealConstraints:
     data = state["constraints"]
     return MealConstraints(
@@ -208,88 +212,6 @@ def _current_request(messages: list) -> list[str]:
 # ---- plain words ----
 
 
-CATEGORY_WORDS = {
-    "dishes": ("dish", "dishes", "道菜"),
-    "soups": ("soup", "soups", "道汤"),
-    "meat_dishes": ("meat dish", "meat dishes", "道荤菜"),
-    "vegetable_dishes": ("vegetable dish", "vegetable dishes", "道素菜"),
-    "staples": ("staple food", "staple foods", "份主食"),
-    "desserts": ("dessert", "desserts", "份甜品"),
-    "snacks": ("snack", "snacks", "份小吃"),
-}
-
-
-def side_phrase(low: int, high: int, total: int, category: str, zh: bool) -> str | None:
-    """One meat or vegetable side in words, from its range against the dish total (design
-    5.11): "6 vegetable dishes", "2 to 3 meat dishes", "at least 2 meat dishes", "at most 1
-    vegetable dish", or None when the side is not constrained."""
-    one, many, cn = CATEGORY_WORDS[category]
-
-    def en(n: int) -> str:
-        return f"{n} {one if n == 1 else many}"
-
-    if total <= 0:
-        return None
-    if low == high:
-        return f"{low} {cn}" if zh else en(low)
-    if low > 0 and high < total:
-        return f"{low} 到 {high} {cn}" if zh else f"{low} to {high} {many}"
-    if low > 0:
-        return f"至少 {low} {cn}" if zh else f"at least {en(low)}"
-    if high < total:
-        return f"最多 {high} {cn}" if zh else f"at most {en(high)}"
-    return None
-
-
-def _side_phrases(ranges: dict, total: int, zh: bool) -> dict[str, str]:
-    """The phrase of each constrained side, in meat-then-vegetable order."""
-    phrases = {}
-    for side in _SIDE_CATEGORIES:
-        low, high = ranges[side]
-        phrase = side_phrase(low, high, total, side, zh)
-        if phrase is not None:
-            phrases[side] = phrase
-    return phrases
-
-
-def _detail_ranges(detail: dict) -> dict[str, tuple[int, int]]:
-    """The side ranges of an H4 finding. A finding saved before ranges existed carries the
-    named sides in `required` and a `minimum` flag instead."""
-    if "ranges" in detail:
-        return {side: (low, high) for side, (low, high) in detail["ranges"].items()}
-    required = detail["required"]
-    bound = "at_least" if detail.get("minimum") else "exact"
-    return ranges_for(
-        required.get("dishes", 0),
-        required.get("meat_dishes"),
-        bound,
-        required.get("vegetable_dishes"),
-        bound,
-    )
-
-
-def _counts_text(detail: dict, zh: bool, wanted: bool = False) -> str:
-    """The counts of an H4 finding in plain words. Without `wanted`, what the plan has: the
-    categories asked for or present, and a constrained side. With `wanted`, what the user
-    asked for: exact counts as numbers, each constrained side as its range phrase, and an
-    unconstrained side not at all, never as a made-up 0."""
-    required, present = detail["required"], detail["present"]
-    total = required.get("dishes", 0)
-    phrases = _side_phrases(_detail_ranges(detail), total, zh)
-    parts = []
-    for category, (one, many, cn) in CATEGORY_WORDS.items():
-        if wanted and category in _SIDE_CATEGORIES:
-            if category in phrases:
-                parts.append(phrases[category])
-            continue
-        if category in _SIDE_CATEGORIES:
-            include = bool(present.get(category, 0)) or category in phrases
-        else:
-            include = bool(required.get(category, 0) or present.get(category, 0))
-        if include:
-            n = (required if wanted else present).get(category, 0)
-            parts.append(f"{n} {cn}" if zh else f"{n} {one if n == 1 else many}")
-    return ("，" if zh else ", ").join(parts)
 
 
 def _composition_gap_of(spec: PlanSpec, validation: dict) -> int:
@@ -323,8 +245,8 @@ def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
         return f"Recipe {recipe_id}: needs cookware the household lacks: {lacking}."
     if code == "H4":
         return (
-            f"The plan has {_counts_text(detail, False)}; "
-            f"the user wants {_counts_text(detail, False, wanted=True)}."
+            f"The plan has {counts_text(detail, False)}; "
+            f"the user wants {counts_text(detail, False, wanted=True)}."
         )
     if code == "H7":
         ids = ", ".join(str(i) for i in detail["recipes_without"])
@@ -346,198 +268,6 @@ def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
     return f"{code}: {json.dumps(detail, ensure_ascii=False)}"
 
 
-def _unmet_for_user(finding: dict, titles: dict[int, str], locale: str) -> str:
-    code, detail = finding["code"], finding["detail"]
-    title = titles.get(finding["recipe_id"], "")
-    zh = _zh(locale)
-    if code == "H1":
-        names = ("、" if zh else ", ").join(detail["missing"])
-        count = len(detail["missing"])
-        if zh:
-            return f"{title}：缺少 {count} 种食材（{names}）"
-        return f"{title}: {count} ingredient{'s' if count != 1 else ''} missing ({names})"
-    if code == "H3":
-        names = ("、" if zh else ", ").join(detail["missing"])
-        if zh:
-            return f"{title}：缺少厨具（{names}）"
-        return f"{title}: missing cookware ({names})"
-    if code == "H4":
-        present = _counts_text(detail, zh)
-        wanted = _counts_text(detail, zh, wanted=True)
-        if zh:
-            return f"方案有 {present}，要求是 {wanted}"
-        return f"The plan has {present}; {wanted} were asked for"
-    if code == "H7":
-        lacking = ("、" if zh else ", ").join(
-            f"“{titles[i]}”" if zh else f'"{titles[i]}"'
-            for i in detail["recipes_without"]
-            if i in titles
-        )
-        name = detail["name"]
-        if detail["rule"] == "must":
-            if zh:
-                return f"方案里没有用到{name}的菜"
-            return f"No dish in the plan uses {name}"
-        if zh:
-            return f"这些菜没有用到{name}：{lacking}"
-        return f"These dishes do not use {name}: {lacking}"
-    if code == "H6":
-        minutes, limit = detail["time_min"], detail["limit"]
-        if zh:
-            return f"{title}：需要 {minutes} 分钟，超过 {limit} 分钟的限制"
-        return f"{title}: takes {minutes} minutes, over the {limit}-minute limit"
-    return f"{title}: {code}"
-
-
-def _no_plan_reason(code: str, locale: str) -> str:
-    """Why no plan is shown (H2 or H5), without naming the dishes."""
-    zh = _zh(locale)
-    if code == "H2":
-        if zh:
-            return "找到的方案都含有用餐者过敏或忌口的食材"
-        return "Every plan found had a dish that breaks a diner's allergies or dietary restrictions"
-    if zh:
-        return "提议的菜并不都来自你的菜谱库"
-    return "The proposed dishes were not all from your recipe library"
-
-
-# A dish type in a sentence about all of them: (English plural, Chinese).
-CATEGORY_KIND = {
-    "meat_dishes": ("meat dishes", "荤菜"),
-    "vegetable_dishes": ("vegetable dishes", "素菜"),
-    "soups": ("soups", "汤"),
-    "staples": ("staple foods", "主食"),
-    "desserts": ("desserts", "甜品"),
-    "snacks": ("snacks", "小吃"),
-}
-
-
-def _count_phrase(n: int | None, category: str, zh: bool, minimum: bool = False) -> str:
-    one, many, cn = CATEGORY_WORDS[category]
-    if zh:
-        return f"{'至少 ' if minimum else ''}{n} {cn}"
-    return f"{'at least ' if minimum else ''}{n} {one if n == 1 else many}"
-
-
-def reason_text(shortfall: dict, mode: str, locale: str) -> str:
-    """One feasibility reason in plain words, in the request's locale. Fixed strings that
-    state what the meal needs and what is available; never model output."""
-    zh = _zh(locale)
-    reason, category = shortfall["reason"], shortfall["category"]
-    needed, available = shortfall["needed"], shortfall["available"]
-    name = shortfall.get("ingredient")
-    fridge = mode == "fridge_only"
-    minimum = bool(shortfall.get("minimum"))
-    if reason == "empty_inventory":
-        return "冰箱里没有可以用来做菜的食材" if zh else "There is nothing in the fridge to cook with"
-    # A category names the dish type ("None of your vegetable dishes ..."); the combined
-    # "dishes" line and no category keep the generic sentence.
-    kind = CATEGORY_KIND.get(category or "")
-    if reason == "no_cookware":
-        if kind:
-            return f"你的{kind[1]}都用不了现有的厨具" if zh else (
-                f"None of your {kind[0]} can be made with the cookware you have"
-            )
-        if zh:
-            return "你的菜谱里没有一道能用你现有的厨具做出来"
-        return "None of your recipes can be made with the cookware you have"
-    if reason == "time_limit":
-        if kind:
-            return f"你的{kind[1]}都不符合时间限制" if zh else (
-                f"None of your {kind[0]} fits the time limit"
-            )
-        return "你的菜谱里没有一道符合时间限制" if zh else "None of your recipes fits the time limit"
-    if reason == "not_enough_dishes":
-        have = _count_phrase(available, category, zh)
-        want = _count_phrase(needed, category, zh, minimum)
-        if zh:
-            return f"按冰箱现有的食材只能做 {have}，这餐需要 {want}"
-        return f"By the current fridge you can make {have}; this meal needs {want}"
-    if reason == "not_enough_in_library":
-        have = _count_phrase(available, category, zh)
-        want = _count_phrase(needed, category, zh, minimum)
-        if zh:
-            return f"你的菜谱库里你能吃的只有 {have}，这餐需要 {want}"
-        return f"Your library has {have} you can eat; this meal needs {want}"
-    # named_ingredient
-    if category is None:
-        if fridge and shortfall.get("absent_from_stock"):
-            return f"冰箱里没有{name}" if zh else f"No {name} in the fridge"
-        if fridge:
-            if zh:
-                return f"用现有的食材做不出用到{name}的菜"
-            return f"No dish that can be made from the fridge uses {name}"
-        if zh:
-            return f"你的菜谱库里没有用到{name}的菜"
-        return f"No dish in your library uses {name}"
-    have = _count_phrase(available, category, zh)
-    want = _count_phrase(needed, category, zh, minimum)
-    if zh:
-        verb = "只能做" if fridge else "只有"
-        return f"用到{name}的菜{verb} {have}，这餐需要 {want}"
-    if fridge:
-        return f"Only {have} with {name} can be made; this meal needs {want}"
-    return f"Your library has only {have} with {name}; this meal needs {want}"
-
-
-# Every next action, in the order the card shows them.
-NEXT_ACTION_ORDER = (
-    "switch_to_shopping",
-    "fewer_dishes",
-    "drop_time_limit",
-    "relax_split",
-    "relax_named",
-    "update_inventory",
-    "register_cookware",
-    "import_recipes",
-)
-_SIDE_CATEGORIES = ("meat_dishes", "vegetable_dishes")
-# Every reason and unmet rule that offers fewer_dishes: the design 5.3 table plus H2 (ruling
-# after review); H5 alone gets no action.
-_FEWER_DISHES_CODES = {
-    "empty_inventory", "no_cookware", "not_enough_dishes", "time_limit", "not_enough_in_library",
-    "named_ingredient", "H1", "H2", "H3", "H4", "H6", "H7",
-}
-
-
-def next_actions(
-    spec: dict,
-    reasons: list[str],
-    unmet_codes: list[str],
-    short_categories: list[str] | None = None,
-) -> list[str]:
-    """The next actions that fit the reasons and unmet rules (design 5.3): their union, in
-    NEXT_ACTION_ORDER. `short_categories` are the feasibility categories that fell short;
-    when given, relax_split needs a meat or vegetable category among them."""
-    codes = set(reasons) | set(unmet_codes)
-    fridge = spec["mode"] == "fridge_only"
-    total = sum(spec.get(n, 0) for n in ("dishes", "soups", "staples", "desserts", "snacks"))
-    chosen: set[str] = set()
-    if fridge and codes & {"empty_inventory", "not_enough_dishes", "named_ingredient", "H1", "H2"}:
-        chosen.add("switch_to_shopping")
-    if total > 1 and codes & _FEWER_DISHES_CODES:
-        chosen.add("fewer_dishes")
-    if codes & {"time_limit", "H6"}:
-        chosen.add("drop_time_limit")
-    names_split = spec.get("meat_dishes") is not None or spec.get("vegetable_dishes") is not None
-    if names_split:
-        if short_categories is None:
-            side_short = bool(codes & {"not_enough_in_library", "not_enough_dishes"})
-        else:
-            side_short = any(c in _SIDE_CATEGORIES for c in short_categories)
-        if side_short or "H4" in codes:
-            chosen.add("relax_split")
-    if codes & {"named_ingredient", "H7"}:
-        chosen.add("relax_named")
-    if codes & {"empty_inventory", "not_enough_dishes", "H1"} or (
-        fridge and "named_ingredient" in codes
-    ):
-        chosen.add("update_inventory")
-    if codes & {"no_cookware", "H3"}:
-        chosen.add("register_cookware")
-    if codes & {"not_enough_in_library", "H4", "named_ingredient", "H7"}:
-        chosen.add("import_recipes")
-    return [a for a in NEXT_ACTION_ORDER if a in chosen]
 
 
 # ---- the planner's opening ----
@@ -584,7 +314,7 @@ def _split_text(spec: dict) -> str:
     """The meat and vegetable sides for the request summary, from their tightened ranges
     (design 5.11). A spec saved before bounds existed is read by PlanSpec."""
     parsed = PlanSpec.model_validate(spec)
-    sides = _side_phrases(side_ranges(parsed), parsed.dishes, False).values()
+    sides = side_phrases(side_ranges(parsed), parsed.dishes, False).values()
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
 
 
@@ -612,32 +342,6 @@ def _merge_notes(
         "left_out_details": details,
         "semantic_paused": bool(notes.get("semantic_paused", False)) or paused,
     }
-
-
-def diners_line(session: Session, settled: dict | None, constraints: dict) -> tuple[list, int]:
-    """The plan card's diners line: the user, then saved friends, then guests, by display
-    name (shown to the user only, never sent to a model), and the unmatched people count.
-    Without a settled set the user alone eats; the others are unconfirmed. A user who
-    deselected themselves on the card is left off."""
-    self_row = session.scalar(select(Diner).where(Diner.is_self))
-    me = {"name": None, "is_self": True, "guest": False}
-    if settled is None:
-        return [me], int(constraints.get("unconfirmed_diners") or 0)
-    settled_ids = settled.get("diner_ids") or []
-    # Without a self row the card could not offer deselecting the user.
-    eats = self_row is None or self_row.id in settled_ids
-    diners = [me] if eats else []
-    ids = [i for i in settled_ids if self_row is None or i != self_row.id]
-    rows = session.execute(select(Diner.id, Diner.display_name).where(Diner.id.in_(ids)))
-    names = {row.id: row.display_name for row in rows}
-    diners += [
-        {"name": names[i], "is_self": False, "guest": False} for i in ids if i in names
-    ]
-    diners += [
-        {"name": name, "is_self": False, "guest": True}
-        for name in (settled.get("guest_names") or {}).values()
-    ]
-    return diners, int(settled.get("others") or 0)
 
 
 # ---- the graph ----
@@ -713,7 +417,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return restored
 
     def unclear(state: ChatState) -> dict:
-        reply = UNCLEAR_REPLY_ZH if _zh(state.get("locale", "en")) else UNCLEAR_REPLY_EN
+        reply = UNCLEAR_REPLY_ZH if is_zh(state.get("locale", "en")) else UNCLEAR_REPLY_EN
         return {"messages": [AIMessage(reply)], "model_calls": []}
 
     def after_parse(state: ChatState) -> str:
@@ -1133,12 +837,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         final = state["validation"] or {"passed": False}
         shortfalls = state.get("shortfalls") or []
         constraints = _constraints(state)
-        headcount = state["constraints"]["headcount"]
-        notes = state.get("search_notes") or {}
         with deps.session_factory() as session:
-            plan_diners, plan_others = diners_line(
-                session, state.get("settled_diners"), state["constraints"]
-            )
+            base = card_base(state, session)
         if shortfalls:
             shown = None
         elif final["passed"]:
@@ -1154,16 +854,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "warnings": [],
             "unmet": [],
             "next_actions": [],
-            "defaults_used": state["defaults_used"],
-            "spec": spec,
-            "headcount": headcount,
             "servings_notes": [],
-            "left_out_unknown_allergens": notes.get("left_out_unknown_allergens", []),
-            "left_out_details": notes.get("left_out_details", []),
-            "semantic_paused": notes.get("semantic_paused", False),
-            "diners": plan_diners,
-            "others": plan_others,
-            "reasons": [],
+            **base,
             "passed": final["passed"],
         }
         if shortfalls:
@@ -1187,67 +879,33 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 [],
                 [s["category"] for s in shortfalls if s["category"]],
             )
-            note = EARLY_STOP_NOTE_ZH if _zh(locale) else EARLY_STOP_NOTE_EN
+            note = EARLY_STOP_NOTE_ZH if is_zh(locale) else EARLY_STOP_NOTE_EN
         elif shown is None:
             # Design 6.3: a plan breaking H2 or H5 is never shown; the note is fixed text.
             plan["unmet"] = [
-                {"code": code, "recipe_id": None, "text": _no_plan_reason(code, locale)}
+                {"code": code, "recipe_id": None, "text": no_plan_reason(code, locale)}
                 for code in state.get("blocked_codes") or []
             ]
             plan["next_actions"] = next_actions(spec, [], list(state.get("blocked_codes") or []))
             if plan["next_actions"]:
-                note = NO_PLAN_NOTE_ZH if _zh(locale) else NO_PLAN_NOTE_EN
+                note = NO_PLAN_NOTE_ZH if is_zh(locale) else NO_PLAN_NOTE_EN
             else:
-                note = NO_PLAN_NOTE_BARE_ZH if _zh(locale) else NO_PLAN_NOTE_BARE_EN
+                note = NO_PLAN_NOTE_BARE_ZH if is_zh(locale) else NO_PLAN_NOTE_BARE_EN
         else:
-            ids = shown["proposal"]["recipe_ids"]
             with deps.session_factory() as session:
-                rows = {r.id: r for r in session.scalars(select(Recipe).where(Recipe.id.in_(ids)))}
                 ctx = load_planning_context(session, constraints)
-                missing = compute_missing(session, ctx, ids)
-                cookware = missing_cookware(session, ctx, ids)
-                recipes = [rows[i] for i in ids]
-                plan["recipes"] = [
-                    {
-                        "id": r.id,
-                        "title": r.title,
-                        "dish_type": r.dish_type,
-                        "time_min": r.time_min,
-                        "time_source": r.time_source,
-                        "servings": r.servings,
-                    }
-                    for r in recipes
-                ]
-            titles = {r["id"]: r["title"] for r in plan["recipes"]}
-            plan["missing"] = {
-                str(i): [line.name for line in lines] for i, lines in missing.items() if lines
-            }
-            plan["missing_cookware"] = {
-                str(i): [name for _, name in items] for i, items in cookware.items() if items
-            }
-            plan["warnings"] = shown["validation"]["warnings"]
-            plan["servings_notes"] = [
-                {"recipe_id": r["id"], "servings": r["servings"], "headcount": headcount}
-                for r in plan["recipes"]
-                if r["servings"] is not None and r["servings"] != headcount
-            ]
-            if not shown["validation"]["passed"]:
-                plan["passed"] = False
-                plan["unmet"] = [
-                    {
-                        "code": v["code"],
-                        "recipe_id": v["recipe_id"],
-                        "text": _unmet_for_user(v, titles, locale),
-                    }
-                    for v in shown["validation"]["violations"]
-                ]
-                plan["next_actions"] = next_actions(
-                    spec, [], [v["code"] for v in shown["validation"]["violations"]]
+                plan = build_dishes_card(
+                    session,
+                    ctx,
+                    recipe_ids=shown["proposal"]["recipe_ids"],
+                    validation=shown["validation"],
+                    base=base,
+                    locale=locale,
                 )
             note = shown["proposal"]["note"]
             if not shown["validation"]["passed"]:
                 # The fixed closest note always leads; the model's own note may follow it.
-                closest = CLOSEST_NOTE_ZH if _zh(locale) else CLOSEST_NOTE_EN
+                closest = CLOSEST_NOTE_ZH if is_zh(locale) else CLOSEST_NOTE_EN
                 note = closest + "\n\n" + note if note else closest
         # The run is over: its query embeddings are no longer needed.
         deps.run_query_vectors.pop(state["run_id"], None)
