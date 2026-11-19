@@ -51,7 +51,6 @@ SEARCH_LIMIT = 10
 ERROR_STATUS = {
     "already_in_plan": 422,
     "not_in_plan": 422,
-    "no_conflict": 422,
     "not_edited": 409,
     "no_plan": 409,
     "thread_busy": 409,

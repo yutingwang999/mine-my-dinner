@@ -62,7 +62,7 @@ COUNT_NOTE_FIELDS = (
 
 class EditError(Exception):
     """An edit that cannot apply: `code` is already_in_plan, not_in_plan, not_found,
-    no_conflict, not_edited, or no_plan."""
+    not_edited, or no_plan."""
 
     def __init__(self, code: str):
         super().__init__(code)
@@ -489,11 +489,18 @@ def apply_edit(
 
     ids, overrides, notes, result = _check(session, ctx, values, recipe_ids, overrides, titles)
     conflicts = _conflicts(session, values, result.violations, locale)
-    entry: dict = {"action": action.action, "recipe_id": target, "at": _now()}
+    entry: dict | None = {"action": action.action, "recipe_id": target, "at": _now()}
     if isinstance(action, Add | Keep):
         asked = [c for c in conflicts if c.recipe_id == target]
         if isinstance(action, Keep) and not asked:
-            raise EditError("no_conflict")
+            # The conflict went away since the card was built (a rule deleted elsewhere):
+            # the card comes back checked again, with nothing logged and no override.
+            if not editing:
+                # A restored model card stays the model's card, checked against today's data.
+                model = versions[model_index]
+                card = _restored_card(session, ctx, values, model, model_index, locale)
+                return EditOutcome(plan=card), _update(values, reply_id, versions, card)
+            entry = None
         confirmed = {c.key() for c in action.confirm}
         if any(c.key() not in confirmed for c in asked):
             # Every conflict of the dish is listed, so one confirmation covers them all.
@@ -504,7 +511,8 @@ def apply_edit(
             spec = PlanSpec.model_validate(values["spec"])
             result = validate_plan(session, ctx, spec, ids, overrides)
             conflicts = _conflicts(session, values, result.violations, locale)
-        entry["overrides"] = [_log_override(o) for o in added]
+        if entry is not None:
+            entry["overrides"] = [_log_override(o) for o in added]
 
     card = _edited_card(
         session,
@@ -514,7 +522,7 @@ def apply_edit(
         result=result,
         conflicts=conflicts,
         overrides=overrides,
-        log=[*log, entry],
+        log=log if entry is None else [*log, entry],
         notes=notes,
         model_index=model_index,
         locale=locale,

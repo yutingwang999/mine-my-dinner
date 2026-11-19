@@ -11,6 +11,7 @@ import { RequestStyleSwitch } from "@/components/RequestStyleSwitch";
 import { ApiError } from "@/lib/api";
 import {
   type ChatEvent,
+  type ChatPlan,
   type DinerAnswer,
   dinerSummary,
   getRequestStyle,
@@ -59,6 +60,15 @@ export function ChatPage() {
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Whether the newest card takes manual edits: from the thread read, then from how each run ended.
+  const [editable, setEditable] = useState(false);
+  // An edit request is in flight: sending, a new conversation, and next actions wait for it.
+  const [editing, setEditing] = useState(false);
+  // Counts runs, so an edit response that arrives after a newer run started is dropped.
+  const runCount = useRef(0);
+  const editStartedAt = useRef(0);
+  // The thread id for rendering (the edit calls); threadRef holds it for the async run code.
+  const [threadId, setThreadId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // The diner card's edits for the pending value they belong to, so a failed confirm, which
   // brings the same pending value back, shows them again.
@@ -105,8 +115,10 @@ export function ChatPage() {
       .then((state) => {
         if (!active) return;
         threadRef.current = id;
+        setThreadId(id);
         setItems(state.items);
         setPending(state.pending);
+        setEditable(state.editable);
       })
       .catch((caught) => {
         if (!active) return;
@@ -188,6 +200,7 @@ export function ChatPage() {
   ): Promise<boolean> {
     const seen: Seen = { plan: false, pending: false, failed: false, assistant: null };
     const previous = { pending };
+    runCount.current += 1;
     setBusy(true);
     setError(null);
     setPending(null);
@@ -196,6 +209,7 @@ export function ChatPage() {
     try {
       if (threadRef.current === null) {
         threadRef.current = await startThread();
+        setThreadId(threadRef.current);
         storeThreadId(threadRef.current);
       }
       const response = await start(threadRef.current);
@@ -211,6 +225,8 @@ export function ChatPage() {
           if (answered) setItems((current) => current.filter((item) => item !== answered));
         }
       }
+      // A failed run leaves the thread mid-way, so the backend refuses edits until the next message.
+      setEditable(!seen.failed);
       setBusy(false);
       setStep(null);
       setStreaming("");
@@ -227,7 +243,7 @@ export function ChatPage() {
 
   function send() {
     const text = draft.trim();
-    if (!text || busy || loading) return;
+    if (!text || busy || loading || editing) return;
     setDraft("");
     followRef.current = true;
     void submit(text);
@@ -259,13 +275,40 @@ export function ChatPage() {
 
   function newConversation() {
     threadRef.current = null;
+    setThreadId(null);
     followRef.current = true;
     storeThreadId(null);
     setItems([]);
     setPending(null);
     setDinerDraft(null);
     setError(null);
+    setEditable(false);
     setDraft("");
+  }
+
+  /** A manual edit returned the newest plan card: it replaces that reply's plan in place. */
+  function edited(plan: ChatPlan) {
+    // A run started since the edit was sent: its card is newer than this response.
+    if (runCount.current !== editStartedAt.current) return;
+    setItems((current) => {
+      const index = current.findLastIndex((item) => item.type === "assistant" && item.plan !== null);
+      if (index === -1) return current;
+      return current.map((item, i) => (i === index && item.type === "assistant" ? { ...item, plan } : item));
+    });
+  }
+
+  /** An edit was refused as busy: read the thread again so the card shows whether it takes edits. */
+  function editRefused() {
+    const id = threadRef.current;
+    if (id === null) return;
+    loadThread(id)
+      .then((state) => setEditable(state.editable))
+      .catch(() => setEditable(false));
+  }
+
+  function editingChanged(saving: boolean) {
+    if (saving) editStartedAt.current = runCount.current;
+    setEditing(saving);
   }
 
   const welcome = ready && items.length === 0 && pending === null && !loading;
@@ -289,7 +332,7 @@ export function ChatPage() {
           streaming={streaming}
           step={step}
           error={error}
-          busy={busy}
+          busy={busy || editing}
           onAction={(action: NextAction) => submit(t(`actionMessage.${action as FixedAction}`))}
           onReplan={() => {
             followRef.current = true;
@@ -299,13 +342,18 @@ export function ChatPage() {
           onConfirmDiners={confirmDiners}
           dinerDraft={dinerDraft && dinerDraft.pending === pending ? dinerDraft.draft : undefined}
           onDinerDraft={keepDinerDraft}
+          editable={editable && !loading}
+          threadId={threadId}
+          onEdited={edited}
+          onEditRefused={editRefused}
+          onEditing={editingChanged}
         />
       </div>
       <div className="chat-bottom">
-        <Composer busy={busy || loading} onSend={send} value={draft} onChange={setDraft} textareaRef={inputRef} />
+        <Composer busy={busy || loading || editing} onSend={send} value={draft} onChange={setDraft} textareaRef={inputRef} />
         <div className="chat-tools">
           <RequestStyleSwitch value={style} onChange={changeStyle} />
-          <button type="button" className="composer-action" disabled={busy || loading} onClick={newConversation}>
+          <button type="button" className="composer-action" disabled={busy || loading || editing} onClick={newConversation}>
             {t("newConversation")}
           </button>
         </div>

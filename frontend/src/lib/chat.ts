@@ -7,6 +7,7 @@ import {
   type RuleWrite,
   type TimeSource,
 } from "@/lib/api";
+import type { Conflict } from "@/lib/planEdits";
 
 export type Locale = "zh" | "en";
 export type NextAction =
@@ -24,7 +25,22 @@ export type PlanFinding = {
   code: string;
   recipe_id: number | null;
   detail: Record<string, unknown>;
+  /** The sentence for a hard check an edited plan allows (H1, H3, H6, H7). */
+  text?: string;
 };
+
+/** How an edited plan differs from a count the user stated (backend edits._count_notes). */
+export type CountNote = {
+  field: "dishes" | "soups" | "meat_dishes" | "vegetable_dishes" | "staples" | "desserts" | "snacks";
+  stated: number;
+  now: number;
+};
+
+/** A quiet note on a rebuilt card: dishes dropped because they left the library. */
+export type PlanNote = { field: "deleted_recipes"; titles: string[] };
+
+/** A manual version's overrides and edit log, and the conflicts still to keep or remove. */
+export type PlanEdit = { overrides: unknown[]; log: unknown[]; conflicts: Conflict[] };
 
 /** The `current_plan` the planning graph presents (backend agent/graph.py present_plan). */
 /** How a named meat or vegetable count binds (design 5.11). */
@@ -80,6 +96,13 @@ export type ChatPlan = {
   others?: number;
   semantic_paused: boolean;
   passed: boolean;
+  /** True on a manual version (plan 3a); absent on plans saved before manual edits. */
+  edited?: boolean;
+  /** The index of the model version this card edits or restores. */
+  model_version?: number;
+  edit?: PlanEdit;
+  count_notes?: CountNote[];
+  notes?: PlanNote[];
 };
 
 /** A rule the user stated in the chat, proposed on the diner card (backend agent/diners.py). */
@@ -176,6 +199,8 @@ export type AskedQuestion =
 export type ThreadState = {
   items: ThreadItem[];
   pending: Pending | null;
+  /** Whether the newest card takes manual edits now (no run in progress, nothing pending). */
+  editable: boolean;
 };
 
 type RawThread = {
@@ -183,6 +208,7 @@ type RawThread = {
   messages?: ChatMessage[];
   current_plan?: ChatPlan | null;
   pending?: Pending | null;
+  editable?: boolean;
 };
 
 export const THREAD_KEY = "mmd.chat.thread";
@@ -262,7 +288,7 @@ async function call(path: string, init: RequestInit): Promise<Response> {
   return response;
 }
 
-function post(path: string, data?: unknown): Promise<Response> {
+export function post(path: string, data?: unknown): Promise<Response> {
   return call(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -307,7 +333,7 @@ export async function loadThread(threadId: string): Promise<ThreadState> {
   if (raw.current_plan && !items.some((item) => item.type === "assistant" && item.plan)) {
     items.push({ type: "assistant", id: null, text: "", plan: normalizePlan(raw.current_plan) });
   }
-  return { items, pending: raw.pending ?? null };
+  return { items, pending: raw.pending ?? null, editable: raw.editable ?? false };
 }
 
 /** The history summary of a confirmed card, built as the backend's answer_summary builds it. */

@@ -177,9 +177,12 @@ def test_keep_and_restore(client, env):
     assert r.status_code == 200, r.text
     assert r.json()["plan"]["edit"]["conflicts"] == []
     assert r.json()["plan"]["passed"] is True
-    # Keep on a dish with no conflict.
+    # Keep on a dish with no conflict returns the re-checked card, with nothing logged.
     r = edit(client, tid, "keep", recipe_id=env.egg.id, confirm=[])
-    assert r.status_code == 422 and r.json()["code"] == "no_conflict"
+    assert r.status_code == 200, r.text
+    kept = r.json()["plan"]
+    assert kept["edit"]["conflicts"] == [] and kept["passed"] is True
+    assert [e["action"] for e in kept["edit"]["log"]] == ["add", "keep"]
     r = edit(client, tid, "restore")
     assert r.status_code == 200, r.text
     restored = r.json()["plan"]

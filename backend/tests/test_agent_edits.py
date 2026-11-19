@@ -345,6 +345,45 @@ def test_keep_records_override(env):
     assert len(update["plan_versions"]) == 2
 
 
+def test_keep_after_conflict_gone_returns_rechecked_card(env):
+    values = model_state(env, [env.veg.id, env.egg.id, env.meat.id], spec=_spec(dishes=3))
+    egg_rule = rule(env.session, env.wang.id, "allergy", allergen="egg")
+    marked, _, after = run(env, values, Remove(recipe_id=env.veg.id))
+    confirm = [Conflict(**c) for c in marked.plan["edit"]["conflicts"]]
+    # The rule is deleted elsewhere before the user presses keep.
+    env.session.delete(egg_rule)
+    env.session.flush()
+    outcome, update, _ = run(env, after, Keep(recipe_id=env.egg.id, confirm=confirm))
+    plan = outcome.plan
+    assert ids(plan) == [env.egg.id, env.meat.id]
+    assert plan["edit"]["conflicts"] == []
+    assert plan["passed"] is True
+    assert plan["edit"]["overrides"] == []
+    # No keep is logged: nothing was confirmed.
+    assert [e["action"] for e in plan["edit"]["log"]] == ["remove"]
+    assert update["current_plan"] == plan
+    assert len(update["plan_versions"]) == 2
+
+
+def test_keep_after_conflict_gone_on_restored_card(env):
+    values = model_state(env, [env.veg.id, env.egg.id])
+    _, _, after = run(env, values, Remove(recipe_id=env.veg.id))
+    egg_rule = rule(env.session, env.wang.id, "allergy", allergen="egg")
+    restored, _, after = run(env, after, Restore())
+    assert restored.plan["edit"]["conflicts"]
+    env.session.delete(egg_rule)
+    env.session.flush()
+    outcome, update, _ = run(env, after, Keep(recipe_id=env.egg.id, confirm=[]))
+    plan = outcome.plan
+    assert ids(plan) == [env.veg.id, env.egg.id]
+    assert plan["edited"] is False
+    assert plan["edit"]["conflicts"] == []
+    assert plan["passed"] is True
+    # A restored card stays the model's card: no new manual version.
+    assert update["plan_versions"] == after["plan_versions"]
+    assert update["current_plan"] == plan
+
+
 def test_keep_with_forged_confirmation_asks(env):
     values = model_state(env, [env.veg.id, env.egg.id, env.meat.id], spec=_spec(dishes=3))
     rule(env.session, env.wang.id, "allergy", allergen="egg")
