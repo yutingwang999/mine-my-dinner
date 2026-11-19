@@ -103,6 +103,12 @@ def _units(spec: PlanSpec) -> list[_Unit]:
     return units
 
 
+def needed_dish_types(spec: PlanSpec) -> list[str]:
+    """The dish types the check counts for this request (meat and vegetable both when it
+    needs dishes)."""
+    return sorted({dish_type for unit in _units(spec) for dish_type in unit.dish_types})
+
+
 def _fits_time(hit: RecipeHit, limit: int) -> bool:
     firm = hit.time_source in FIRM_TIME_SOURCES and hit.time_min is not None
     return not firm or hit.time_min <= limit
@@ -118,7 +124,7 @@ def check_feasibility(session: Session, ctx: PlanningContext, spec: PlanSpec) ->
     stock_checks = spec.mode == "fridge_only"
 
     units = _units(spec)
-    dish_types = sorted({dish_type for unit in units for dish_type in unit.dish_types})
+    dish_types = needed_dish_types(spec)
     hits = (
         search_recipes(session, None, ctx, limit=None, dish_types=dish_types).hits  # type: ignore[arg-type]
         if dish_types

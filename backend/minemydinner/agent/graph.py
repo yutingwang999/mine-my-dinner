@@ -1,6 +1,8 @@
+import dataclasses
+import inspect
 import json
 import uuid
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -11,12 +13,40 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from minemydinner.agent.diners import (
+    DinerAnswer,
+    SettledDiners,
+    answer_summary,
+    apply_answer,
+    build_card,
+    card_needed,
+    constraints_from,
+    guest_key,
+    not_yet_known,
+    profile_rules,
+    settled_friend_deleted,
+    settled_rules,
+    stated_friend_rules,
+    stated_to_rules,
+)
+from minemydinner.agent.labels import (
+    Friend,
+    LabelTable,
+    current_labels,
+    current_table,
+    find_friends,
+    labels_scope,
+    load_label_context,
+)
 from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
+from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
+    REPLAN_MESSAGE,
     REQUEST_STYLES,
     ParsedRequest,
     apply_defaults,
@@ -30,9 +60,15 @@ from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
 from minemydinner.planning.composition import composition_gap, ranges_for, side_ranges
-from minemydinner.planning.context import MealConstraints, diner_codes, load_planning_context
-from minemydinner.planning.feasibility import Shortfall, check_feasibility
+from minemydinner.planning.context import (
+    MealConstraints,
+    RuleRef,
+    diner_codes,
+    load_planning_context,
+)
+from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
 from minemydinner.planning.inventory import meal_preferences
+from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
 from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
 from minemydinner.planning.stock import compute_missing, missing_cookware
 from minemydinner.planning.tools import PlannerDeps
@@ -120,7 +156,41 @@ def _zh(locale: str) -> bool:
 def _constraints(state: ChatState) -> MealConstraints:
     data = state["constraints"]
     return MealConstraints(
-        diner_ids=tuple(data["diner_ids"]), unconfirmed_diners=data["unconfirmed_diners"]
+        diner_ids=tuple(data["diner_ids"]),
+        guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
+        unconfirmed_diners=data["unconfirmed_diners"],
+    )
+
+
+def _matched_friend_ids(
+    texts: Sequence[str],
+    friends: Sequence[Friend],
+    food_terms: Collection[str],
+    parsed: ParsedRequest,
+    labels: LabelTable,
+) -> list[int]:
+    """Saved friends named in the current request's own words, then those the parse gave a
+    stated rule by label, in that order, once each."""
+    found = [
+        friend.diner_id
+        for text in texts
+        for _, _, friend in find_friends(text, friends, food_terms)
+    ]
+    found += list(stated_friend_rules(parsed, labels))
+    existing = {friend.diner_id for friend in friends}
+    return [diner_id for diner_id in dict.fromkeys(found) if diner_id in existing]
+
+
+def _reuses_parse(state: ChatState) -> bool:
+    """True when the latest message is the fixed "plan again" message (spec 5.7) and the
+    thread holds a parsed request: code reuses that request instead of a route and a parse
+    call. The fixed text as a thread's first message takes the normal path."""
+    last = state["messages"][-1]
+    return (
+        state.get("request") is not None
+        and isinstance(last, HumanMessage)
+        and isinstance(last.content, str)
+        and last.content.strip() in REPLAN_MESSAGE.values()
     )
 
 
@@ -518,15 +588,56 @@ def _split_text(spec: dict) -> str:
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
 
 
-def _merge_notes(notes: dict | None, titles: list[str], paused: bool) -> dict:
-    """Search notes with `titles` added (once each) and `paused` or-ed in."""
+def _merge_notes(
+    notes: dict | None,
+    titles: list[str],
+    paused: bool,
+    excluded: Sequence[ExcludedRecipe] = (),
+) -> dict:
+    """Search notes with `titles` and `excluded` added (once each) and `paused` or-ed in.
+    `left_out_details` holds the ingredient lines per recipe; notes saved before it existed
+    have titles only."""
     notes = notes or {}
     left_out = list(notes.get("left_out_unknown_allergens", []))
+    details = list(notes.get("left_out_details", []))
+    known = {d["id"] for d in details}
+    for item in excluded:
+        if item.id not in known:
+            known.add(item.id)
+            details.append({"id": item.id, "title": item.title, "lines": list(item.lines)})
+    titles = [*titles, *(item.title for item in excluded)]
     left_out += [t for t in dict.fromkeys(titles) if t not in left_out]
     return {
         "left_out_unknown_allergens": left_out,
+        "left_out_details": details,
         "semantic_paused": bool(notes.get("semantic_paused", False)) or paused,
     }
+
+
+def diners_line(session: Session, settled: dict | None, constraints: dict) -> tuple[list, int]:
+    """The plan card's diners line: the user, then saved friends, then guests, by display
+    name (shown to the user only, never sent to a model), and the unmatched people count.
+    Without a settled set the user alone eats; the others are unconfirmed. A user who
+    deselected themselves on the card is left off."""
+    self_row = session.scalar(select(Diner).where(Diner.is_self))
+    me = {"name": None, "is_self": True, "guest": False}
+    if settled is None:
+        return [me], int(constraints.get("unconfirmed_diners") or 0)
+    settled_ids = settled.get("diner_ids") or []
+    # Without a self row the card could not offer deselecting the user.
+    eats = self_row is None or self_row.id in settled_ids
+    diners = [me] if eats else []
+    ids = [i for i in settled_ids if self_row is None or i != self_row.id]
+    rows = session.execute(select(Diner.id, Diner.display_name).where(Diner.id.in_(ids)))
+    names = {row.id: row.display_name for row in rows}
+    diners += [
+        {"name": names[i], "is_self": False, "guest": False} for i in ids if i in names
+    ]
+    diners += [
+        {"name": name, "is_self": False, "guest": True}
+        for name in (settled.get("guest_names") or {}).values()
+    ]
+    return diners, int(settled.get("others") or 0)
 
 
 # ---- the graph ----
@@ -543,12 +654,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return planner_agent
 
     def route_intent(state: ChatState) -> dict:
+        # Each new message is a new request, which may be asked about once.
+        fresh = {"asked_question": False}
+        if _reuses_parse(state):
+            # "Plan again": the previous parsed request stands as this turn's parse, with
+            # no model call; choose sends the turn on as after a parse.
+            return {**fresh, "intent": "plan", "model_calls": [{"kind": "parse_reused"}]}
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
-        # Each new message is a new request, which may be asked about once.
         return {
+            **fresh,
             "intent": result.parsed.intent,
-            "asked_question": False,
             # A new turn starts the buffer fresh, so events left by a turn that failed
             # before load_context are never recorded under this run.
             "model_calls": [_model_call_event(deps.client, "route", messages, result)],
@@ -562,18 +678,39 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
 
     def choose(state: ChatState) -> str:
-        return "parse_request" if state["intent"] == "plan" else "other"
+        if state["intent"] != "plan":
+            return "other"
+        return after_parse(state) if _reuses_parse(state) else "parse_request"
 
     def parse_request(state: ChatState) -> dict:
-        messages = [SystemMessage(load_prompt("parse")), *state["messages"]]
+        # The parse also reads the assistant's questions, so a short answer such as "两个"
+        # sits next to the question it answers (spec 5.6). The route input is unchanged.
+        conversation = parse_messages(
+            state["messages"], state.get("questions") or [], state.get("locale", "en")
+        )
+        messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         return {
-            "request": result.parsed.model_dump(),
+            "request": _restore_parsed(result.parsed.model_dump()),
             "model_calls": [
                 *(state.get("model_calls") or []),
                 _model_call_event(deps.client, "parse", messages, result),
             ],
         }
+
+    def _restore_parsed(parsed: dict) -> dict:
+        """The parse runs without the post-hook so friend_rules codes stay labels for code to
+        resolve; every other field gets its labels restored here, so no label reaches a
+        text shown to the user (a named ingredient, the query, a guest's name)."""
+        ctx = current_labels.get()
+        if ctx is None:
+            return parsed
+        codes = [item["code"] for item in parsed.get("friend_rules") or []]
+        with labels_scope(dataclasses.replace(ctx, restore=True)):
+            restored = map_strings(parsed, deps.client.restore_text)
+        for item, code in zip(restored.get("friend_rules") or [], codes, strict=True):
+            item["code"] = code
+        return restored
 
     def unclear(state: ChatState) -> dict:
         reply = UNCLEAR_REPLY_ZH if _zh(state.get("locale", "en")) else UNCLEAR_REPLY_EN
@@ -592,10 +729,94 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return "ask_style"
         if not state.get("asked_question") and needs_question(parsed, style):
             return "ask_question"
+        # "Plan again" reuses the request the diners were settled for: the card shows only
+        # when a friend in the settled set was deleted since (never drop a person silently).
+        if _reuses_parse(state):
+            if friend_deleted_since(state):
+                return "select_diners"
+        elif diner_card_needed(state, parsed):
+            return "select_diners"
         return "load_context"
 
+    def friend_deleted_since(state: ChatState) -> bool:
+        """A friend in the settled set no longer exists; read from the database."""
+        settled = state.get("settled_diners")
+        if not settled:
+            return False
+        with deps.session_factory() as session:
+            self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+            existing = set(session.scalars(select(Diner.id).where(Diner.is_self.is_(False))))
+        return settled_friend_deleted(settled, existing, self_id)
+
+    def diner_card_needed(state: ChatState, parsed: ParsedRequest) -> bool:
+        """Spec 5.1, read from the database; no model call."""
+        settled = state.get("settled_diners")
+        with deps.session_factory() as session:
+            self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+            table = LabelTable.from_state(state.get("diner_labels"), self_id)
+            ctx = load_label_context(session, table, state.get("locale", "en"), restore=False)
+            matched = _matched_friend_ids(
+                _current_request(state["messages"]), ctx.friends, ctx.food_terms, parsed, table
+            )
+            by_friend = stated_friend_rules(parsed, table)
+            saved = profile_rules(session, [i for i in (self_id, *by_friend) if i is not None])
+            new_self_rules = []
+            if self_id is not None:
+                new_self_rules = not_yet_known(
+                    stated_to_rules(session, parsed.self_rules),
+                    [*saved[self_id], *settled_rules(settled, f"diner:{self_id}")],
+                )
+            # Stated rules of the others that neither a profile nor the settled set holds.
+            uncovered = []
+            for diner_id, items in by_friend.items():
+                known = [*saved[diner_id], *settled_rules(settled, f"diner:{diner_id}")]
+                for item in items:
+                    uncovered += not_yet_known(stated_to_rules(session, item), known)
+            for guest in parsed.guests:
+                key = guest_key(settled, guest.name)
+                known = settled_rules(settled, key) if key else []
+                uncovered += not_yet_known(stated_to_rules(session, guest), known)
+        return card_needed(
+            parsed,
+            matched,
+            new_self_rules,
+            settled,
+            {friend.diner_id for friend in ctx.friends},
+            self_id=self_id,
+            uncovered_rules=uncovered,
+            self_diet_words=parsed.self_rules.diet_words if parsed.self_rules else (),
+        )
+
+    def select_diners(state: ChatState) -> dict:
+        """The diner card (spec 5.2, 5.3). A confirmed answer (a dict) is applied by code and
+        becomes the conversation's settled diner set; guests get labels in the table. A
+        skipped card (None or text) plans as before the card existed: the user alone with
+        the parse's headcount, the rest unconfirmed, and no settled set."""
+        parsed = ParsedRequest.model_validate(state["request"])
+        ctx = current_labels.get()
+        texts = _current_request(state["messages"])
+        with deps.session_factory() as session:
+            matched = _matched_friend_ids(texts, ctx.friends, ctx.food_terms, parsed, ctx.table)
+            card = build_card(session, parsed, ctx.table, matched, "\n".join(texts))
+        answer = interrupt(card)
+        update: dict[str, Any] = {"settled_diners": None}
+        if not isinstance(answer, dict):
+            asked = {"kind": "diners", "summary": None}
+            update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
+            return update
+        chosen = DinerAnswer.model_validate(answer)
+        with deps.session_factory() as session:
+            # Everything that can fail runs before apply_answer commits: a node re-run after
+            # the commit would create a saved guest twice.
+            asked = {"kind": "diners", "summary": answer_summary(session, chosen)}
+            update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
+            settled = apply_answer(session, chosen, ctx.table, stated_headcount=parsed.headcount)
+            update["settled_diners"] = settled.to_state()
+        return update
+
     def _question(state: ChatState, value: dict) -> dict:
-        # For display only: `at` is the message count when the question was asked.
+        # Shown in the chat and rendered into the parse input (parse_messages): `at` is the
+        # message count when the question was asked.
         return {"at": len(state["messages"]), "value": value}
 
     def ask_style(state: ChatState) -> dict:
@@ -634,9 +855,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         parsed = ParsedRequest.model_validate(state["request"])
         with deps.session_factory() as session:
             self_id = session.scalar(select(Diner.id).where(Diner.is_self))
-        spec, constraints, defaults_used = apply_defaults(parsed, self_id)
-        # The self diner plus everyone not yet confirmed (apply_defaults' headcount).
-        headcount = constraints.unconfirmed_diners + 1
+        # The settled set stands until a confirmed card replaces it or a skipped card clears
+        # it; a change in who eats always shows the card (spec 5.1).
+        data = state.get("settled_diners")
+        settled = SettledDiners.from_state(data) if data else None
+        spec, constraints, defaults_used, headcount = apply_defaults(
+            parsed, self_id, settled.headcount if settled else None
+        )
+        if settled is not None:
+            constraints = constraints_from(settled)
         request = {
             "messages": [deps.client.prepare_text(t) for t in _current_request(state["messages"])],
             "parsed": map_strings(parsed.model_dump(), deps.client.prepare_text),
@@ -651,7 +878,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             defaults_used=defaults_used,
             prompt_version=PROMPT_VERSION,
             tools_version=TOOLS_VERSION,
-            has_temporary_guests=False,
+            # Guests' names cannot be anonymized (design 6, 7.6): true when this run's parse
+            # listed a guest (their names reached the provider) or an unsaved guest eats.
+            has_temporary_guests=bool(parsed.guests or (settled and settled.guest_names)),
         )
         # Bound the cache: a run that failed after its planner started (for example in a
         # validation or feasibility re-check) never reached present_plan, so drop every
@@ -666,6 +895,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "spec": spec.model_dump(),
             "constraints": {
                 "diner_ids": list(constraints.diner_ids),
+                "guest_rules": [asdict(rule) for rule in constraints.guest_rules],
                 "unconfirmed_diners": constraints.unconfirmed_diners,
                 "headcount": headcount,
             },
@@ -678,7 +908,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "best": None,
             "blocked_codes": [],
             "shortfalls": [],
-            "search_notes": {"left_out_unknown_allergens": [], "semantic_paused": False},
+            "search_notes": {
+                "left_out_unknown_allergens": [],
+                "left_out_details": [],
+                "semantic_paused": False,
+            },
             "planner_opening": None,
             "shortlist_ids": [],
         }
@@ -689,6 +923,20 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         with deps.session_factory() as session:
             ctx = load_planning_context(session, _constraints(state))
             found: list[Shortfall] = check_feasibility(session, ctx, spec)
+            # The planner never searches on a stop, so the reply names the dishes left out
+            # for unknown allergens among the types the request needs.
+            notes = (
+                _merge_notes(
+                    state.get("search_notes"),
+                    [],
+                    False,
+                    unknown_allergen_exclusions(
+                        session, ctx, dish_types=needed_dish_types(spec)
+                    ),
+                )
+                if found
+                else None
+            )
         if not found:
             return Command(update={"shortfalls": []}, goto="planner")
         dumped = [asdict(shortfall) for shortfall in found]
@@ -699,7 +947,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 "shortfalls": map_strings(dumped, deps.client.prepare_text),
             },
         )
-        return Command(update={"shortfalls": dumped}, goto="present_plan")
+        return Command(update={"shortfalls": dumped, "search_notes": notes}, goto="present_plan")
 
     def request_summary(state: ChatState, preferences: list[str]) -> str:
         spec, parsed = state["spec"], state["request"]
@@ -734,7 +982,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     def retry_message(state: ChatState, session, ctx) -> str:
         """The violations of the previous attempt, then a short summary of it."""
-        codes = diner_codes(_constraints(state))
+        codes = diner_codes(_constraints(state), current_table())
         ids = state["proposal"]["recipe_ids"]
         problems = [_violation_for_model(v, codes) for v in state["validation"]["violations"]]
         known = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(ids)))) if ids else set()
@@ -777,7 +1025,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             ctx = load_planning_context(session, constraints)
             if opening is None:
                 # Built once per run and stored, so every attempt sends the same bytes.
-                summary = request_summary(state, meal_preferences(session, ctx))
+                summary = request_summary(
+                    state, meal_preferences(session, ctx, current_table())
+                )
                 entries = None
                 complete: frozenset[str] = frozenset()
                 if deps.use_shortlist:
@@ -788,7 +1038,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     entries = found.entries
                     complete = found.complete
                     notes = _merge_notes(
-                        notes, found.left_out_unknown_allergens, found.semantic_paused
+                        notes, [], found.semantic_paused, found.left_out_unknown_allergens
                     )
                 opening = planner_opening(entries, summary, complete)
                 update["planner_opening"] = opening
@@ -885,6 +1135,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         constraints = _constraints(state)
         headcount = state["constraints"]["headcount"]
         notes = state.get("search_notes") or {}
+        with deps.session_factory() as session:
+            plan_diners, plan_others = diners_line(
+                session, state.get("settled_diners"), state["constraints"]
+            )
         if shortfalls:
             shown = None
         elif final["passed"]:
@@ -905,7 +1159,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "headcount": headcount,
             "servings_notes": [],
             "left_out_unknown_allergens": notes.get("left_out_unknown_allergens", []),
+            "left_out_details": notes.get("left_out_details", []),
             "semantic_paused": notes.get("semantic_paused", False),
+            "diners": plan_diners,
+            "others": plan_others,
             "reasons": [],
             "passed": final["passed"],
         }
@@ -1010,28 +1267,62 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "messages": [AIMessage(note, id=reply_id)],
         }
 
+    def with_labels(node: Callable, restore: bool = True) -> Callable:
+        """Run `node` with the conversation's label table as the current label context, so
+        the client hooks replace saved nicknames in every model call the node makes. The
+        scope is set inside the node's own run, in the thread that makes its model calls;
+        LangGraph copies the context into any thread it starts from there. The node's update
+        gets `diner_labels` when the table changed (it only grows). A thread saved before
+        the table existed starts one with the user as "Diner 1"."""
+        takes_config = "config" in inspect.signature(node).parameters
+
+        def run(state: ChatState, config: RunnableConfig):
+            with deps.session_factory() as session:
+                self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+                table = LabelTable.from_state(state.get("diner_labels"), self_id)
+                ctx = load_label_context(session, table, state.get("locale", "en"), restore)
+            with labels_scope(ctx):
+                result = node(state, config) if takes_config else node(state)
+            labels = table.to_state()
+            if labels == state.get("diner_labels"):
+                return result
+            if isinstance(result, Command):
+                update = {**(result.update or {}), "diner_labels": labels}
+                return dataclasses.replace(result, update=update)
+            return {**(result or {}), "diner_labels": labels}
+
+        return run
+
     builder = StateGraph(ChatState)
-    builder.add_node("route_intent", route_intent)
-    builder.add_node("other", other)
-    builder.add_node("parse_request", parse_request)
-    builder.add_node("ask_style", ask_style)
-    builder.add_node("ask_question", ask_question)
-    builder.add_node("unclear", unclear)
-    builder.add_node("load_context", load_context)
-    builder.add_node("planner", planner)
+    builder.add_node("route_intent", with_labels(route_intent))
+    builder.add_node("other", with_labels(other))
+    # The parse output keeps labels as labels (friend_rules codes are resolved by code), so
+    # no nickname reaches the state's request through the post-hook.
+    builder.add_node("parse_request", with_labels(parse_request, restore=False))
+    builder.add_node("ask_style", with_labels(ask_style))
+    builder.add_node("ask_question", with_labels(ask_question))
+    builder.add_node("select_diners", with_labels(select_diners))
+    builder.add_node("unclear", with_labels(unclear))
+    builder.add_node("load_context", with_labels(load_context))
+    builder.add_node("planner", with_labels(planner))
     builder.add_node(
-        "check_feasibility", feasibility_step, destinations=("planner", "present_plan")
+        "check_feasibility",
+        with_labels(feasibility_step),
+        destinations=("planner", "present_plan"),
     )
     builder.add_node(
-        "validate_plan", check_plan, destinations=("check_feasibility", "present_plan")
+        "validate_plan",
+        with_labels(check_plan),
+        destinations=("check_feasibility", "present_plan"),
     )
-    builder.add_node("present_plan", present_plan)
+    builder.add_node("present_plan", with_labels(present_plan))
     builder.add_edge(START, "route_intent")
-    builder.add_conditional_edges("route_intent", choose, ["parse_request", "other"])
-    gates = ["ask_style", "ask_question", "load_context", "unclear"]
+    gates = ["ask_style", "ask_question", "select_diners", "load_context", "unclear"]
+    builder.add_conditional_edges("route_intent", choose, ["parse_request", "other", *gates])
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")
+    builder.add_edge("select_diners", "load_context")
     builder.add_edge("load_context", "check_feasibility")
     builder.add_edge("planner", "validate_plan")
     builder.add_edge("present_plan", END)

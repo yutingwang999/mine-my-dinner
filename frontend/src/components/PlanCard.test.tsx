@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import zh from "../../messages/zh.json";
 
 import { PlanCard } from "@/components/PlanCard";
 import { plan, spec } from "@/test/chatFixtures";
-import { mockFetch, renderWithProviders, reply, savedRecipe } from "@/test/helpers";
+import { callsTo, mockFetch, renderWithProviders, reply, savedRecipe } from "@/test/helpers";
 
 describe("PlanCard", () => {
   it("always shows the allergen notice with no way to close it", () => {
@@ -119,7 +119,16 @@ describe("PlanCard", () => {
     expect(screen.getByText("Missing cookware: 炒锅")).toBeInTheDocument();
     expect(screen.getByText("葱花蛋: the cooking time (15 min) is only an estimate.")).toBeInTheDocument();
     expect(screen.getByText(/2 other diners have unknown dietary limits/)).toBeInTheDocument();
-    expect(screen.getByText("葱花蛋 makes 2 servings; you are cooking for 3 people.")).toBeInTheDocument();
+    expect(screen.getByText("The 葱花蛋 recipe serves 2; you're cooking for 3 people, so scale up the ingredients.")).toBeInTheDocument();
+  });
+
+  it("asks to scale down when fewer people eat than the recipe serves", () => {
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard plan={plan({ headcount: 1, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 1 }] })} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByText(/的菜谱是 2 人份，这顿 1 人吃，食材记得按人数减量。/)).toBeInTheDocument();
   });
 
   it("localizes known units in the stock warning and falls back to the raw unit", () => {
@@ -384,6 +393,87 @@ describe("PlanCard what was asked, reasons, and links", () => {
   });
 });
 
+describe("PlanCard layout order", () => {
+  const noPlan = {
+    recipes: [],
+    passed: false,
+    reasons: [{ reason: "no_cookware", category: null, needed: null, available: null, text: "No cookware registered." }],
+    next_actions: ["fewer_dishes"] as never[],
+  };
+
+  it("drops the no-dishes line for a card with reasons and puts the actions inside the reasons box", () => {
+    renderWithProviders(<PlanCard plan={plan(noPlan)} />);
+    expect(screen.queryByText(/No dishes/i)).toBeNull();
+    const box = screen.getByText("No cookware registered.").closest(".notice") as HTMLElement;
+    expect(box).toHaveClass("notice-warning");
+    expect(box).toContainElement(screen.getByRole("group"));
+  });
+
+  it("keeps the no-dishes line when a card has no dishes, reasons, or unmet rules", () => {
+    renderWithProviders(<PlanCard plan={plan({ recipes: [], passed: false })} />);
+    expect(screen.getByText(/No dishes|no plan|could not/i)).toBeInTheDocument();
+  });
+
+  it("puts the actions inside the last red box, after the unmet list", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          ...noPlan,
+          unmet: [{ code: "H2", recipe_id: null, text: "Every plan found broke a rule" }],
+        })}
+      />,
+    );
+    const reasons = screen.getByText("No cookware registered.").closest(".notice") as HTMLElement;
+    const unmet = screen.getByText("Every plan found broke a rule").closest(".notice") as HTMLElement;
+    expect(reasons).not.toContainElement(screen.getByRole("group"));
+    expect(unmet).toContainElement(screen.getByRole("group"));
+  });
+
+  it("puts asked, assumed, and the diners line in the footer before the allergen notice", () => {
+    const { container } = renderWithProviders(
+      <PlanCard
+        plan={plan({
+          defaults_used: ["headcount"],
+          spec: spec({ dishes: 2 }),
+          diners: [
+            { name: null, is_self: true, guest: false },
+            { name: null, is_self: false, guest: true },
+          ],
+          others: 0,
+        })}
+      />,
+    );
+    const footer = container.querySelector(".plan-footer") as HTMLElement;
+    const asked = screen.getByText(/As you asked/);
+    const assumed = screen.getByText(/Assumed:/);
+    const diners = screen.getByText(/Checked against/);
+    const notice = screen.getByText(/check the actual ingredients for allergens/);
+    const order = [asked, assumed, diners, notice];
+    for (const node of order) expect(footer).toContainElement(node);
+    for (let i = 0; i < order.length - 1; i += 1) {
+      expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it("renders the servings note inside the info box", () => {
+    renderWithProviders(
+      <PlanCard plan={plan({ headcount: 3, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }] })} />,
+    );
+    const box = screen.getByText(/recipe serves 2/).closest(".notice") as HTMLElement;
+    expect(box).toHaveClass("notice-info");
+  });
+
+  it("puts the left-out dishes in their own box after the problem boxes", () => {
+    const { container } = renderWithProviders(
+      <PlanCard plan={plan({ ...noPlan, left_out_unknown_allergens: ["秘制酱鸡"] })} />,
+    );
+    const red = container.querySelector(".notice-warning:not(.allergen-notice)") as HTMLElement;
+    const box = container.querySelector(".left-out-box") as HTMLElement;
+    expect(red.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(box).getByRole("heading", { level: 3 })).toHaveTextContent(/left out/);
+  });
+});
+
 describe("PlanCard unknown actions", () => {
   it("skips next actions the UI does not know", () => {
     renderWithProviders(
@@ -463,5 +553,245 @@ describe("PlanCard recipe detail", () => {
     fail = false;
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("鸡蛋炒熟后撒葱花。")).toBeInTheDocument();
+  });
+});
+
+describe("PlanCard diners and left-out dishes", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const DETAILS = [
+    { id: 11, title: "宫保鸡丁", lines: ["花椒油"] },
+    { id: 12, title: "麻辣香锅", lines: ["花椒油", "秘制酱"] },
+  ];
+  const leftOut = {
+    left_out_unknown_allergens: ["宫保鸡丁", "麻辣香锅"],
+    left_out_details: DETAILS,
+  };
+  const ENTRY = {
+    id: 9, name_zh: "花椒油", name_en: null, aliases_zh: [], aliases_en: [], user_aliases_zh: [],
+    user_aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null,
+    parent_id: null,
+  };
+
+  function zhCard(card: ReturnType<typeof plan>, onReplan = vi.fn()) {
+    return render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard plan={card} onReplan={onReplan} />
+      </NextIntlClientProvider>,
+    );
+  }
+
+  it("groups the left-out dishes by ingredient name, each with a confirm button", () => {
+    zhCard(plan(leftOut));
+    const list = screen.getByRole("list", { name: "被排除的菜" });
+    expect(within(list).getAllByRole("listitem").map((li) => li.querySelector("span")?.textContent)).toEqual([
+      "宫保鸡丁、麻辣香锅：花椒油（过敏原未知）",
+      "麻辣香锅：秘制酱（过敏原未知）",
+    ]);
+    expect(within(list).getAllByRole("button", { name: "确认过敏原" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "重新规划" })).toBeNull();
+  });
+
+  it("confirms an entry with unknown allergens, then offers plan again", async () => {
+    const calls = mockFetch({
+      "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry: ENTRY }] }),
+      "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => ENTRY,
+    });
+    const onReplan = vi.fn();
+    renderWithProviders(<PlanCard plan={plan(leftOut)} onReplan={onReplan} />);
+    const row = within(screen.getByTestId("left-out-花椒油"));
+    await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
+    await userEvent.click(await row.findByRole("button", { name: "Confirm it contains none" }));
+    await userEvent.click(row.getByRole("button", { name: "Save allergens" }));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/allergens/resolve")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/allergens/resolve")[0].body).toEqual({ ingredient_id: 9, allergens: [] });
+    expect(callsTo(calls, "POST", "/api/ingredients/match")[0].body).toEqual({ names: ["花椒油"] });
+    expect(await row.findByText("Confirmed")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Plan again" }));
+    expect(onReplan).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the link panel for a name not in the dictionary, and can create an entry instead", async () => {
+    const calls = mockFetch({
+      "POST /api/ingredients/match": () => ({ matches: [] }),
+      "POST /api/allergen-suggestions": () => ({ suggested: ["soy"], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => ENTRY,
+    });
+    renderWithProviders(<PlanCard plan={plan(leftOut)} onReplan={vi.fn()} />);
+    const row = within(screen.getByTestId("left-out-秘制酱"));
+    await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
+    expect(await row.findByRole("checkbox", { name: "Remember this link" })).toBeChecked();
+    await userEvent.click(row.getByRole("button", { name: "Not listed? Create a new entry" }));
+    await userEvent.click(await row.findByRole("button", { name: "Confirm selected allergens" }));
+    await userEvent.click(row.getByRole("button", { name: "Save allergens" }));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/allergens/resolve")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/allergens/resolve")[0].body).toMatchObject({
+      name: "秘制酱",
+      allergens: ["soy"],
+    });
+    expect(await screen.findByRole("button", { name: "Plan again" })).toBeInTheDocument();
+  });
+
+  const KNOWN_TEXT =
+    "The dictionary knows this name, but this dish's ingredient line is not linked to it, so the dish stays left out. Link the line to an entry below.";
+  const BEEF = {
+    id: 20, name_zh: "牛肉末", name_en: "minced beef", aliases_zh: [], aliases_en: [], user_aliases_zh: [],
+    user_aliases_en: [], source: "seed", category: "meat", stock_mode: "level", allergens: [], parent_id: null,
+  };
+
+  async function linkTo(row: ReturnType<typeof within>) {
+    await userEvent.type(row.getByRole("searchbox", { name: "Search the dictionary" }), "牛肉");
+    await userEvent.click(await row.findByRole("button", { name: "Choose minced beef" }));
+    await userEvent.click(row.getByRole("button", { name: "Confirm" }));
+  }
+
+  it("does not offer plan again when the name's allergens are known but the line is not linked", async () => {
+    const calls = mockFetch({
+      "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry: { ...ENTRY, allergens: [] } }] }),
+      "GET /api/ingredients": () => [BEEF],
+      "POST /api/allergens/link": () => ({ ...BEEF, linked_lines: 2, remembered: true }),
+    });
+    renderWithProviders(<PlanCard plan={plan(leftOut)} onReplan={vi.fn()} />);
+    const row = within(screen.getByTestId("left-out-花椒油"));
+    await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
+    expect(await row.findByText(KNOWN_TEXT)).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Save allergens" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Plan again" })).toBeNull();
+    // Linking the line fixes it, so planning again is offered.
+    await linkTo(row);
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/allergens/link")).toHaveLength(1));
+    expect(await row.findByText("Confirmed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Plan again" })).toBeInTheDocument();
+  });
+
+  it("goes on to confirm allergens when the linked entry's allergens are unknown", async () => {
+    const calls = mockFetch({
+      "POST /api/ingredients/match": () => ({ matches: [] }),
+      "GET /api/ingredients": () => [BEEF],
+      "POST /api/allergens/link": () => ({ ...BEEF, allergens: null, linked_lines: 1, remembered: true }),
+      "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => BEEF,
+    });
+    renderWithProviders(<PlanCard plan={plan(leftOut)} onReplan={vi.fn()} />);
+    const row = within(screen.getByTestId("left-out-秘制酱"));
+    await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
+    await linkTo(row);
+    await userEvent.click(await row.findByRole("button", { name: "Confirm it contains none" }));
+    expect(row.queryByText("Confirmed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Plan again" })).toBeNull();
+    await userEvent.click(row.getByRole("button", { name: "Save allergens" }));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/allergens/resolve")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/allergens/resolve")[0].body).toEqual({ ingredient_id: 20, allergens: [] });
+    expect(await screen.findByRole("button", { name: "Plan again" })).toBeInTheDocument();
+  });
+
+  it("says so when linking found no line to link", async () => {
+    mockFetch({
+      "POST /api/ingredients/match": () => ({ matches: [] }),
+      "GET /api/ingredients": () => [BEEF],
+      "POST /api/allergens/link": () => ({ ...BEEF, linked_lines: 0, remembered: true }),
+    });
+    renderWithProviders(<PlanCard plan={plan(leftOut)} onReplan={vi.fn()} />);
+    const row = within(screen.getByTestId("left-out-秘制酱"));
+    await userEvent.click(row.getByRole("button", { name: "Confirm allergens" }));
+    await linkTo(row);
+    expect(await row.findByText(/No unlinked line with this name was found/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Plan again" })).toBeNull();
+  });
+
+  it("states the unknown limits without names when no diner is listed", () => {
+    const { unmount } = renderWithProviders(<PlanCard plan={plan({ diners: [], others: 2 })} />);
+    expect(screen.getByText("2 people have unknown limits")).toBeInTheDocument();
+    unmount();
+    zhCard(plan({ diners: [], others: 2 }));
+    expect(screen.getByText("另外 2 人的忌口未知")).toBeInTheDocument();
+  });
+
+  it("shows an old plan's left-out titles without a confirm button", async () => {
+    renderWithProviders(<PlanCard plan={plan({ left_out_unknown_allergens: ["秘制酱鸡"] })} onReplan={vi.fn()} />);
+    await userEvent.click(screen.getByText("Show which dishes"));
+    expect(screen.getByText("秘制酱鸡")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm allergens" })).toBeNull();
+  });
+
+  it("lists the left-out dishes on an early-stop reply with no dishes", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          recipes: [],
+          passed: false,
+          reasons: [{ reason: "not_enough_dishes", category: null, needed: 2, available: 0, text: "Need 2 dishes, none can be made." }],
+          ...leftOut,
+        })}
+        onReplan={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("宫保鸡丁, 麻辣香锅: 花椒油 (allergens unknown)")).toBeInTheDocument();
+  });
+
+  it("reads the diners line with the user, friends, and guests", () => {
+    const { unmount } = zhCard(
+      plan({
+        diners: [
+          { name: null, is_self: true, guest: false },
+          { name: "小王", is_self: false, guest: false },
+          { name: "Alex", is_self: false, guest: true },
+        ],
+        others: 0,
+      }),
+    );
+    expect(screen.getByText("按 我、小王、Alex 排除")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          diners: [
+            { name: null, is_self: true, guest: false },
+            { name: null, is_self: false, guest: true },
+          ],
+          others: 2,
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("Checked against: you, a guest; 2 more people have unknown limits"),
+    ).toBeInTheDocument();
+  });
+
+  it("says how many dishes share one type, in one list with the servings notes", () => {
+    zhCard(
+      plan({
+        warnings: [{ code: "S5", recipe_id: null, detail: { dish_type: "vegetable dish", count: 2 } }],
+        servings_notes: [{ recipe_id: 1, servings: 1, headcount: 4 }],
+      }),
+    );
+    const box = screen.getByRole("heading", { name: "需要注意" }).parentElement as HTMLElement;
+    const items = within(box).getAllByRole("listitem").map((item) => item.textContent);
+    expect(items[0]).toBe("2 道菜都是素菜。");
+    expect(items[1]).toMatch(/的菜谱是 1 人份，这顿 4 人吃/);
+  });
+
+  it("counts guests without a name together on the diners line", () => {
+    zhCard(
+      plan({
+        diners: [
+          { name: null, is_self: true, guest: false },
+          { name: "Alex", is_self: false, guest: true },
+          { name: null, is_self: false, guest: true },
+          { name: null, is_self: false, guest: true },
+        ],
+        others: 0,
+      }),
+    );
+    expect(screen.getByText("按 我、Alex、2 位客人 排除")).toBeInTheDocument();
+  });
+
+  it("shows no diners line for a solo plan", () => {
+    const { unmount } = renderWithProviders(<PlanCard plan={plan()} />);
+    expect(screen.queryByText(/Checked against/)).toBeNull();
+    unmount();
+    renderWithProviders(<PlanCard plan={plan({ diners: [{ name: null, is_self: true, guest: false }], others: 0 })} />);
+    expect(screen.queryByText(/Checked against/)).toBeNull();
   });
 });

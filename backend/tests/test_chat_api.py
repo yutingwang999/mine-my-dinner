@@ -207,6 +207,25 @@ def test_resume_value_is_bounded(client, chat_env_first_use):
     assert post_resume(client, tid, "x" * 4000).status_code == 200
 
 
+def test_resume_accepts_diner_answer(client, tmp_path, session, recipe):
+    model = plan_model(recipe)
+    model.structured["ParsedRequest"] = [{"headcount": 2, "others_mentioned": True}]
+    install(tmp_path, session, model, "plan_then_adjust")
+    tid = new_thread(client)
+    events = sse(post_message(client, tid, "我和 Alex 吃饭"))
+    assert of(events, "interrupt")[0]["kind"] == "diners"
+    # A malformed answer: nobody eats.
+    assert post_resume(client, tid, {"selected": []}).status_code == 422
+    assert post_resume(client, tid, {"selected": [], "others": -1}).status_code == 422
+    good = {"selected": [], "guests": [{"name": "Alex", "rules": []}], "others": 0}
+    events = sse(post_resume(client, tid, good))
+    assert "plan" in names(events) and "interrupt" not in names(events)
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    (question,) = [item for item in body["items"] if item["type"] == "question"]
+    assert question["value"]["kind"] == "diners"
+    assert question["value"]["summary"]["names"] == ["Alex"]
+
+
 def test_resume_without_pending_question_is_409(client, chat_env):
     tid = new_thread(client)
     r = post_resume(client, tid, "x")
@@ -478,3 +497,105 @@ def test_display_records_never_reach_models(client, chat_env_first_use):
     ]
     for marker in forbidden:
         assert marker not in text, marker
+
+
+def card_env(tmp_path, session, recipe):
+    model = plan_model(recipe)
+    model.structured["ParsedRequest"] = [{"headcount": 2, "others_mentioned": True}]
+    install(tmp_path, session, model, "plan_then_adjust")
+
+
+def test_resume_answer_type_must_fit_the_question(client, tmp_path, session, recipe):
+    card_env(tmp_path, session, recipe)
+    tid = new_thread(client)
+    sse(post_message(client, tid, "我和朋友吃饭"))
+    r = post_resume(client, tid, "两个人")
+    assert r.status_code == 422 and r.json()["code"] == "wrong_answer_type"
+    # Null skips the card.
+    events = sse(post_resume(client, tid, None))
+    assert "plan" in names(events)
+
+
+def test_resume_text_question_refuses_a_card_answer(client, chat_env_first_use):
+    tid = new_thread(client)
+    sse(post_message(client, tid))
+    r = post_resume(client, tid, {"selected": [1]})
+    assert r.status_code == 422 and r.json()["code"] == "wrong_answer_type"
+    assert post_resume(client, tid, "plan_then_adjust").status_code == 200
+
+
+def test_resume_card_with_stated_rules(client, tmp_path, session, recipe):
+    from minemydinner.models import Diner
+    from tests.planningfakes import self_diner
+
+    me = self_diner(session)
+    wang = Diner(display_name="小王", is_self=False)
+    session.add(wang)
+    session.flush()
+    card_env(tmp_path, session, recipe)
+    tid = new_thread(client)
+    sse(post_message(client, tid, "我和小王吃饭"))
+    peanut = {"rule_type": "allergy", "allergen": "peanut"}
+    # JSON object keys are strings; the answer reads them as diner ids.
+    good = {"selected": [me.id, wang.id], "stated": {str(wang.id): [peanut]}}
+    events = sse(post_resume(client, tid, good))
+    assert "plan" in names(events)
+    runtime = app.dependency_overrides[get_chat_runtime]()
+    values = runtime.graph.get_state({"configurable": {"thread_id": tid}}).values
+    assert values["constraints"]["guest_rules"] == [
+        {
+            "diner_key": f"diner:{wang.id}",
+            "rule_type": "allergy",
+            "allergen": "peanut",
+            "ingredient_id": None,
+            "text": None,
+        }
+    ]
+    assert values["settled_diners"]["diner_ids"] == [me.id, wang.id]
+
+
+def test_resume_card_out_of_date(client, tmp_path, session, recipe):
+    # A friend deleted (or an ingredient gone) between showing and confirming the card:
+    # the run ends with a clear code, again on a retry.
+    from minemydinner.models import Diner
+    from tests.planningfakes import self_diner
+
+    me = self_diner(session)
+    wang = Diner(display_name="小王", is_self=False)
+    session.add(wang)
+    session.flush()
+    card_env(tmp_path, session, recipe)
+    tid = new_thread(client)
+    sse(post_message(client, tid, "我和小王吃饭"))
+    gone_id = wang.id
+    session.delete(wang)
+    session.flush()
+    for attempt in range(2):
+        events = sse(post_resume(client, tid, {"selected": [me.id, gone_id]}))
+        assert of(events, "error") == [{"code": "card_out_of_date"}], attempt
+    bad_ingredient = {"rule_type": "dislike", "ingredient_id": 99999999}
+    answer = {"selected": [me.id], "stated": {me.id: [bad_ingredient]}}
+    events = sse(post_resume(client, tid, answer))
+    assert of(events, "error") == [{"code": "card_out_of_date"}]
+
+
+def test_resume_card_headcount(client, tmp_path, session, recipe):
+    # The card's confirmed total sets the unmatched people; a total below the people on the
+    # card is refused with its own code, and the card stays pending.
+    from tests.planningfakes import self_diner
+
+    me = self_diner(session)
+    card_env(tmp_path, session, recipe)
+    tid = new_thread(client)
+    sse(post_message(client, tid, "我和朋友吃饭"))
+    guest = {"name": "Alex", "rules": []}
+    r = post_resume(client, tid, {"selected": [me.id], "guests": [guest], "headcount": 1})
+    assert r.status_code == 422 and r.json()["code"] == "headcount_too_low"
+    answer = {"selected": [me.id], "guests": [guest], "headcount": 4, "others_answer": "none"}
+    events = sse(post_resume(client, tid, answer))
+    assert "plan" in names(events)
+    runtime = app.dependency_overrides[get_chat_runtime]()
+    values = runtime.graph.get_state({"configurable": {"thread_id": tid}}).values
+    assert values["settled_diners"]["others"] == 2
+    assert values["settled_diners"]["headcount"] == 4
+    assert values["settled_diners"]["stated_headcount"] == 2

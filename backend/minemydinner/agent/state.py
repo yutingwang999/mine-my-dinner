@@ -4,14 +4,21 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 
+def _latest(_old: str, new: str) -> str:
+    return new
+
+
 class ChatState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
-    locale: str
+    # The latest value wins: a resume retried after a failed run writes the locale again in
+    # the step where the failed resume's write is still pending.
+    locale: Annotated[str, _latest]
     intent: str | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
     defaults_used: list[str]
-    # PlanSpec as a dict, and the meal constraints: diner_ids, unconfirmed_diners, headcount.
+    # PlanSpec as a dict, and the meal constraints: diner_ids, guest_rules (RuleRef dicts),
+    # unconfirmed_diners, headcount.
     spec: dict | None
     constraints: dict | None
     # Set when the user skipped the request-style question in this conversation.
@@ -43,7 +50,15 @@ class ChatState(TypedDict):
     retries: int
     current_plan: dict | None
     plan_versions: list[dict]
-    # Display only, never sent to a model: each plan by the id of the assistant reply it
-    # belongs to, and the questions the assistant asked ({"at": message count, "value": dict}).
+    # reply_plans is display only, never sent to a model: each plan by the id of the assistant
+    # reply it belongs to. questions are the questions the assistant asked ({"at": message
+    # count, "value": dict}): shown in the chat and also rendered into the parse input
+    # (agent/questions.py); the route and the planner never see them.
     reply_plans: dict[str, dict]
     questions: list[dict]
+    # The conversation's label table (LabelTable.to_state()): diner keys to "Diner N". It only
+    # grows; a thread saved before it existed starts one with the user as "Diner 1".
+    diner_labels: dict | None
+    # The confirmed diner set (SettledDiners.to_state()), reused by later requests that do
+    # not change who eats; replaced by the next confirmed card, None after a skipped card.
+    settled_diners: dict | None

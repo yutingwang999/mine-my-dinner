@@ -240,3 +240,7 @@ private/
 # Frontend dependencies and build output
 node_modules/
 .next/
+
+# Personal reading notes, not committed.
+docs/architecture-overview.md
+docs/architecture-overview.zh.md

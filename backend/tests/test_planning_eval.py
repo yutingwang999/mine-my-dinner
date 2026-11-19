@@ -1232,3 +1232,570 @@ def test_notes_review_writes_one_row_per_plan_scenario(tmp_path):
     ]
     assert rows[2][2] == "two" and rows[2][5] == "counts_dishes,multi_sentence"
     assert rows[3][:3] == ["deepseek-flash", "R2", "one"] and rows[3][6:] == ["", "", ""]
+
+
+# ---- plan 2b: diners, ask-first answers, privacy checks (Task 11) ----
+
+EVAL_DIR = Path(__file__).resolve().parents[1] / "eval_data" / "planning"
+
+
+class NotedTitleModel(TitleModel):
+    """TitleModel whose plan note is given."""
+
+    def __init__(self, factory, title, note, **kwargs):
+        super().__init__(factory, title, **kwargs)
+        self.note = note
+
+    def invoke(self, messages, config=None, **kwargs):
+        with self.factory() as session:
+            recipe_id = session.scalar(select(Recipe.id).where(Recipe.title == self.title))
+        self.replies = [final_proposal([recipe_id], note=self.note)]
+        return ScriptedChatModel.invoke(self, messages, config, **kwargs)
+
+
+def _hooked_client(tmp_path, factory, model):
+    from minemydinner.agent.labels import replace_nicknames, restore_labels
+
+    register_provider("eval_primary", lambda m, timeout: model)
+    register_provider("eval_fallback", lambda m, timeout: model)
+    config = load_llm_config(_config_with_planning_eval(tmp_path))
+    return LLMClient(
+        config,
+        factory,
+        Decimal("20"),
+        pre_hooks=(replace_nicknames,),
+        post_hooks=(restore_labels,),
+    )
+
+
+FRIENDS = [
+    {"name": "小王", "rules": [{"type": "allergy", "allergen": "peanut"}]},
+    {"name": "老李", "rules": [{"type": "dietary restriction", "ingredient": "牛肉"}]},
+]
+
+
+def _parse_calls(model):
+    return [m for m in model.sent if "extract the details" in str(m[0].content)]
+
+
+def test_runner_answers_card_accept(tmp_path, eval_db):
+    """A saved friend named in the request is preselected on the card; the runner accepts
+    the card, the friend's rule applies, and the other friend's does not."""
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [
+        {"headcount": 3, "dishes": 1, "guests": [{"name": "Alex", "allergens": ["egg"]}]}
+    ]
+    scenario = _scenario(
+        "card",
+        request="今晚我和小王，还有 Alex 一起吃，一个菜。Alex 对鸡蛋过敏。",
+        friends=FRIENDS,
+        expect_card={
+            "preselected": ["me", "小王"],
+            "others": 0,
+            "nudge": False,
+            "guests": [{"name": "Alex", "allergens": ["egg"]}],
+        },
+        expect_rules_applied=[
+            {"who": "小王", "allergen": "peanut"},
+            {"who": "guest", "allergen": "egg"},
+        ],
+        expect_rules_not_applied=[{"who": "老李", "ingredient": "牛肉"}],
+    )
+    [outcome] = evaluate(
+        eval_db, _hooked_client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, outcome.failures
+    assert outcome.card_shown and outcome.cards_shown == 1
+    assert outcome.card["kind"] == "diners"
+    assert outcome.final_passed
+    # The parse saw the friend as a label, never by nickname.
+    parse_texts = "".join(str(m.content) for m in _parse_calls(model)[0][1:])
+    assert "小王" not in parse_texts and "Diner 2" in parse_texts
+    _assert_clean(eval_db)
+
+
+def test_runner_answers_card_with_an_explicit_answer(tmp_path, eval_db):
+    """diners_answer overrides the selection and the guests; the expectations judge the
+    planning context's rules."""
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{"headcount": 3, "dishes": 1}]
+    scenario = _scenario(
+        "explicit",
+        request="今晚三个人吃，一个菜。",
+        friends=FRIENDS,
+        diners_answer={
+            "selected": ["me", "老李"],
+            "guests": [{"name": "Sam", "rules": [{"type": "allergy", "allergen": "fish"}]}],
+            "others": 0,
+        },
+        expect_card={"preselected": ["me"], "others": 2},
+        expect_rules_applied=[
+            {"who": "老李", "ingredient": "牛肉"},
+            {"who": "guest", "allergen": "fish"},
+        ],
+        expect_rules_not_applied=[{"who": "小王", "allergen": "peanut"}],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, outcome.failures
+    _assert_clean(eval_db)
+
+
+def test_runner_answers_ask_first_questions(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{}, {"dishes": 1, "mode": "shopping"}]
+    scenario = _scenario(
+        "ask",
+        request="今晚我一个人吃。",
+        request_style="ask_first",
+        answers=["一个，可以买菜"],
+        expect_card=False,
+        expect_spec={"dishes": 1, "mode": "shopping"},
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, outcome.failures
+    assert outcome.note == "" and outcome.final_passed
+    # The second parse read the answer after the question.
+    parse_calls = _parse_calls(model)
+    assert len(parse_calls) == 2
+    assert str(parse_calls[-1][-1].content) == "一个，可以买菜"
+    _assert_clean(eval_db)
+
+
+def test_runner_stops_at_a_question_with_no_answer_left(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{}]
+    scenario = _scenario("ask", request="今晚我一个人吃。", request_style="ask_first")
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.note == "stopped at a question: question"
+    assert not outcome.as_expected
+    _assert_clean(eval_db)
+
+
+def test_runner_flags_nickname_sent(tmp_path, eval_db):
+    """Without the nickname pre-hook the friend's nickname reaches the model, and the
+    planning record shows it: a mismatch, even though everything else is as expected."""
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{"headcount": 2, "dishes": 1}]
+    scenario = _scenario("leak", request="我和小王两个人吃，一个菜。", friends=FRIENDS[:1])
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.final_passed
+    assert any(f.startswith("nickname sent") and "小王" in f for f in outcome.failures)
+    assert not outcome.as_expected
+    _assert_clean(eval_db)
+
+
+def test_runner_flags_label_shown(tmp_path, eval_db):
+    model = NotedTitleModel(eval_db, "清炒小白菜", "Diner 2 会喜欢这道菜。")
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [_scenario()], InMemorySaver()
+    )
+    assert outcome.final_passed
+    assert any(f.startswith("label shown") for f in outcome.failures)
+    assert not outcome.as_expected
+    _assert_clean(eval_db)
+
+
+def test_runner_expect_card_false_mismatch(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{"headcount": 2, "dishes": 1}]
+    scenario = _scenario("no_card", request="我们两个人吃，一个菜。", expect_card=False)
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    # The runner still answers the card and plans; the card itself is the mismatch.
+    assert outcome.final_passed and outcome.card_shown
+    assert any("card" in f for f in outcome.failures)
+    _assert_clean(eval_db)
+
+
+def test_between_turns_confirms_allergens_before_the_follow_up(tmp_path, eval_db):
+    """The plan-again case: the first turn leaves out the dish with an unlinked line; the
+    runner confirms the line's allergens on the database; the follow-up plans it."""
+    model = TitleModel(eval_db, "香煎鸡腿")
+    model.structured["ParsedRequest"] = [{"dishes": 1, "mode": "shopping"}]
+    library = [
+        {
+            "title": "香煎鸡腿",
+            "dish_type": "meat dish",
+            "servings": 1,
+            "cookware": ["平底锅"],
+            "lines": [
+                {"name": "鸡腿", "role": "main"},
+                {"name": "秘制腌料", "role": "secondary", "linked": False},
+            ],
+        }
+    ]
+    scenario = _scenario(
+        "again",
+        request="今晚我一个人吃，一个菜，可以买菜。",
+        inventory={"鸡腿": 2},
+        cookware=["平底锅"],
+        rules=[{"type": "allergy", "allergen": "peanut"}],
+        follow_up="按同样的要求重新规划",
+        between_turns=[{"confirm_allergens": {"name": "秘制腌料", "allergens": []}}],
+        expect_titles_exact=["香煎鸡腿"],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), library, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, outcome.failures
+    first_run, second_run = outcome.record["planning_runs"]
+    assert "香煎鸡腿" in first_run["final_plan"]["left_out_unknown_allergens"]
+    _assert_clean(eval_db)
+
+
+def test_reset_recreates_friends(session):
+    from minemydinner.evaluation.planning import reset_scenario_state
+    from minemydinner.models import DietaryRule, Diner
+
+    seed_all(session)
+    session.flush()
+    self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+    old = Diner(display_name="Old friend", is_self=False)
+    session.add(old)
+    session.flush()
+    session.add(DietaryRule(diner_id=old.id, rule_type="allergy", allergen="egg"))
+    session.commit()
+    reset_scenario_state(
+        session,
+        _scenario(friends=FRIENDS, rules=[{"type": "allergy", "allergen": "sesame"}]),
+    )
+    diners = session.scalars(select(Diner).order_by(Diner.id)).all()
+    assert [d.id for d in diners if d.is_self] == [self_id]
+    friends = {d.display_name: d for d in diners if not d.is_self}
+    assert set(friends) == {"小王", "老李"}
+    rules = session.scalars(select(DietaryRule)).all()
+    by_diner = {(r.diner_id, r.rule_type, r.allergen) for r in rules}
+    assert (self_id, "allergy", "sesame") in by_diner
+    assert (friends["小王"].id, "allergy", "peanut") in by_diner
+    [beef] = [r for r in rules if r.diner_id == friends["老李"].id]
+    assert beef.rule_type == "dietary restriction" and beef.ingredient.name_zh == "牛肉"
+    assert len(rules) == 3
+    # A second reset with no friends leaves only the user.
+    reset_scenario_state(session, _scenario())
+    assert [d.is_self for d in session.scalars(select(Diner))] == [True]
+
+
+def test_reset_sets_the_request_style(session):
+    from minemydinner.agent.request import get_request_style
+    from minemydinner.evaluation.planning import reset_scenario_state
+
+    seed_all(session)
+    session.flush()
+    reset_scenario_state(session, _scenario(request_style="ask_first"))
+    assert get_request_style(session) == "ask_first"
+    reset_scenario_state(session, _scenario())
+    assert get_request_style(session) == "plan_then_adjust"
+
+
+def test_heldout_file_loads():
+    """The held-out and development sets parse into Scenario. The held-out content must not
+    be shown, so a failure reports only the file and, for an unknown key, the key."""
+    problems = []
+    for name in (
+        "scenarios_heldout.yaml", "scenarios_heldout_core.yaml", "scenarios_diners.yaml"
+    ):
+        problem = None
+        try:
+            scenarios = load_scenarios(EVAL_DIR / name)
+        except Exception as error:  # noqa: BLE001 - reported without its message
+            cause = error.__cause__
+            problem = type(error).__name__
+            if isinstance(cause, TypeError) and "keyword argument" in str(cause):
+                problem += ": " + str(cause).rsplit("keyword argument", 1)[1].strip()
+            elif cause is not None:
+                problem += f" from {type(cause).__name__}"
+            scenarios = []
+        if problem:
+            problems.append(f"{name} does not load ({problem})")
+        elif not scenarios or not all(isinstance(s, Scenario) for s in scenarios):
+            problems.append(f"{name} holds no scenarios")
+    if problems:
+        pytest.fail("; ".join(problems), pytrace=False)
+
+
+def test_the_loader_refuses_unknown_diner_keys(tmp_path):
+    base = {"name": "x", "request": "r", "locale": "zh", "inventory": {}, "cookware": []}
+    bad = [
+        {"request_style": "sometimes"},
+        {"diners_answer": "reject"},
+        {"diners_answer": {"chosen": ["me"]}},
+        {"expect_card": {"rows": 2}},
+        {"between_turns": [{"confirm_allergens": {"name": "x", "allergens": []}}]},
+        {"between_turns": [{"delete_friend": "x"}], "follow_up": "again"},
+    ]
+    path = tmp_path / "s.yaml"
+    for changes in bad:
+        path.write_text(
+            yaml.safe_dump({"scenarios": [{**base, **changes}]}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError):
+            load_scenarios(path)
+
+
+def test_the_development_set_fits_its_library(session):
+    """Every development scenario's stock, cookware, rules and friends exist in the
+    dictionary, and every expected title is a library dish."""
+    from minemydinner.evaluation.planning import read_library, reset_scenario_state
+
+    library = read_library(EVAL_DIR / "library_diners.yaml")
+    titles = {dish["title"] for dish in library}
+    seed_all(session)
+    session.flush()
+    load_library(session, library)
+    scenarios = load_scenarios(EVAL_DIR / "scenarios_diners.yaml")
+    assert len({s.name for s in scenarios}) == len(scenarios)
+    for scenario in scenarios:
+        assert scenario.max_model_calls is not None, scenario.name
+        reset_scenario_state(session, scenario)
+        named = [
+            *scenario.expect_titles_none, *scenario.expect_titles_include,
+            *scenario.expect_titles_exact, *scenario.expect_titles_any,
+            *scenario.expect_left_out_include,
+        ]
+        assert set(named) <= titles, scenario.name
+
+
+# ---- pure diner checks ----
+
+CARD = {
+    "kind": "diners",
+    "headcount": 3,
+    "rows": [
+        {"diner_id": 1, "name": None, "is_self": True, "selected": True, "rules": [],
+         "proposed": [{"rule_type": "dietary restriction", "allergen": None,
+                       "ingredient_id": 40, "ingredient_name": "羊肉", "text": None,
+                       "by_wording": False}],
+         "diet_words": []},
+        {"diner_id": 2, "name": "小王", "is_self": False, "selected": True, "rules": [],
+         "proposed": [], "diet_words": []},
+        {"diner_id": 3, "name": "老李", "is_self": False, "selected": False, "rules": [],
+         "proposed": [], "diet_words": []},
+    ],
+    "guests": [
+        {"name": "Alex", "diet_words": ["vegetarian"], "proposed": [
+            {"rule_type": "allergy", "allergen": "peanut", "ingredient_id": None,
+             "ingredient_name": None, "text": None, "by_wording": False},
+            {"rule_type": "dislike", "allergen": None, "ingredient_id": 41,
+             "ingredient_name": "coriander", "text": None, "by_wording": False},
+        ]},
+    ],
+    "others": 0,
+    "nudge": False,
+}
+NAMES = {40: {"羊肉", "lamb"}, 41: {"香菜", "coriander"}}
+
+
+def _card_check(expect, cards=(CARD,)):
+    from minemydinner.evaluation.planning import card_failures
+
+    return card_failures(expect, list(cards), NAMES)
+
+
+def test_card_expectations():
+    assert _card_check(None) == [] and _card_check(None, cards=()) == []
+    assert _card_check(False, cards=()) == []
+    assert _card_check(False) != []
+    assert _card_check(True) == [] and _card_check(True, cards=()) != []
+    assert _card_check({"preselected": ["Me", "小王"]}, cards=()) != []
+    good = {
+        "preselected": ["me", "小王"],
+        "others": 0,
+        "nudge": False,
+        "diet_words": True,
+        "guests": [{"name": "alex", "allergens": ["peanut"],
+                    "avoid": [{"name": "香菜", "kind": "dislike"}], "diet_words": True}],
+        "self_proposed": [{"ingredient": "羊肉"}],
+    }
+    assert _card_check(good) == []
+    assert _card_check({"guests": [{"avoid": [{"name": "coriander"}]}]}) == []
+    bad = [
+        {"preselected": ["me"]},
+        {"others": 1},
+        {"nudge": True},
+        {"diet_words": False},
+        {"guests": [{"name": "Sam"}]},
+        {"guests": [{"name": "Alex", "allergens": ["egg"]}]},
+        {"guests": [{"avoid": [{"name": "香菜", "kind": "restriction"}]}]},
+        {"guests": [{"name": "Alex"}, {"name": "Alex"}]},
+        {"self_proposed": [{"allergen": "egg"}]},
+    ]
+    for expect in bad:
+        assert len(_card_check(expect)) == 1, expect
+
+
+def test_rule_expectations():
+    from minemydinner.evaluation.planning import rule_failures
+
+    rules = [
+        {"diner_key": "diner:1", "rule_type": "allergy", "allergen": "egg",
+         "ingredient_id": None, "text": None},
+        {"diner_key": "diner:2", "rule_type": "dislike", "allergen": None,
+         "ingredient_id": 40, "text": None},
+        {"diner_key": "guest:1", "rule_type": "dietary restriction", "allergen": None,
+         "ingredient_id": None, "text": "芒果"},
+    ]
+    who = {"diner:1": "me", "diner:2": "小王"}
+    applied = [
+        {"who": "me", "allergen": "egg"},
+        {"who": "小王", "ingredient": "lamb"},
+        {"who": "guest", "ingredient": "芒果"},
+    ]
+    assert rule_failures(applied, [], rules, who, NAMES) == []
+    not_applied = [{"who": "小王", "allergen": "egg"}, {"who": "guest", "allergen": "egg"}]
+    assert rule_failures([], not_applied, rules, who, NAMES) == []
+    assert len(rule_failures([{"who": "老李", "allergen": "egg"}], [], rules, who, NAMES)) == 1
+    assert len(rule_failures([], [{"who": "me", "allergen": "egg"}], rules, who, NAMES)) == 1
+
+
+def test_privacy_checks():
+    from minemydinner.evaluation.planning import label_failures, nickname_failures
+
+    events = [
+        {"kind": "model_call", "step": "route",
+         "messages": [{"type": "human", "content": "我和Diner 2吃鱼香肉丝"}]},
+        {"kind": "tool_call", "args": {"query": "小王"}},
+    ]
+    # A food-like nickname inside a food word is not naming the friend.
+    terms = frozenset({"鱼香肉丝"})
+    assert nickname_failures([events], ["小王", "鱼"], terms) == []
+    leaked = [{"kind": "model_call", "step": "parse",
+               "messages": [{"type": "human", "content": [{"text": "和 Alex 吃"}]}]}]
+    [failure] = nickname_failures([events, leaked], ["alex"], terms)
+    assert failure.startswith("nickname sent") and "parse" in failure
+    assert label_failures(["今晚吃清炒小白菜。"]) == []
+    assert len(label_failures(["和Diner 2一起吃", "diner  3 likes it"])) == 1
+    assert label_failures(["Dinner 2 is ready"]) == []
+    assert len(label_failures(["Diner2 会喜欢"])) == 1
+
+
+def test_nickname_check_skips_system_prompts_and_record_fields():
+    """System prompts are fixed text the pre-hook leaves as written (the parse prompt's
+    examples hold names such as "Alex" and "我妈"); record fields are not model text."""
+    from minemydinner.evaluation.planning import nickname_failures
+
+    in_system = [{"kind": "model_call", "step": "parse", "messages": [
+        {"type": "system", "content": "Example: 我和 Alex 吃饭，我妈不吃辣"},
+        {"type": "human", "content": "今晚一个人吃"},
+        {"type": "tool", "content": "{}", "name": "Alex", "tool_call_id": "Alex"},
+    ]}]
+    assert nickname_failures([in_system], ["Alex", "我妈"], frozenset()) == []
+    in_human = [{"kind": "model_call", "step": "parse", "messages": [
+        {"type": "system", "content": "fixed"},
+        {"type": "human", "content": "我和我妈吃饭"},
+    ]}]
+    [failure] = nickname_failures([in_human], ["Alex", "我妈"], frozenset())
+    assert "我妈" in failure and "Alex" not in failure
+    in_args = [{"kind": "model_call", "step": "planner", "messages": [
+        {"type": "ai", "content": "", "tool_calls": [
+            {"name": "search", "args": {"query": "Alex 爱吃的菜"}, "id": "c1"}]},
+    ]}]
+    assert len(nickname_failures([in_args], ["Alex"], frozenset())) == 1
+
+
+def test_reset_undoes_an_allergen_confirmation(engine, session):
+    """A scenario after a confirm sees the line unknown again and the created entry gone."""
+    from minemydinner.evaluation.planning import reset_scenario_state, run_between_turns
+    from minemydinner.models import Ingredient, RecipeIngredient
+
+    seed_all(session)
+    session.flush()
+    [recipe] = load_library(
+        session,
+        [{**LIBRARY[0], "lines": [{"name": "小白菜", "role": "main"},
+                                  {"name": "秘制腌料", "linked": False}]}],
+    )
+    session.commit()
+    seeds = session.scalar(select(func.count()).select_from(Ingredient))
+
+    def factory():
+        return _SessionProxy(session)
+
+    run_between_turns(factory, [{"confirm_allergens": {"name": "秘制腌料", "allergens": []}}])
+    line = session.scalars(
+        select(RecipeIngredient).where(RecipeIngredient.name == "秘制腌料")
+    ).one()
+    session.refresh(line)
+    assert line.ingredient_id is not None
+    reset_scenario_state(session, _scenario())
+    session.refresh(line)
+    assert line.ingredient_id is None
+    assert session.scalar(select(func.count()).select_from(Ingredient)) == seeds
+    assert session.scalar(
+        select(func.count()).select_from(RecipeIngredient)
+        .where(RecipeIngredient.recipe_id == recipe.id, RecipeIngredient.ingredient_id.is_not(None))
+    ) == 1
+    # A name the dictionary already owns cannot be confirmed (it could not be undone).
+    with pytest.raises(ValueError):
+        run_between_turns(factory, [{"confirm_allergens": {"name": "小白菜", "allergens": []}}])
+
+
+class _SessionProxy:
+    """The test session as a context manager that does not close it (for a factory)."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def __enter__(self):
+        return self.session
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_the_heldout_sets_fit_the_library(session):
+    """Every dictionary lookup a held-out scenario needs (stock, cookware, rules, friends'
+    rules, diners_answer guests' rules, card and rule expectations' ingredients) and every
+    expected title exists. Failures report only the file, scenario index and key."""
+    from minemydinner.evaluation.planning import read_library
+    from minemydinner.models import Cookware, Ingredient
+
+    library = read_library(EVAL_DIR / "library_diners.yaml")
+    titles = {dish["title"] for dish in library}
+    seed_all(session)
+    session.flush()
+    load_library(session, library)
+
+    def known(model, name):
+        return session.scalar(select(model.id).where(model.name_zh == name)) is not None
+
+    def rule_ok(rule):
+        return not rule.get("ingredient") or known(Ingredient, rule["ingredient"])
+
+    problems = []
+    for name in ("scenarios_heldout.yaml", "scenarios_heldout_core.yaml"):
+        for index, s in enumerate(load_scenarios(EVAL_DIR / name)):
+            def bad(key):
+                problems.append(f"{name}[{index}].{key}")
+
+            if not all(known(Ingredient, item) for item in s.inventory):
+                bad("inventory")
+            if not all(known(Cookware, item) for item in s.cookware):
+                bad("cookware")
+            if not all(rule_ok(rule) for rule in s.rules):
+                bad("rules")
+            if not all(rule_ok(r) for f in s.friends for r in f.get("rules") or []):
+                bad("friends")
+            answer = s.diners_answer if isinstance(s.diners_answer, dict) else {}
+            if not all(rule_ok(r) for g in answer.get("guests") or [] for r in g.get("rules") or []):
+                bad("diners_answer")
+            wanted = [*s.expect_rules_applied, *s.expect_rules_not_applied]
+            if isinstance(s.expect_card, dict):
+                wanted += s.expect_card.get("self_proposed") or []
+            if not all(rule_ok(item) for item in wanted):
+                bad("expected ingredients")
+            for key in ("expect_titles_none", "expect_titles_include", "expect_titles_exact",
+                        "expect_titles_any", "expect_titles_all", "expect_left_out_include"):
+                if not set(getattr(s, key)) <= titles:
+                    bad(key)
+    if problems:
+        pytest.fail("; ".join(problems), pytrace=False)

@@ -207,6 +207,45 @@ describe("ChatPage", () => {
     });
   });
 
+  it("plan again sends the fixed replan message after an allergen is confirmed", async () => {
+    const entry = {
+      id: 9, name_zh: "花椒油", name_en: null, aliases_zh: [], aliases_en: [], user_aliases_zh: [],
+      user_aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null,
+      parent_id: null,
+    };
+    setup({
+      "POST /api/chat/threads/t1/messages": (body) =>
+        (body as { text: string }).text === "Plan again with the same request"
+          ? stream(frame("message", { role: "assistant", text: "Planned again." }), DONE)
+          : stream(
+              frame("plan", {
+                ...plan({ recipes: [], passed: false, left_out_unknown_allergens: ["宫保鸡丁"] }),
+                left_out_details: [{ id: 11, title: "宫保鸡丁", lines: ["花椒油"] }],
+              }),
+              DONE,
+            ),
+      "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry }] }),
+      "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => entry,
+    });
+    await send("dinner");
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm allergens" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm it contains none" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save allergens" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Plan again" }));
+    expect(await screen.findByText("Planned again.")).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")[1].body).toEqual({
+      text: "Plan again with the same request",
+      locale: "en",
+    });
+  });
+
+  it("has the backend's replan wording in both languages", async () => {
+    const zh = (await import("../../messages/zh.json")).default;
+    expect(zh.chat.replanMessage).toBe("按同样的要求重新规划");
+    expect(en.chat.replanMessage).toBe("Plan again with the same request");
+  });
+
   it.each<[NextAction, string, string]>([
     ["relax_split", "Any mix is fine", "Any mix of meat and vegetable dishes is fine"],
     ["relax_named", "Named ingredients optional", "The named ingredients are optional"],
@@ -289,6 +328,14 @@ describe("ChatPage", () => {
     expect(screen.getByRole("textbox", { name: "Your message" })).toBeEnabled();
     await userEvent.type(screen.getByRole("textbox", { name: "Your message" }), "try again");
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("asks to send the request again when the diner card is out of date", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () => stream(frame("error", { code: "card_out_of_date" }), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Send your request again");
   });
 
   it("shows an internal error message", async () => {
@@ -636,6 +683,96 @@ describe("ChatPage", () => {
     const texts = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
     expect(texts[1]).toMatch(/whether to cook only from the fridge/);
     expect(texts[2]).toMatch(/yes/);
+  });
+
+  it("shows the diner card for a diners interrupt and resumes with the answer object", async () => {
+    const diners = {
+      kind: "diners",
+      headcount: 2,
+      rows: [
+        { diner_id: 1, name: null, is_self: true, selected: true, rules: [], proposed: [], diet_words: [] },
+        { diner_id: 2, name: "Xiao Wang", is_self: false, selected: true, rules: [], proposed: [], diet_words: [] },
+      ],
+      guests: [],
+      others: 0,
+      nudge: false,
+    };
+    setup({
+      "POST /api/chat/threads/t1/messages": () => stream(frame("interrupt", diners), DONE),
+      "POST /api/chat/threads/t1/resume": () =>
+        stream(frame("message", { role: "assistant", text: "Planning for two." }), DONE),
+    });
+    await send("dinner with Xiao Wang");
+    const confirm = await screen.findByRole("button", { name: "Confirm and start planning" });
+    expect(screen.getByRole("checkbox", { name: "Xiao Wang" })).toBeChecked();
+    await userEvent.click(confirm);
+    expect(await screen.findByText("Planning for two.")).toBeInTheDocument();
+    expect(callsTo(calls, "POST", "/api/chat/threads/t1/resume")[0].body).toEqual({
+      value: { selected: [1, 2], stated: {}, guests: [], others: 0, others_answer: null, headcount: 2 },
+      locale: "en",
+    });
+    expect(screen.queryByRole("button", { name: "Confirm and start planning" })).toBeNull();
+    expect(screen.getByText("Diners confirmed: you and Xiao Wang.")).toBeInTheDocument();
+  });
+
+  it("keeps the diner card's edits when confirming fails", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(
+          frame("interrupt", {
+            kind: "diners",
+            headcount: 2,
+            rows: [{ diner_id: 1, name: null, is_self: true, selected: true, rules: [], proposed: [], diet_words: [] }],
+            guests: [],
+            others: 1,
+            nudge: false,
+          }),
+          DONE,
+        ),
+      "POST /api/chat/threads/t1/resume": () => reply(500, { code: "unknown" }),
+    });
+    await send("dinner for two");
+    await userEvent.click(await screen.findByRole("button", { name: "Add a person" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Mia");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm and start planning" }));
+    await screen.findByRole("alert");
+    expect(await screen.findByLabelText("Name")).toHaveValue("Mia");
+    expect(screen.queryByText(/Diners confirmed/)).toBeNull();
+  });
+
+  it("sends a typed message as a new message while the diner card is pending", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({
+      "GET /api/chat/threads/t5": () => ({
+        items: [{ type: "user", text: "dinner" }],
+        pending: { kind: "diners", headcount: 1, rows: [], guests: [], others: 1, nudge: false },
+      }),
+      "POST /api/chat/threads/t5/messages": () => stream(DONE),
+    });
+    await screen.findByRole("button", { name: "Confirm and start planning" });
+    await send("never mind");
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/chat/threads/t5/messages")).toHaveLength(1));
+    expect(callsTo(calls, "POST", "/api/chat/threads/t5/resume")).toHaveLength(0);
+  });
+
+  it("shows the summary of an answered diner card in a stored thread", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t6");
+    setup({
+      "GET /api/chat/threads/t6": () => ({
+        items: [
+          { type: "user", text: "dinner" },
+          { type: "question", value: { kind: "diners", summary: { self: true, names: ["Xiao Wang", "Alex"], others: 2 } } },
+          { type: "question", value: { kind: "diners", summary: { self: false, names: ["Alex"], others: 0 } } },
+          { type: "question", value: { kind: "diners", summary: null } },
+        ],
+        pending: null,
+      }),
+    });
+    expect(
+      await screen.findByText("Diners confirmed: you, Xiao Wang, Alex, and 2 more people."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Diners confirmed: Alex.")).toBeInTheDocument();
+    expect(screen.getByText("Who is eating?")).toBeInTheDocument();
   });
 
   it("renders the same first markup as the server when a thread is remembered", () => {

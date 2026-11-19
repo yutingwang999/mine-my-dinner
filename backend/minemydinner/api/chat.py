@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from minemydinner.agent.diners import CardOutOfDate, DinerAnswer
 from minemydinner.agent.graph import GraphDeps, build_graph
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.api.deps import ApiError, get_llm_client
@@ -79,7 +80,8 @@ class MessageBody(BaseModel):
 
 
 class ResumeBody(BaseModel):
-    value: str | None = Field(default=None, max_length=4000)
+    # Text or null answers a question (null skips it); the diner card answers with an object.
+    value: Annotated[str, Field(max_length=4000)] | DinerAnswer | None = None
     locale: Literal["zh", "en"]
 
 
@@ -212,6 +214,11 @@ def _stream(runtime: ChatRuntime, graph_input: Any, config: dict) -> Iterator[st
         settled = True
         _fail_record(runtime, config)
         yield event("error", {"code": "models_unavailable"})
+    except CardOutOfDate:
+        # The diner card names someone or something deleted since it was shown.
+        settled = True
+        _fail_record(runtime, config)
+        yield event("error", {"code": "card_out_of_date"})
     except Exception:
         settled = True
         logger.exception("Chat stream failed")
@@ -250,8 +257,18 @@ def resume(thread_id: str, body: ResumeBody, runtime: RuntimeDep) -> StreamingRe
     pending = _pending(state)
     if not pending:
         raise ApiError(409, "nothing_pending")
+    value = body.value
+    # The diner card takes an answer object or null; every other question text or null.
+    card = isinstance(pending[0].value, dict) and pending[0].value.get("kind") == "diners"
+    if value is not None and card != isinstance(value, DinerAnswer):
+        raise ApiError(422, "wrong_answer_type")
+    if isinstance(value, DinerAnswer):
+        if value.headcount_too_low:
+            # The card's total cannot be below the people ticked and added on it.
+            raise ApiError(422, "headcount_too_low")
+        value = value.model_dump(mode="json")
     # LangGraph ignores a bare resume of None, so answer by interrupt id (None means skip).
-    command = Command(resume={pending[0].id: body.value}, update={"locale": body.locale})
+    command = Command(resume={pending[0].id: value}, update={"locale": body.locale})
     return _response(_stream(runtime, command, config))
 
 

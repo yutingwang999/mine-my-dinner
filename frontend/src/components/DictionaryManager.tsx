@@ -3,145 +3,16 @@
 import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 
-import { AllergenPicker } from "@/components/AllergenPicker";
+import { ConfirmPanel, type LinkNotice, LinkPanel, type Target } from "@/components/AllergenResolvePanels";
 import { ConfirmDelete } from "@/components/ConfirmDelete";
 import { DictionaryBrowser } from "@/components/DictionaryBrowser";
-import { DictionarySearch } from "@/components/DictionarySearch";
 import { EditIngredient } from "@/components/EditIngredient";
-import { EntryTypeFields, useEntryType } from "@/components/EntryTypeFields";
 import { entryNames, useListSearch } from "@/components/ListSearch";
 import { PagedList } from "@/components/PagedList";
 import { TabPanel, Tabs } from "@/components/Tabs";
-import { type Allergen, api, entryName, type IngredientEntry } from "@/lib/api";
-import { useErrorText } from "@/lib/errors";
+import { api, entryName, type IngredientEntry } from "@/lib/api";
 import { useLoad } from "@/lib/useLoad";
 import { useUrlTab } from "@/lib/useUrlTab";
-
-type Target = { name: string } | { ingredient_id: number };
-
-type LinkNotice = { name: string; entry: string };
-
-/** Saving needs a confirmed value: a list, or an explicit "contains none". */
-function ConfirmPanel({
-  name,
-  target,
-  onCancel,
-  onResolved,
-}: {
-  name: string;
-  target: Target;
-  onCancel: () => void;
-  onResolved: () => void;
-}) {
-  const t = useTranslations("dictionary");
-  const tCommon = useTranslations("common");
-  const errorText = useErrorText();
-  const [allergens, setAllergens] = useState<Allergen[] | null>(null);
-  const type = useEntryType("other");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  // Only a name that has no entry yet becomes a new entry, so only it has a category.
-  const isNewEntry = "name" in target;
-
-  async function save() {
-    if (allergens === null) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.resolveAllergens(
-        target,
-        allergens,
-        isNewEntry ? { category: type.category, stock_mode: type.stockMode } : undefined,
-      );
-      onResolved();
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="dish-panel form-panel">
-      {isNewEntry && <EntryTypeFields type={type} fieldClass="panel-row" />}
-      <AllergenPicker name={name} onChange={setAllergens} onSuggestion={type.applySuggestion} />
-      {error !== null && (
-        <p role="alert" className="notice notice-warning">
-          {errorText(error)}
-        </p>
-      )}
-      <div className="panel-actions">
-        <button type="button" disabled={busy} onClick={onCancel}>
-          {tCommon("cancel")}
-        </button>
-        <button type="button" className="btn-primary" disabled={allergens === null || busy} onClick={save}>
-          {t("saveAllergens")}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Links every line with an unmatched name to an entry the user picks. */
-function LinkPanel({
-  name,
-  onCancel,
-  onResolved,
-}: {
-  name: string;
-  onCancel: () => void;
-  /** Gets the link notice to show when the name could not be remembered, else null. */
-  onResolved: (notice: LinkNotice | null) => void;
-}) {
-  const t = useTranslations("dictionary");
-  const tReview = useTranslations("review");
-  const tCommon = useTranslations("common");
-  const locale = useLocale();
-  const errorText = useErrorText();
-  const [chosen, setChosen] = useState<IngredientEntry | null>(null);
-  const [remember, setRemember] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-
-  async function confirm() {
-    if (chosen === null) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const linked = await api.linkUnknownName(name, chosen.id, remember);
-      // Asked to remember, but the name already belongs to another entry.
-      onResolved(remember && !linked.remembered ? { name, entry: entryName(chosen, locale) } : null);
-    } catch (caught) {
-      setError(caught);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="dish-panel form-panel">
-      <DictionarySearch search={api.searchIngredients} onChoose={setChosen} />
-      {chosen !== null && <p role="status">{t("linkChosen", { entry: entryName(chosen, locale) })}</p>}
-      <label className="mini-field inline">
-        <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
-        {tReview("rememberLink")}
-      </label>
-      {error !== null && (
-        <p role="alert" className="notice notice-warning">
-          {errorText(error)}
-        </p>
-      )}
-      <div className="panel-actions">
-        <button type="button" disabled={busy} onClick={onCancel}>
-          {tCommon("cancel")}
-        </button>
-        <button type="button" className="btn-primary" disabled={chosen === null || busy} onClick={confirm}>
-          {t("confirmLink")}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 function ResolveRow({
   testId,

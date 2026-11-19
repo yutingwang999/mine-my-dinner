@@ -512,6 +512,18 @@ button.btn-danger:hover:not(:disabled) {
   margin-left: 1.25rem;
 }
 
+/* A boxed notice keeps equal space above and below: no outer margin on its first and last
+   children (a heading's top margin would otherwise add to the padding at the top only). */
+.notice > :first-child,
+.left-out-box > :first-child {
+  margin-top: 0;
+}
+
+.notice > :last-child,
+.left-out-box > :last-child {
+  margin-bottom: 0;
+}
+
 /* Dictionary browser: one entry per row, details in a muted line below the name. */
 .dictionary-browser h2 {
   margin-top: 1.5rem;
@@ -583,7 +595,7 @@ button.btn-danger:hover:not(:disabled) {
   list-style: none;
 }
 
-/* The diner list is one card; each diner is a block separated by a thin line. */
+/* The diner list: one line per person, no divider lines. */
 .diner-list {
   list-style: none;
   display: flex;
@@ -593,13 +605,510 @@ button.btn-danger:hover:not(:disabled) {
 .diner {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  padding: 0.75rem 0;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+}
+
+.diner:hover {
+  background: color-mix(in srgb, var(--border) 35%, transparent);
+}
+
+/* The diner card is as wide as the chat column, like the plan card. */
+.chat-assistant.chat-wide {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Every part of a person's first line (name, rules, actions) is centred in one line height,
+   so an input (a guest's name), plain text and text buttons sit on the same line. */
+.diner-line {
+  --diner-line-height: 1.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.25rem 0.75rem;
+}
+
+.diner-line > .diner-who,
+.diner-line > .btn-text {
+  min-height: var(--diner-line-height);
+}
+
+.diner-line > .diner-ends {
+  min-height: var(--diner-line-height);
+  align-items: center;
+}
+
+/* The rules column wraps (rules, then "save to friend profiles"), so its first-line items
+   carry the line height themselves; the list is `display: contents`, so its items count.
+   The diet-word hint is a full-width notice, not a first-line item. */
+.diner-line > .diner-info > :not(.diner-save):not(ul):not(.diner-diet),
+.diner-line > .diner-info > ul > li {
+  min-height: var(--diner-line-height);
+  display: inline-flex;
+  align-items: center;
+}
+
+/* "No rules." reads at the size of a rule, only muted, with no paragraph margin. */
+.diner-info > .hint {
+  margin: 0;
+  font-size: inherit;
+}
+
+.diner-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 7rem;
+  cursor: pointer;
+}
+
+/* The guest row's stand-in for the friend rows' checkbox, so the columns line up. */
+.diner-who input[type="checkbox"],
+.diner-spacer {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+.diner-spacer {
+  display: inline-block;
+}
+
+/* A guest's name column is exactly the friend rows' minimum, so the rules line up; the
+   input's default width (about 20 characters) would otherwise stretch it. */
+.diner-who:has(> input.diner-guest-name) {
+  width: 7rem;
+}
+
+/* A guest's name reads like the bold name text; a border appears on hover and focus.
+   `:not(...)` repeats the base input rule's selectors so this rule outranks it. */
+.diner-who input.diner-guest-name:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  height: auto;
+  min-height: 0;
+  /* No side padding or border width, so the text starts where the friends' names start;
+     the hover and focus frame is drawn outside the box. */
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: text;
+}
+
+.diner-who input.diner-guest-name::placeholder {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.diner-who input.diner-guest-name:not([type="checkbox"]):not([type="radio"]):not([type="file"]):hover,
+.diner-who input.diner-guest-name:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--card), 0 0 0 4px var(--control-border);
+}
+
+/* "Save to friend profiles" is a small grey hint on its own line under the rules. */
+.diner-info .diner-save {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* The rules sit after the name on the same line and wrap under the rules column. */
+.diner-info {
+  flex: 1 1 10rem;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 1rem;
+}
+
+.diner-info ul {
+  display: contents;
+  list-style: none;
+}
+
+.diner-items > li {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+}
+
+/* Ticked rules read at the same size as the saved rules on the friend rows. */
+.diner-info .mini-field.inline {
+  font-size: 1rem;
+}
+
+.diner-ends {
+  margin-left: auto;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.diner-line > .btn-text {
+  margin-left: auto;
+}
+
+button.btn-text {
+  min-height: 0;
+  padding: 0.1rem 0.4rem;
+  border: none;
+  background: none;
+  color: var(--accent);
+}
+
+button.btn-small {
+  min-height: 0;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* The rule editor opens under the rules column, with compact controls (14 px text, 32 px
+   high, muted labels) and a secondary "add" button: the card's one primary button is confirm. */
+.diner-edit {
+  --control-height: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.25rem 0 0.25rem calc(1rem + 0.4rem + 7rem + 0.75rem);
+  font-size: 0.875rem;
+}
+
+.diner-edit .mini-field {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.diner-edit .mini-field input:not([type="checkbox"]),
+.diner-edit .mini-field select,
+.diner-edit button {
+  font-size: 0.875rem;
+  color: var(--foreground);
+}
+
+.diner-edit button.btn-primary {
+  background: var(--control);
+  border-color: var(--control-border);
+  color: var(--foreground);
+}
+
+.diner-edit button.btn-primary:hover:not(:disabled) {
+  background: var(--control);
+  border-color: var(--accent);
+}
+
+@media (max-width: 40rem) {
+  .diner-edit {
+    padding-left: 0;
+  }
+}
+
+/* "Who is eating?  [−] [N] [+] people in all": the editable total (spec 5.2). */
+.diner-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.diner-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* The total is one compact stepper: a single border around −, the number and +, all one
+   height. The `:not(...)` chain repeats the base input rule's selectors so this outranks it. */
+.stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 1.9rem;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control);
+  overflow: hidden;
+}
+
+.stepper button {
+  min-height: 0;
+  width: 1.9rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.stepper button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--foreground);
+}
+
+.stepper input.stepper-value:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+  width: 2.6rem;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-inline: 1px solid var(--control-border);
+  border-radius: 0;
+  background: transparent;
+  text-align: center;
+  font-weight: 600;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.stepper input.stepper-value::-webkit-outer-spin-button,
+.stepper input.stepper-value::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stepper:focus-within {
+  border-color: var(--accent);
+}
+
+/* `overflow: hidden` clips an outer focus ring, so the focused part draws one inside. */
+.stepper button:focus-visible,
+.stepper input.stepper-value:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.diner-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+
+.diner-diet {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.875rem;
+}
+
+.diner-section {
+  font-size: 0.875rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.diner-others {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.diner-others button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The people page: one line per person in three columns, name | rules | actions. The rows
+   share the list's columns (subgrid), so the action slots line up on every row. */
+.people-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: fit-content(12rem) minmax(0, 1fr) repeat(3, max-content);
+}
+
+.person {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: start;
+  column-gap: 0.75rem;
+  row-gap: 0.4rem;
+  padding: 0.45rem 0.4rem;
   border-bottom: 1px solid var(--border);
 }
 
-.diner:last-child {
+.person:last-child {
   border-bottom: none;
+}
+
+.person:hover {
+  background: color-mix(in srgb, var(--border) 35%, transparent);
+}
+
+/* The name column is as wide as the diner card's, at least. */
+.person-name {
+  grid-column: 1;
+  min-width: 7rem;
+  overflow-wrap: anywhere;
+  line-height: 1.75rem;
+}
+
+.person-name input {
+  width: 100%;
+  --control-height: 1.75rem;
+}
+
+/* Wrapped rules start under the first rule, never under the name or the actions. */
+.person-rules {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.4rem;
+  min-height: 1.75rem;
+}
+
+.person-rules > .hint {
+  line-height: 1.75rem;
+}
+
+.rule-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0 0.15rem 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.875rem;
+  line-height: 1.6rem;
+}
+
+button.rule-chip-remove {
+  min-height: 0;
+  height: 1.3rem;
+  width: 1.3rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+}
+
+button.rule-chip-remove:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* The action slots are grid items of the row; an empty slot keeps its column. */
+.person-actions {
+  display: contents;
+}
+
+.person-actions > button {
+  min-height: 1.75rem;
+  white-space: nowrap;
+}
+
+.person-add {
+  grid-column: 3;
+}
+
+.person-rename,
+.person-actions > .person-slot:nth-child(2) {
+  grid-column: 4;
+}
+
+.person-delete,
+.person-actions > .person-slot:nth-child(3) {
+  grid-column: 5;
+}
+
+/* A text-style danger button (remove, delete) keeps its red, which the later btn-text colour would override. */
+button.btn-text.btn-danger {
+  color: var(--danger);
+}
+
+/* Delete's question and the notes, warnings, and rule editor go under the rules column. */
+.person-actions > .confirm-box,
+.person-note,
+.person-edit {
+  grid-column: 2 / -1;
+}
+
+/* A person's notes (food-like nickname, a refused rule) are one small warning line under
+   the rules, not a boxed notice that outweighs the row. */
+.person .notice.person-note {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.85rem;
+  color: var(--warning-text);
+}
+
+.person .notice.person-note::before {
+  content: "⚠ ";
+}
+
+.person-edit.diner-edit {
+  padding: 0;
+}
+
+@media (max-width: 40rem) {
+  .people-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .person {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .person-name {
+    min-width: 0;
+    max-width: 50%;
+  }
+
+  .person-rules {
+    flex: 1 1 8rem;
+    min-width: 0;
+  }
+
+  .person-actions {
+    display: flex;
+    flex-wrap: wrap;
+    flex-basis: 100%;
+    gap: 0.25rem;
+  }
+
+  .person-actions > button.btn-text:first-child {
+    padding-left: 0;
+  }
+
+  .person-slot {
+    display: none;
+  }
+
+  .person-actions > .confirm-box,
+  .person-note,
+  .person-edit {
+    flex-basis: 100%;
+    min-width: 0;
+  }
 }
 
 /* Search results: chips in a wrapping row, with room below the search box. */
@@ -650,6 +1159,19 @@ button.chip {
   border-radius: 999px;
   font-size: 0.9rem;
   line-height: 1;
+}
+
+/* The chosen result: accent border, text and a light accent fill. */
+button.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--control));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Inside a resolve panel, the small checkbox labels read at the panel's text size. */
+.form-panel .mini-field.inline {
+  font-size: inherit;
 }
 
 /* A heading sitting in a row of actions keeps the actions on the right. */
@@ -1092,8 +1614,8 @@ body:has(.chat) {
   padding: 0.25rem 0;
 }
 
-/* Plan card: what was asked and assumed, then the allergen notice as a quiet footer. */
-.plan-conditions {
+/* Plan card footer: what was asked and assumed, then the allergen notice, under one line. */
+.plan-footer {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1102,15 +1624,68 @@ body:has(.chat) {
   border-top: 1px solid var(--border);
 }
 
+.plan-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .plan-conditions:empty {
   display: none;
 }
 
+/* Plan card: dishes left out for unknown allergens, a neutral box with one row per name. */
+.left-out-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.left-out-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.left-out-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+/* The text grows, so the button sits at the right edge, or drops under it when narrow. */
+.left-out-list li > span:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.left-out-list li > .actions {
+  margin-left: auto;
+}
+
+.left-out-list .left-out-panel {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.left-out-list .left-out-panel:empty {
+  display: none;
+}
+
+.left-out-box > .actions,
+.plan-card .notice > .actions {
+  margin-top: 0.5rem;
+}
+
 .plan-card .allergen-notice {
-  margin-top: 0.4rem;
-  padding: 0.6rem 0 0;
+  margin: 0;
+  padding: 0;
   border: 0;
-  border-top: 1px solid var(--border);
   border-radius: 0;
   background: none;
   font-size: 0.875rem;
@@ -1571,4 +2146,46 @@ button.compact {
   .dish-toggles button:not([aria-expanded="true"]) {
     border-color: var(--control-border);
   }
+}
+
+/* The rule editor's dictionary search: a labelled field of fixed width, so the type, target,
+   search and "add" controls fit on one row of the diner card and the People page. */
+.rule-ingredient {
+  width: 12rem;
+  max-width: 100%;
+}
+
+.rule-ingredient .search-bar input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Its results open as a dropdown under the box instead of growing the field, so the other
+   controls of the row stay on their line. */
+.rule-ingredient .dictionary-search {
+  position: relative;
+}
+
+.rule-ingredient .search-results,
+.rule-ingredient .dictionary-search > p {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 5;
+  width: 18rem;
+  max-width: calc(100vw - 2rem);
+  margin: 0;
+  padding: 0.5rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+}
+
+/* A panel's switch to the other way of resolving (link / create) sits at the left of its
+   action row, as a text link, apart from cancel and confirm on the right. */
+.panel-actions > .panel-switch {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
 }

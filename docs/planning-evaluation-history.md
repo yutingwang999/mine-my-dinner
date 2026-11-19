@@ -45,7 +45,9 @@ Columns: first pass and calls are over the 6 scenarios that expect a plan; cost,
 | 5 (reverted) | 20261115T013928Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0031 | $0.0127 | 0.89 | 3022 | 3.3 s | 4.8 s |
 | 6 | 20261115T040226Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0046 | $0.0146 | 0.79 | 3493 | 3.5 s | 4.9 s |
 | 6 | 20261115T040255Z | yes | 7/7 | 6/6 | 3.00 | 3 | $0.0033 | $0.0147 | 0.90 | 3493 | 3.4 s | 5.5 s |
-| **7** | 20261116T042755Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0042 | $0.0148 | 0.83 | 3493 | 3.2 s | 4.6 s |
+| 7 | 20261116T042755Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0042 | $0.0148 | 0.83 | 3493 | 3.2 s | 4.6 s |
+| 8 (parse_v4) | 20261118T070858Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0032 | $0.0182 | 0.93 | 5166 | 3.4 s | 5.3 s |
+| **8** | 20261118T074847Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0035 | $0.0185 | 0.92 | 5206 | 3.5 s | 5.9 s |
 
 ## Comparison: plan 2a set (18 scored scenarios, 12 expect a plan, plus 1 check-only)
 
@@ -65,9 +67,11 @@ Same columns. "Over 5" names the scenarios that used more than 5 calls.
 | 5 (reverted) | 20261115T014347Z | yes | 18/18 | 12/12 | 3.17 | 5 | $0.0079 | $0.0326 | 0.89 | 3730 | 3.0 s | 6.7 s | — |
 | 6 | 20261115T040333Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0081 | $0.0363 | 0.90 | 3658 | 3.0 s | 5.6 s | — |
 | 6 | 20261115T040434Z | yes | 18/18 | 12/12 | 3.17 | 4 | $0.0081 | $0.0372 | 0.91 | 3602 | 3.0 s | 4.6 s | — |
-| **7** | 20261116T042822Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0086 | $0.0363 | 0.88 | 3554 | 3.0 s | 5.1 s | — |
-| **7** | 20261116T042924Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0081 | $0.0378 | 0.91 | 3792 | 3.2 s | 5.7 s | — |
-| **7** | 20261116T043028Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0079 | $0.0376 | 0.91 | 3661 | 3.2 s | 6.4 s | — |
+| 7 | 20261116T042822Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0086 | $0.0363 | 0.88 | 3554 | 3.0 s | 5.1 s | — |
+| 7 | 20261116T042924Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0081 | $0.0378 | 0.91 | 3792 | 3.2 s | 5.7 s | — |
+| 7 | 20261116T043028Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0079 | $0.0376 | 0.91 | 3661 | 3.2 s | 6.4 s | — |
+| 8 (parse_v4) | 20261118T070934Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0080 | $0.0464 | 0.93 | 5163 | 3.3 s | 6.2 s | — |
+| **8** | 20261118T074917Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0082 | $0.0466 | 0.92 | 5203 | 3.3 s | 6.4 s | — |
 
 Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient_dominates`) passed in every plan 2a run.
 
@@ -78,9 +82,30 @@ Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient
 | Round | Run | Vectors | As expected | First pass | Avg calls | Max calls | Cost (cache-aware) | Cost (uncached) | Cache hit | Largest call (tokens) | Model time avg | Wall p95 | Not as expected |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 6 | 20261115T040549Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0059 | $0.0238 | 0.88 | 3510 | 3.7 s | 6.1 s | — |
-| **7** | 20261116T043132Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0058 | $0.0239 | 0.88 | 3510 | 3.6 s | 5.8 s | — |
-| **7** | 20261116T043213Z | no | 10/10 | 8/8 | 3.88 | 7 | $0.0057 | $0.0268 | 0.92 | 3510 | 4.0 s | 6.7 s | — (relax_split_button 7 calls over two turns, within its limit) |
-| **7** | 20261116T043258Z | no | 9/10 | 7/8 | 4.25 | 7 | $0.0070 | $0.0312 | 0.90 | 5542 | 4.3 s | 9.3 s | eight_dishes_at_least_two_meat_fridge (6 calls, over its limit of 5); three_dishes_at_most_one_vegetable_shopping passed on the second attempt |
+| 7 | 20261116T043132Z | no | 10/10 | 8/8 | 3.50 | 5 | $0.0058 | $0.0239 | 0.88 | 3510 | 3.6 s | 5.8 s | — |
+| 7 | 20261116T043213Z | no | 10/10 | 8/8 | 3.88 | 7 | $0.0057 | $0.0268 | 0.92 | 3510 | 4.0 s | 6.7 s | — (relax_split_button 7 calls over two turns, within its limit) |
+| 7 | 20261116T043258Z | no | 9/10 | 7/8 | 4.25 | 7 | $0.0070 | $0.0312 | 0.90 | 5542 | 4.3 s | 9.3 s | eight_dishes_at_least_two_meat_fridge (6 calls, over its limit of 5); three_dishes_at_most_one_vegetable_shopping passed on the second attempt |
+| 8 (parse_v4) | 20261118T071048Z | no | 10/10 | 7/8 | 3.88 | 5 | $0.0058 | $0.0331 | 0.93 | 5183 | 4.3 s | 7.3 s | — (three_dishes_at_most_one_vegetable_shopping passed on the second attempt: the planner proposed 4 dishes first) |
+| **8** | 20261118T075026Z | no | 10/10 | 7/8 | 3.75 | 5 | $0.0060 | $0.0323 | 0.92 | 5223 | 4.5 s | 7.6 s | — (one scenario passed on the second attempt) |
+
+## Comparison: diners development set (17 scenarios, all expect a plan)
+
+`scenarios_diners.yaml` with `library_diners.yaml`, added in plan 2b Task 11 and written by Claude: the diner card, saved friends and guests, nicknames, ask-first answers, plan again after an allergen confirmation. Tuning against it is allowed in plan 2b Task 12 only, with the user's approval. The two-turn scenarios count both turns. `nickname sent` and `label shown` mismatches: none in any run.
+
+| Round | Run | Prompts | As expected | First pass | Avg calls | Max calls | Cost (cache-aware) | Cost (uncached) | Cache hit | Largest call (tokens) | Model time avg | Wall p95 | Not as expected |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8 | 20261118T065901Z | parse_v4 | 16/17 | 16/17 | 3.35 | 8 | $0.0116 | $0.0563 | 0.89 | 5216 | 4.2 s | 12.7 s | guest_dislike_is_a_warning ("只做一个凉拌菜" gave no dish count, so two people defaulted to two dishes and the fridge stopped it early) |
+| 8 | 20261118T072512Z | parse_v5 | 16/17 | 17/17 | 3.59 | 9 | $0.0125 | $0.0616 | 0.90 | 5245 | 4.6 s | 12.7 s | plan_again_after_confirmation (the re-plan's parse dropped the previous query, so 香煎鸡腿 was not chosen) |
+| **8** | 20261118T074711Z | parse_v5, plan again in code | 17/17 | 17/17 | 3.12 | 4 | $0.0092 | $0.0521 | 0.93 | 5223 | 3.9 s | 5.3 s | — |
+
+## Comparison: held-out sets
+
+The requests were written by the user (2026-11-17); Claude added stock, friends, card answers and expectations. Each set runs once per plan, after the development set and the code are final, and nothing is changed in response within that plan. Both use `library_diners.yaml`.
+
+| Round | Set | Run | Scenarios | As expected | First pass | Avg calls | Max calls | Cost (cache-aware) | Cost (uncached) | Largest call (tokens) | Wall p95 | Not as expected |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **8** | `scenarios_heldout.yaml` (diners) | 20261118T075129Z | 14 (all expect a plan) | 13/14 | 12/14 | 3.43 | 7 | $0.0114 | $0.0500 | 7401 | 11.3 s | diners_five_lunch_guest_fish_allergy: 7 calls against 5 (a call-count warning only; the plan was right) |
+| **8** | `scenarios_heldout_core.yaml` (one diner) | 20261118T075247Z | 22 (20 expect a plan) | 19/22 | 19/20 | 3.05 | 5 | $0.0128 | $0.0607 | 5221 | 6.1 s | core_one_dessert, core_en_dinner_with_fish, core_en_spicy_shopping (see round 8) |
 
 ## Rounds
 
@@ -132,7 +157,7 @@ Bold rounds in the tables hold the results of record for the current code.
 - **Result:** every run as expected: baseline 7/7 twice, plan 2a 18/18 twice, counts 10/10; first pass 6/6, 12/12, 8/8. No scenario over 5 calls; average calls per plan scenario 3.0-3.2 (3.5 in the counts set, where the two button scenarios take 5 calls over two turns). In the counts set, "8个菜，2个荤菜" with 5 makeable vegetable dishes stopped at once with `not_enough_dishes` and `relax_split`, and "8个菜，至少2个荤菜" with the same stock planned 3 meat and 5 vegetable dishes. Both button conversations ended with a plan on the second turn.
 - **Cost:** the uncached cost on the baseline set rose from $0.0128 to $0.0146 and the largest call from 3,022 to 3,493 tokens, because `parse_v3` is a longer prompt (the parse call is the largest). The cache-aware cost stayed between $0.003 and $0.005.
 
-### Round 7 — planner_v4 note rules and model comparison (2026-11-16, `d4b2e30`) — results of record
+### Round 7 — planner_v4 note rules and model comparison (2026-11-16, `d4b2e30`)
 
 - **Changed:** chat page redesign Task 4 (design 5.5 of `2026-11-15-chat-page-redesign-design.md`). `planner_v4` changes only the note rule: one sentence with one practical tip; do not count or list the plan's dishes; name no dish outside the plan and suggest no swaps. Prompts `route_v2+parse_v3+planner_v4`; tools and the `PlanProposal` schema unchanged. The evaluation gained note checks (`notes` per group, `note_flags` per scenario), `--planning-model`, and the `notes_review` export.
 - **Runs:** the baseline set once with the default model (`20261116T042755Z`), then each of the five tool-calling catalog models on the plan 2a and counts sets, three runs each, all without vectors (30 runs, `20261116T042822Z` to `20261116T051816Z`). The `deepseek-flash` runs are the default model's rows in the tables above; the others are in "Model comparison" below. Estimated spend for the 31 runs: $1.07 cache-aware, $1.98 uncached.
@@ -178,6 +203,21 @@ Gemini models showed little or no cache hits (gemini-3.5-flash-lite 0.00 in ever
 - **The automatic checks against the user's judgement.** None of the 25 notes flagged `counts_dishes` was marked y by the user: almost all say "两道菜可同时上桌" or "三道都很快手", a correct reference to the dishes as a group, which the user accepted. The one note the user marked y (deepseek-v4-pro: "最后快炒肉丝和青菜" for a plan with 宫保鸡丁 and no 肉丝 dish) was not flagged: it names a dish loosely, not by its library title. As written, `counts_dishes` measures a wording the user does not object to, so its rate does not rank the models.
 - **Wrong facts seen while reading (not caught by any check):** "一荤一素" for 蒜蓉西兰花 and 清炒小白菜, both vegetable dishes (deepseek-v4-pro, rated 1); "Diner 2 的饮食限制尚未确认" in two Chinese notes (deepseek-flash, default model), which shows the internal diner label to the user.
 - **Decision (user, 2026-11-16):** keep deepseek-flash as the default planning model. It rated second (2.90 of 3), is the fastest, and costs a fraction of the models that rated close to it.
+
+### Round 8 — plan 2b: several diners, parse_v4 and parse_v5, held-out sets (2026-11-18) — results of record
+
+- **Changed:** plan 2b (design `2026-11-17-phase-1-plan-2b-diners-design.md`): the diner card before planning, saved friends' and guests' rules applied by code, nickname replacement with "Diner N" labels, unknown-allergen exclusions with their ingredient names, and `parse_v4` (guests, friend and self rules, diet words, the assistant's questions in the parse input, the trimmed examples). The evaluation runner gained friends, the card answer, ask-first answers, `between_turns`, and the `nickname sent` and `label shown` checks (Task 11). The planner prompt and tools are unchanged (`planner_v4`).
+- **Runs at `8f6babd` (`route_v2+parse_v4+planner_v4`):** development set 16/17 (`20261118T065901Z`); regression baseline 7/7, plan 2a 18/18, counts 10/10 (`070858Z`, `070934Z`, `071048Z`). The regression sets match round 7, so the `parse_v4` trim removed nothing these scenarios need. The miss, `guest_dislike_is_a_warning`: "只做一个凉拌菜" gave no dish count under the cold-dish rule ("put the phrase in query, do not fill a count from it alone"). The user judged the stated number the better reading.
+- **`parse_v5` at `bb74039`:** one rule changed (a stated count of cold dishes is the dish count; a cold dish in passing still gives none). Development set 16/17 (`072512Z`): the cold-dish scenario passed, but `plan_again_after_confirmation` failed because the re-plan's parse dropped the previous query ("香煎鸡腿"), and the turn-1 parse missed "就做一个香煎鸡腿" as one dish.
+- **Plan again in code at `86729e8`:** the fixed "plan again" message now reuses the thread's latest parsed request with no route or parse call (user decision; spec 5.7 updated). Development set 17/17 (`074711Z`, 3.12 calls on average, largest call 5,223 tokens). The turn-1 count miss did not repeat, so it was read as variance and no `parse_v6` was made. Regression on `parse_v5`: baseline 7/7, plan 2a 18/18, counts 10/10 (`074847Z`, `074917Z`, `075026Z`).
+- **Held-out at `86729e8`, once each:** diners 13/14 (`075129Z`), one diner 19/22 (`075247Z`). No nickname was sent and no label shown in either. The misses, recorded as they are:
+  - `diners_five_lunch_guest_fish_allergy` ("5人份的午餐，别太复杂，有一个人对鱼过敏"): the unnamed guest's fish allergy was parsed and applied, and no fish dish was chosen; the planner proposed the wrong dish counts twice (H4) before a valid plan, 7 calls. A call-count warning only.
+  - `core_one_dessert` ("想吃个甜品，推荐一个"): `route_v2` answered "other", so no plan was made. The route prompt describes planning as "deciding what to cook, planning meals or dinners"; a request to recommend one dessert fell outside it.
+  - `core_en_dinner_with_fish` ("dinner, at least 1 fish,"): the plan was right (清蒸鲈鱼), but the note was written in Chinese for an English conversation.
+  - `core_en_spicy_shopping` ("I want to have some spicy food today, shopping allowed"): parsed as shopping with query "spicy", but without recipe vectors an English query cannot match the Chinese library, so the planner chose 葱爆羊肉, not a spicy dish.
+- **Notes:** four notes named a library dish outside their plan (`outside_dish`; round 7 had none): "青椒肉丝" (baseline), "蒜蓉西兰花" (counts), "清蒸鲈鱼" and "孜然羊排" (core held-out). Each names a dish the planner considered but did not choose. `planner_v4` did not change in 2b. To watch; see the carryover.
+- **Cost:** eleven runs, $0.092 cache-aware and $0.48 uncached in total. The approved estimate (about $0.05 cache-aware, at most $0.22 uncached) covered the six planned runs; the five re-runs after `parse_v5` and the plan-again change were each agreed with the user.
+- **Largest call:** now the parse call (about 5,200 tokens, with the parse prompt and the `ParsedRequest` schema; 97% of it cached). The five-diner scenario reached 7,401 in the planner after two retries. Far below the 32,000 budget.
 
 ### Status after round 6
 

@@ -24,7 +24,7 @@ from minemydinner.planning.composition import (
 )
 from minemydinner.planning.context import PlanningContext
 from minemydinner.planning.named import line_uses_clause, recipes_using
-from minemydinner.planning.search import RecipeHit, search_recipes
+from minemydinner.planning.search import ExcludedRecipe, RecipeHit, search_recipes
 
 if TYPE_CHECKING:
     from minemydinner.agent.request import ParsedRequest
@@ -200,8 +200,8 @@ class ShortlistResult:
     """The shortlist plus the notes its search produced, for the plan card."""
 
     entries: dict[str, list[ShortlistEntry]]
-    # Titles of recipes left out because an ingredient's allergens are unknown.
-    left_out_unknown_allergens: list[str] = field(default_factory=list)
+    # Recipes left out because an ingredient's allergens are unknown, with those lines.
+    left_out_unknown_allergens: list[ExcludedRecipe] = field(default_factory=list)
     # True when meaning-based search was unavailable and the query matched text only.
     semantic_paused: bool = False
     # Dish types whose list holds every recipe the fetch returned for that type (including
@@ -276,7 +276,7 @@ def build_shortlist_result(
             complete.add(dish_type)
     return ShortlistResult(
         shortlist,
-        [excluded.title for excluded in result.left_out_unknown_allergens],
+        result.left_out_unknown_allergens,
         result.semantic_paused,
         frozenset(complete),
     )

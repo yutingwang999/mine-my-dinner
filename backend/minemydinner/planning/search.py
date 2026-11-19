@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from minemydinner.extraction.normalize import all_terms, match_ingredient
 from minemydinner.llm.client import AllModelsFailed, LLMClient, MonthlyCapExceeded
 from minemydinner.models import MealPlan, MealPlanItem, Rating, Recipe, RecipeIngredient
+from minemydinner.agent.labels import current_table
 from minemydinner.planning.context import PlanningContext, diner_codes
 from minemydinner.planning.dietary import DietaryCheck, check_recipes
 from minemydinner.planning.named import recipes_using, uses_clause
@@ -79,6 +80,42 @@ def _line_terms(session: Session, recipe_ids: list[int]) -> dict[int, list[str]]
         if row.ingredient is not None:
             terms[row.recipe_id].extend(_fold(term) for term in all_terms(row.ingredient))
     return terms
+
+
+def unknown_allergen_exclusions(
+    session: Session,
+    ctx: PlanningContext,
+    recipe_ids: list[int] | None = None,
+    *,
+    dish_types: Sequence[str] | None = None,
+    check: DietaryCheck | None = None,
+    titles: dict[int, str] | None = None,
+) -> list[ExcludedRecipe]:
+    """The recipes left out because an ingredient line's allergens are unknown, with those
+    lines. `recipe_ids` limits them to those recipes (default: the whole library) and
+    `dish_types` to recipes of those types. `check` and `titles` are reused when the caller
+    already has them. Empty when no diner of the meal has an allergy. A recipe that breaks a
+    hard rule is not listed: it is excluded outright."""
+    if not any(item.rule_type == "allergy" for item in ctx.rules):
+        return []
+    if recipe_ids is None:
+        query = select(Recipe.id).order_by(Recipe.id)
+        if dish_types is not None:
+            query = query.where(Recipe.dish_type.in_(list(dish_types)))
+        recipe_ids = list(session.scalars(query))
+    if not recipe_ids:
+        return []
+    if titles is None or any(i not in titles for i in recipe_ids):
+        rows = session.execute(select(Recipe.id, Recipe.title).where(Recipe.id.in_(recipe_ids)))
+        titles = {row.id: row.title for row in rows}
+    if check is None:
+        check = check_recipes(session, ctx.rules, recipe_ids)
+    hard = {conflict.recipe_id for conflict in check.hard}
+    return [
+        ExcludedRecipe(i, titles[i], check.unknown_allergen_lines[i])
+        for i in recipe_ids
+        if i in titles and i not in hard and check.blocked_by_unknown(i)
+    ]
 
 
 def search_recipes(
@@ -178,11 +215,9 @@ def search_recipes(
 
     check = check_recipes(session, ctx.rules, reached)
     hard = {conflict.recipe_id for conflict in check.hard}
-    left_out = [
-        ExcludedRecipe(i, by_id[i].title, check.unknown_allergen_lines[i])
-        for i in reached
-        if i not in hard and check.blocked_by_unknown(i)
-    ]
+    left_out = unknown_allergen_exclusions(
+        session, ctx, reached, check=check, titles={i: row.title for i, row in by_id.items()}
+    )
     safe = [i for i in reached if i not in hard and not check.blocked_by_unknown(i)]
     facts = _facts(session, ctx, safe, check)
     if makeable_only:
@@ -252,7 +287,7 @@ def _facts(
         for recipe_id, name in rows:
             if name not in expiring[recipe_id]:
                 expiring[recipe_id].append(name)
-    codes = diner_codes(ctx.constraints)
+    codes = diner_codes(ctx.constraints, current_table())
     dislikes: dict[int, list[str]] = {recipe_id: [] for recipe_id in recipe_ids}
     for conflict in check.dislikes:
         if conflict.recipe_id not in dislikes:

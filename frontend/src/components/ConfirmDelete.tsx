@@ -14,6 +14,8 @@ type Props = {
   label?: string;
   question?: string;
   confirmLabel?: string;
+  /** Classes of the first button; the soft danger look by default. */
+  className?: string;
 };
 
 /** A delete button that asks inline first, without a browser dialog. */
@@ -24,6 +26,7 @@ export function ConfirmDelete({
   label,
   question,
   confirmLabel,
+  className = "btn-danger",
 }: Props) {
   const t = useTranslations("common");
   const errorText = useErrorText();
@@ -46,7 +49,7 @@ export function ConfirmDelete({
 
   if (!asking) {
     return (
-      <button type="button" className="btn-danger" onClick={() => setAsking(true)}>
+      <button type="button" className={className} onClick={() => setAsking(true)}>
         {label ?? t("delete")}
       </button>
     );

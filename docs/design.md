@@ -92,7 +92,7 @@ Dig tonight's dinner out of your saved recipes and your fridge.
 | Planning agent (tool calling) | DeepSeek | OpenAI |
 | Embeddings | Gemini | None (retry or queue) |
 
-**Data sent to model providers (all models):** check each provider's data storage and retention terms before use. Recipe and inventory data has low sensitivity, but prompts must not contain secrets or personally identifying information. Allergies and dietary restrictions are health or personal information: code performs the filtering, and before any model call, including a failover call, the unified call layer replaces saved friends' nicknames with codes such as "Diner 1", and it restores the nicknames in model responses before they are shown to the user. Constraints use the same form, such as "Diner 1 does not eat cilantro". Local code cannot recognize temporary guests' names, so anonymity cannot be guaranteed for them, and the UI must state that conversation content may be sent to the model provider.
+**Data sent to model providers (all models):** check each provider's data storage and retention terms before use. Recipe and inventory data has low sensitivity, but prompts must not contain secrets or personally identifying information. Allergies and dietary restrictions are health or personal information: code performs the filtering, and before any model call, including a failover call, the unified call layer replaces saved friends' nicknames with codes such as "Diner 1", and it restores the nicknames in model responses before they are shown to the user (a guest's code becomes the guest's name, and any code left over becomes "another diner", so no code is shown). Constraints use the same form, such as "Diner 1 does not eat cilantro". Local code cannot recognize temporary guests' names, so anonymity cannot be guaranteed for them, and the UI must state that conversation content may be sent to the model provider.
 
 ---
 
@@ -267,8 +267,8 @@ The LangGraph checkpointer and Store create their own tables in the same databas
 **Unknown allergens:** an unrecognized ingredient, or a user-created dictionary entry whose `allergens[]` is null, has unknown allergens. A missing value never counts as "contains no allergens". Seed entries are reviewed by a person and are never null.
 
 - **Selection:** if any diner in this meal has an allergy of any kind, the model cannot select dishes containing such an ingredient, because it cannot be shown to be free of that allergen. The user can still add one manually after confirming (see "Manual plan edits" in 7.5).
-- **Visibility:** planning tells the user how many dishes were left out for this reason, such as "3 dishes were not used because they contain ingredients with unknown allergens", and the user can see which ones.
-- **Resolution:** a model suggests which listed allergens the ingredient may contain, and code discards values outside the list. The user then confirms once which allergens it contains, or that it contains none. A suggestion has no effect until confirmed, and if the user skips this, `allergens[]` stays null. The result is saved to a user-created dictionary entry. Code then links other `recipe_ingredients` rows that have the same `name` and an empty `ingredient_id` to that entry. That dish and other dishes using the ingredient become selectable again unless the confirmed allergens rule them out.
+- **Visibility:** planning tells the user which dishes were left out for this reason and names the ingredient responsible for each, such as "宫保鸡丁：花椒油（过敏原未知）". The list also appears when planning stops early or finds no valid plan, since unknown allergens are often the cause.
+- **Resolution:** a model suggests which listed allergens the ingredient may contain, and code discards values outside the list. The user then confirms once which allergens it contains, or that it contains none. A suggestion has no effect until confirmed, and if the user skips this, `allergens[]` stays null. The result is saved to a user-created dictionary entry. Code then links other `recipe_ingredients` rows that have the same `name` and an empty `ingredient_id` to that entry. That dish and other dishes using the ingredient become selectable again unless the confirmed allergens rule them out. The plan card offers this confirmation (or linking the line to an entry) for each listed ingredient, then "Plan again", which reuses the same request.
 
 **When cookware does not match the dictionary:** import review and manual entry let the user link it to existing cookware, create a dictionary entry with `source` = `user`, or skip it. A new entry records only that the dish needs this cookware, so the review also asks whether the user owns it and, if so, adds it to `cookware_owned`. Skipped cookware is not stored, and H3 does not check it. A dish needing that cookware could then be selected, which is an inconvenience rather than a safety risk, so it is not treated like unknown allergens.
 
@@ -359,9 +359,10 @@ parse_request ─key information missing→ [interrupt to ask, such as "How many
   → planner (LLM) ⇄ tools (may load_skill)
   → validate_plan (code check) ─fails→ return to planner with specific errors (at most N times)
   → present_plan → END
-Next turn, "swap the second dish / make it spicier" → revise_plan (only the current plan + the instruction) → validate_plan → present_plan
-"Xiao Li is coming too / Xiao Wang isn't coming" → update diners → validate_plan → replace only dishes that break the rules → present_plan
+Next turn, "swap the second dish / make it spicier" → revise_plan (only the current plan + the instruction) → validate_plan → present_plan *(T1.5; until then the instruction is planned as a new request.)*
+"Xiao Li is coming too / Xiao Wang isn't coming" → update diners → validate_plan → replace only dishes that break the rules → present_plan *(T1.5; until then a change in who eats shows the diner card and the meal is planned as a new request.)*
 "This one is good" → save the plan → if ingredients are missing: make_shopping_list → [interrupt to confirm] → save the list
+"Plan again" (after resolving unknown allergens, 5.5) → reuse the previous parsed request (no route or parse call) → load_context → planner → … → present_plan
 ```
 
 **Subgraph B: recipe import**
@@ -454,7 +455,7 @@ Import confirmation shows the duration and its source. A changed duration become
 | H4 | Allowed. The edited plan is what counts |
 | H5 | Not allowed |
 
-**Edit log:** `meal_plans.edits` records each manual edit: the action, `recipe_id`, time, and any rule overridden, identified by `diner_id` and allergen or ingredient, never by name. A dish with a confirmed H2 override is not sent back for replanning or silently replaced by later validation, and the override covers only that diner and rule, so a new conflict asks again. The log is used to review overrides and to analyze how often users change model plans. It does not change preferences by itself; any preference inferred from it goes through the usual user confirmation.
+**Edit log:** `meal_plans.edits` records each manual edit: the action, `recipe_id`, time, and any rule overridden, identified by `diner_id` and allergen or ingredient, never by name. A dish with a confirmed H2 override is not sent back for replanning or silently replaced by later validation. For a rule conflict, the override covers only that diner and rule, so a new conflict, including one from a diner added later, asks again. A confirmation for an ingredient of unknown allergens covers the dish for the whole plan: it is not asked again for anyone, including diners who join later, whose known allergens H2 still checks. The log is used to review overrides and to analyze how often users change model plans. It does not change preferences by itself; any preference inferred from it goes through the usual user confirmation.
 
 **Planning metrics:** computed only on plans as the model produced them, before manual edits:
 
@@ -474,14 +475,16 @@ Import confirmation shows the duration and its source. A changed duration become
 
 **Selecting diners:**
 
-- When one person is eating, plan directly without asking and without mentioning friends.
+- When one person is eating, plan directly without asking and without mentioning friends. The one exception: when the user states a new rule about themselves, or a diet word such as "我吃素", the card appears with only the user's row, so the proposed rule or the diet-word hint is seen.
 - When several people are eating, use an interrupt to show a selection card. The card lists each person's rules, which the user can edit on the spot.
 - The user is selected by default; saved friends named in the conversation are preselected; other friends are not selected.
-- The card lists all saved friends, sorted by the most recent saved plan that included them.
-- Saved friends' names are matched by local code against nicknames and are not sent to a model for recognition. Code writes the constraints after the user confirms the final list.
-- When fewer people are selected than the total headcount, ask whether the rest have dietary limits, with the options "No / Yes, I'll enter them / Not sure". "Not sure" allows planning to continue with an S8 warning.
+- The card lists all saved friends, sorted by the most recent saved plan that included them (by name until saved plans exist).
+- Saved friends' names are matched by local code against nicknames and are not sent to a model for recognition. An occurrence inside a longer food name or recipe title ("鱼" in "鱼香肉丝") is not a match, and the people page warns when a nickname looks like a food word. Code writes the constraints after the user confirms the final list.
+- The card shows the total number of people, prefilled from the request and editable; it never falls below the people selected and added. When fewer people are selected than the total, ask whether the rest have dietary limits, with the options "No / Yes, I'll enter them / Not sure". "Not sure" allows planning to continue with an S8 warning.
+- One card holds all of it: the selection, the people not yet matched, and the save choices, so the user is not asked several times in a row.
+- The confirmed diners carry over in the conversation. A later request reuses them without the card until it states a change in who eats or how many (a new friend or guest, a new rule, or a headcount different from the one stated when the card was confirmed, "only me" included). When confirmed diners include anyone besides the user and the request's reading says nobody else eats (no one else mentioned, no guest, no friend named, no headcount above 1), that is also a change, even without a stated number (decided by the user, 2026-11-19). Any such change shows the card again, and confirming it replaces the diners; they are never cleared silently. "Plan again" reuses them without the card. A conversation whose confirmed diners include a friend deleted since then shows the card again, "plan again" included.
 
-**Saving friend information:** when the user mentions a new friend's rule, ask once, with the options "Use for this meal only (default) / Save to friend profiles", and remind the user to get the friend's agreement before saving. After "Use for this meal only", do not ask again in this conversation. The friend profile page supports viewing, editing, and deleting, and deleting a person also deletes their rules.
+**Saving friend information:** when the user mentions a new friend's rule, ask once, with the options "Use for this meal only (default) / Save to friend profiles", and remind the user to get the friend's agreement before saving. After "Use for this meal only", do not ask again in this conversation. Rules the user states in the chat, for anyone including the user, are proposed on the card and apply to this meal only by default (they stay with the confirmed diners for the rest of the conversation); saving to the profile is a choice per person. Diet words ("吃素", "vegetarian") are not accepted as rules: the card and the people page show a hint to add the ingredients the person does not eat one by one. The friend profile page supports viewing, editing, and deleting, and deleting a person also deletes their rules.
 
 **Deleting a friend:** in one transaction, code deletes the person and their rules, and removes their `diner_id` and related allergen and rule details from `meal_plans.constraints` and `meal_plans.edits`.
 
@@ -489,7 +492,7 @@ Import confirmation shows the duration and its source. A changed duration become
 - The delete dialog says that related conversations may still contain this friend's information and links to conversation deletion. Conversations are not cleaned automatically, because their content cannot be scrubbed reliably.
 - If an open conversation's plan includes a deleted diner, code asks the user to confirm again who is eating this meal. It must not silently drop the person, because their limits would then stop applying without notice.
 
-**Changes mid-conversation:** when someone is added, rerun `validate_plan` and replace only the dishes that break the rules. When someone is removed, the plan does not need to change unless the user asks to replan.
+**Changes mid-conversation:** when someone is added, rerun `validate_plan` and replace only the dishes that break the rules. When someone is removed, the plan does not need to change unless the user asks to replan. *(T1.5; until then a change in who eats shows the diner card and the meal is planned as a new request.)*
 
 **Conversation records:** temporary guests' information does not enter friend profiles, but what the user said stays in the checkpointer's conversation records. Saved friends' nicknames are replaced with codes before model calls, but anonymity cannot be guaranteed for temporary guests' names. The product must therefore provide conversation deletion and explain in the UI how conversations are kept and that their content may be sent to the model provider.
 

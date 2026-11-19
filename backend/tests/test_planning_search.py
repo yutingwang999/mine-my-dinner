@@ -4,7 +4,12 @@ import pytest
 
 from minemydinner.dictionary.service import set_personal_aliases
 from minemydinner.models import MealPlan, MealPlanItem, Rating
-from minemydinner.planning.search import recipe_detail, search_recipes
+from minemydinner.planning.search import (
+    ExcludedRecipe,
+    recipe_detail,
+    search_recipes,
+    unknown_allergen_exclusions,
+)
 from tests.planningfakes import (
     FakeEmbedClient,
     L,
@@ -371,3 +376,39 @@ def test_makeable_only_drops_recipes_with_missing_lines(session, seeded):
     assert ids(search_recipes(session, client, ctx, query="菜")) == [near.id, far.id]
     only = search_recipes(session, client, ctx, query="菜", makeable_only=True)
     assert ids(only) == [far.id]
+
+
+def test_dislike_facts_use_the_conversation_labels(session, seeded, fake_embed):
+    from minemydinner.agent.labels import LabelContext, LabelTable, labels_scope
+    from minemydinner.models import Diner
+
+    recipe = make_recipe(session, "番茄炒蛋", lines=[L("鸡蛋"), L("番茄")])
+    me = self_diner(session)
+    friend = Diner(display_name="小王", is_self=False)
+    session.add(friend)
+    session.flush()
+    rule(session, friend.id, "dislike", ingredient="番茄")
+    table = LabelTable.from_state(None, me.id)
+    table.label_for("diner:999999")
+    table.label_for(f"diner:{friend.id}")
+    with labels_scope(LabelContext(table, [], frozenset(), "zh")):
+        result = search_recipes(session, fake_embed, ctx_for(session, me.id, friend.id))
+    hit = next(h for h in result.hits if h.id == recipe.id)
+    assert hit.dislikes == ["Diner 3: 番茄"]
+
+
+def test_unknown_allergen_exclusions_lines(session, seeded):
+    odd = make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False), L("小白菜")])
+    make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    me = self_diner(session).id
+    ctx = ctx_for(session, me)
+    assert unknown_allergen_exclusions(session, ctx) == []
+    rule(session, me, "allergy", allergen="egg")
+    ctx = ctx_for(session, me)
+    assert unknown_allergen_exclusions(session, ctx) == [
+        ExcludedRecipe(odd.id, "神秘菜", ["某种酱"])
+    ]
+    assert unknown_allergen_exclusions(session, ctx, [odd.id]) == [
+        ExcludedRecipe(odd.id, "神秘菜", ["某种酱"])
+    ]
+    assert unknown_allergen_exclusions(session, ctx, []) == []
