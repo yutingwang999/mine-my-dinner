@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from minemydinner.agent.edits import (
@@ -31,10 +31,10 @@ from minemydinner.agent.edits import (
 from minemydinner.agent.labels import LabelTable, labels_scope, load_label_context
 from minemydinner.agent.plan_card import meal_constraints
 from minemydinner.api.chat import RuntimeDep, _snapshot, edit_refusal
-from minemydinner.api.deps import ApiError, get_llm_client
+from minemydinner.api.deps import ApiError
+from minemydinner.api.recipe_match import recipe_text_match, title_contains
 from minemydinner.db import get_session
-from minemydinner.llm.client import LLMClient
-from minemydinner.models import Diner
+from minemydinner.models import Diner, Recipe
 from minemydinner.planning.context import load_planning_context
 from minemydinner.planning.dietary import check_recipes
 from minemydinner.planning.search import search_recipes
@@ -42,7 +42,6 @@ from minemydinner.planning.search import search_recipes
 router = APIRouter(prefix="/api/chat")
 
 SessionDep = Annotated[Session, Depends(get_session)]
-ClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 Locale = Literal["zh", "en"]
 
 # The most results the card's search shows.
@@ -94,9 +93,8 @@ def _editable(runtime, thread_id: str) -> tuple[dict, Any, dict]:
 
 @contextmanager
 def _thread_labels(session: Session, values: dict, locale: str) -> Iterator[None]:
-    """The thread's label table as the current label context (plan 2b), so a saved
-    nickname in model-bound text (the search query's embedding) is replaced by its label.
-    The table is not saved back: a search changes no state."""
+    """The thread's label table as the current label context (plan 2b), as an edit's card
+    text is built. The table is not saved back."""
     self_id = session.scalar(select(Diner.id).where(Diner.is_self))
     table = LabelTable.from_state(values.get("diner_labels"), self_id)
     with labels_scope(load_label_context(session, table, locale)):
@@ -125,17 +123,29 @@ def _edit(
 
 @router.post("/threads/{thread_id}/plan/search")
 def search(
-    thread_id: str, body: SearchBody, runtime: RuntimeDep, session: SessionDep, llm: ClientDep
+    thread_id: str, body: SearchBody, runtime: RuntimeDep, session: SessionDep
 ) -> dict[str, Any]:
+    """A plain text match, as on the library page (no model call): only recipes whose title,
+    tags, lines, or ingredient names contain the query. Title matches first, then by title."""
     _, state, plan = _editable(runtime, thread_id)
     values = state.values
     in_plan = {r["id"] for r in plan.get("recipes") or []}
-    with _thread_labels(session, values, body.locale):
-        ctx = load_planning_context(session, meal_constraints(values))
-        result = search_recipes(
-            session, llm, ctx, query=body.query, limit=SEARCH_LIMIT, show_blocked=True
+    matched = list(
+        session.scalars(
+            select(Recipe.id)
+            .where(recipe_text_match(body.query))
+            .order_by(case((title_contains(body.query), 0), else_=1), Recipe.title, Recipe.id)
+            .limit(SEARCH_LIMIT)
         )
-    hits = result.hits
+    )
+    if not matched:
+        return {"hits": []}
+    ctx = load_planning_context(session, meal_constraints(values))
+    found = search_recipes(
+        session, None, ctx, limit=None, show_blocked=True, only_ids=matched
+    ).hits
+    order = {recipe_id: index for index, recipe_id in enumerate(matched)}
+    hits = sorted(found, key=lambda hit: order[hit.id])
     dislikes = check_recipes(session, ctx.rules, [hit.id for hit in hits]).dislikes
     markers = search_markers(session, values, hits, dislikes, body.locale)
     return {
@@ -154,7 +164,6 @@ def search(
             }
             for hit in hits
         ],
-        "semantic_paused": result.semantic_paused,
     }
 
 

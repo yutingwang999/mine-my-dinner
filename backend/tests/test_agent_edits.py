@@ -251,6 +251,32 @@ def test_add_confirmed_records_override_and_log(env):
     assert "小王" not in json.dumps(plan["edit"]["log"], ensure_ascii=False)
 
 
+def test_confirmed_override_is_shown_as_kept(env):
+    outcome, _, after = _confirmed_meat(env)
+    [kept] = outcome.plan["edit"]["kept"]
+    assert kept["recipe_id"] == env.meat.id
+    assert kept["diner_name"] == "小王" and kept["is_self"] is False
+    assert kept["kind"] == "ingredient"
+    assert kept["ingredient_name"] == "五花肉"
+    assert kept["rule_type"] == "dietary restriction"
+    assert "Diner" not in json.dumps(outcome.plan["edit"], ensure_ascii=False)
+    # A later edit keeps showing it; removing the dish drops it with its override.
+    outcome, _, after = run(env, after, Remove(recipe_id=env.veg.id))
+    assert [k["recipe_id"] for k in outcome.plan["edit"]["kept"]] == [env.meat.id]
+    outcome, _, _ = run(env, after, Remove(recipe_id=env.meat.id))
+    assert outcome.plan["edit"]["kept"] == []
+
+
+def test_unknown_allergen_override_is_shown_as_kept(env):
+    rule(env.session, env.wang.id, "allergy", allergen="peanut")
+    odd = make_recipe(env.session, "神秘菜", lines=[L("某种酱", linked=False)])
+    values = model_state(env, [env.veg.id, env.egg.id])
+    asked, _, _ = run(env, values, Add(recipe_id=odd.id, confirm=[]))
+    outcome, _, _ = run(env, values, Add(recipe_id=odd.id, confirm=asked.needs_confirmation))
+    [kept] = outcome.plan["edit"]["kept"]
+    assert kept["kind"] == "unknown_allergens" and kept["lines"] == ["某种酱"]
+
+
 def test_forged_confirmation_creates_no_override(env):
     values = model_state(env, [env.veg.id, env.egg.id])
     forged = Conflict(

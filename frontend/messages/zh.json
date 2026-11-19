@@ -582,7 +582,8 @@
       "leftOutNothingLinked": "没有找到这个名称下未关联的食材行，这道菜仍被排除。请到词典页面查看。",
       "leftOutCreateInstead": "找不到？新建一个条目",
       "leftOutLinkInstead": "改为关联到已有条目",
-      "replan": "重新规划"
+      "replan": "重新规划",
+      "dinersKept": "（{count} 道菜已确认保留）"
     },
     "warning": {
       "S1": "{name}：{parts}，共需 {needed} {unit}，库存 {have} {unit}。",
@@ -619,7 +620,7 @@
       "searching": "正在搜索…",
       "closeSearch": "收起",
       "results": "搜索结果",
-      "noResults": "没有找到菜。",
+      "noResults": "没有找到包含“{query}”的菜",
       "inPlan": "已在方案中",
       "add": "加入",
       "time": "{minutes} 分钟",
@@ -631,7 +632,6 @@
       "noteForOriginal": "以上说明针对原方案",
       "unresolved": "方案里还有新出现的冲突：请逐道确认保留或删除。",
       "keep": "确认保留",
-      "remove": "删除",
       "self": "你",
       "guest": "一位客人",
       "rule": "{type, select, allergy {过敏} dislike {不喜欢} other {忌口}} {target}",
@@ -648,7 +648,10 @@
       "countNote": "和你的要求不同：{list}",
       "countNoteSeparator": "；",
       "countNoteItem": "要求 {bound, select, at_least {至少 } at_most {最多 } other {}}{stated} 道{field, select, dishes {菜} soups {汤} meat_dishes {荤菜} vegetable_dishes {素菜} staples {主食} desserts {甜点} other {小吃}}，现在 {now} 道",
-      "deletedRecipes": "{titles} 已不在菜谱库中，已从方案中去掉。"
+      "deletedRecipes": "{titles} 已不在菜谱库中，已从方案中去掉。",
+      "kept": "已确认保留：{who} {rule}",
+      "keptUnknown": "已确认保留：{lines} 过敏原未知",
+      "showMore": "显示更多"
     }
   }
 }

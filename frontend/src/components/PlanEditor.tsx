@@ -47,6 +47,11 @@ export function useConflictText() {
         : t("line", { who: who(conflict), rule: rule(conflict, conflict.rule_type, target(conflict)) }),
     dislike: (dislike: SearchDislike) =>
       t("line", { who: who(dislike), rule: rule(dislike, "dislike", dislike.line) }),
+    /** A conflict the user confirmed: "已确认保留：小王 忌口 牛肉". */
+    kept: (conflict: Conflict) =>
+      conflict.kind === "unknown_allergens"
+        ? t("keptUnknown", { lines: lines(conflict) })
+        : t("kept", { who: who(conflict), rule: rule(conflict, conflict.rule_type, target(conflict)) }),
     /** Why a dish already in the plan is marked red: what changed since planning. */
     reason: (conflict: Conflict) =>
       conflict.kind === "unknown_allergens"
@@ -201,6 +206,9 @@ export function ConfirmConflicts({
   );
 }
 
+/** How many search results show before "Show more". */
+const FIRST_RESULTS = 5;
+
 /** "+ Add a dish": a search of the library inside the card, each result with its markers. */
 export function AddDish({
   threadId,
@@ -222,12 +230,28 @@ export function AddDish({
   const text = useConflictText();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState<SearchResult | null>(null);
+  // The result with the text it was searched for, which the empty message names.
+  const [result, setResult] = useState<(SearchResult & { query: string }) | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // The first results only, so the card stays short; "Show more" reveals the rest.
+  const [showAll, setShowAll] = useState(false);
+  const input = useRef<HTMLInputElement | null>(null);
+  const row = useRef<HTMLDivElement | null>(null);
+  // Closing puts focus back on "+ Add a dish", which takes the search's place again.
+  const refocus = useRef(false);
+  // Typing goes to the search box, not the chat composer, as soon as the search opens.
+  useEffect(() => {
+    if (open) input.current?.focus();
+    else if (refocus.current) {
+      refocus.current = false;
+      row.current?.querySelector<HTMLButtonElement>(".plan-add-open")?.focus();
+    }
+  }, [open]);
   const busy = disabled || edit.saving;
 
   function close() {
+    refocus.current = true;
     setOpen(false);
     setResult(null);
     setQuery("");
@@ -242,7 +266,8 @@ export function AddDish({
     setSearching(true);
     setError(null);
     try {
-      setResult(await searchPlan(threadId, q, locale));
+      setResult({ ...(await searchPlan(threadId, q, locale)), query: q });
+      setShowAll(false);
     } catch (caught) {
       setError(caught);
       if (caught instanceof ApiError && caught.code === "thread_busy") edit.refused();
@@ -257,21 +282,23 @@ export function AddDish({
   };
 
   return (
-    <div className="plan-add">
-      <button
-        type="button"
-        ref={buttonRef}
-        className="btn-text"
-        aria-expanded={open}
-        disabled={busy}
-        onClick={() => (open ? close() : setOpen(true))}
-      >
-        {t("addDish")}
-      </button>
+    // The last row of the dish list: "+ Add a dish", which turns into the search in place.
+    <div className="plan-add" ref={row}>
+      {!open && (
+        <button type="button" ref={buttonRef} className="plan-add-open" disabled={busy} onClick={() => setOpen(true)}>
+          {t("addDish")}
+        </button>
+      )}
       {open && (
-        <div className="plan-search">
+        <div
+          className="plan-search"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !event.nativeEvent.isComposing) close();
+          }}
+        >
           <form role="search" className="plan-search-form" onSubmit={search}>
             <input
+              ref={input}
               type="search"
               aria-label={t("searchLabel")}
               placeholder={t("searchLabel")}
@@ -279,11 +306,11 @@ export function AddDish({
               maxLength={200}
               onChange={(event) => setQuery(event.target.value)}
             />
-            <button type="submit" disabled={busy || searching || !query.trim()}>
+            <button type="submit" disabled={busy || searching}>
               {t("search")}
             </button>
-            <button type="button" className="btn-text" onClick={close}>
-              {t("closeSearch")}
+            <button type="button" className="plan-search-close" aria-label={t("closeSearch")} onClick={close}>
+              <span aria-hidden="true">×</span>
             </button>
           </form>
           {searching && <p className="hint">{t("searching")}</p>}
@@ -292,11 +319,10 @@ export function AddDish({
               {errorText(error)}
             </p>
           )}
-          {result !== null && result.semantic_paused && <p className="hint">{tPlan("semanticPaused")}</p>}
-          {result !== null && result.hits.length === 0 && <p className="hint">{t("noResults")}</p>}
+          {result !== null && result.hits.length === 0 && <p className="hint">{t("noResults", { query: result.query })}</p>}
           {result !== null && result.hits.length > 0 && (
             <ul aria-label={t("results")} className="plan-search-results">
-              {result.hits.map((hit) => (
+              {(showAll ? result.hits : result.hits.slice(0, FIRST_RESULTS)).map((hit) => (
                 <li key={hit.id} className="plan-search-hit">
                   <div className="plan-search-main">
                     <strong>{hit.title}</strong>
@@ -348,6 +374,11 @@ export function AddDish({
                 </li>
               ))}
             </ul>
+          )}
+          {result !== null && !showAll && result.hits.length > FIRST_RESULTS && (
+            <button type="button" className="btn-text" onClick={() => setShowAll(true)}>
+              {t("showMore")}
+            </button>
           )}
         </div>
       )}

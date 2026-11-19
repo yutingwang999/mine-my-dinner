@@ -196,6 +196,9 @@ function DinersLine({ plan }: { plan: ChatPlan }) {
   if (diners.length === 0) text = t("dinersOthersOnly", { count: others });
   else if (others > 0) text = t("dinersLineOthers", { names, count: others });
   else text = t("dinersLine", { names });
+  // Dishes kept against someone's rule: the line no longer says the plan follows every rule.
+  const kept = new Set((plan.edit?.kept ?? []).map((conflict) => conflict.recipe_id)).size;
+  if (kept > 0) text += t("dinersKept", { count: kept });
   return <p className="hint">{text}</p>;
 }
 
@@ -335,7 +338,8 @@ function EditNotes({ plan, showQuiet }: { plan: ChatPlan; showQuiet: boolean }) 
   );
 }
 
-/** Why a dish already in the plan is red (a conflict since planning), with keep and remove. */
+/** Why a dish already in the plan is red (a conflict since planning), with keep; removing
+ * goes through the dish's named × button. */
 function DishConflicts({
   recipeId,
   conflicts,
@@ -360,9 +364,6 @@ function DishConflicts({
         <div className="actions">
           <button type="button" disabled={disabled} onClick={() => void edit.keep(recipeId, conflicts)}>
             {t("keep")}
-          </button>
-          <button type="button" disabled={disabled} onClick={() => void edit.remove(recipeId)}>
-            {t("remove")}
           </button>
         </div>
       )}
@@ -403,6 +404,8 @@ export function PlanCard({
   const controls = editable && threadId !== null && onEdited !== undefined;
   const editDisabled = busy || edit.saving;
   const conflicts = plan.edit?.conflicts ?? [];
+  const kept = plan.edit?.kept ?? [];
+  const conflictText = useConflictText();
   // After a dish's own remove button disappears with it, focus goes to "+ Add a dish" once
   // the controls are enabled again.
   const addRef = useRef<HTMLButtonElement | null>(null);
@@ -462,6 +465,19 @@ export function PlanCard({
   const showInfo = warnings.length > 0 || plan.servings_notes.length > 0 || plan.semantic_paused;
   // The card is never empty: with no dishes and nothing explaining why, say so.
   const showNoDishes = plan.recipes.length === 0 && redBoxes.length === 0;
+  // "+ Add a dish" is the last row of the dish list; with no dishes it follows the reasons,
+  // so a reply without a plan explains first, then offers building one.
+  const addRow = controls ? (
+    <>
+      <AddDish threadId={threadId as string} edit={edit} disabled={busy} buttonRef={addRef} />
+      {edit.error !== null && (
+        <p role="alert" className="notice notice-warning">
+          {errorText(edit.error)}
+        </p>
+      )}
+    </>
+  ) : null;
+  const hasDishes = plan.recipes.length > 0;
 
   return (
     <section className="card plan-card">
@@ -480,6 +496,7 @@ export function PlanCard({
             const missing = plan.missing[String(recipe.id)] ?? [];
             const cookware = plan.missing_cookware[String(recipe.id)] ?? [];
             const dishConflicts = conflicts.filter((conflict) => conflict.recipe_id === recipe.id);
+            const dishKept = kept.filter((conflict) => conflict.recipe_id === recipe.id);
             return (
               <li
                 key={recipe.id}
@@ -514,6 +531,11 @@ export function PlanCard({
                   </p>
                   {missing.length > 0 && <p>{t("missingIngredients", { list: missing.join(", ") })}</p>}
                   {cookware.length > 0 && <p>{t("missingCookware", { list: cookware.join(", ") })}</p>}
+                  {dishKept.map((conflict, index) => (
+                    <p key={`kept-${index}`} className="hint">
+                      {conflictText.kept(conflict)}
+                    </p>
+                  ))}
                   {dishConflicts.length > 0 && (
                     <DishConflicts
                       recipeId={recipe.id}
@@ -529,13 +551,8 @@ export function PlanCard({
           })}
         </ul>
       )}
+      {hasDishes && addRow}
       {showNoDishes && <p className="hint">{t("noDishes")}</p>}
-      {controls && <AddDish threadId={threadId as string} edit={edit} disabled={busy} buttonRef={addRef} />}
-      {controls && edit.error !== null && (
-        <p role="alert" className="notice notice-warning">
-          {errorText(edit.error)}
-        </p>
-      )}
       {conflicts.length > 0 && <p className="notice notice-warning">{tEdit("unresolved")}</p>}
       <EditNotes plan={plan} showQuiet={plan.edited === true && controls} />
       {reasonTexts.length > 0 && (
@@ -561,30 +578,34 @@ export function PlanCard({
         </div>
       )}
       {lastRed === undefined && actionsRow}
-      {showInfo && (
-        <div className="notice notice-info">
-          {/* Warnings, servings notes and the search pause: one list, one style. */}
-          <h3>{t("warnings")}</h3>
-          <ul>
-            {warnings.map((text, index) => (
-              <li key={`warning-${index}`}>{text}</li>
-            ))}
-            {plan.servings_notes.map((note) => (
-              <li key={`servings-${note.recipe_id}`}>
-                {t("servingsNote", {
-                  title: titles.get(note.recipe_id) ?? "",
-                  servings: note.servings,
-                  headcount: note.headcount,
-                  // More people than the recipe serves: scale up; fewer: scale down.
-                  direction: note.headcount > note.servings ? "up" : "down",
-                })}
-              </li>
-            ))}
-            {plan.semantic_paused && <li>{t("semanticPaused")}</li>}
-          </ul>
-        </div>
-      )}
-      <LeftOutDishes plan={plan} onReplan={onReplan} replanDisabled={busy || !actionable} />
+      {!hasDishes && addRow}
+      {/* Warnings, servings notes, the search pause, then the left-out dishes: one light
+          block, its parts divided by a rule; empty when there is nothing to say. */}
+      <div className="plan-notes">
+        {showInfo && (
+          <div className="plan-info">
+            <h3>{t("warnings")}</h3>
+            <ul>
+              {warnings.map((text, index) => (
+                <li key={`warning-${index}`}>{text}</li>
+              ))}
+              {plan.servings_notes.map((note) => (
+                <li key={`servings-${note.recipe_id}`}>
+                  {t("servingsNote", {
+                    title: titles.get(note.recipe_id) ?? "",
+                    servings: note.servings,
+                    headcount: note.headcount,
+                    // More people than the recipe serves: scale up; fewer: scale down.
+                    direction: note.headcount > note.servings ? "up" : "down",
+                  })}
+                </li>
+              ))}
+              {plan.semantic_paused && <li>{t("semanticPaused")}</li>}
+            </ul>
+          </div>
+        )}
+        <LeftOutDishes plan={plan} onReplan={onReplan} replanDisabled={busy || !actionable} />
+      </div>
       {/* What was asked and assumed, then the allergen notice: one quiet footer. */}
       <footer className="plan-footer">
         <div className="plan-conditions">

@@ -15,7 +15,7 @@ from minemydinner.api.chat import ChatRuntime, get_chat_runtime
 from minemydinner.api.deps import get_llm_client
 from minemydinner.llm.client import AllModelsFailed
 from minemydinner.main import app
-from minemydinner.models import AppPreference, Diner, PlanningRun
+from minemydinner.models import AppPreference, Diner, PlanningRun, Recipe
 from tests.agentfakes import FakeEmbeddings, ScriptedChatModel, final_proposal, make_llm_client
 from tests.agentfakes import tool_call
 from tests.planningfakes import L, make_recipe, rollback_session_factory, rule, self_diner, stock
@@ -350,14 +350,58 @@ def test_search_marks_in_plan_and_conflicts(client, env):
     assert asked == pork["conflicts"]
 
 
-def test_search_query_nickname_is_replaced_before_embedding(client, env):
+def mentions(session, recipe_id: int, query: str) -> bool:
+    """Whether the recipe's title, tags, line names, or linked entry names contain query."""
+    recipe = session.get(Recipe, recipe_id)
+    texts = [recipe.title, *recipe.tags]
+    for line in recipe.ingredients:
+        texts.append(line.name)
+        entry = line.ingredient
+        if entry is not None:
+            texts += [entry.name_zh or "", entry.name_en or "", *entry.aliases_zh]
+            texts += [*entry.aliases_en, *entry.user_aliases_zh, *entry.user_aliases_en]
+    return any(query.lower() in text.lower() for text in texts)
+
+
+def test_search_is_a_text_match(client, env):
     tid = planned_thread(client, env)
+    stew = make_recipe(env.session, "牛腩煲", "meat dish", [L("萝卜块", linked=False)])
+    bone = make_recipe(env.session, "骨汤", "soup", [L("牛骨XQ", linked=False)])
+    late = make_recipe(env.session, "凉拌菜", "vegetable dish", [L("黄瓜条", linked=False)])
+    late.tags = ["夜宵XQ"]
+    env.session.flush()
     env.embeddings.embedded.clear()
-    r = edit(client, tid, "search", query="小王爱吃的白菜")
+    hits = edit(client, tid, "search", query="牛").json()["hits"]
+    assert 0 < len(hits) <= 10
+    # Only dishes that contain the text; nothing ranked in by meaning.
+    assert all(mentions(env.session, h["id"], "牛") for h in hits)
+    assert env.egg.id not in [h["id"] for h in hits]
+    # Title matches come first.
+    in_title = ["牛" in h["title"] for h in hits]
+    assert in_title == sorted(in_title, reverse=True)
+    assert stew.id in [h["id"] for h in hits] or all(in_title)
+    # A line name and a tag match too.
+    for query, recipe in (("牛骨XQ", bone), ("夜宵XQ", late)):
+        found = edit(client, tid, "search", query=query).json()["hits"]
+        assert [h["id"] for h in found] == [recipe.id]
+    # No embedding call: the card search never ranks by meaning.
+    assert env.embeddings.embedded == []
+
+
+def test_search_matches_an_ingredient_alias(client, env):
+    tid = planned_thread(client, env)
+    by_zh(env.session, "五花肉").user_aliases_zh = ["猪五花XQ"]
+    env.session.flush()
+    hits = edit(client, tid, "search", query="猪五花XQ").json()["hits"]
+    assert [h["id"] for h in hits] == [env.pork.id]
+    assert hits[0]["missing"] == ["五花肉"]
+
+
+def test_search_with_no_match(client, env):
+    tid = planned_thread(client, env)
+    r = edit(client, tid, "search", query="没有这道菜XQ")
     assert r.status_code == 200, r.text
-    [sent] = env.embeddings.embedded
-    assert "小王" not in sent
-    assert LABEL.search(sent)
+    assert r.json() == {"hits": []}
 
 
 def test_no_label_in_responses(client, env):

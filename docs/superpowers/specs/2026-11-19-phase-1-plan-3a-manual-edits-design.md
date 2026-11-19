@@ -60,19 +60,22 @@ How overrides behave does not depend on the choice: they live in the state and e
 方案                                     （已手动修改） [恢复模型方案]
 番茄炒蛋        素菜 · 10 分钟        [查看做法][原文] [×]
 清炒小白菜      素菜 · 8 分钟         [查看做法][原文] [×]
-                                         [+ 加一道菜]
-  ┌ 搜索菜名或食材：[小白菜        ] ─────────────────┐
+┌╌ + 加一道菜 ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐   (the list's last row)
+  ┌ [小白菜                          ] [搜索] × ───┐   (opened in place)
   │ 清炒小白菜   素菜 · 缺：小白菜、蒜        已在方案中 │
   │ 小白菜豆腐汤 汤 · 缺：小白菜  ⚠ 小王：忌口 豆腐 [加入] │
   └──────────────────────────────────────────────┘
-⚠ 需要注意 …（recomputed by code after each edit）
+需要注意 …（recomputed by code after each edit）
+────────── one light block with the left-out dishes
 ```
 
 - Each dish has a remove button (×). Removing is always allowed.
-- "+ 加一道菜" opens a search inside the card (decided by the user: in the card, not on the library page, not model suggestions). It searches by dish name or ingredient with the existing `search_recipes` (meaning and text), across all dish types. Each result shows its dish type, missing ingredients, missing cookware, any conflict with a selected diner (who and which rule, or an unknown-allergen ingredient), and "already in the plan" instead of an add button for a dish already there.
+- "+ 加一道菜" opens a search inside the card (decided by the user: in the card, not on the library page, not model suggestions). It searches by dish name or ingredient by text only (title, tags, ingredient lines, and ingredient names and aliases), the same match as the library page, across all dish types, at most 10 results with title matches first; the card shows 5, then "显示更多". Changed from meaning and text during the browser check: meaning-based search with no threshold returned unrelated dishes ("牛" found 番茄炒蛋). Each result shows its dish type, missing ingredients, missing cookware, any conflict with a selected diner (who and which rule, or an unknown-allergen ingredient), and "already in the plan" instead of an add button for a dish already there.
 - Only the newest plan card is editable (as "Plan again" today); older cards stay read-only.
 - A reply without a plan (no valid plan, early stop) shows "+ 加一道菜" too (decided by the user), so the user can build the meal from the library; the reasons and next actions stay as they are.
 - After the first edit the card shows "已手动修改" and "恢复模型方案". The model's note above the card is kept and marked as describing the original plan (Claude's call; no new model call).
+- "+ 加一道菜" is the last row of the dish list (with no dishes, it follows the reasons) and opens the search in place; × or Escape closes it. Warnings and left-out dishes share one light block (browser check).
+- A dish whose conflict the user confirmed shows a line "已确认保留：{who} {rule}" (or "{lines} 过敏原未知"), and the diners line adds "（n 道菜已确认保留）" (`edit.kept` on the card; browser check).
 - The plan card's other parts (warnings, left-out dishes, the footer with asked, assumed and diners line, the allergen notice) are recomputed from the edited plan by the same code that builds them today.
 
 ### 5.2 What an edit checks
@@ -98,7 +101,7 @@ Soft warnings (S1-S8) show as they do for a model plan. A failed hard check that
 
 ### 5.2a The search inside the card
 
-`search_recipes` today leaves out dishes with a conflict or unknown allergens. The card search needs them shown with their markers instead (a flag on the search, or a separate call; Claude's call, the builder chooses). Dishes already in the plan are marked, not hidden.
+The library search leaves out nothing; the card search shows dishes with a conflict or unknown allergens with their markers, and marks dishes already in the plan instead of hiding them. Built as a text match shared with the library page's search, so it makes no model or embedding call.
 
 ### 5.3 Versions and restore
 
@@ -123,7 +126,7 @@ Soft warnings (S1-S8) show as they do for a model plan. A failed hard check that
 
 ### 5.6 Backend
 
-New endpoints under the thread (exact paths and payloads left to the builder): search recipes for the card, remove a dish, add a dish (returning the conflicts to confirm when there are any, and accepting the confirmed overrides), and restore the model's plan. Each returns the updated plan card. They read and write the thread state through the checkpointer (`update_state`), update both `current_plan` and the newest reply's plan in `reply_plans` (the chat history shows plans per reply), and append to `plan_versions`. The code that builds a plan card from recipe ids is shared with `present_plan` rather than copied. Label handling follows plan 2b: any text shown is restored, any model-bound text (only the search query's embedding) is replaced.
+New endpoints under the thread (exact paths and payloads left to the builder): search recipes for the card, remove a dish, add a dish (returning the conflicts to confirm when there are any, and accepting the confirmed overrides), and restore the model's plan. Each returns the updated plan card. They read and write the thread state through the checkpointer (`update_state`), update both `current_plan` and the newest reply's plan in `reply_plans` (the chat history shows plans per reply), and record the manual version in `plan_versions` as 5.3 says (appended on the first edit after a model version, updated in place after that). The code that builds a plan card from recipe ids is shared with `present_plan` rather than copied. Label handling follows plan 2b: any text shown is restored. The card search sends nothing to a model.
 
 ## 6. Success criteria
 

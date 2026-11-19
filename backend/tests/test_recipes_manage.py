@@ -72,6 +72,14 @@ def test_search_matches_title_tag_and_ingredient_without_model_call(client, libr
     assert fake_llm.call_count == 0 and fake_llm.embed_count == 0
 
 
+def test_search_matches_an_ingredient_alias(client, library, seeded):
+    pork = by_zh(seeded, "五花肉")
+    pork.user_aliases_zh = ["猪五花XQ"]
+    library[2].ingredients[0].ingredient_id = pork.id
+    seeded.flush()
+    assert titles(client, q="猪五花XQ") == ["红烧肉"]
+
+
 def test_filter_by_dish_type_and_list_all(client, library):
     assert titles(client, dish_type="meat dish") == ["红烧肉"]
     assert sorted(titles(client)) == sorted(["番茄炒蛋", "拍黄瓜", "红烧肉"])

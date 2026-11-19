@@ -85,7 +85,6 @@ describe("PlanEditor search", () => {
             dislikes: [{ diner_key: "self", diner_name: null, is_self: true, line: "香菜" }],
           }),
         ],
-        semantic_paused: false,
       }),
     });
     renderWithProviders(<Editable initial={plan()} />);
@@ -103,17 +102,62 @@ describe("PlanEditor search", () => {
     expect(within(soup).getByRole("button", { name: "Add" })).toBeEnabled();
   });
 
-  it("says when nothing was found and when search by meaning is paused", async () => {
-    mockFetch({ [`POST ${BASE}/search`]: () => ({ hits: [], semantic_paused: true }) });
+  it("focuses the search box when the search opens", async () => {
     renderWithProviders(<Editable initial={plan()} />);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add a dish" }));
+    expect(screen.getByRole("searchbox", { name: "Search by dish name or ingredient" })).toHaveFocus();
+  });
+
+  it("opens the search in place of the add row, and closes it with × or Escape", async () => {
+    renderWithProviders(<Editable initial={plan()} />);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add a dish" }));
+    expect(screen.queryByRole("button", { name: "+ Add a dish" })).toBeNull();
+    // An empty box still offers the search button enabled; searching empty text does nothing.
+    expect(screen.getByRole("button", { name: "Search" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.getByRole("button", { name: "+ Add a dish" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "+ Add a dish" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.getByRole("button", { name: "+ Add a dish" })).toHaveFocus();
+  });
+
+  it("shows five results, then the rest on show more", async () => {
+    mockFetch({
+      [`POST ${BASE}/search`]: () => ({
+        hits: Array.from({ length: 8 }, (_, i) => hit({ id: 100 + i, title: `菜${i}` })),
+      }),
+    });
+    renderWithProviders(<Editable initial={plan()} />);
+    await searchFor("菜");
+    const results = await screen.findByRole("list", { name: "Search results" });
+    expect(within(results).getAllByRole("listitem")).toHaveLength(5);
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(within(results).getAllByRole("listitem")).toHaveLength(8);
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("says which text found nothing, in both languages", async () => {
+    mockFetch({ [`POST ${BASE}/search`]: () => ({ hits: [] }) });
+    const { unmount } = renderWithProviders(<Editable initial={plan()} />);
     await searchFor("xyz");
-    expect(await screen.findByText("No dishes found.")).toBeInTheDocument();
-    expect(screen.getByText(/Search by meaning is paused/)).toBeInTheDocument();
+    expect(await screen.findByText("No dish contains “xyz”.")).toBeInTheDocument();
+    unmount();
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <Editable initial={plan()} />
+      </NextIntlClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "+ 加一道菜" }));
+    await userEvent.type(screen.getByRole("searchbox", { name: "搜索菜名或食材" }), "牛");
+    await userEvent.click(screen.getByRole("button", { name: "搜索" }));
+    expect(await screen.findByText("没有找到包含“牛”的菜")).toBeInTheDocument();
   });
 
   it("adds a dish without a conflict and shows the returned card", async () => {
     const calls = mockFetch({
-      [`POST ${BASE}/search`]: () => ({ hits: [hit()], semantic_paused: false }),
+      [`POST ${BASE}/search`]: () => ({ hits: [hit()] }),
       [`POST ${BASE}/add`]: () => ({ plan: ADDED }),
     });
     renderWithProviders(<Editable initial={plan()} />);
@@ -128,7 +172,7 @@ describe("PlanEditor search", () => {
   it("asks before adding a conflicting dish and sends the confirmed conflicts", async () => {
     const asked = [conflict(), conflict({ diner_key: "self", diner_name: null, is_self: true, kind: "allergen", allergen: "soy", ingredient_id: null, ingredient_name: null, rule_type: "allergy" })];
     const calls = mockFetch({
-      [`POST ${BASE}/search`]: () => ({ hits: [hit({ conflicts: asked })], semantic_paused: false }),
+      [`POST ${BASE}/search`]: () => ({ hits: [hit({ conflicts: asked })] }),
       [`POST ${BASE}/add`]: (body) =>
         (body as { confirm: unknown[] }).confirm.length === 0
           ? reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: asked })
@@ -152,7 +196,7 @@ describe("PlanEditor search", () => {
 
   it("closes the confirmation on cancel without adding", async () => {
     const calls = mockFetch({
-      [`POST ${BASE}/search`]: () => ({ hits: [hit({ conflicts: [conflict()] })], semantic_paused: false }),
+      [`POST ${BASE}/search`]: () => ({ hits: [hit({ conflicts: [conflict()] })] }),
       [`POST ${BASE}/add`]: () =>
         reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: [conflict()] }),
     });
@@ -174,7 +218,7 @@ describe("PlanEditor search", () => {
     };
     let resolved = false;
     const calls = mockFetch({
-      [`POST ${BASE}/search`]: () => ({ hits: [hit({ conflicts: [unknown], blocked_unknown: ["花椒油"] })], semantic_paused: false }),
+      [`POST ${BASE}/search`]: () => ({ hits: [hit({ conflicts: [unknown], blocked_unknown: ["花椒油"] })] }),
       [`POST ${BASE}/add`]: () =>
         resolved ? { plan: ADDED } : reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: [unknown] }),
       "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry: ENTRY }] }),
@@ -201,7 +245,6 @@ describe("PlanEditor search", () => {
     mockFetch({
       [`POST ${BASE}/search`]: () => ({
         hits: [hit({ conflicts: [conflict({ diner_key: "guest:1", diner_name: null }), conflict({ kind: "allergen", allergen: "peanut", ingredient_id: null, ingredient_name: null, rule_type: "allergy" })] })],
-        semantic_paused: false,
       }),
     });
     render(

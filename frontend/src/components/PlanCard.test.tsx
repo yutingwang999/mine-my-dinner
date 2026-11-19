@@ -462,11 +462,11 @@ describe("PlanCard layout order", () => {
     renderWithProviders(
       <PlanCard plan={plan({ headcount: 3, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }] })} />,
     );
-    const box = screen.getByText(/recipe serves 2/).closest(".notice") as HTMLElement;
-    expect(box).toHaveClass("notice-info");
+    const box = screen.getByText(/recipe serves 2/).closest(".plan-info") as HTMLElement;
+    expect(box.parentElement).toHaveClass("plan-notes");
   });
 
-  it("puts the left-out dishes in their own box after the problem boxes", () => {
+  it("puts the left-out dishes after the problem boxes", () => {
     const { container } = renderWithProviders(
       <PlanCard plan={plan({ ...noPlan, left_out_unknown_allergens: ["秘制酱鸡"] })} />,
     );
@@ -474,6 +474,23 @@ describe("PlanCard layout order", () => {
     const box = container.querySelector(".left-out-box") as HTMLElement;
     expect(red.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(box).getByRole("heading", { level: 3 })).toHaveTextContent(/left out/);
+  });
+
+  it("keeps the warnings and the left-out dishes in one notes block, in that order", () => {
+    const { container } = renderWithProviders(
+      <PlanCard
+        plan={plan({
+          headcount: 3,
+          servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }],
+          left_out_unknown_allergens: ["秘制酱鸡"],
+        })}
+      />,
+    );
+    const blocks = container.querySelectorAll(".plan-notes");
+    expect(blocks).toHaveLength(1);
+    const [info, leftOut] = Array.from(blocks[0].children);
+    expect(info).toHaveClass("plan-info");
+    expect(leftOut).toHaveClass("left-out-box");
   });
 });
 
@@ -891,7 +908,7 @@ describe("PlanCard manual edits", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("marks a dish with a new conflict in red with the reason, and keeps or removes it", async () => {
+  it("marks a dish with a new conflict in red with the reason, and keeps it or removes it with ×", async () => {
     const calls = mockFetch({
       [`POST ${BASE}/keep`]: () => ({ plan: edited({ recipes: TWO.recipes }) }),
       [`POST ${BASE}/remove`]: () => ({ plan: edited() }),
@@ -909,7 +926,9 @@ describe("PlanCard manual edits", () => {
 
     renderWithProviders(<Editable initial={withConflict([beef])} />);
     const again = screen.getByText("牛肉汤").closest("li") as HTMLElement;
-    await userEvent.click(within(again).getByRole("button", { name: "Remove" }));
+    // Only "Keep it" sits under the conflict; removing goes through the named × button.
+    expect(within(again).queryByRole("button", { name: "Remove" })).toBeNull();
+    await userEvent.click(within(again).getByRole("button", { name: "Remove 牛肉汤" }));
     await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/remove`)).toHaveLength(1));
     expect(callsTo(calls, "POST", `${BASE}/remove`)[0].body).toEqual({ recipe_id: 2, locale: "en" });
   });
@@ -925,7 +944,8 @@ describe("PlanCard manual edits", () => {
     expect(screen.getByText("已手动修改")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "恢复模型方案" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认保留" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    expect(screen.getByRole("button", { name: "删除牛肉汤" })).toBeInTheDocument();
     expect(screen.getByText("继续对话会重新规划，手动修改不会带入")).toBeInTheDocument();
   });
 
@@ -1061,6 +1081,83 @@ describe("PlanCard manual edits", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/still running or stopped with an error/);
     expect(onRefused).toHaveBeenCalledTimes(1);
     expect(screen.getByText("牛肉汤")).toBeInTheDocument();
+  });
+
+  it("shows each confirmed override under its dish and counts the dishes on the diners line", () => {
+    const pork: Conflict = { ...beef, ingredient_name: "五花肉", lines: ["五花肉"] };
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard
+          plan={edited({
+            recipes: TWO.recipes,
+            edit: { ...EDIT, kept: [pork, unknownOil] },
+            diners: [
+              { name: null, is_self: true, guest: false },
+              { name: "小王", is_self: false, guest: false },
+            ],
+          })}
+          editable
+          threadId="t1"
+          onEdited={vi.fn()}
+        />
+      </NextIntlClientProvider>,
+    );
+    const row = screen.getByText("牛肉汤").closest("li") as HTMLElement;
+    expect(within(row).getByText("已确认保留：小王 忌口 五花肉")).toBeInTheDocument();
+    expect(within(row).getByText("已确认保留：花椒油 过敏原未知")).toBeInTheDocument();
+    expect(row).not.toHaveClass("plan-dish-conflict");
+    expect(screen.getByText("按 我、小王 排除（1 道菜已确认保留）")).toBeInTheDocument();
+  });
+
+  it("states kept overrides in English and leaves the diners line alone without them", () => {
+    const { unmount } = renderWithProviders(
+      <PlanCard
+        plan={edited({
+          recipes: TWO.recipes,
+          edit: { ...EDIT, kept: [beef] },
+          diners: [{ name: "小王", is_self: false, guest: false }],
+        })}
+      />,
+    );
+    expect(screen.getByText("Kept anyway: 小王 avoids 牛肉")).toBeInTheDocument();
+    expect(screen.getByText("Checked against: 小王 (1 dish kept anyway)")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(<PlanCard plan={edited({ diners: [{ name: "小王", is_self: false, guest: false }] })} />);
+    expect(screen.getByText("Checked against: 小王")).toBeInTheDocument();
+  });
+
+  it("puts add a dish below the reasons on a reply with no plan", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          recipes: [],
+          passed: false,
+          reasons: [{ reason: "not_enough", category: "dishes", needed: 2, available: 0, text: "No dish can be made." }],
+        })}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    const reasons = screen.getByText("No dish can be made.");
+    const add = screen.getByRole("button", { name: "+ Add a dish" });
+    expect(reasons.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("puts add a dish right after the dishes, above the notes", () => {
+    const { container } = renderWithProviders(
+      <PlanCard
+        plan={plan({ headcount: 3, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }] })}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    const list = container.querySelector(".card-list") as HTMLElement;
+    const add = screen.getByRole("button", { name: "+ Add a dish" }).closest(".plan-add") as HTMLElement;
+    const notes = container.querySelector(".plan-notes") as HTMLElement;
+    expect(list.nextElementSibling).toBe(add);
+    expect(add.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("asks again when keeping a dish whose conflicts changed", async () => {

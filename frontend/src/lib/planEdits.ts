@@ -39,7 +39,8 @@ export type SearchHit = {
   in_plan: boolean;
 };
 
-export type SearchResult = { hits: SearchHit[]; semantic_paused: boolean };
+/** A plain text match of the library (no model call), at most 10 hits. */
+export type SearchResult = { hits: SearchHit[] };
 
 const base = (threadId: string) => `/api/chat/threads/${threadId}/plan`;
 

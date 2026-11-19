@@ -582,7 +582,8 @@
       "leftOutNothingLinked": "No unlinked line with this name was found, so the dish stays left out. Check it on the dictionary page.",
       "leftOutCreateInstead": "Not listed? Create a new entry",
       "leftOutLinkInstead": "Link to an existing entry instead",
-      "replan": "Plan again"
+      "replan": "Plan again",
+      "dinersKept": " ({count, plural, one {# dish} other {# dishes}} kept anyway)"
     },
     "warning": {
       "S1": "{name}: {parts}, {needed} {unit} needed, {have} {unit} in stock.",
@@ -619,7 +620,7 @@
       "searching": "Searching…",
       "closeSearch": "Close",
       "results": "Search results",
-      "noResults": "No dishes found.",
+      "noResults": "No dish contains “{query}”.",
       "inPlan": "Already in the plan",
       "add": "Add",
       "time": "{minutes} min",
@@ -631,7 +632,6 @@
       "noteForOriginal": "The note above describes the original plan.",
       "unresolved": "Some dishes have a new conflict: keep or remove each one.",
       "keep": "Keep it",
-      "remove": "Remove",
       "self": "you",
       "guest": "a guest",
       "rule": "{type, select, allergy {{self, select, yes {are} other {is}} allergic to {target}} dislike {{self, select, yes {dislike} other {dislikes}} {target}} other {{self, select, yes {avoid} other {avoids}} {target}}}",
@@ -648,7 +648,10 @@
       "countNote": "Differs from what you asked: {list}",
       "countNoteSeparator": "; ",
       "countNoteItem": "you asked for {bound, select, at_least {at least } at_most {at most } other {}}{stated} {field, select, dishes {{stated, plural, one {dish} other {dishes}}} soups {{stated, plural, one {soup} other {soups}}} meat_dishes {{stated, plural, one {meat dish} other {meat dishes}}} vegetable_dishes {{stated, plural, one {vegetable dish} other {vegetable dishes}}} staples {{stated, plural, one {staple} other {staples}}} desserts {{stated, plural, one {dessert} other {desserts}}} other {{stated, plural, one {snack} other {snacks}}}}, now {now}",
-      "deletedRecipes": "{titles}: no longer in the recipe library, so taken out of the plan."
+      "deletedRecipes": "{titles}: no longer in the recipe library, so taken out of the plan.",
+      "kept": "Kept anyway: {who} {rule}",
+      "keptUnknown": "Kept anyway: allergens of {lines} unknown",
+      "showMore": "Show more"
     }
   }
 }

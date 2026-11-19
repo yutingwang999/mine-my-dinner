@@ -39,8 +39,11 @@ export type CountNote = {
 /** A quiet note on a rebuilt card: dishes dropped because they left the library. */
 export type PlanNote = { field: "deleted_recipes"; titles: string[] };
 
-/** A manual version's overrides and edit log, and the conflicts still to keep or remove. */
-export type PlanEdit = { overrides: unknown[]; log: unknown[]; conflicts: Conflict[] };
+/**
+ * A manual version's overrides and edit log, the conflicts still to keep or remove, and the
+ * conflicts its overrides cover (`kept`, named for display; absent on cards before it existed).
+ */
+export type PlanEdit = { overrides: unknown[]; log: unknown[]; conflicts: Conflict[]; kept?: Conflict[] };
 
 /** The `current_plan` the planning graph presents (backend agent/graph.py present_plan). */
 /** How a named meat or vegetable count binds (design 5.11). */

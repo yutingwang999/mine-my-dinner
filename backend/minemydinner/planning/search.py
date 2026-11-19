@@ -129,7 +129,7 @@ def unknown_allergen_exclusions(
 
 def search_recipes(
     session: Session,
-    client: LLMClient,
+    client: LLMClient | None,
     ctx: PlanningContext,
     query: str | None = None,
     max_time: int | None = None,
@@ -144,6 +144,7 @@ def search_recipes(
     keep_unmatched: bool = False,
     makeable_only: bool = False,
     show_blocked: bool = False,
+    only_ids: Sequence[int] | None = None,
 ) -> SearchResult:
     """Search the recipe library. Allergy and dietary exclusions always apply.
 
@@ -157,6 +158,8 @@ def search_recipes(
     query_vectors caches query embeddings for one planning run, so a repeated query is
     embedded once. show_blocked (the plan card's search, never the planner's) keeps the
     recipes a hard rule or an unknown allergen excludes, as BlockedHit with those markers.
+    only_ids limits the search to those recipes (the card's text match). client is needed
+    only with a query; without one no model is called.
 
     Every hit carries its missing lines, missing cookware, the close-to-expiry stock it
     uses, and dislike hits. Order: requested tags first; then query relevance; then more
@@ -180,6 +183,8 @@ def search_recipes(
     )
     if dish_types is not None:
         candidates = candidates.where(Recipe.dish_type.in_(list(dish_types)))
+    if only_ids is not None:
+        candidates = candidates.where(Recipe.id.in_(list(only_ids)))
     if exclude_ids:
         candidates = candidates.where(Recipe.id.not_in(list(exclude_ids)))
     if max_time is not None:
@@ -210,6 +215,7 @@ def search_recipes(
     semantic_paused = False
     relevance: dict[int, tuple] = {recipe_id: () for recipe_id in by_id}
     if query and query.strip() and by_id:
+        assert client is not None, "a query is ranked through the model client"
         relevance, semantic_paused = _rank_by_query(
             session, client, query, by_id, query_vectors, keep_unmatched
         )

@@ -337,6 +337,25 @@ def _check(
     return live, kept, notes, validate_plan(session, ctx, spec, live, kept)
 
 
+def _kept(
+    session: Session,
+    ctx: PlanningContext,
+    values: dict,
+    spec: PlanSpec,
+    recipe_ids: list[int],
+    overrides: list[H2Override],
+    locale: str,
+) -> list[Conflict]:
+    """The conflicts the overrides cover, named for the card ("kept: 小王 avoids pork"): the
+    plan checked without overrides, keeping the conflicts an override matches. An override
+    whose conflict no longer exists (a rule deleted since) shows nothing."""
+    if not overrides:
+        return []
+    bare = validate_plan(session, ctx, spec, recipe_ids, [])
+    found = _conflicts(session, values, bare.violations, locale)
+    return [c for c in found if c.override() in overrides]
+
+
 def _edited_card(
     session: Session,
     ctx: PlanningContext,
@@ -374,6 +393,7 @@ def _edited_card(
         locale=locale,
     )
     spec = PlanSpec.model_validate(values["spec"])
+    kept = _kept(session, ctx, values, spec, recipe_ids, overrides, locale)
     card.update(
         passed=not conflicts,
         edited=True,
@@ -382,6 +402,7 @@ def _edited_card(
             "overrides": [o.model_dump() for o in overrides],
             "log": log,
             "conflicts": [c.model_dump() for c in conflicts],
+            "kept": [c.model_dump() for c in kept],
         },
         count_notes=_count_notes(values, spec, card["recipes"]),
         notes=notes,
@@ -419,7 +440,12 @@ def _restored_card(
         passed=not others and not conflicts,
         edited=False,
         model_version=model_index,
-        edit={"overrides": [], "log": [], "conflicts": [c.model_dump() for c in conflicts]},
+        edit={
+            "overrides": [],
+            "log": [],
+            "conflicts": [c.model_dump() for c in conflicts],
+            "kept": [],
+        },
         count_notes=[],
         notes=notes,
     )
