@@ -48,7 +48,11 @@ from minemydinner.agent.labels import (
     load_label_context,
 )
 from minemydinner.agent.middleware import dump_message
-from minemydinner.agent.plan_card import build_dishes_card, card_base
+from minemydinner.agent.plan_card import (
+    build_dishes_card,
+    card_base,
+    meal_constraints,
+)
 from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
 from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
@@ -68,12 +72,7 @@ from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
 from minemydinner.planning.composition import composition_gap, side_ranges
-from minemydinner.planning.context import (
-    MealConstraints,
-    RuleRef,
-    diner_codes,
-    load_planning_context,
-)
+from minemydinner.planning.context import diner_codes, load_planning_context
 from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
@@ -155,15 +154,6 @@ def load_route_prompt() -> str:
 
 def other_reply(locale: str) -> str:
     return OTHER_REPLY_ZH if locale == "zh" else OTHER_REPLY_EN
-
-
-def _constraints(state: ChatState) -> MealConstraints:
-    data = state["constraints"]
-    return MealConstraints(
-        diner_ids=tuple(data["diner_ids"]),
-        guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
-        unconfirmed_diners=data["unconfirmed_diners"],
-    )
 
 
 def _matched_friend_ids(
@@ -625,7 +615,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         """No model call: when the request cannot be met, skip the planner and say why."""
         spec = PlanSpec.model_validate(state["spec"])
         with deps.session_factory() as session:
-            ctx = load_planning_context(session, _constraints(state))
+            ctx = load_planning_context(session, meal_constraints(state))
             found: list[Shortfall] = check_feasibility(session, ctx, spec)
             # The planner never searches on a stop, so the reply names the dishes left out
             # for unknown allergens among the types the request needs.
@@ -686,7 +676,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     def retry_message(state: ChatState, session, ctx) -> str:
         """The violations of the previous attempt, then a short summary of it."""
-        codes = diner_codes(_constraints(state), current_table())
+        codes = diner_codes(meal_constraints(state), current_table())
         ids = state["proposal"]["recipe_ids"]
         problems = [_violation_for_model(v, codes) for v in state["validation"]["violations"]]
         known = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(ids)))) if ids else set()
@@ -718,7 +708,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             raise
 
     def plan_attempt(state: ChatState) -> dict:
-        constraints = _constraints(state)
+        constraints = meal_constraints(state)
         spec = PlanSpec.model_validate(state["spec"])
         # One cache per run, so the shortlist and every attempt embed a query once.
         vectors = deps.run_query_vectors.setdefault(state["run_id"], {})
@@ -796,7 +786,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         spec = PlanSpec.model_validate(state["spec"])
         ids = state["proposal"]["recipe_ids"]
         with deps.session_factory() as session:
-            ctx = load_planning_context(session, _constraints(state))
+            ctx = load_planning_context(session, meal_constraints(state))
             result: ValidationResult = validate_plan(session, ctx, spec, ids)
         dumped = result.model_dump(mode="json")
         deps.recorder.add_event(
@@ -836,7 +826,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         spec = state["spec"]
         final = state["validation"] or {"passed": False}
         shortfalls = state.get("shortfalls") or []
-        constraints = _constraints(state)
+        constraints = meal_constraints(state)
         with deps.session_factory() as session:
             base = card_base(state, session)
         if shortfalls:

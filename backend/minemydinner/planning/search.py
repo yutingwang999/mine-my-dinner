@@ -39,6 +39,15 @@ class RecipeHit:
 
 
 @dataclass(frozen=True)
+class BlockedHit(RecipeHit):
+    """A hit of a search with `show_blocked`: the hard-rule conflicts (diner keys, never a
+    name) and the unknown-allergen lines that would keep it out of a model's search."""
+
+    conflicts: list[dict] = field(default_factory=list)
+    blocked_unknown: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ExcludedRecipe:
     id: int
     title: str
@@ -134,6 +143,7 @@ def search_recipes(
     prefer_use: Sequence[str] = (),
     keep_unmatched: bool = False,
     makeable_only: bool = False,
+    show_blocked: bool = False,
 ) -> SearchResult:
     """Search the recipe library. Allergy and dietary exclusions always apply.
 
@@ -145,7 +155,8 @@ def search_recipes(
     a recipe the query does not reach is dropped, or ranked last with keep_unmatched.
     makeable_only (fridge-only mode) drops every recipe with a missing required line.
     query_vectors caches query embeddings for one planning run, so a repeated query is
-    embedded once.
+    embedded once. show_blocked (the plan card's search, never the planner's) keeps the
+    recipes a hard rule or an unknown allergen excludes, as BlockedHit with those markers.
 
     Every hit carries its missing lines, missing cookware, the close-to-expiry stock it
     uses, and dislike hits. Order: requested tags first; then query relevance; then more
@@ -215,10 +226,15 @@ def search_recipes(
 
     check = check_recipes(session, ctx.rules, reached)
     hard = {conflict.recipe_id for conflict in check.hard}
-    left_out = unknown_allergen_exclusions(
-        session, ctx, reached, check=check, titles={i: row.title for i, row in by_id.items()}
-    )
-    safe = [i for i in reached if i not in hard and not check.blocked_by_unknown(i)]
+    if show_blocked:
+        # Nothing is left out: the blocked recipes are hits, with their markers.
+        left_out: list[ExcludedRecipe] = []
+        safe = list(reached)
+    else:
+        left_out = unknown_allergen_exclusions(
+            session, ctx, reached, check=check, titles={i: row.title for i, row in by_id.items()}
+        )
+        safe = [i for i in reached if i not in hard and not check.blocked_by_unknown(i)]
     facts = _facts(session, ctx, safe, check)
     if makeable_only:
         safe = [i for i in safe if not facts[i].missing]
@@ -244,8 +260,29 @@ def search_recipes(
     ordered = sorted(safe, key=rank)
     if limit is not None:
         ordered = ordered[:limit]
+    blocked: dict[int, dict] = {}
+    if show_blocked:
+        for recipe_id in ordered:
+            conflicts: list[dict] = []
+            for c in check.hard:
+                item = {
+                    "diner_key": c.diner_key,
+                    "rule_type": c.rule_type,
+                    "allergen": c.allergen,
+                    "ingredient_id": c.ingredient_id,
+                    "text": c.text,
+                    "line": c.line_name,
+                }
+                if c.recipe_id == recipe_id and item not in conflicts:
+                    conflicts.append(item)
+            unknown = check.unknown_allergen_lines.get(recipe_id, [])
+            blocked[recipe_id] = {
+                "conflicts": conflicts,
+                "blocked_unknown": list(unknown) if check.blocked_by_unknown(recipe_id) else [],
+            }
+    hit_class = BlockedHit if show_blocked else RecipeHit
     hits = [
-        RecipeHit(
+        hit_class(
             id=recipe_id,
             title=by_id[recipe_id].title,
             dish_type=by_id[recipe_id].dish_type,
@@ -258,6 +295,7 @@ def search_recipes(
             missing_cookware=facts[recipe_id].missing_cookware,
             uses_expiring=facts[recipe_id].uses_expiring,
             dislikes=facts[recipe_id].dislikes,
+            **blocked.get(recipe_id, {}),
         )
         for recipe_id in ordered
     ]

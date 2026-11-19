@@ -1,4 +1,5 @@
-"""The plan card's builder, shared by the planning graph's `present_plan` and manual edits."""
+"""The plan card's builder, shared by the planning graph's `present_plan` and manual edits,
+and the meal constraints of a thread's state."""
 
 from typing import Any
 
@@ -7,8 +8,18 @@ from sqlalchemy.orm import Session
 
 from minemydinner.agent.card_text import next_actions, unmet_for_user
 from minemydinner.models import Diner, Recipe
-from minemydinner.planning.context import PlanningContext
+from minemydinner.planning.context import MealConstraints, PlanningContext, RuleRef
 from minemydinner.planning.stock import compute_missing, missing_cookware
+
+
+def meal_constraints(values: dict) -> MealConstraints:
+    """The meal constraints of a thread's state, for `load_planning_context`."""
+    data = values["constraints"]
+    return MealConstraints(
+        diner_ids=tuple(data["diner_ids"]),
+        guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
+        unconfirmed_diners=data["unconfirmed_diners"],
+    )
 
 
 def diners_line(session: Session, settled: dict | None, constraints: dict) -> tuple[list, int]:
