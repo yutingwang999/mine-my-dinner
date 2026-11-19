@@ -34,6 +34,8 @@ from minemydinner.planning.composition import (
     side_ranges,
 )
 from minemydinner.planning.context import PlanningContext
+from minemydinner.planning.dietary import RuleConflict
+from minemydinner.planning.search import BlockedHit
 from minemydinner.planning.validate import (
     Finding,
     H2Override,
@@ -246,6 +248,46 @@ def _conflicts(
         else:
             existing.lines += [line for line in conflict.lines if line not in existing.lines]
     return list(found.values())
+
+
+def search_markers(
+    session: Session,
+    values: dict,
+    hits: list[BlockedHit],
+    dislikes: list[RuleConflict],
+    locale: str,
+) -> dict[int, dict]:
+    """Per hit of the card's search (`search_recipes(show_blocked=True)`): its conflicts as
+    `Conflict` dumps, the same ones adding the dish asks to confirm, and its dislikes as
+    `{diner_key, diner_name, is_self, line}`. Diners are named as in `Conflict`; the search's
+    own `dislikes` strings carry labels and are never shown."""
+    findings = [
+        Finding(code="H2", recipe_id=hit.id, detail=dict(conflict))
+        for hit in hits
+        for conflict in hit.conflicts
+    ]
+    findings += [
+        Finding(code="H2", recipe_id=hit.id, detail={"unknown": list(hit.blocked_unknown)})
+        for hit in hits
+        if hit.blocked_unknown
+    ]
+    markers: dict[int, dict] = {hit.id: {"conflicts": [], "dislikes": []} for hit in hits}
+    for conflict in _conflicts(session, values, findings, locale):
+        markers[conflict.recipe_id]["conflicts"].append(conflict.model_dump())
+    names = _diner_names(session, values, {d.diner_key for d in dislikes})
+    for item in dislikes:
+        if item.recipe_id not in markers:
+            continue
+        name, is_self = names.get(item.diner_key, (None, False))
+        entry = {
+            "diner_key": item.diner_key,
+            "diner_name": name,
+            "is_self": is_self,
+            "line": item.line_name,
+        }
+        if entry not in markers[item.recipe_id]["dislikes"]:
+            markers[item.recipe_id]["dislikes"].append(entry)
+    return markers
 
 
 def _count_notes(values: dict, spec: PlanSpec, recipes: list[dict]) -> list[dict]:

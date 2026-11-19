@@ -19,6 +19,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from minemydinner.agent.diners import CardOutOfDate, DinerAnswer
+from minemydinner.agent.edits import EditError, newest_reply_id
 from minemydinner.agent.graph import GraphDeps, build_graph
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.api.deps import ApiError, get_llm_client
@@ -104,6 +105,20 @@ def _snapshot(runtime: ChatRuntime, thread_id: str):
 
 def _pending(state) -> list:
     return list(state.interrupts)
+
+
+def edit_refusal(state) -> str | None:
+    """Why the newest plan card cannot be edited now, or None when it can: `no_plan` when no
+    reply has a plan (a new thread, too, whose first step is still ahead), `thread_busy`
+    while a run or a question is pending (the saved state's next steps and interrupts tell,
+    so a failed or disconnected run counts until the next message)."""
+    try:
+        newest_reply_id(state.values)
+    except EditError as error:
+        return error.code
+    if state.next or _pending(state):
+        return "thread_busy"
+    return None
 
 
 def event(name: str, data: dict[str, Any]) -> str:
@@ -281,4 +296,6 @@ def read_thread(thread_id: str, runtime: RuntimeDep) -> dict[str, Any]:
         "messages": _visible_messages(state.values.get("messages") or []),
         "current_plan": state.values.get("current_plan"),
         "pending": pending[0].value if pending else None,
+        # Whether the newest plan card takes edits now: the edit endpoints' own rule.
+        "editable": edit_refusal(state) is None,
     }

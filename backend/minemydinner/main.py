@@ -7,7 +7,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from minemydinner.agent.checkpoint import open_checkpointer
-from minemydinner.api import chat, diners, dictionary, imports, inventory, preferences, recipes
+from minemydinner.api import (
+    chat,
+    diners,
+    dictionary,
+    imports,
+    inventory,
+    plan_edits,
+    preferences,
+    recipes,
+)
 from minemydinner.api.deps import ERROR_HANDLERS, get_llm_client
 from minemydinner.db import SessionFactory, configure_engine
 from minemydinner.recipes.embedding import retry_pending_embeddings
@@ -47,6 +56,7 @@ app.include_router(inventory.router)
 app.include_router(diners.router)
 app.include_router(preferences.router)
 app.include_router(chat.router)
+app.include_router(plan_edits.router)
 
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

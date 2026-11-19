@@ -116,7 +116,13 @@ def test_create_thread_returns_uuid_and_empty_history(client, chat_env):
     assert str(uuid.UUID(tid)) == tid
     r = client.get(f"/api/chat/threads/{tid}")
     assert r.status_code == 200
-    assert r.json() == {"items": [], "messages": [], "current_plan": None, "pending": None}
+    assert r.json() == {
+        "items": [],
+        "messages": [],
+        "current_plan": None,
+        "pending": None,
+        "editable": False,
+    }
 
 
 def test_message_streams_progress_plan_and_done(client, chat_env):
@@ -370,7 +376,13 @@ def test_thread_existence_with_the_postgres_checkpointer(
             created.append(tid)
             r = client.get(f"/api/chat/threads/{tid}")
             assert r.status_code == 200
-            assert r.json() == {"items": [], "messages": [], "current_plan": None, "pending": None}
+            assert r.json() == {
+                "items": [],
+                "messages": [],
+                "current_plan": None,
+                "pending": None,
+                "editable": False,
+            }
         finally:
             for thread_id in created:
                 saver.delete_thread(thread_id)
