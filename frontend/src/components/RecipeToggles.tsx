@@ -17,10 +17,12 @@ type Props = {
   missing?: string[];
   /** Shown between the title row and the open panel. */
   children?: ReactNode;
+  /** Extra buttons after the toggles, such as the plan card's remove button. */
+  actions?: ReactNode;
 };
 
 /** A dish row: its title, the "how to cook" and "original text" toggles, and the open panel. */
-export function RecipeToggles({ recipeId, recipe: given, title, missing = [], children }: Props) {
+export function RecipeToggles({ recipeId, recipe: given, title, missing = [], children, actions }: Props) {
   const t = useTranslations("recipeDetail");
   const [panel, setPanel] = useState<"recipe" | "source" | null>(null);
   const [fetched, setFetched] = useState<SavedRecipe | null>(null);
@@ -58,6 +60,7 @@ export function RecipeToggles({ recipeId, recipe: given, title, missing = [], ch
           <button type="button" aria-expanded={panel === "source"} onClick={() => toggle("source")}>
             {t("originalText")} <span aria-hidden="true">{panel === "source" ? "▴" : "▾"}</span>
           </button>
+          {actions}
         </span>
       </div>
       {children}

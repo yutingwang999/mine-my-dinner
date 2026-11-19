@@ -1,11 +1,14 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import zh from "../../messages/zh.json";
 
 import { PlanCard } from "@/components/PlanCard";
+import type { ChatPlan } from "@/lib/chat";
+import type { Conflict } from "@/lib/planEdits";
 import { plan, spec } from "@/test/chatFixtures";
 import { callsTo, mockFetch, renderWithProviders, reply, savedRecipe } from "@/test/helpers";
 
@@ -459,11 +462,11 @@ describe("PlanCard layout order", () => {
     renderWithProviders(
       <PlanCard plan={plan({ headcount: 3, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }] })} />,
     );
-    const box = screen.getByText(/recipe serves 2/).closest(".notice") as HTMLElement;
-    expect(box).toHaveClass("notice-info");
+    const box = screen.getByText(/recipe serves 2/).closest(".plan-info") as HTMLElement;
+    expect(box.parentElement).toHaveClass("plan-notes");
   });
 
-  it("puts the left-out dishes in their own box after the problem boxes", () => {
+  it("puts the left-out dishes after the problem boxes", () => {
     const { container } = renderWithProviders(
       <PlanCard plan={plan({ ...noPlan, left_out_unknown_allergens: ["秘制酱鸡"] })} />,
     );
@@ -471,6 +474,23 @@ describe("PlanCard layout order", () => {
     const box = container.querySelector(".left-out-box") as HTMLElement;
     expect(red.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(box).getByRole("heading", { level: 3 })).toHaveTextContent(/left out/);
+  });
+
+  it("keeps the warnings and the left-out dishes in one notes block, in that order", () => {
+    const { container } = renderWithProviders(
+      <PlanCard
+        plan={plan({
+          headcount: 3,
+          servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }],
+          left_out_unknown_allergens: ["秘制酱鸡"],
+        })}
+      />,
+    );
+    const blocks = container.querySelectorAll(".plan-notes");
+    expect(blocks).toHaveLength(1);
+    const [info, leftOut] = Array.from(blocks[0].children);
+    expect(info).toHaveClass("plan-info");
+    expect(leftOut).toHaveClass("left-out-box");
   });
 });
 
@@ -793,5 +813,401 @@ describe("PlanCard diners and left-out dishes", () => {
     unmount();
     renderWithProviders(<PlanCard plan={plan({ diners: [{ name: null, is_self: true, guest: false }], others: 0 })} />);
     expect(screen.queryByText(/Checked against/)).toBeNull();
+  });
+});
+
+describe("PlanCard manual edits", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const BASE = "/api/chat/threads/t1/plan";
+  const TWO = plan({
+    recipes: [
+      { id: 1, title: "葱花蛋", dish_type: "vegetable dish", time_min: 10, time_source: "stated", servings: 2 },
+      { id: 2, title: "牛肉汤", dish_type: "soup", time_min: 30, time_source: "stated", servings: 2 },
+    ],
+  });
+  const EDIT = { overrides: [], log: [], conflicts: [] };
+  const edited = (fields: Partial<ChatPlan> = {}) =>
+    plan({ edited: true, model_version: 0, edit: EDIT, count_notes: [], notes: [], ...fields });
+  const beef: Conflict = {
+    recipe_id: 2,
+    diner_key: "diner:2",
+    diner_name: "小王",
+    is_self: false,
+    kind: "ingredient",
+    allergen: null,
+    ingredient_id: 40,
+    ingredient_name: "牛肉",
+    text: null,
+    rule_type: "dietary restriction",
+    lines: ["牛肉"],
+  };
+  const unknownOil: Conflict = {
+    ...beef,
+    diner_key: "*",
+    diner_name: null,
+    kind: "unknown_allergens",
+    ingredient_id: null,
+    ingredient_name: null,
+    rule_type: null,
+    lines: ["花椒油"],
+  };
+  const withConflict = (conflicts: Conflict[]) =>
+    edited({ recipes: TWO.recipes, passed: false, edit: { ...EDIT, conflicts } });
+
+  function Editable({ initial, onRefused }: { initial: ChatPlan; onRefused?: () => void }) {
+    const [current, setCurrent] = useState(initial);
+    return <PlanCard plan={current} editable threadId="t1" onEdited={setCurrent} onEditRefused={onRefused} />;
+  }
+
+  it("removes a dish through the endpoint and shows the returned card", async () => {
+    const calls = mockFetch({ [`POST ${BASE}/remove`]: () => ({ plan: edited() }) });
+    renderWithProviders(<Editable initial={TWO} />);
+    expect(screen.queryByText("Edited by hand")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Remove 牛肉汤" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/remove`)).toHaveLength(1));
+    expect(callsTo(calls, "POST", `${BASE}/remove`)[0].body).toEqual({ recipe_id: 2, locale: "en" });
+    expect(await screen.findByText("Edited by hand")).toBeInTheDocument();
+    expect(screen.queryByText("牛肉汤")).toBeNull();
+    expect(screen.getByText(/Sending another message plans again/)).toBeInTheDocument();
+    // The removed dish's button is gone; focus goes to "+ Add a dish".
+    expect(screen.getByRole("button", { name: "+ Add a dish" })).toHaveFocus();
+  });
+
+  it("reports when an edit request starts and ends", async () => {
+    let resolve!: (value: Response) => void;
+    mockFetch({ [`POST ${BASE}/remove`]: () => new Promise<Response>((r) => (resolve = r)) });
+    const onEditing = vi.fn();
+    renderWithProviders(
+      <PlanCard plan={TWO} editable threadId="t1" onEdited={vi.fn()} onEditing={onEditing} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Remove 牛肉汤" }));
+    expect(onEditing).toHaveBeenLastCalledWith(true);
+    resolve(reply(200, { plan: edited() }));
+    await waitFor(() => expect(onEditing).toHaveBeenLastCalledWith(false));
+  });
+
+  it("drops an edit error once the card no longer has controls", async () => {
+    mockFetch({ [`POST ${BASE}/remove`]: () => reply(409, { code: "thread_busy", suggest_paste: false }) });
+    // The same card instance loses its controls (a newer reply, or the thread is no longer editable).
+    function Lockable() {
+      const [editable, setEditable] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setEditable(false)}>
+            lock
+          </button>
+          <PlanCard plan={TWO} editable={editable} threadId="t1" onEdited={vi.fn()} />
+        </>
+      );
+    }
+    renderWithProviders(<Lockable />);
+    await userEvent.click(screen.getByRole("button", { name: "Remove 牛肉汤" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "lock" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("marks a dish with a new conflict in red with the reason, and keeps it or removes it with ×", async () => {
+    const calls = mockFetch({
+      [`POST ${BASE}/keep`]: () => ({ plan: edited({ recipes: TWO.recipes }) }),
+      [`POST ${BASE}/remove`]: () => ({ plan: edited() }),
+    });
+    const { unmount } = renderWithProviders(<Editable initial={withConflict([beef])} />);
+    const row = screen.getByText("牛肉汤").closest("li") as HTMLElement;
+    expect(row).toHaveClass("plan-dish-conflict");
+    expect(within(row).getByText("Changed since planning: 小王 avoids 牛肉; this dish contains 牛肉.")).toBeInTheDocument();
+    expect(screen.getByText(/Some dishes have a new conflict/)).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: "Keep it" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/keep`)).toHaveLength(1));
+    expect(callsTo(calls, "POST", `${BASE}/keep`)[0].body).toEqual({ recipe_id: 2, confirm: [beef], locale: "en" });
+    await waitFor(() => expect(screen.queryByText(/Changed since planning/)).toBeNull());
+    unmount();
+
+    renderWithProviders(<Editable initial={withConflict([beef])} />);
+    const again = screen.getByText("牛肉汤").closest("li") as HTMLElement;
+    // Only "Keep it" sits under the conflict; removing goes through the named × button.
+    expect(within(again).queryByRole("button", { name: "Remove" })).toBeNull();
+    await userEvent.click(within(again).getByRole("button", { name: "Remove 牛肉汤" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/remove`)).toHaveLength(1));
+    expect(callsTo(calls, "POST", `${BASE}/remove`)[0].body).toEqual({ recipe_id: 2, locale: "en" });
+  });
+
+  it("writes the reason sentences in Chinese", () => {
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard plan={withConflict([beef, unknownOil])} editable threadId="t1" onEdited={vi.fn()} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByText("规划之后有变化：小王 忌口 牛肉，这道菜含牛肉")).toBeInTheDocument();
+    expect(screen.getByText("这道菜里的 花椒油 过敏原未知，而这顿有人过敏")).toBeInTheDocument();
+    expect(screen.getByText("已手动修改")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "恢复模型方案" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认保留" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    expect(screen.getByRole("button", { name: "删除牛肉汤" })).toBeInTheDocument();
+    expect(screen.getByText("继续对话会重新规划，手动修改不会带入")).toBeInTheDocument();
+  });
+
+  it("names the user and a guest without a name in the reason", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={withConflict([
+          {
+            ...beef,
+            diner_key: "self",
+            diner_name: null,
+            is_self: true,
+            kind: "allergen",
+            allergen: "milk",
+            ingredient_id: null,
+            ingredient_name: null,
+            rule_type: "allergy",
+            lines: ["牛奶"],
+          },
+          { ...beef, diner_key: "guest:1", diner_name: null },
+        ])}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("Changed since planning: you are allergic to Milk; this dish contains 牛奶."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Changed since planning: a guest avoids 牛肉; this dish contains 牛肉.")).toBeInTheDocument();
+  });
+
+  it("offers restore only on an edited card, and restores", async () => {
+    const restored = plan({ edited: false, model_version: 0, edit: EDIT, count_notes: [], notes: [] });
+    const calls = mockFetch({ [`POST ${BASE}/restore`]: () => ({ plan: restored }) });
+    const { unmount } = renderWithProviders(<Editable initial={TWO} />);
+    expect(screen.queryByRole("button", { name: "Restore the model's plan" })).toBeNull();
+    unmount();
+    renderWithProviders(<Editable initial={edited()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Restore the model's plan" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/restore`)).toHaveLength(1));
+    expect(callsTo(calls, "POST", `${BASE}/restore`)[0].body).toEqual({ locale: "en" });
+    await waitFor(() => expect(screen.queryByText("Edited by hand")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Restore the model's plan" })).toBeNull();
+    expect(screen.queryByText(/Sending another message plans again/)).toBeNull();
+  });
+
+  it("shows a count note only for the counts the card returns", () => {
+    const { unmount } = render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard
+          plan={edited({ count_notes: [{ field: "dishes", stated: 3, now: 2 }] })}
+          editable
+          threadId="t1"
+          onEdited={vi.fn()}
+        />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByText("和你的要求不同：要求 3 道菜，现在 2 道")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(
+      <PlanCard plan={edited({ defaults_used: ["dishes"] })} editable threadId="t1" onEdited={vi.fn()} />,
+    );
+    expect(screen.queryByText(/Differs from what you asked/)).toBeNull();
+  });
+
+  it("shows the allowed hard-check warnings and the deleted-dish note", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={edited({
+          warnings: [
+            { code: "H1", recipe_id: 1, detail: { missing: ["葱"] }, text: "葱花蛋: 1 ingredient missing (葱)" },
+          ],
+          notes: [{ field: "deleted_recipes", titles: ["红烧肉"] }],
+        })}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("葱花蛋: 1 ingredient missing (葱)")).toBeInTheDocument();
+    expect(screen.getByText(/红烧肉: no longer in the recipe library/)).toBeInTheDocument();
+  });
+
+  it("shows no edit controls on an older card and disables them while busy", () => {
+    const { unmount } = renderWithProviders(<PlanCard plan={edited({ recipes: TWO.recipes })} />);
+    expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "+ Add a dish" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore the model's plan" })).toBeNull();
+    expect(screen.getByText("Edited by hand")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(
+      <PlanCard plan={edited({ recipes: TWO.recipes })} editable busy threadId="t1" onEdited={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "Remove 牛肉汤" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "+ Add a dish" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restore the model's plan" })).toBeDisabled();
+  });
+
+  it("shows add a dish on a reply with no plan", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          recipes: [],
+          passed: false,
+          reasons: [{ reason: "not_enough", category: "dishes", needed: 2, available: 0, text: "No dish can be made." }],
+          next_actions: ["import_recipes"],
+        })}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "+ Add a dish" })).toBeEnabled();
+    expect(screen.getByText("No dish can be made.")).toBeInTheDocument();
+  });
+
+  it("renders an old plan without edit fields as before", () => {
+    renderWithProviders(<PlanCard plan={TWO} editable threadId="t1" onEdited={vi.fn()} />);
+    expect(screen.queryByText("Edited by hand")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore the model's plan" })).toBeNull();
+    expect(screen.queryByText(/Sending another message plans again/)).toBeNull();
+    expect(screen.queryByText(/Differs from what you asked/)).toBeNull();
+    expect(screen.queryByText(/Changed since planning/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove 葱花蛋" })).toBeEnabled();
+  });
+
+  it("shows a refused edit and tells the page the thread is busy", async () => {
+    mockFetch({ [`POST ${BASE}/remove`]: () => reply(409, { code: "thread_busy", suggest_paste: false }) });
+    const onRefused = vi.fn();
+    renderWithProviders(<Editable initial={TWO} onRefused={onRefused} />);
+    await userEvent.click(screen.getByRole("button", { name: "Remove 牛肉汤" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/still running or stopped with an error/);
+    expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("牛肉汤")).toBeInTheDocument();
+  });
+
+  it("shows each confirmed override under its dish and counts the dishes on the diners line", () => {
+    const pork: Conflict = { ...beef, ingredient_name: "五花肉", lines: ["五花肉"] };
+    render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard
+          plan={edited({
+            recipes: TWO.recipes,
+            edit: { ...EDIT, kept: [pork, unknownOil] },
+            diners: [
+              { name: null, is_self: true, guest: false },
+              { name: "小王", is_self: false, guest: false },
+            ],
+          })}
+          editable
+          threadId="t1"
+          onEdited={vi.fn()}
+        />
+      </NextIntlClientProvider>,
+    );
+    const row = screen.getByText("牛肉汤").closest("li") as HTMLElement;
+    expect(within(row).getByText("已确认保留：小王 忌口 五花肉")).toBeInTheDocument();
+    expect(within(row).getByText("已确认保留：花椒油 过敏原未知")).toBeInTheDocument();
+    expect(row).not.toHaveClass("plan-dish-conflict");
+    expect(screen.getByText("按 我、小王 排除（1 道菜已确认保留）")).toBeInTheDocument();
+  });
+
+  it("states kept overrides in English and leaves the diners line alone without them", () => {
+    const { unmount } = renderWithProviders(
+      <PlanCard
+        plan={edited({
+          recipes: TWO.recipes,
+          edit: { ...EDIT, kept: [beef] },
+          diners: [{ name: "小王", is_self: false, guest: false }],
+        })}
+      />,
+    );
+    expect(screen.getByText("Kept anyway: 小王 avoids 牛肉")).toBeInTheDocument();
+    expect(screen.getByText("Checked against: 小王 (1 dish kept anyway)")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(<PlanCard plan={edited({ diners: [{ name: "小王", is_self: false, guest: false }] })} />);
+    expect(screen.getByText("Checked against: 小王")).toBeInTheDocument();
+  });
+
+  it("puts add a dish below the reasons on a reply with no plan", () => {
+    renderWithProviders(
+      <PlanCard
+        plan={plan({
+          recipes: [],
+          passed: false,
+          reasons: [{ reason: "not_enough", category: "dishes", needed: 2, available: 0, text: "No dish can be made." }],
+        })}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    const reasons = screen.getByText("No dish can be made.");
+    const add = screen.getByRole("button", { name: "+ Add a dish" });
+    expect(reasons.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("puts add a dish right after the dishes, above the notes", () => {
+    const { container } = renderWithProviders(
+      <PlanCard
+        plan={plan({ headcount: 3, servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }] })}
+        editable
+        threadId="t1"
+        onEdited={vi.fn()}
+      />,
+    );
+    const list = container.querySelector(".card-list") as HTMLElement;
+    const add = screen.getByRole("button", { name: "+ Add a dish" }).closest(".plan-add") as HTMLElement;
+    const notes = container.querySelector(".plan-notes") as HTMLElement;
+    expect(list.nextElementSibling).toBe(add);
+    expect(add.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("asks again when keeping a dish whose conflicts changed", async () => {
+    const other: Conflict = { ...beef, diner_key: "diner:3", diner_name: "小李" };
+    const calls = mockFetch({
+      [`POST ${BASE}/keep`]: (body) =>
+        (body as { confirm: Conflict[] }).confirm.length === 2
+          ? { plan: edited({ recipes: TWO.recipes }) }
+          : reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: [beef, other] }),
+    });
+    renderWithProviders(<Editable initial={withConflict([beef])} />);
+    await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    const dialog = await screen.findByRole("group", { name: "This dish conflicts with" });
+    expect(within(dialog).getByText("小李 avoids 牛肉")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Keep anyway" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/keep`)).toHaveLength(2));
+    expect(callsTo(calls, "POST", `${BASE}/keep`)[1].body).toEqual({
+      recipe_id: 2,
+      confirm: [beef, other],
+      locale: "en",
+    });
+  });
+
+  it("offers the allergen panel for a dish red for unknown allergens, then keeps it again", async () => {
+    const ENTRY = {
+      id: 9, name_zh: "花椒油", name_en: null, aliases_zh: [], aliases_en: [], user_aliases_zh: [],
+      user_aliases_en: [], source: "user", category: "seasoning", stock_mode: "level", allergens: null,
+      parent_id: null,
+    };
+    let resolved = false;
+    const calls = mockFetch({
+      [`POST ${BASE}/keep`]: (body) =>
+        resolved && (body as { confirm: Conflict[] }).confirm.length === 0
+          ? { plan: edited({ recipes: TWO.recipes }) }
+          : reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: [unknownOil] }),
+      "POST /api/ingredients/match": () => ({ matches: [{ name: "花椒油", entry: ENTRY }] }),
+      "POST /api/allergen-suggestions": () => ({ suggested: [], category: null, stock_mode: null }),
+      "POST /api/allergens/resolve": () => {
+        resolved = true;
+        return { ...ENTRY, allergens: [] };
+      },
+    });
+    renderWithProviders(<Editable initial={withConflict([{ ...unknownOil, recipe_id: 2 }])} />);
+    await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    const dialog = await screen.findByRole("group", { name: "This dish conflicts with" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Confirm allergens" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Confirm it contains none" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save allergens" }));
+    await waitFor(() => expect(callsTo(calls, "POST", `${BASE}/keep`)).toHaveLength(2));
+    expect(callsTo(calls, "POST", `${BASE}/keep`)[1].body).toEqual({ recipe_id: 2, confirm: [], locale: "en" });
+    await waitFor(() => expect(screen.queryByRole("group", { name: "This dish conflicts with" })).toBeNull());
   });
 });

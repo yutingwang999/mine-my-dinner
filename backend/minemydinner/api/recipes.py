@@ -4,10 +4,11 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, BeforeValidator
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from minemydinner.api.deps import ApiError, contains_pattern, get_llm_client
+from minemydinner.api.deps import ApiError, get_llm_client
+from minemydinner.api.recipe_match import recipe_text_match
 from minemydinner.constants import DISH_TYPES
 from minemydinner.db import get_session
 from minemydinner.extraction.schemas import ExtractedIngredient
@@ -18,7 +19,6 @@ from minemydinner.models import (
     Cookware,
     Diner,
     ExtractionLog,
-    Ingredient,
     Recipe,
     RecipeCookware,
     RecipeIngredient,
@@ -181,30 +181,11 @@ def list_recipes(
     # Query values arrive as text, so the Literal needs them as numbers first.
     page_size: Annotated[Literal[10, 20, 50, 100], BeforeValidator(int)] = PAGE_SIZE,
 ) -> RecipePage:
-    """Text search on title, tags, and ingredient names, with no model call."""
+    """Text search on title, tags, ingredient line names, and dictionary names and aliases,
+    with no model call."""
     query = select(Recipe)
     if q and q.strip():
-        pattern = contains_pattern(q)
-        line_matches = (
-            select(RecipeIngredient.id)
-            .outerjoin(Ingredient, RecipeIngredient.ingredient_id == Ingredient.id)
-            .where(
-                RecipeIngredient.recipe_id == Recipe.id,
-                or_(
-                    RecipeIngredient.name.ilike(pattern),
-                    # Dictionary names let "egg" find a recipe whose line says "鸡蛋".
-                    Ingredient.name_zh.ilike(pattern),
-                    Ingredient.name_en.ilike(pattern),
-                ),
-            )
-        )
-        query = query.where(
-            or_(
-                Recipe.title.ilike(pattern),
-                func.array_to_string(Recipe.tags, "\n").ilike(pattern),
-                exists(line_matches),
-            )
-        )
+        query = query.where(recipe_text_match(q))
     if dish_type is not None:
         query = query.where(Recipe.dish_type == dish_type)
     total = session.scalar(select(func.count()).select_from(query.subquery()))

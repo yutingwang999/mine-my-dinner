@@ -775,6 +775,87 @@ describe("ChatPage", () => {
     expect(screen.getByText("Who is eating?")).toBeInTheDocument();
   });
 
+  it("edits only the newest card of an editable thread and keeps the returned card", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    const edited = plan({
+      recipes: [],
+      edited: true,
+      model_version: 0,
+      edit: { overrides: [], log: [], conflicts: [] },
+      count_notes: [],
+      notes: [],
+    });
+    setup({
+      "GET /api/chat/threads/t5": () => ({ ...twoPlans, editable: true }),
+      "POST /api/chat/threads/t5/plan/remove": () => ({ plan: edited }),
+    });
+    await screen.findByText("Second plan.");
+    const removes = screen.getAllByRole("button", { name: "Remove 葱花蛋" });
+    expect(removes).toHaveLength(1);
+    await userEvent.click(removes[0]);
+    expect(await screen.findByText("Edited by hand")).toBeInTheDocument();
+    expect(screen.getByText("The note above describes the original plan.")).toBeInTheDocument();
+    // The first reply's card is unchanged.
+    expect(screen.getAllByText("葱花蛋")).toHaveLength(1);
+  });
+
+  it("blocks sending, a new conversation, and next actions while an edit is in flight", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({
+      "GET /api/chat/threads/t5": () => ({ ...twoPlans, editable: true }),
+      "POST /api/chat/threads/t5/plan/remove": () => new Promise(() => {}) as never,
+    });
+    await screen.findByText("Second plan.");
+    await userEvent.type(screen.getByRole("textbox", { name: "Your message" }), "more");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Remove 葱花蛋" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "New conversation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow shopping" })).toBeDisabled();
+  });
+
+  it("shows no edit controls when the thread is not editable", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    setup({ "GET /api/chat/threads/t5": () => ({ ...twoPlans, editable: false }) });
+    await screen.findByText("Second plan.");
+    expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "+ Add a dish" })).toBeNull();
+  });
+
+  it("reloads the editable flag when an edit is refused as busy", async () => {
+    window.localStorage.setItem(THREAD_KEY, "t5");
+    let reads = 0;
+    setup({
+      "GET /api/chat/threads/t5": () => {
+        reads += 1;
+        return { ...twoPlans, editable: reads === 1 };
+      },
+      "POST /api/chat/threads/t5/plan/remove": () => reply(409, { code: "thread_busy", suggest_paste: false }),
+    });
+    await screen.findByText("Second plan.");
+    await userEvent.click(screen.getByRole("button", { name: "Remove 葱花蛋" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull());
+    expect(reads).toBe(2);
+  });
+
+  it("allows edits after a run ends with a plan", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () => stream(frame("plan", plan()), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByRole("button", { name: "Remove 葱花蛋" })).toBeEnabled();
+  });
+
+  it("allows no edits after a run fails", async () => {
+    setup({
+      "POST /api/chat/threads/t1/messages": () =>
+        stream(frame("plan", plan()), frame("error", { code: "models_unavailable" }), DONE),
+    });
+    await send("dinner");
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
+  });
+
   it("renders the same first markup as the server when a thread is remembered", () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     calls = mockFetch({

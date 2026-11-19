@@ -5,7 +5,15 @@ import { useFormatter, useTranslations } from "next-intl";
 import { DinerCard, type DinerDraft } from "@/components/DinerCard";
 import { PlanCard } from "@/components/PlanCard";
 import { RequestStylePrompt } from "@/components/RequestStylePrompt";
-import type { AskedQuestion, DinerAnswer, NextAction, Pending, RequestStyle, ThreadItem } from "@/lib/chat";
+import type {
+  AskedQuestion,
+  ChatPlan,
+  DinerAnswer,
+  NextAction,
+  Pending,
+  RequestStyle,
+  ThreadItem,
+} from "@/lib/chat";
 import { useErrorText } from "@/lib/errors";
 
 type Props = {
@@ -23,6 +31,15 @@ type Props = {
   /** The pending card's edits, kept across a failed confirm. */
   dinerDraft?: DinerDraft;
   onDinerDraft?: (draft: DinerDraft) => void;
+  /** The thread takes manual edits of its newest card now (the thread read's `editable`). */
+  editable?: boolean;
+  threadId?: string | null;
+  /** Gets the card a manual edit of the newest plan returned. */
+  onEdited?: (plan: ChatPlan) => void;
+  /** A manual edit was refused because the thread is busy. */
+  onEditRefused?: () => void;
+  /** Hears when a manual edit request starts (true) and ends (false). */
+  onEditing?: (saving: boolean) => void;
 };
 
 /** The assistant's words for a question: the hint that used to sit above the input. */
@@ -66,8 +83,14 @@ export function MessageList({
   onConfirmDiners,
   dinerDraft,
   onDinerDraft,
+  editable = false,
+  threadId = null,
+  onEdited,
+  onEditRefused,
+  onEditing,
 }: Props) {
   const t = useTranslations("chat");
+  const tEdit = useTranslations("chat.edit");
   const tStyle = useTranslations("chat.requestStyle");
   const errorText = useErrorText();
   const questionText = useQuestionText();
@@ -109,6 +132,8 @@ export function MessageList({
             <li key={index} className="chat-message chat-assistant">
               <strong className="sr-only">{t("assistant")}</strong>
               {item.text && <p>{item.text}</p>}
+              {/* The model's note was written for the plan it made, not the edited one. */}
+              {item.text && item.plan?.edited && <p className="hint">{tEdit("noteForOriginal")}</p>}
               {item.plan && (
                 <PlanCard
                   plan={item.plan}
@@ -116,6 +141,11 @@ export function MessageList({
                   actionable={index === newestPlan}
                   onAction={onAction}
                   onReplan={onReplan}
+                  editable={editable && index === newestPlan}
+                  threadId={threadId}
+                  onEdited={onEdited}
+                  onEditRefused={onEditRefused}
+                  onEditing={onEditing}
                 />
               )}
             </li>

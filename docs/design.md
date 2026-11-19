@@ -446,7 +446,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 
 Import confirmation shows the duration and its source. A changed duration becomes `user` by default, and the user can mark it `stated` when the source gives it, which also corrects an extraction that mislabeled a stated time. `estimated` is offered only while the model's own number is unchanged. A later "cooked this meal" feature could let the user record actual time.
 
-**Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written back to `current_plan`, so the next conversation turn sees it. The user can also add, remove, and change items when confirming the shopping list.
+**Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written to the conversation state (`current_plan`) so later turns can read it; until T1.5 part 3b, a new message plans again from the request (3b revises the edited plan). Edits live in the conversation state until the plan is saved (T1.5 part 3c); "restore the model's plan" brings back the model's last version and checks it again against today's data. The user can also add, remove, and change items when confirming the shopping list.
 
 | Rule | When the user adds a dish that breaks it |
 |---|---|

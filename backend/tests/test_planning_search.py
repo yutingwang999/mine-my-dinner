@@ -412,3 +412,30 @@ def test_unknown_allergen_exclusions_lines(session, seeded):
         ExcludedRecipe(odd.id, "神秘菜", ["某种酱"])
     ]
     assert unknown_allergen_exclusions(session, ctx, []) == []
+
+
+def test_show_blocked_keeps_conflicting_hits(session, seeded, fake_embed):
+    pork = make_recipe(session, "红烧肉", dish_type="meat dish", lines=[L("五花肉")])
+    odd = make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
+    ok = make_recipe(session, "清炒白菜", lines=[L("小白菜")])
+    me = self_diner(session).id
+    rule(session, me, "dietary restriction", ingredient="五花肉")
+    rule(session, me, "allergy", allergen="egg")
+    ctx = ctx_for(session, me)
+    assert ids(search_recipes(session, fake_embed, ctx)) == [ok.id]
+    result = search_recipes(session, fake_embed, ctx, show_blocked=True)
+    hits = {h.id: h for h in result.hits}
+    assert set(hits) == {pork.id, odd.id, ok.id}
+    [conflict] = hits[pork.id].conflicts
+    assert conflict == {
+        "diner_key": f"diner:{me}",
+        "rule_type": "dietary restriction",
+        "allergen": None,
+        "ingredient_id": by_zh(session, "五花肉").id,
+        "text": None,
+        "line": "五花肉",
+    }
+    assert hits[pork.id].blocked_unknown == []
+    assert hits[odd.id].conflicts == []
+    assert hits[odd.id].blocked_unknown == ["某种酱"]
+    assert hits[ok.id].conflicts == [] and hits[ok.id].blocked_unknown == []

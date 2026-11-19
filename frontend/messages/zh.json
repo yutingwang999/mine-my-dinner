@@ -85,7 +85,12 @@
     "thread_not_found": "没有找到这段对话，请新建一段。",
     "headcount_too_low": "人数少于卡片上勾选和添加的人，请调高后再确认。",
     "card_out_of_date": "这张卡片显示后，上面的人或食材已被删除。请重新发送你的请求。",
-    "nothing_pending": "现在没有等待回答的问题。"
+    "nothing_pending": "现在没有等待回答的问题。",
+    "thread_busy": "这段对话还在进行或出错了，发一条消息后再改。",
+    "no_plan": "这段对话里还没有可以修改的方案。",
+    "not_edited": "方案没有被手动修改，不需要恢复。",
+    "already_in_plan": "这道菜已在方案中。",
+    "not_in_plan": "这道菜已不在方案中。"
   },
   "review": {
     "amountVague": "适量",
@@ -577,7 +582,8 @@
       "leftOutNothingLinked": "没有找到这个名称下未关联的食材行，这道菜仍被排除。请到词典页面查看。",
       "leftOutCreateInstead": "找不到？新建一个条目",
       "leftOutLinkInstead": "改为关联到已有条目",
-      "replan": "重新规划"
+      "replan": "重新规划",
+      "dinersKept": "（{count} 道菜已确认保留）"
     },
     "warning": {
       "S1": "{name}：{parts}，共需 {needed} {unit}，库存 {have} {unit}。",
@@ -605,6 +611,47 @@
       "split_conflicts_total": "荤菜和素菜的数量要求和总菜数对不上。请重新告诉我各自的数量。",
       "split_exceeds_total": "荤菜和素菜的数量加起来超过了总菜数。请重新告诉我各自的数量。",
       "too_many": "一次最多只能安排 12 道（所有种类合计）。请告诉我想做几道。"
+    },
+    "edit": {
+      "addDish": "+ 加一道菜",
+      "removeDish": "删除{title}",
+      "searchLabel": "搜索菜名或食材",
+      "search": "搜索",
+      "searching": "正在搜索…",
+      "closeSearch": "收起",
+      "results": "搜索结果",
+      "noResults": "没有找到包含“{query}”的菜",
+      "inPlan": "已在方案中",
+      "add": "加入",
+      "time": "{minutes} 分钟",
+      "missing": "缺：{list}",
+      "missingCookware": "缺厨具：{list}",
+      "edited": "已手动修改",
+      "restore": "恢复模型方案",
+      "quiet": "继续对话会重新规划，手动修改不会带入",
+      "noteForOriginal": "以上说明针对原方案",
+      "unresolved": "方案里还有新出现的冲突：请逐道确认保留或删除。",
+      "keep": "确认保留",
+      "self": "你",
+      "guest": "一位客人",
+      "rule": "{type, select, allergy {过敏} dislike {不喜欢} other {忌口}} {target}",
+      "line": "{who}：{rule}",
+      "unknownLine": "{lines}：过敏原未知",
+      "reason": "规划之后有变化：{who} {rule}，这道菜含{lines}",
+      "reasonUnknown": "这道菜里的 {lines} 过敏原未知，而这顿有人过敏",
+      "lineSeparator": "、",
+      "confirmTitle": "这道菜有以下冲突",
+      "confirmAdd": "仍然加入",
+      "confirmKeep": "仍然保留",
+      "cancel": "取消",
+      "confirmUnknownHint": "确认食材的过敏原后，会重新检查这道菜。",
+      "countNote": "和你的要求不同：{list}",
+      "countNoteSeparator": "；",
+      "countNoteItem": "要求 {bound, select, at_least {至少 } at_most {最多 } other {}}{stated} 道{field, select, dishes {菜} soups {汤} meat_dishes {荤菜} vegetable_dishes {素菜} staples {主食} desserts {甜点} other {小吃}}，现在 {now} 道",
+      "deletedRecipes": "{titles} 已不在菜谱库中，已从方案中去掉。",
+      "kept": "已确认保留：{who} {rule}",
+      "keptUnknown": "已确认保留：{lines} 过敏原未知",
+      "showMore": "显示更多"
     }
   }
 }
