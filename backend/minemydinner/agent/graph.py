@@ -79,6 +79,7 @@ from minemydinner.agent.revise_step import (
     WISH_UNMET,
     card_search_notes,
     carried_overrides,
+    count_fix_hint,
     dish_facts,
     failed_note,
     from_version,
@@ -1154,7 +1155,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             )
         problems = [p["text"] for p in state["revision"]["problems"]]
         ids = state["revision"]["recipe_ids"]
-        return retry_text(state, session, ctx, header, ids, problems)
+        text = retry_text(state, session, ctx, header, ids, problems)
+        # Which categories are off and how to fix them, after the H4 line (task 8b): the
+        # reviser swapped a vegetable dish for a meat dish and then gave up.
+        h4 = [v for v in state["validation"]["violations"] if v["code"] == "H4"]
+        if h4:
+            text += "\n\nTo fix the counts: " + count_fix_hint(h4[0]["detail"])
+        return text
 
     def revise_attempt(state: ChatState) -> dict:
         spec = PlanSpec.model_validate(state["spec"])

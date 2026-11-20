@@ -45,8 +45,10 @@ class RevisionProposal(BaseModel):
             "leaves out in excepted. \"general\": it is a wish that points at no particular "
             "dish (\"something spicier\", \"not so many egg dishes\"); a general ingredient or "
             "taste word that does not point at one dish is a general wish, not a named dish, "
-            "and locked dishes stay. \"unclear\": you cannot tell which dishes are meant; "
-            "change nothing (empty remove and add) and say in note what to ask the user."
+            "and so is a wish to change without saying how (\"换个思路\"); locked dishes stay. "
+            "\"unclear\": only when the message points at a dish but you cannot tell which one "
+            "(\"drop the soup\" with two soups); change nothing (empty remove and add) and say "
+            "in note what to ask the user."
         )
     )
     remove: list[RemovedDish] = Field(
@@ -55,7 +57,10 @@ class RevisionProposal(BaseModel):
     )
     add: list[int] = Field(
         default_factory=list,
-        description="The ids of the dishes to add. None of them may already be in the plan.",
+        description=(
+            "The recipe ids of the dishes to add, as integers only. None of them may already "
+            "be in the plan, and no id may be in both add and remove."
+        ),
     )
     scope_quote: str = Field(
         default="",

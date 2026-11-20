@@ -37,7 +37,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v1"
+    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -393,9 +393,26 @@ def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v1"
+    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
     assert PROMPT_VERSIONS["parse"] == "parse_v6"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+
+
+def test_revise_v1_is_frozen_and_revise_v2_is_current():
+    import hashlib
+
+    v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
+    # revise_v1 was used by plan 3b-1 development runs, so it must never change.
+    assert hashlib.sha256(v1).hexdigest() == (
+        "9062ccb0da4dfd894023e79f6fabe118c5484f9dcc94c32ddc6563f55fbb4fc3"
+    )
+    assert PROMPT_VERSIONS["revise"] == "revise_v2"
+    v2 = load_prompt("revise")
+    assert v2 == (PROMPT_DIR / "revise_v2.md").read_text(encoding="utf-8")
+    # The fixes of the 20261120T091620Z development run (task 8b).
+    assert "meat dish for a meat dish" in v2
+    assert "integers" in v2 and "never in both add and remove" in v2
+    assert "换个思路" in v2
 
 
 def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():

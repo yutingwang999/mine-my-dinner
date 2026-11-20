@@ -481,6 +481,8 @@ def test_failed_validation_retries_with_errors(graph_env, veg, meat):
     assert record.retries == 1 and record.first_passed is False and record.final_passed is True
     retry_request = planner_requests(graph_env)[1]
     assert "the user wants 2 dishes" in retry_request and str(veg.id) in retry_request
+    # The category hint is the revise step's; a new plan's retry is unchanged.
+    assert "same dish type" not in retry_request
 
 
 def test_h2_failure_after_retries_is_never_shown(graph_env, session, veg):

@@ -16,6 +16,7 @@ from minemydinner.agent.plan_card import meal_constraints
 from minemydinner.agent.planner import REVISE_TOOLS_VERSION
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import PROMPT_VERSION, set_request_style
+from minemydinner.agent.revise_step import count_fix_hint
 from minemydinner.models import AppPreference, PlanningRun
 from minemydinner.planning.context import load_planning_context
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client, tool_call
@@ -242,6 +243,61 @@ def test_failed_revision_leaves_plan_unchanged(env):
     record = last_record(env)
     assert (record.final_passed, record.retries) == (False, MAX_RETRIES)
     assert record.request["revision"] == {"from_version": 0}
+
+
+def test_count_fix_hint_names_the_categories_that_are_off():
+    detail = {
+        "required": {"dishes": 4, "soups": 1, "staples": 0, "desserts": 0, "snacks": 0},
+        "present": {
+            "dishes": 4,
+            "soups": 0,
+            "meat_dishes": 3,
+            "vegetable_dishes": 1,
+            "staples": 0,
+            "desserts": 0,
+            "snacks": 1,
+        },
+        "ranges": {"meat_dishes": [2, 2], "vegetable_dishes": [2, 2]},
+    }
+    hint = count_fix_hint(detail)
+    assert hint.startswith("The revised plan must have 4 dishes: 2 meat dishes and 2 vegetable dishes.")
+    assert "Too many: 1 meat dish, 1 snack." in hint
+    assert "Too few: 1 vegetable dish, 1 soup." in hint
+    assert "same dish type" in hint and "meat dish for a meat dish" in hint
+    # A total that is off while the sides are free is a dish of either side.
+    free = {
+        "required": {"dishes": 3, "soups": 0, "staples": 0, "desserts": 0, "snacks": 0},
+        "present": {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1, "soups": 0},
+        "ranges": {"meat_dishes": [0, 3], "vegetable_dishes": [0, 3]},
+    }
+    hint = count_fix_hint(free)
+    assert hint.startswith("The revised plan must have 3 dishes. Too few: 1 dish (meat or vegetable).")
+    assert "Too many" not in hint
+    # A side given as a range keeps the total in front of it.
+    ranged = {**free, "ranges": {"meat_dishes": [2, 3], "vegetable_dishes": [0, 3]}}
+    assert count_fix_hint(ranged).startswith(
+        "The revised plan must have 3 dishes: at least 2 meat dishes."
+    )
+
+
+def test_split_broken_by_a_general_wish_gets_the_category_hint(env):
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    egg, pork, beans = ids_of(env, "番茄炒蛋", "红烧肉", "干煸豆角")
+    out = revise(
+        env,
+        "想要辣一些的",
+        [
+            proposal("general", remove=[(egg, "")], add=[pork]),
+            proposal("general", remove=[(egg, "")], add=[beans]),
+        ],
+        parse={"query": "辣一些的"},
+    )
+    assert out["current_plan"]["passed"] is True and out["retries"] == 1
+    retry = [m for m in reviser_requests(env)[1] if m.type == "human"][-1].content
+    assert "The plan has 3 dishes, 2 meat dishes, 1 vegetable dish" in retry
+    assert "must have 3 dishes: 1 meat dish and 2 vegetable dishes." in retry
+    assert "Too many: 1 meat dish." in retry and "Too few: 1 vegetable dish." in retry
+    assert "same dish type" in retry
 
 
 def test_unclear_asks_and_changes_nothing(env):

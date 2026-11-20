@@ -8,7 +8,15 @@ from collections.abc import Collection
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from minemydinner.agent.card_text import NEXT_ACTION_ORDER, is_zh, no_plan_reason, unmet_for_user
+from minemydinner.agent.card_text import CATEGORY_WORDS as COUNT_WORDS
+from minemydinner.agent.card_text import (
+    NEXT_ACTION_ORDER,
+    detail_ranges,
+    is_zh,
+    no_plan_reason,
+    side_phrases,
+    unmet_for_user,
+)
 from minemydinner.agent.edits import ALLOWED_CODES, latest_model_index, locked_ids
 from minemydinner.agent.revision import DishFacts, RevisionProposal, changed_text
 from minemydinner.models import Recipe, RecipeIngredient
@@ -168,6 +176,58 @@ def must_unmet_names(violations: list[Finding]) -> set[str]:
         for f in violations
         if f.code == "H7" and f.detail.get("rule") == "must"
     }
+
+
+def _count_words(n: int, category: str) -> str:
+    one, many, _ = COUNT_WORDS[category]
+    return f"{n} {one if n == 1 else many}"
+
+
+def count_fix_hint(detail: dict) -> str:
+    """For the reviser's retry after an H4 finding: which categories have too many or too few
+    dishes, and that a replacement takes the dish type of the dish it replaces (spec 5.2: a
+    revision keeps the plan's counts and categories unless the message changes a count).
+    Only the revise step adds it; a new plan's retry keeps the H4 line alone."""
+    required, present = detail["required"], detail["present"]
+    ranges = detail_ranges(detail)
+    over: list[str] = []
+    under: list[str] = []
+    side_off = False
+    for category in ("meat_dishes", "vegetable_dishes"):
+        low, high = ranges[category]
+        have = present.get(category, 0)
+        if have > high:
+            over.append(_count_words(have - high, category))
+            side_off = True
+        elif have < low:
+            under.append(_count_words(low - have, category))
+            side_off = True
+    gap = present.get("dishes", 0) - required.get("dishes", 0)
+    if gap and not side_off:
+        words = f"{_count_words(abs(gap), 'dishes')} (meat or vegetable)"
+        (over if gap > 0 else under).append(words)
+    for category in ("soups", "staples", "desserts", "snacks"):
+        diff = present.get(category, 0) - required.get(category, 0)
+        if diff > 0:
+            over.append(_count_words(diff, category))
+        elif diff < 0:
+            under.append(_count_words(-diff, category))
+    total = required.get("dishes", 0)
+    sides = side_phrases(ranges, total, False)
+    keep = _count_words(total, "dishes")
+    if sides:
+        keep += ": " + " and ".join(sides.values())
+    lines = [f"The revised plan must have {keep}."]
+    if over:
+        lines.append(f"Too many: {', '.join(over)}.")
+    if under:
+        lines.append(f"Too few: {', '.join(under)}.")
+    lines.append(
+        "Replace each removed dish with one of the same dish type (a meat dish for a meat "
+        "dish, a vegetable dish for a vegetable dish, a soup for a soup) unless the message "
+        "changes a count, and choose the dish to remove from the category the wish fits."
+    )
+    return " ".join(lines)
 
 
 def problem_for_user(problem: dict, titles: dict[int, str], locale: str) -> str:
