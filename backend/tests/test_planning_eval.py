@@ -708,7 +708,8 @@ def test_tools_and_prompts_are_saved(tmp_path):
     }
     copied = {p.name: p.read_bytes() for p in (folder / "prompts").iterdir()}
     in_use = {p.name: p.read_bytes() for p in prompt_files()}
-    assert copied == in_use and len(copied) == 3
+    # route, parse, planner, and revise (plan 3b-1).
+    assert copied == in_use and len(copied) == 4
     cond = data["conditions"]
     assert cond["prompt_version"] == PROMPT_VERSION
     assert cond["prompt_versions"] == PROMPT_VERSIONS

@@ -150,7 +150,7 @@ def newest_reply_id(values: dict) -> str:
     raise EditError("no_plan")
 
 
-def _model_index(versions: list[dict]) -> int:
+def latest_model_index(versions: list[dict]) -> int:
     """The latest model version: manual versions are the only entries marked `edited`."""
     for index in range(len(versions) - 1, -1, -1):
         if not versions[index].get("edited"):
@@ -484,6 +484,41 @@ def _restored_card(
     return card
 
 
+def revised_card(
+    session: Session,
+    ctx: PlanningContext,
+    values: dict,
+    *,
+    recipe_ids: list[int],
+    result: ValidationResult,
+    overrides: list[H2Override],
+    locked: list[int],
+    index: int,
+    locale: str,
+) -> dict:
+    """A revision that passed its checks, as a model version (plan 3b-1 spec 5.5): the card of
+    a manual version (H1, H3, H6 and H7 of locked dishes as warnings, the carried overrides
+    with their kept conflicts), but not edited, with `model_version` its own index in
+    `plan_versions`, an empty edit log and no count notes. `values["spec"]` is the
+    revision's spec. The caller adds `revision`."""
+    card = _edited_card(
+        session,
+        ctx,
+        values,
+        recipe_ids=recipe_ids,
+        result=result,
+        conflicts=_conflicts(session, values, result.violations, locale),
+        overrides=overrides,
+        locked=locked,
+        log=[],
+        notes=[],
+        model_index=index,
+        locale=locale,
+    )
+    card.update(edited=False, count_notes=[])
+    return card
+
+
 def _update(values: dict, reply_id: str, versions: list[dict], card: dict) -> dict:
     return {
         "current_plan": card,
@@ -506,7 +541,7 @@ def apply_edit(
     reply_id = newest_reply_id(values)
     current = values["reply_plans"][reply_id]
     versions = list(values.get("plan_versions") or [])
-    model_index = _model_index(versions)
+    model_index = latest_model_index(versions)
     editing = bool(current.get("edited"))
 
     if isinstance(action, Restore):

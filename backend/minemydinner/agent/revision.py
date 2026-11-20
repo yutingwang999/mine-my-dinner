@@ -286,9 +286,14 @@ def revised_ids(plan: dict, proposal: RevisionProposal) -> list[int]:
 
 
 def changed_text(
-    removed: list[str], added: list[str], untouched_locked: list[str], locale: str
+    removed: list[str],
+    added: list[str],
+    untouched_locked: list[str],
+    locale: str,
+    untouched_kept: list[str] = (),
 ) -> str:
-    """The sentence on what the revision changed, and which locked dishes it left."""
+    """The sentence on what the revision changed, and which locked dishes it left: those added
+    by hand (`untouched_locked`) and those the user chose to keep (`untouched_kept`)."""
     zh = is_zh(locale)
     join = "、" if zh else ", "
     parts = []
@@ -307,5 +312,12 @@ def changed_text(
             f"{names}是你手动加的，没有改动。"
             if zh
             else f"{names} was added by you, so it was left as is."
+        )
+    if untouched_kept:
+        names = join.join(untouched_kept)
+        parts.append(
+            f"{names}是你确认保留的，没有改动。"
+            if zh
+            else f"You chose to keep {names}, so it was left as is."
         )
     return "".join(parts) if zh else " ".join(parts)

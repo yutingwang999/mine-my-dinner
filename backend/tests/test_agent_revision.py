@@ -175,6 +175,13 @@ def test_changed_text_both_languages():
     assert changed_text(["A"], ["B"], ["X"], "en") == (
         "Replaced A with B. X was added by you, so it was left as is."
     )
+    assert changed_text(["A"], ["B"], ["X"], "zh", ["Y"]) == (
+        "把A换成了B。X是你手动加的，没有改动。Y是你确认保留的，没有改动。"
+    )
+    assert changed_text(["A"], ["B"], [], "en", ["Y", "Z"]) == (
+        "Replaced A with B. You chose to keep Y, Z, so it was left as is."
+    )
+    assert changed_text([], [], [], "zh", ["Y"]) == "Y是你确认保留的，没有改动。"
 
 
 def test_count_cut_is_outside_the_general_limit():

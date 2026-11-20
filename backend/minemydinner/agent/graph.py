@@ -47,13 +47,20 @@ from minemydinner.agent.labels import (
     labels_scope,
     load_label_context,
 )
+from minemydinner.agent.edits import locked_ids, revised_card
 from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.plan_card import (
     build_dishes_card,
     card_base,
     meal_constraints,
 )
-from minemydinner.agent.planner import TOOLS_VERSION, PlanProposal, build_planner
+from minemydinner.agent.planner import (
+    REVISE_TOOLS_VERSION,
+    TOOLS_VERSION,
+    PlanProposal,
+    build_planner,
+    build_reviser,
+)
 from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
@@ -68,6 +75,34 @@ from minemydinner.agent.request import (
     request_problem,
     set_request_style,
 )
+from minemydinner.agent.revise_step import (
+    WISH_UNMET,
+    card_search_notes,
+    carried_overrides,
+    dish_facts,
+    failed_note,
+    from_version,
+    kept_locked,
+    must_unmet_names,
+    open_conflict_ids,
+    reply_text,
+    revision_defaults,
+    revision_opening,
+    split_violations,
+    unchanged_card,
+    unchanged_note,
+    unmet_entries,
+    untouched_locked,
+    wish_unmet_actions,
+)
+from minemydinner.agent.revision import (
+    RevisionProblem,
+    RevisionProposal,
+    changed_text,
+    check_revision,
+    revised_ids,
+    revision_spec,
+)
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
@@ -79,7 +114,7 @@ from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclus
 from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
 from minemydinner.planning.stock import compute_missing
 from minemydinner.planning.tools import PlannerDeps
-from minemydinner.planning.validate import PlanSpec, ValidationResult, validate_plan
+from minemydinner.planning.validate import Finding, PlanSpec, ValidationResult, validate_plan
 
 # Retries after the first proposal fails validation (design 7.3: at most N times).
 MAX_RETRIES = 2
@@ -337,8 +372,37 @@ def _merge_notes(
 # ---- the graph ----
 
 
+def _notes_from_searches(notes: dict | None, messages: list) -> dict | None:
+    """Search notes with what each search_recipes result in `messages` left out added."""
+    for message in messages:
+        if not (isinstance(message, ToolMessage) and message.name == "search_recipes"):
+            continue
+        try:
+            result = json.loads(message.content)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(result, dict):
+            continue
+        notes = _merge_notes(
+            notes,
+            list(result.get("left_out_unknown_allergens", [])),
+            bool(result.get("semantic_paused")),
+        )
+    return notes
+
+
+def _asks_back(proposal: RevisionProposal) -> bool:
+    """An unclear target with no change: the model asks which dish is meant."""
+    return proposal.target == "unclear" and not proposal.remove and not proposal.add
+
+
+def _empty_search_notes() -> dict:
+    return {"left_out_unknown_allergens": [], "left_out_details": [], "semantic_paused": False}
+
+
 def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     planner_agent: CompiledStateGraph | None = None
+    reviser_agent: CompiledStateGraph | None = None
 
     def get_planner() -> CompiledStateGraph:
         # Built on first use, so conversations that never plan never build a model.
@@ -346,6 +410,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if planner_agent is None:
             planner_agent = build_planner(deps)
         return planner_agent
+
+    def get_reviser() -> CompiledStateGraph:
+        nonlocal reviser_agent
+        if reviser_agent is None:
+            reviser_agent = build_reviser(deps)
+        return reviser_agent
 
     def route_intent(state: ChatState) -> dict:
         # Each new message is a new request, which may be asked about once.
@@ -372,6 +442,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
 
     def choose(state: ChatState) -> str:
+        # Plan 3b-1 Task 4: a turn whose intent is "revise" changes the current plan. Task 5
+        # makes the route return it and decides what runs before the revise step.
+        if state["intent"] == "revise" and state.get("current_plan") is not None:
+            return "start_revision"
         if state["intent"] != "plan":
             return "other"
         return after_parse(state) if _reuses_parse(state) else "parse_request"
@@ -643,7 +717,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         )
         return Command(update={"shortfalls": dumped, "search_notes": notes}, goto="present_plan")
 
-    def request_summary(state: ChatState, preferences: list[str]) -> str:
+    def request_summary(
+        state: ChatState, preferences: list[str], heading: str = "Plan this meal."
+    ) -> str:
         spec, parsed = state["spec"], state["request"]
         lines = [
             f"Reply locale: {state.get('locale', 'en')}",
@@ -672,13 +748,24 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             lines.append(f"Exclude dishes from the last {parsed['exclude_recent_days']} days")
         lines.append("Diners' dietary limits:")
         lines.extend(f"- {line}" for line in preferences or ["none recorded"])
-        return "Plan this meal.\n" + "\n".join(lines)
+        return f"{heading}\n" + "\n".join(lines)
 
     def retry_message(state: ChatState, session, ctx) -> str:
         """The violations of the previous attempt, then a short summary of it."""
-        codes = diner_codes(meal_constraints(state), current_table())
         ids = state["proposal"]["recipe_ids"]
-        problems = [_violation_for_model(v, codes) for v in state["validation"]["violations"]]
+        header = f"Your proposal {ids} failed these checks. Propose a new plan that fixes each one:"
+        return retry_text(state, session, ctx, header, ids, [])
+
+    def retry_text(
+        state: ChatState, session, ctx, header: str, ids: list[int], problems: list[str]
+    ) -> str:
+        """`header`, then `problems` and the previous attempt's violations, then a short
+        summary of that attempt (`ids` are the dishes it proposed)."""
+        codes = diner_codes(meal_constraints(state), current_table())
+        problems = [
+            *problems,
+            *(_violation_for_model(v, codes) for v in state["validation"]["violations"]),
+        ]
         known = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(ids)))) if ids else set()
         missing = compute_missing(session, ctx, sorted(known)) if known else {}
         per_recipe = [
@@ -693,7 +780,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "Missing items per proposed recipe: " + ("; ".join(per_recipe) or "none"),
         ]
         return (
-            f"Your proposal {ids} failed these checks. Propose a new plan that fixes each one:\n"
+            f"{header}\n"
             + "\n".join(f"- {p}" for p in problems)
             + "\n\nThe previous attempt:\n"
             + "\n".join(f"- {line}" for line in summary)
@@ -707,6 +794,44 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             deps.run_query_vectors.pop(state["run_id"], None)
             raise
 
+    def build_opening(
+        state: ChatState, session, ctx, spec: PlanSpec, vectors: dict, heading: str
+    ) -> tuple[str, dict | None, list[int]]:
+        """The shortlist (when used), then the request summary under `heading`. Returns the
+        text, the search notes with the shortlist's left-out dishes, and the shortlist ids."""
+        notes = state.get("search_notes")
+        summary = request_summary(
+            state, meal_preferences(session, ctx, current_table()), heading
+        )
+        entries = None
+        complete: frozenset[str] = frozenset()
+        if deps.use_shortlist:
+            parsed = ParsedRequest.model_validate(state["request"])
+            found = build_shortlist_result(session, deps.client, ctx, spec, parsed, vectors)
+            entries = found.entries
+            complete = found.complete
+            notes = _merge_notes(
+                notes, [], found.semantic_paused, found.left_out_unknown_allergens
+            )
+        ids = [entry.id for items in (entries or {}).values() for entry in items]
+        return planner_opening(entries, summary, complete), notes, ids
+
+    def planner_context(state: ChatState, spec: PlanSpec, vectors: dict) -> PlannerDeps:
+        """The tools' runtime context for one attempt of the planner or the revise step."""
+        return PlannerDeps(
+            deps.session_factory,
+            deps.client,
+            meal_constraints(state),
+            spec.mode,
+            query_vectors=vectors,
+            must_use=list(spec.must_use),
+            all_use=list(spec.all_use),
+            prefer_use=list(spec.prefer_use),
+            time_limit_min=spec.time_limit_min,
+            exclude_recent_days=state["request"].get("exclude_recent_days"),
+            query=state["request"].get("query"),
+        )
+
     def plan_attempt(state: ChatState) -> dict:
         constraints = meal_constraints(state)
         spec = PlanSpec.model_validate(state["spec"])
@@ -719,63 +844,23 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             ctx = load_planning_context(session, constraints)
             if opening is None:
                 # Built once per run and stored, so every attempt sends the same bytes.
-                summary = request_summary(
-                    state, meal_preferences(session, ctx, current_table())
+                opening, notes, shortlist_ids = build_opening(
+                    state, session, ctx, spec, vectors, "Plan this meal."
                 )
-                entries = None
-                complete: frozenset[str] = frozenset()
-                if deps.use_shortlist:
-                    parsed = ParsedRequest.model_validate(state["request"])
-                    found = build_shortlist_result(
-                        session, deps.client, ctx, spec, parsed, vectors
-                    )
-                    entries = found.entries
-                    complete = found.complete
-                    notes = _merge_notes(
-                        notes, [], found.semantic_paused, found.left_out_unknown_allergens
-                    )
-                opening = planner_opening(entries, summary, complete)
                 update["planner_opening"] = opening
-                update["shortlist_ids"] = [
-                    entry.id for items in (entries or {}).values() for entry in items
-                ]
+                update["shortlist_ids"] = shortlist_ids
             messages = [HumanMessage(opening)]
             validation = state.get("validation")
             if validation is not None and not validation["passed"]:
                 messages.append(HumanMessage(retry_message(state, session, ctx)))
-        context = PlannerDeps(
-            deps.session_factory,
-            deps.client,
-            constraints,
-            spec.mode,
-            query_vectors=vectors,
-            must_use=list(spec.must_use),
-            all_use=list(spec.all_use),
-            prefer_use=list(spec.prefer_use),
-            time_limit_min=spec.time_limit_min,
-            exclude_recent_days=state["request"].get("exclude_recent_days"),
-            query=state["request"].get("query"),
-        )
         out = get_planner().invoke(
-            {"messages": messages, "run_id": state["run_id"]}, context=context
+            {"messages": messages, "run_id": state["run_id"]},
+            context=planner_context(state, spec, vectors),
         )
         # A run cut off by the call limits or the token budget has no proposal; validation
         # then fails it.
         proposal = out.get("structured_response") or PlanProposal(recipe_ids=[], note="")
-        for message in out["messages"]:
-            if not (isinstance(message, ToolMessage) and message.name == "search_recipes"):
-                continue
-            try:
-                result = json.loads(message.content)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(result, dict):
-                continue
-            notes = _merge_notes(
-                notes,
-                list(result.get("left_out_unknown_allergens", [])),
-                bool(result.get("semantic_paused")),
-            )
+        notes = _notes_from_searches(notes, out["messages"])
         return {
             **update,
             "proposal": proposal.model_dump(),
@@ -917,6 +1002,290 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "messages": [AIMessage(note, id=reply_id)],
         }
 
+    # ---- the revise step (plan 3b-1 spec 5.2-5.6) ----
+
+    def start_revision(state: ChatState, config: RunnableConfig) -> dict:
+        """Start a planning run that changes the current plan: the revision's spec (the plan's
+        counts, the message's changes on top) and the run's record, marked with the version
+        it starts from. Who eats is the current plan's (a change in who eats plans anew)."""
+        plan = state["current_plan"]
+        index = from_version(plan, state.get("plan_versions") or [])
+        parsed = ParsedRequest.model_validate(state["request"])
+        spec = revision_spec(plan, state.get("previous_request"), state["request"])
+        defaults_used = revision_defaults(plan.get("defaults_used") or [], plan["spec"], spec)
+        texts = _current_request(state["messages"])
+        settled_data = state.get("settled_diners")
+        settled = SettledDiners.from_state(settled_data) if settled_data else None
+        request = {
+            "messages": [deps.client.prepare_text(t) for t in texts],
+            "parsed": map_strings(parsed.model_dump(), deps.client.prepare_text),
+            "spec": map_strings(spec.model_dump(), deps.client.prepare_text),
+            "headcount": state["constraints"]["headcount"],
+            "locale": state.get("locale", "en"),
+            "revision": {"from_version": index},
+        }
+        run_id = deps.recorder.start(
+            thread_id=config["configurable"]["thread_id"],
+            request=request,
+            defaults_used=defaults_used,
+            prompt_version=PROMPT_VERSION,
+            tools_version=REVISE_TOOLS_VERSION,
+            has_temporary_guests=bool(parsed.guests or (settled and settled.guest_names)),
+        )
+        for stale in [r for r in deps.run_query_vectors if r != run_id]:
+            del deps.run_query_vectors[stale]
+        for event in state.get("model_calls") or []:
+            deps.recorder.add_event(run_id, event)
+        return {
+            "model_calls": [],
+            "spec": spec.model_dump(),
+            "defaults_used": defaults_used,
+            "run_id": run_id,
+            "retries": 0,
+            "proposal": None,
+            "validation": None,
+            "first_passed": None,
+            "best": None,
+            "blocked_codes": [],
+            "shortfalls": [],
+            "search_notes": _empty_search_notes(),
+            "planner_opening": None,
+            "shortlist_ids": [],
+            "revision": {
+                "from_version": index,
+                "message": "\n".join(texts),
+                "recipe_ids": [r["id"] for r in plan["recipes"]],
+                "problems": [],
+            },
+        }
+
+    def reviser(state: ChatState) -> dict:
+        try:
+            return revise_attempt(state)
+        except BaseException:
+            deps.run_query_vectors.pop(state["run_id"], None)
+            raise
+
+    def revise_retry_message(state: ChatState, session, ctx) -> str:
+        """The previous attempt's revision problems and violations, in the planner's format."""
+        data = state["proposal"]
+        if data is None:
+            header = "You gave no revision. Answer with the RevisionProposal tool:"
+        else:
+            removed = [r["id"] for r in data["remove"]]
+            header = (
+                f"Your revision (remove {removed}, add {data['add']}) failed these checks. "
+                "Propose a new revision of the current plan that fixes each one:"
+            )
+        problems = [p["text"] for p in state["revision"]["problems"]]
+        ids = state["revision"]["recipe_ids"]
+        return retry_text(state, session, ctx, header, ids, problems)
+
+    def revise_attempt(state: ChatState) -> dict:
+        spec = PlanSpec.model_validate(state["spec"])
+        vectors = deps.run_query_vectors.setdefault(state["run_id"], {})
+        update: dict[str, Any] = {}
+        notes = state.get("search_notes")
+        opening = state.get("planner_opening")
+        plan = state["current_plan"]
+        with deps.session_factory() as session:
+            ctx = load_planning_context(session, meal_constraints(state))
+            if opening is None:
+                base, notes, shortlist_ids = build_opening(
+                    state, session, ctx, spec, vectors, "Revise this meal."
+                )
+                _, mains = dish_facts(session, [r["id"] for r in plan["recipes"]])
+                opening = revision_opening(base, plan, mains, state["revision"]["message"])
+                update["planner_opening"] = opening
+                update["shortlist_ids"] = shortlist_ids
+            messages = [HumanMessage(opening)]
+            validation = state.get("validation")
+            if validation is not None and not validation["passed"]:
+                messages.append(HumanMessage(revise_retry_message(state, session, ctx)))
+        out = get_reviser().invoke(
+            {"messages": messages, "run_id": state["run_id"]},
+            context=planner_context(state, spec, vectors),
+        )
+        # A run cut off by the call limits or the token budget has no answer; the check
+        # then fails the attempt.
+        answer = out.get("structured_response")
+        notes = _notes_from_searches(notes, out["messages"])
+        return {
+            **update,
+            "proposal": answer.model_dump() if answer is not None else None,
+            "search_notes": _merge_notes(notes, [], False),
+        }
+
+    def check_revised(state: ChatState) -> Command:
+        """The revision's own rules (revision.check_revision), then the hard checks with the
+        carried overrides. H1, H3, H6 and H7 caused only by locked dishes are warnings."""
+        plan = state["current_plan"]
+        spec = PlanSpec.model_validate(state["spec"])
+        revision = dict(state["revision"])
+        current_ids = [r["id"] for r in plan["recipes"]]
+        data = state["proposal"]
+        proposal = RevisionProposal.model_validate(data) if data is not None else None
+        if proposal is not None and _asks_back(proposal):
+            # Unclear: the plan stays and the model's question is the reply. Any other empty
+            # change ("nothing fits") is checked like a change: an open conflict still fails
+            # H2 and a changed count still fails H4.
+            update: dict[str, Any] = {
+                "revision": {**revision, "recipe_ids": current_ids, "problems": []}
+            }
+            if state.get("first_passed") is None:
+                update["first_passed"] = False
+            return Command(update=update, goto="present_revision")
+        with deps.session_factory() as session:
+            if proposal is None:
+                ids = current_ids
+                problems = [
+                    RevisionProblem(
+                        code="R6", text="No revision was given: answer with RevisionProposal."
+                    )
+                ]
+            else:
+                ids = revised_ids(plan, proposal)
+                facts, _ = dish_facts(session, current_ids)
+                problems = check_revision(plan, proposal, revision["message"], facts, spec=spec)
+            ctx = load_planning_context(session, meal_constraints(state))
+            result = validate_plan(session, ctx, spec, ids, carried_overrides(plan, ids))
+            missed_before: set[str] = set()
+            if must_unmet_names(result.violations):
+                # A "must use" name the current plan already missed (under its own spec) is
+                # not this revision's doing.
+                before = validate_plan(
+                    session,
+                    ctx,
+                    PlanSpec.model_validate(plan["spec"]),
+                    current_ids,
+                    carried_overrides(plan, current_ids),
+                )
+                missed_before = must_unmet_names(before.violations)
+        locked = (locked_ids(plan) - open_conflict_ids(plan)) & set(ids)
+        failing, allowed = split_violations(result.violations, locked, missed_before)
+        passed = not problems and not failing
+        dumped = result.model_dump(mode="json")
+        problem_dumps = [p.model_dump() for p in problems]
+        deps.recorder.add_event(
+            state["run_id"],
+            {
+                "kind": "validation",
+                "attempt": state["retries"],
+                "recipe_ids": ids,
+                "passed": passed,
+                "problems": problem_dumps,
+                "result": map_strings(dumped, deps.client.prepare_text),
+            },
+        )
+        update = {
+            "validation": {
+                "passed": passed,
+                "violations": [v.model_dump(mode="json") for v in failing],
+                "allowed": [v.model_dump(mode="json") for v in allowed],
+                "warnings": dumped["warnings"],
+            },
+            "revision": {**revision, "recipe_ids": ids, "problems": problem_dumps},
+        }
+        if state.get("first_passed") is None:
+            update["first_passed"] = passed
+        if not passed and state["retries"] < MAX_RETRIES:
+            update["retries"] = state["retries"] + 1
+            return Command(update=update, goto="reviser")
+        return Command(update=update, goto="present_revision")
+
+    def present_revision(state: ChatState) -> dict:
+        """A passed revision becomes a new model version and the current plan. Otherwise
+        (every attempt failed, unclear, or nothing to change) the plan stays as it was: the
+        reply's card shows the current dishes, not passed, and the state's spec goes back to
+        the plan's, so a manual edit of that card checks against the plan's own request."""
+        locale = state.get("locale", "en")
+        plan = state["current_plan"]
+        versions = list(state.get("plan_versions") or [])
+        revision = state["revision"]
+        validation = state.get("validation")
+        data = state["proposal"]
+        proposal = RevisionProposal.model_validate(data) if data is not None else None
+        changed = proposal is not None and bool(proposal.remove or proposal.add)
+        passed = validation is not None and validation["passed"]
+        update: dict[str, Any] = {}
+        with deps.session_factory() as session:
+            if proposal is not None and _asks_back(proposal):
+                card = unchanged_card(plan, [], [])
+                note = proposal.note.strip() or unchanged_note(locale)
+            elif changed and passed:
+                ctx = load_planning_context(session, meal_constraints(state))
+                ids = revision["recipe_ids"]
+                result = ValidationResult(
+                    violations=[Finding(**v) for v in validation["allowed"]],
+                    warnings=[Finding(**w) for w in validation["warnings"]],
+                    passed=False,
+                )
+                card = revised_card(
+                    session,
+                    ctx,
+                    state,
+                    recipe_ids=ids,
+                    result=result,
+                    overrides=carried_overrides(plan, ids),
+                    locked=kept_locked(plan, ids),
+                    index=len(versions),
+                    locale=locale,
+                )
+                card["revision"] = {"from_version": revision["from_version"]}
+                note = reply_text(plan, proposal, card, locale)
+                update.update(current_plan=card, plan_versions=[*versions, card])
+            elif passed:
+                # The checks passed with no change: the model found nothing that fits the
+                # wish. The plan stays; the reply says so with next actions (spec 5.4).
+                unmet = unmet_entries(
+                    [{"code": WISH_UNMET, "recipe_id": None}], [], {}, locale
+                )
+                actions = wish_unmet_actions(state["spec"])
+                card = unchanged_card(plan, unmet, actions)
+                titles_now = {r["id"]: r["title"] for r in plan["recipes"]}
+                hand, kept = untouched_locked(plan, proposal, titles_now)
+                parts = [
+                    failed_note(locale, True),
+                    changed_text([], [], hand, locale, kept),
+                    proposal.note.strip(),
+                ]
+                note = "\n\n".join(part for part in parts if part)
+            else:
+                titles = {r["id"]: r["title"] for r in plan["recipes"]}
+                extra = [i for i in revision["recipe_ids"] if i not in titles]
+                if extra:
+                    titles.update(
+                        session.execute(
+                            select(Recipe.id, Recipe.title).where(Recipe.id.in_(extra))
+                        ).all()
+                    )
+                violations = (validation or {}).get("violations", [])
+                actions = next_actions(state["spec"], [], [v["code"] for v in violations])
+                unmet = unmet_entries(revision["problems"], violations, titles, locale)
+                card = unchanged_card(plan, unmet, actions)
+                note = failed_note(locale, bool(actions))
+        if "current_plan" not in update:
+            update.update(
+                spec=plan["spec"],
+                defaults_used=plan.get("defaults_used") or [],
+                search_notes=card_search_notes(plan),
+            )
+        deps.run_query_vectors.pop(state["run_id"], None)
+        deps.recorder.finish(
+            state["run_id"],
+            retries=state["retries"],
+            first_passed=bool(state.get("first_passed")),
+            # Only a revision that became the current plan passed.
+            final_passed="current_plan" in update,
+            final_plan=map_strings(card, deps.client.prepare_text),
+        )
+        reply_id = str(uuid.uuid4())
+        return {
+            **update,
+            "reply_plans": {**(state.get("reply_plans") or {}), reply_id: card},
+            "messages": [AIMessage(note, id=reply_id)],
+        }
+
     def with_labels(node: Callable, restore: bool = True) -> Callable:
         """Run `node` with the conversation's label table as the current label context, so
         the client hooks replace saved nicknames in every model call the node makes. The
@@ -966,9 +1335,22 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         destinations=("check_feasibility", "present_plan"),
     )
     builder.add_node("present_plan", with_labels(present_plan))
+    builder.add_node("start_revision", with_labels(start_revision))
+    builder.add_node("reviser", with_labels(reviser))
+    builder.add_node(
+        "check_revised",
+        with_labels(check_revised),
+        destinations=("reviser", "present_revision"),
+    )
+    builder.add_node("present_revision", with_labels(present_revision))
     builder.add_edge(START, "route_intent")
     gates = ["ask_style", "ask_question", "select_diners", "load_context", "unclear"]
-    builder.add_conditional_edges("route_intent", choose, ["parse_request", "other", *gates])
+    builder.add_conditional_edges(
+        "route_intent", choose, ["parse_request", "other", "start_revision", *gates]
+    )
+    builder.add_edge("start_revision", "reviser")
+    builder.add_edge("reviser", "check_revised")
+    builder.add_edge("present_revision", END)
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")
