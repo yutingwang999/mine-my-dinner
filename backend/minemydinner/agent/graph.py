@@ -106,7 +106,7 @@ from minemydinner.agent.revision import (
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
-from minemydinner.planning.composition import composition_gap, side_ranges
+from minemydinner.planning.composition import composition_gap, count_categories, side_ranges
 from minemydinner.planning.context import diner_codes, load_planning_context
 from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
 from minemydinner.planning.inventory import meal_preferences
@@ -150,8 +150,50 @@ UNCLEAR_REPLY_ZH = "我没能理解这次要几道菜，所以没有出方案。
 CLOSEST_NOTE_ZH = "这是我能找到的最接近的方案，有些规则没有满足，详见下方。"
 
 
+# What a message asks for (plan 3b-1 spec 5.1). A new intent is added here and in the route
+# prompt only. "revise" and "unsure" need a current plan; without one code reads them as "plan".
+IntentName = Literal["plan", "revise", "unsure", "other"]
+
+
 class Intent(BaseModel):
-    intent: Literal["plan", "other"]
+    intent: IntentName
+
+
+# The answers of the choice card shown for "unsure"; anything else continues as "revise".
+REVISE_OR_PLAN = ("revise", "plan")
+
+_PLAN_LINE_CATEGORIES = (
+    ("soups", "soup", "soups"),
+    ("staples", "staple food", "staple foods"),
+    ("desserts", "dessert", "desserts"),
+    ("snacks", "snack", "snacks"),
+)
+
+
+# Marks the plan line as the app's, so the parse does not take it for the user's newest words.
+PLAN_LINE_PREFIX = "[App note, not written by the user] Current plan: "
+
+
+def current_plan_line(plan: dict) -> str:
+    """The current plan as one fixed line for the parse input of a revise turn (spec 5.3), in
+    the parse prompt's terms: "dishes" are the meat plus vegetable dishes. Titles only; never
+    a diner."""
+    if not plan["recipes"]:
+        return f"{PLAN_LINE_PREFIX}no dishes"
+    counts = count_categories(r["dish_type"] for r in plan["recipes"])
+    parts = []
+    if counts["dishes"]:
+        noun = "dish" if counts["dishes"] == 1 else "dishes"
+        parts.append(
+            f"{counts['dishes']} {noun} ({counts['meat_dishes']} meat, "
+            f"{counts['vegetable_dishes']} vegetable)"
+        )
+    for name, one, many in _PLAN_LINE_CATEGORIES:
+        if counts[name]:
+            parts.append(f"{counts[name]} {one if counts[name] == 1 else many}")
+    titles = ", ".join(r["title"] for r in plan["recipes"])
+    # A dish type outside the categories is listed by title only.
+    return f"{PLAN_LINE_PREFIX}{', '.join(parts) or 'other dishes'}: {titles}"
 
 
 def _model_call_event(client: Any, step: str, messages: list, result: Any) -> dict:
@@ -221,6 +263,11 @@ def _reuses_parse(state: ChatState) -> bool:
         and isinstance(last.content, str)
         and last.content.strip() in REPLAN_MESSAGE.values()
     )
+
+
+def _revises(state: ChatState) -> bool:
+    """This turn changes the current plan (intent "revise" with a plan to change)."""
+    return state.get("intent") == "revise" and state.get("current_plan") is not None
 
 
 def _current_request(messages: list) -> list[str]:
@@ -418,17 +465,22 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return reviser_agent
 
     def route_intent(state: ChatState) -> dict:
-        # Each new message is a new request, which may be asked about once.
-        fresh = {"asked_question": False}
+        # Each new message is a new request, which may be asked about once. The thread's
+        # request is kept before this turn's parse replaces it: a revision compares the two.
+        fresh = {"asked_question": False, "previous_request": state.get("request")}
         if _reuses_parse(state):
             # "Plan again": the previous parsed request stands as this turn's parse, with
             # no model call; choose sends the turn on as after a parse.
             return {**fresh, "intent": "plan", "model_calls": [{"kind": "parse_reused"}]}
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
+        intent = result.parsed.intent
+        if intent in ("revise", "unsure") and state.get("current_plan") is None:
+            # Nothing to revise yet (spec 5.1). A no-plan or early-stop reply is a plan.
+            intent = "plan"
         return {
             **fresh,
-            "intent": result.parsed.intent,
+            "intent": intent,
             # A new turn starts the buffer fresh, so events left by a turn that failed
             # before load_context are never recorded under this run.
             "model_calls": [_model_call_event(deps.client, "route", messages, result)],
@@ -442,13 +494,28 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
 
     def choose(state: ChatState) -> str:
-        # Plan 3b-1 Task 4: a turn whose intent is "revise" changes the current plan. Task 5
-        # makes the route return it and decides what runs before the revise step.
-        if state["intent"] == "revise" and state.get("current_plan") is not None:
-            return "start_revision"
-        if state["intent"] != "plan":
+        # A revise turn is parsed like a new plan; after_parse then sends it to the revise
+        # step. "unsure" asks first with the choice card.
+        if state["intent"] == "unsure":
+            return "ask_revise_or_plan"
+        if state["intent"] not in ("plan", "revise"):
             return "other"
         return after_parse(state) if _reuses_parse(state) else "parse_request"
+
+    def ask_revise_or_plan(state: ChatState) -> dict:
+        """The choice card (spec 5.1): change the current plan or plan a new meal. Shown once
+        per message, before the parse. A skipped card (None or other text) revises: it keeps
+        the user's work, and the reply shows what changed."""
+        last = state["messages"][-1]
+        message = last.content if isinstance(last.content, str) else ""
+        asked = {"kind": "revise_or_plan", "message": message}
+        answer = interrupt(asked)
+        choice = answer if answer in REVISE_OR_PLAN else None
+        recorded = {**asked, "choice": choice}
+        return {
+            "intent": choice or "revise",
+            "questions": [*(state.get("questions") or []), _question(state, recorded)],
+        }
 
     def parse_request(state: ChatState) -> dict:
         # The parse also reads the assistant's questions, so a short answer such as "两个"
@@ -456,6 +523,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         conversation = parse_messages(
             state["messages"], state.get("questions") or [], state.get("locale", "en")
         )
+        if _revises(state):
+            # A relative count ("再加一道") needs the plan's size (spec 5.3). The line is
+            # marked as the app's, not the user's (no parse prompt change, parse_v5).
+            conversation.append(HumanMessage(current_plan_line(state["current_plan"])))
         messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         return {
@@ -491,6 +562,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             if len(state["messages"]) > state.get("problem_asked_at", -1):
                 return "ask_question"
             return "unclear"
+        if _revises(state):
+            # A revision never asks the ask-first question (spec 5.3): unstated fields come
+            # from the current plan. A change in who eats plans anew after the diner card
+            # (spec 5.1); load_context then marks the turn as a plan.
+            # That fallback also skips the ask-first question and plans from this parse.
+            return "select_diners" if diner_card_needed(state, parsed) else "start_revision"
         with deps.session_factory() as session:
             style = get_request_style(session)
         if style is None:
@@ -659,6 +736,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         for event in state.get("model_calls") or []:
             deps.recorder.add_event(run_id, event)
         return {
+            # Planning from scratch, also for a revise turn that changed who eats.
+            "intent": "plan",
             "model_calls": [],
             "spec": spec.model_dump(),
             "constraints": {
@@ -1265,6 +1344,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 card = unchanged_card(plan, unmet, actions)
                 note = failed_note(locale, bool(actions))
         if "current_plan" not in update:
+            # The plan stays, but `request` keeps this turn's parse (decided for plan 3b-1):
+            # "plan again" then plans the latest request from scratch (spec 5.1).
             update.update(
                 spec=plan["spec"],
                 defaults_used=plan.get("defaults_used") or [],
@@ -1314,6 +1395,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     builder = StateGraph(ChatState)
     builder.add_node("route_intent", with_labels(route_intent))
+    builder.add_node("ask_revise_or_plan", with_labels(ask_revise_or_plan))
     builder.add_node("other", with_labels(other))
     # The parse output keeps labels as labels (friend_rules codes are resolved by code), so
     # no nickname reaches the state's request through the post-hook.
@@ -1344,10 +1426,18 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     )
     builder.add_node("present_revision", with_labels(present_revision))
     builder.add_edge(START, "route_intent")
-    gates = ["ask_style", "ask_question", "select_diners", "load_context", "unclear"]
+    gates = [
+        "ask_style",
+        "ask_question",
+        "select_diners",
+        "load_context",
+        "unclear",
+        "start_revision",
+    ]
     builder.add_conditional_edges(
-        "route_intent", choose, ["parse_request", "other", "start_revision", *gates]
+        "route_intent", choose, ["parse_request", "other", "ask_revise_or_plan", *gates]
     )
+    builder.add_edge("ask_revise_or_plan", "parse_request")
     builder.add_edge("start_revision", "reviser")
     builder.add_edge("reviser", "check_revised")
     builder.add_edge("present_revision", END)

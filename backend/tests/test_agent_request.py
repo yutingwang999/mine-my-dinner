@@ -37,7 +37,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v2+parse_v5+planner_v4+revise_v1"
+    assert PROMPT_VERSION == "route_v3+parse_v5+planner_v4+revise_v1"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -393,7 +393,7 @@ def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v2+parse_v5+planner_v4+revise_v1"
+    assert PROMPT_VERSION == "route_v3+parse_v5+planner_v4+revise_v1"
     assert PROMPT_VERSIONS["parse"] == "parse_v5"
 
 

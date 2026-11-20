@@ -16,6 +16,9 @@ class ChatState(TypedDict):
     intent: str | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
+    # The thread's request before this turn's parse replaced it (plan 3b-1): a revision takes a
+    # count or field from the new request only when it differs from this one.
+    previous_request: dict | None
     defaults_used: list[str]
     # PlanSpec as a dict, and the meal constraints: diner_ids, guest_rules (RuleRef dicts),
     # unconfirmed_diners, headcount.

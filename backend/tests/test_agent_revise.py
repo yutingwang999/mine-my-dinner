@@ -1,6 +1,6 @@
-"""The revise step of the planning graph (plan 3b-1 Task 4). Until routing sends revise turns
-there (Task 5), a test enters it by writing the turn as route_intent's output with intent
-"revise" and the follow-up's parse."""
+"""The revise step of the planning graph (plan 3b-1 Task 4). A test enters it by writing the
+turn as route_intent's output with intent "revise"; the scripted parse then runs as on a real
+revise turn. The real route path is tested in test_agent_graph.py."""
 
 from dataclasses import dataclass
 from typing import Any
@@ -15,7 +15,7 @@ from minemydinner.agent.graph import MAX_RETRIES, GraphDeps, build_graph
 from minemydinner.agent.plan_card import meal_constraints
 from minemydinner.agent.planner import REVISE_TOOLS_VERSION
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.agent.request import PROMPT_VERSION, ParsedRequest, set_request_style
+from minemydinner.agent.request import PROMPT_VERSION, set_request_style
 from minemydinner.models import AppPreference, PlanningRun
 from minemydinner.planning.context import load_planning_context
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client, tool_call
@@ -99,16 +99,13 @@ def proposal(target: str, remove=(), add=(), note: str = "", **fields):
 
 
 def revise(env: Env, text: str, replies: list, parse: dict | None = None) -> dict:
-    """A follow-up turn routed to the revise step."""
+    """A follow-up turn routed to the revise step, with no earlier request to compare with
+    (previous_request stays unset), so every field the parse states counts as changed."""
     env.model.replies = list(replies)
+    env.model.structured["ParsedRequest"] = [parse or {}]
     env.graph.update_state(
         env.config,
-        {
-            "messages": [HumanMessage(text)],
-            "intent": "revise",
-            "model_calls": [],
-            "request": ParsedRequest.model_validate(parse or {}).model_dump(),
-        },
+        {"messages": [HumanMessage(text)], "intent": "revise", "model_calls": []},
         as_node="route_intent",
     )
     return env.graph.invoke(None, env.config)

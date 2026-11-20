@@ -611,3 +611,31 @@ def test_resume_card_headcount(client, tmp_path, session, recipe):
     assert values["settled_diners"]["others"] == 2
     assert values["settled_diners"]["headcount"] == 4
     assert values["settled_diners"]["stated_headcount"] == 2
+
+
+def test_choice_card_resumes_and_shows_in_history(client, tmp_path, session, recipe):
+    model = plan_model(recipe)
+    model.structured["Intent"] = [{"intent": "plan"}, {"intent": "unsure"}]
+    install(tmp_path, session, model, "plan_then_adjust")
+    tid = new_thread(client)
+    sse(post_message(client, tid, "今晚吃什么"))
+    model.replies = [
+        tool_call(
+            "RevisionProposal",
+            {"target": "general", "remove": [], "add": [], "note": "没有更辣的了。"},
+        )
+    ]
+    events = sse(post_message(client, tid, "来点辣的"))
+    assert of(events, "interrupt") == [{"kind": "revise_or_plan", "message": "来点辣的"}]
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    assert body["pending"] == {"kind": "revise_or_plan", "message": "来点辣的"}
+    events = sse(post_resume(client, tid, "revise", "zh"))
+    assert "interrupt" not in names(events)
+    assert any("RevisionProposal" in str(sent[0].content) for sent in model.sent if sent)
+    items = items_of(client, tid)
+    assert [i["type"] for i in items] == ["user", "assistant", "user", "question", "assistant"]
+    assert items[3]["value"] == {
+        "kind": "revise_or_plan",
+        "message": "来点辣的",
+        "choice": "revise",
+    }
