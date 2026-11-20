@@ -869,7 +869,7 @@ describe("PlanCard manual edits", () => {
     expect(callsTo(calls, "POST", `${BASE}/remove`)[0].body).toEqual({ recipe_id: 2, locale: "en" });
     expect(await screen.findByText("Edited by hand")).toBeInTheDocument();
     expect(screen.queryByText("牛肉汤")).toBeNull();
-    expect(screen.getByText(/Sending another message plans again/)).toBeInTheDocument();
+    expect(screen.queryByText(/Sending another message plans again/)).toBeNull();
     // The removed dish's button is gone; focus goes to "+ Add a dish".
     expect(screen.getByRole("button", { name: "+ Add a dish" })).toHaveFocus();
   });
@@ -946,7 +946,7 @@ describe("PlanCard manual edits", () => {
     expect(screen.getByRole("button", { name: "确认保留" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
     expect(screen.getByRole("button", { name: "删除牛肉汤" })).toBeInTheDocument();
-    expect(screen.getByText("继续对话会重新规划，手动修改不会带入")).toBeInTheDocument();
+    expect(screen.queryByText("继续对话会重新规划，手动修改不会带入")).toBeNull();
   });
 
   it("names the user and a guest without a name in the reason", () => {

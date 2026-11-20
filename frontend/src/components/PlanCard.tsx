@@ -302,13 +302,13 @@ function LeftOutDishes({
 
 /**
  * The quiet lines of an edited card: how it differs from a count the user stated, dishes
- * dropped because they left the library, and that a new message plans again (until 3b).
+ * dropped because they left the library.
  */
-function EditNotes({ plan, showQuiet }: { plan: ChatPlan; showQuiet: boolean }) {
+function EditNotes({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.edit");
   const counts = plan.count_notes ?? [];
   const deleted = (plan.notes ?? []).filter((note) => note.field === "deleted_recipes" && note.titles.length > 0);
-  if (counts.length === 0 && deleted.length === 0 && !showQuiet) return null;
+  if (counts.length === 0 && deleted.length === 0) return null;
   const bound = (field: string) =>
     (field === "meat_dishes"
       ? plan.spec.meat_bound
@@ -333,7 +333,6 @@ function EditNotes({ plan, showQuiet }: { plan: ChatPlan; showQuiet: boolean }) 
           {t("deletedRecipes", { titles: note.titles.join(t("lineSeparator")) })}
         </p>
       ))}
-      {showQuiet && <p className="hint">{t("quiet")}</p>}
     </div>
   );
 }
@@ -561,7 +560,7 @@ export function PlanCard({
       {hasDishes && addRow}
       {showNoDishes && <p className="hint">{t("noDishes")}</p>}
       {conflicts.length > 0 && <p className="notice notice-warning">{tEdit("unresolved")}</p>}
-      <EditNotes plan={plan} showQuiet={plan.edited === true && controls} />
+      <EditNotes plan={plan} />
       {reasonTexts.length > 0 && (
         <div className="notice notice-warning">
           <h3>{t("reasons")}</h3>
