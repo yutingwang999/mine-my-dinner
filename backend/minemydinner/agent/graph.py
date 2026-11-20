@@ -846,6 +846,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "next_actions": [],
             "servings_notes": [],
             **base,
+            "locked": [],
             "passed": final["passed"],
         }
         if shortfalls:
@@ -892,6 +893,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     base=base,
                     locale=locale,
                 )
+                plan["locked"] = []
             note = shown["proposal"]["note"]
             if not shown["validation"]["passed"]:
                 # The fixed closest note always leads; the model's own note may follow it.

@@ -13,6 +13,7 @@ from minemydinner.agent.edits import (
     Remove,
     Restore,
     apply_edit,
+    locked_ids,
 )
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
 from minemydinner.models import Diner
@@ -663,3 +664,78 @@ def test_edit_after_a_newer_model_version(env):
     outcome, _, _ = run(env, after2, Restore())
     assert ids(outcome.plan) == [env.meat.id, env.soup.id]
     assert outcome.plan["model_version"] == 2
+
+
+def _revised_state(env):
+    """A thread state whose model version carries a lock and one override, as a revised
+    version does: the egg dish conflicts with a rule and is kept by an override."""
+    rule(env.session, env.wang.id, "allergy", allergen="egg")
+    values = model_state(env, [env.veg.id, env.egg.id])
+    override = H2Override(
+        recipe_id=env.egg.id, diner_key=f"diner:{env.wang.id}", allergen="egg"
+    ).model_dump()
+    card = values["current_plan"]
+    card["locked"] = [env.egg.id]
+    card["edit"] = {"overrides": [override], "log": [], "conflicts": [], "kept": []}
+    values["plan_versions"] = [card]
+    return values, override
+
+
+def test_manual_add_locks_the_dish(env):
+    values = model_state(env, [env.veg.id, env.egg.id])
+    _, _, after = run(env, values, Add(recipe_id=env.soup.id, confirm=[]))
+    assert after["current_plan"]["locked"] == [env.soup.id]
+    _, _, after = run(env, after, Remove(recipe_id=env.soup.id))
+    assert after["current_plan"]["locked"] == []
+
+
+def test_locked_ids_include_override_dishes(env):
+    values, override = _revised_state(env)
+    plan = values["current_plan"]
+    assert locked_ids({**plan, "locked": []}) == {env.egg.id}
+    assert locked_ids(plan) == {env.egg.id}
+    plan = {"locked": [env.veg.id], "edit": {"overrides": [override]}}
+    assert locked_ids(plan) == {env.veg.id, env.egg.id}
+
+
+def test_old_card_without_locked_reads_empty(env):
+    values = model_state(env, [env.veg.id, env.egg.id])
+    plan = values["current_plan"]
+    assert "locked" not in plan
+    assert locked_ids(plan) == set()
+    assert locked_ids({"edit": {"overrides": [{"recipe_id": 7}]}}) == {7}
+    _, _, after = run(env, values, Remove(recipe_id=env.egg.id))
+    assert after["current_plan"]["locked"] == []
+
+
+def test_restore_keeps_a_revised_versions_locks_and_overrides(env):
+    values, override = _revised_state(env)
+    _, _, after = run(env, values, Remove(recipe_id=env.veg.id))
+    outcome, _, _ = run(env, after, Restore())
+    plan = outcome.plan
+    assert plan["edited"] is False
+    assert plan["locked"] == [env.egg.id]
+    assert plan["edit"]["overrides"] == [override]
+    assert plan["edit"]["conflicts"] == []
+    assert [k["recipe_id"] for k in plan["edit"]["kept"]] == [env.egg.id]
+    assert plan["passed"] is True
+
+
+def test_manual_edit_from_a_model_version_with_overrides_keeps_them(env):
+    values, override = _revised_state(env)
+    outcome, _, _ = run(env, values, Remove(recipe_id=env.veg.id))
+    plan = outcome.plan
+    assert plan["edited"] is True
+    assert plan["locked"] == [env.egg.id]
+    assert plan["edit"]["overrides"] == [override]
+    assert plan["edit"]["log"] == [{"action": "remove", "recipe_id": env.veg.id, "at": ANY}]
+    assert [k["recipe_id"] for k in plan["edit"]["kept"]] == [env.egg.id]
+    assert plan["edit"]["conflicts"] == []
+
+
+def test_restore_of_a_no_plan_version_has_no_locked_key_error(env):
+    values = no_plan_state(env)
+    _, _, after = run(env, values, Add(recipe_id=env.veg.id, confirm=[]))
+    assert after["current_plan"]["locked"] == [env.veg.id]
+    outcome, _, _ = run(env, after, Restore())
+    assert outcome.plan == values["plan_versions"][0]

@@ -158,6 +158,14 @@ def _model_index(versions: list[dict]) -> int:
     raise EditError("no_plan")
 
 
+def locked_ids(plan: dict) -> set[int]:
+    """The dishes a revision must keep: those added by hand and still in the plan (`locked`)
+    and those an override covers. A card saved before locks existed reads as no locks."""
+    ids = set(plan.get("locked") or [])
+    ids.update(o["recipe_id"] for o in (plan.get("edit") or {}).get("overrides", []))
+    return ids
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -381,6 +389,7 @@ def _edited_card(
     result: ValidationResult,
     conflicts: list[Conflict],
     overrides: list[H2Override],
+    locked: list[int],
     log: list[dict],
     notes: list[dict],
     model_index: int,
@@ -413,6 +422,7 @@ def _edited_card(
     card.update(
         passed=not conflicts,
         edited=True,
+        locked=locked,
         model_version=model_index,
         edit={
             "overrides": [o.model_dump() for o in overrides],
@@ -434,10 +444,13 @@ def _restored_card(
     model_index: int,
     locale: str,
 ) -> dict:
-    """The model version's dishes checked again against today's data, with no overrides: the
-    card the model's plan would get today. A new H2 conflict is marked, not listed as unmet."""
+    """The model version's dishes checked again against today's data, with the overrides and
+    locks the version carries (a revised version has some; the model's own plan has none):
+    the card the model's plan would get today. A new H2 conflict is marked, not listed as
+    unmet."""
     titles = {r["id"]: r["title"] for r in model["recipes"]}
-    ids, _, notes, result = _check(session, ctx, values, list(titles), [], titles)
+    carried = [H2Override(**o) for o in (model.get("edit") or {}).get("overrides", [])]
+    ids, overrides, notes, result = _check(session, ctx, values, list(titles), carried, titles)
     conflicts = _conflicts(session, values, result.violations, locale)
     others = [v for v in result.violations if v.code not in ("H2", "H5")]
     card = build_dishes_card(
@@ -452,15 +465,18 @@ def _restored_card(
         base=_base(session, values, ids),
         locale=locale,
     )
+    spec = PlanSpec.model_validate(values["spec"])
+    kept = _kept(session, ctx, values, spec, ids, overrides, locale)
     card.update(
         passed=not others and not conflicts,
         edited=False,
+        locked=[i for i in model.get("locked") or [] if i in ids],
         model_version=model_index,
         edit={
-            "overrides": [],
+            "overrides": [o.model_dump() for o in overrides],
             "log": [],
             "conflicts": [c.model_dump() for c in conflicts],
-            "kept": [],
+            "kept": [c.model_dump() for c in kept],
         },
         count_notes=[],
         notes=notes,
@@ -507,9 +523,12 @@ def apply_edit(
         versions[-1] = {**manual, "edit": {**manual["edit"], "log": log}}
         return EditOutcome(plan=card), _update(values, reply_id, versions, card)
 
-    edit = (current.get("edit") or {}) if editing else {}
+    # A model version may carry overrides and locks too (revised or restored): they carry into
+    # the manual version, whose log starts empty.
+    edit = current.get("edit") or {}
     overrides = [H2Override(**o) for o in edit.get("overrides", [])]
-    log = list(edit.get("log", []))
+    log = list(edit.get("log", [])) if editing else []
+    locked = list(current.get("locked") or [])
     recipe_ids = [r["id"] for r in current["recipes"]]
     titles = {r["id"]: r["title"] for r in current["recipes"]}
     target = action.recipe_id
@@ -520,12 +539,14 @@ def apply_edit(
         recipe_ids.remove(target)
         # Removing a dish removes its overrides: adding it back asks again.
         overrides = [o for o in overrides if o.recipe_id != target]
+        locked = [i for i in locked if i != target]
     elif isinstance(action, Add):
         if target in recipe_ids:
             raise EditError("already_in_plan")
         if session.get(Recipe, target) is None:
             raise EditError("not_found")
         recipe_ids.append(target)
+        locked.append(target)
     elif target not in recipe_ids:
         raise EditError("not_in_plan")
 
@@ -564,6 +585,7 @@ def apply_edit(
         result=result,
         conflicts=conflicts,
         overrides=overrides,
+        locked=[i for i in locked if i in ids],
         log=log if entry is None else [*log, entry],
         notes=notes,
         model_index=model_index,
