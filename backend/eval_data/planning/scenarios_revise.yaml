@@ -252,7 +252,7 @@ scenarios:
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
     first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
     edits_between_turns: [{add: 松仁玉米}]
-    follow_up: 感觉差点意思，再调调？
+    follow_up: 要不换个思路？
     choice_answer: revise
     expect_route: unsure
     expect_choice_card: true

@@ -2547,6 +2547,37 @@ def test_add_one_more_to_a_hand_grown_plan(revise_env):
     assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 5
 
 
+def test_add_one_more_to_a_hand_trimmed_plan(revise_env):
+    # Asked 3, one removed by hand (plan 2); "再加一道吧" is parsed from the app note as 3,
+    # equal to the previous request's 3. The message stated a count, so the plan grows to 3.
+    from minemydinner.agent.edits import Remove, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    env = revise_env
+    first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    values = env.graph.get_state(env.config).values
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=pepper), "zh")
+    assert outcome.plan is not None
+    env.graph.update_state(env.config, update, as_node="present_plan")
+    out = say(
+        env, "再加一道吧", "revise",
+        parse={"dishes": 3, "mode": "shopping", "counts_stated_now": True},
+        replies=[revision("general", add=[beans])],
+    )
+    assert latest_record(env).request["spec"]["dishes"] == 3
+    assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 3
+    # The parse ran with parse_v6, and its input still ends with the app note.
+    from minemydinner.agent.request import PROMPT_DIR
+
+    (parse_input,) = model_calls_by_prompt(env, "parse")[-1:]
+    assert parse_input[0].content == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+    assert parse_input[-2].content == "再加一道吧"
+    assert parse_input[-1].content == PLAN_NOTE + "2 dishes (1 meat, 1 vegetable): 土豆炖牛肉, 清炒小白菜"
+
+
 def test_revise_under_ask_first_keeps_fridge_only(revise_env):
     # Spec 5.3: a field the revise turn's parse leaves unstated comes from the current plan,
     # never from defaults, and nothing is asked.

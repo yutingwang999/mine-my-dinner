@@ -18,7 +18,7 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 # any record has used is never edited; a change makes the next version of that prompt.
 PROMPT_VERSIONS = {
     "route": "route_v3",
-    "parse": "parse_v5",
+    "parse": "parse_v6",
     "planner": "planner_v4",
     "revise": "revise_v1",
 }
@@ -200,6 +200,18 @@ class ParsedRequest(BaseModel):
     )
     exclude_recent_days: int | None = Field(
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
+    )
+    # None on requests parsed before parse_v6; a revision then compares counts with the
+    # previous request instead (agent/revision.py).
+    counts_stated_now: bool | None = Field(
+        default=None,
+        description=(
+            "True when the newest user message itself states or changes a count of any "
+            "category, as a number (\"4个菜就够了\") or relative to the plan (\"再加一道吧\"). "
+            "False when the newest message states no count, even if the count fields carry "
+            "counts from earlier messages. The app note about the current plan never makes "
+            "it true."
+        ),
     )
     guests: list[StatedGuest] = Field(
         default_factory=list,

@@ -242,11 +242,31 @@ def _stated(request: dict, previous: dict | None, name: str) -> bool:
     return value != (previous or {}).get(name)
 
 
+def _changed_counts(request: dict, previous: dict | None) -> set[str]:
+    """The count fields the newest message sets. From parse_v6 the parse says whether the
+    message states a count (`counts_stated_now`): if it does, every non-null total and
+    category count is taken, even one equal to the previous request (a hand-trimmed plan of
+    2, asked as 3, with "再加一道" is 3), but a meat or vegetable side only when it differs
+    from the previous request, so a split carried over from an earlier message never becomes a
+    stale exact side; if not, none is. A request parsed before the field has it null: then a
+    count is taken only when it differs from the previous request."""
+    stated_now = request.get("counts_stated_now")
+    if stated_now is None:
+        return {n for n in COUNT_FIELDS if _stated(request, previous, n)}
+    if not stated_now:
+        return set()
+    return {
+        n
+        for n in COUNT_FIELDS
+        if (_stated(request, previous, n) if n in SPLIT_CATEGORIES else request.get(n) is not None)
+    }
+
+
 def revision_spec(plan: dict, previous_request: dict | None, request: dict) -> PlanSpec:
     """The spec of a revision (spec 5.2, 5.3). The counts are the plan's own, as exact counts,
-    so a hand-grown plan keeps its size; a count the message changes replaces its field. A plan
-    with no dishes keeps the spec's counts. Other fields change only when the request states
-    them anew."""
+    so a hand-grown plan keeps its size; a count the message changes replaces its field
+    (`_changed_counts`). A plan with no dishes keeps the spec's counts. Other fields change only
+    when the request states them anew."""
     spec = PlanSpec.model_validate(plan["spec"])
     updates: dict = {}
     if plan["recipes"]:
@@ -262,7 +282,7 @@ def revision_spec(plan: dict, previous_request: dict | None, request: dict) -> P
             desserts=present["desserts"],
             snacks=present["snacks"],
         )
-    changed = {n for n in COUNT_FIELDS if _stated(request, previous_request, n)}
+    changed = _changed_counts(request, previous_request)
     for name in ("soups", "staples", "desserts", "snacks"):
         if name in changed:
             updates[name] = request[name]

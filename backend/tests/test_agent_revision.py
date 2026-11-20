@@ -159,6 +159,65 @@ def test_revision_spec_null_never_clears():
     assert (spec.mode, spec.time_limit_min) == ("shopping", 20)
 
 
+def test_revision_spec_counts_stated_now_true_takes_an_equal_count():
+    # A plan of 3 trimmed by hand to 2; "再加一道吧" parsed from the app note as 3, which
+    # equals the previous request's 3. The newest message stated a count, so 3 wins.
+    plan = _plan([1, 6])
+    previous = {"dishes": 3}
+    request = {"dishes": 3, "counts_stated_now": True}
+    spec = revision_spec(plan, previous, request)
+    assert spec.dishes == 3
+    assert spec.meat_dishes is None and spec.vegetable_dishes is None
+    assert spec.soups == 0
+    # Every non-null count of such a request replaces the plan's, equal or not.
+    spec = revision_spec(plan, {"dishes": 3, "soups": 1}, {
+        "dishes": 3, "soups": 1, "counts_stated_now": True,
+    })
+    assert (spec.dishes, spec.soups) == (3, 1)
+
+
+def test_revision_spec_counts_stated_now_true_skips_a_carried_split():
+    # "一荤一素" first, grown by hand to 3; "再加一道" with the split carried over from the
+    # first request: the split is not applied (no stale exact side), the total is 4.
+    plan = _plan([1, 5, 6])  # 2 vegetable + 1 meat
+    previous = {"meat_dishes": 1, "meat_bound": "exact", "vegetable_dishes": 1,
+                "vegetable_bound": "exact"}
+    request = {**previous, "dishes": 4, "counts_stated_now": True}
+    spec = revision_spec(plan, previous, request)
+    assert spec.dishes == 4
+    assert spec.meat_dishes is None and spec.vegetable_dishes is None
+    assert spec.meat_bound is None and spec.vegetable_bound is None
+    # A side the newest message changes is still taken.
+    spec = revision_spec(plan, previous, {**request, "meat_dishes": 2})
+    assert (spec.dishes, spec.meat_dishes, spec.meat_bound) == (4, 2, "exact")
+    assert spec.vegetable_dishes is None
+
+
+def test_revision_spec_counts_stated_now_false_keeps_the_plan_counts():
+    # A plan asked as 3, grown by hand to 4; "想要辣一些的" repeats 3 (or even a stale 2):
+    # the newest message stated no count, so the plan keeps 4.
+    plan = _plan([1, 2, 5, 6])
+    for repeated in ({"dishes": 3}, {"dishes": 2, "soups": 1}):
+        request = {**repeated, "counts_stated_now": False, "query": "辣一些的"}
+        spec = revision_spec(plan, {"dishes": 3}, request)
+        assert (spec.dishes, spec.soups) == (4, 0)
+        assert (spec.meat_dishes, spec.vegetable_dishes) == (1, 3)
+    # Non-count fields keep their own rule.
+    spec = revision_spec(
+        plan, {"mode": "fridge_only"}, {"mode": "shopping", "counts_stated_now": False}
+    )
+    assert spec.mode == "shopping" and spec.dishes == 4
+
+
+def test_revision_spec_without_counts_stated_now_keeps_the_old_rule():
+    # Requests stored before the field: a count changes only when it differs from the
+    # previous request.
+    plan = _plan([1, 6])
+    for request in ({"dishes": 3}, {"dishes": 3, "counts_stated_now": None}):
+        assert revision_spec(plan, {"dishes": 3}, request).dishes == 2
+    assert revision_spec(plan, {"dishes": 3}, {"dishes": 4}).dishes == 4
+
+
 def test_revision_spec_no_dishes_uses_request_counts():
     plan = _plan([])
     plan["spec"]["dishes"] = 3

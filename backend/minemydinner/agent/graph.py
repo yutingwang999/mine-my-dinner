@@ -521,7 +521,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         )
         if _revises(state):
             # A relative count ("再加一道") needs the plan's size (spec 5.3). The line is
-            # marked as the app's, not the user's (no parse prompt change, parse_v5).
+            # marked as the app's, not the user's; parse_v6 counts from it.
             conversation.append(HumanMessage(current_plan_line(state["current_plan"])))
         messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
