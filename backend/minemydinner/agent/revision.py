@@ -79,6 +79,14 @@ class RevisionProposal(BaseModel):
     )
 
 
+def asks_back(proposal: RevisionProposal | dict) -> bool:
+    """An unclear target with no change: the model asks which dish is meant. Takes the
+    proposal or its dump (as the graph state keeps it), so the graph and the evaluation share
+    one rule."""
+    data = proposal.model_dump() if isinstance(proposal, RevisionProposal) else proposal
+    return data.get("target") == "unclear" and not data.get("remove") and not data.get("add")
+
+
 class RevisionProblem(BaseModel):
     """A way the proposal breaks the rules; `text` is English and goes into the retry message."""
 

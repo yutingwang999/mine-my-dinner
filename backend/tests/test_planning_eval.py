@@ -70,6 +70,15 @@ def test_summarize_rates_and_averages():
         "cache_hit_rate": 0.0,
         "max_call_input_tokens": 0,
         "uncached_cost_usd": Decimal("0"),
+        "deferred": "0/0",
+        "revisions": 0,
+        "revision_pass_rate": 0.0,
+        "locked_removed": 0,
+        "avg_changed": 0.0,
+        "avg_turn_model_calls": 0.0,
+        "max_turn_model_calls": 0,
+        "route_as_expected": "0/0",
+        "route_first_as_expected": "0/0",
     }
 
 
@@ -628,6 +637,7 @@ def test_run_folder_layout_and_summary(tmp_path):
     assert set(cond) == {
         "git_commit", "scenarios_file", "library_file", "prompt_version", "prompt_versions",
         "prompt_files", "tools_version", "flags", "constants", "models", "planning_model",
+        "revise_tools_version",
     }
     assert cond["git_commit"] == "abc123" and len(cond["scenarios_file"]["sha256"]) == 64
     assert cond["flags"] == {"no_shortlist": True, "with_embeddings": True}
@@ -643,7 +653,9 @@ def test_run_folder_layout_and_summary(tmp_path):
         assert word in metrics["basis"]
     assert set(metrics["groups"]) == {"all", "expect_plan", "expect_stop"}
     m = metrics["groups"]["all"]
-    assert set(m) == {"scenarios", "outcomes", "calls", "tokens", "cost", "latency", "notes"}
+    assert set(m) == {
+        "scenarios", "outcomes", "calls", "tokens", "cost", "latency", "notes", "revisions"
+    }
     assert m["scenarios"] == 2 and m["outcomes"]["as_expected"] == "1/2"
     assert m["calls"]["embedding_calls"] == {"library": 3, "scenarios": 2, "total": 5}
     assert m["calls"]["max_model_calls"] == 5 and m["calls"]["model_calls"] == 8
@@ -1800,3 +1812,517 @@ def test_the_heldout_sets_fit_the_library(session):
                     bad(key)
     if problems:
         pytest.fail("; ".join(problems), pytrace=False)
+
+
+# ---- plan 3b-1: follow-up scenarios (revisions) ----
+
+from minemydinner.evaluation.planning import expectation_failures  # noqa: E402
+from minemydinner.evaluation.revise_eval import TurnFacts  # noqa: E402
+from tests.agentfakes import tool_call  # noqa: E402
+
+REVISE_BASE = {"name": "r", "request": "r", "locale": "zh", "inventory": {}, "cookware": []}
+
+
+def _load_one(tmp_path, library_titles=None, **changes):
+    path = tmp_path / "s.yaml"
+    path.write_text(
+        yaml.safe_dump({"scenarios": [{**REVISE_BASE, **changes}]}, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return load_scenarios(path, library_titles=library_titles)
+
+
+def test_the_loader_reads_the_revise_keys(tmp_path):
+    [s] = _load_one(
+        tmp_path,
+        library_titles=["番茄炒蛋", "红烧茄子", "清炒小白菜", "宫保鸡丁"],
+        follow_up="茄子这道不要，换一个别的",
+        first_plan=["番茄炒蛋", "红烧茄子"],
+        edits_between_turns=[{"add": "清炒小白菜"}, {"remove": "番茄炒蛋"}, {"keep": "宫保鸡丁"}],
+        choice_answer="revise",
+        expect_route="revise",
+        expect_choice_card=False,
+        expect_question=False,
+        expect_unchanged=False,
+        expect_removed=["红烧茄子"],
+        expect_max_changed=1,
+        expect_removed_any=["红烧茄子"],
+        expect_any_of=[{"expect_question": True}, {"expect_removed": ["红烧茄子"]}],
+        library_exclude=["宫保鸡丁"],
+        deferred_to="3b-2",
+    )
+    assert s.first_plan == ["番茄炒蛋", "红烧茄子"] and s.choice_answer == "revise"
+    assert s.edits_between_turns[2] == {"keep": "宫保鸡丁"} and s.expect_max_changed == 1
+    assert s.deferred_to == "3b-2" and len(s.expect_any_of) == 2
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"follow_up": "x", "choice_answer": "maybe"},
+        {"follow_up": "x", "expect_route": "replan"},
+        {"edits_between_turns": [{"add": "番茄炒蛋"}]},
+        {"follow_up": "x", "edits_between_turns": [{"swap": "番茄炒蛋"}]},
+        {"follow_up": "x", "edits_between_turns": [{"add": "番茄炒蛋", "remove": "红烧茄子"}]},
+        {"follow_up": "x", "expect_max_changed": -1},
+        {"follow_up": "x", "expect_question": "yes"},
+        {"follow_up": "x", "expect_any_of": [{}]},
+        {"follow_up": "x", "expect_any_of": [{"max_model_calls": 3}]},
+        {"follow_up": "x", "expect_any_of": [{"expect_card": True}]},
+        {"follow_up": "x", "expect_any_of": [{"expect_route": "replan"}]},
+        {"first_plan": "番茄炒蛋"},
+        {"expect_removed": ["番茄炒蛋"]},
+        {"follow_up": "x", "deferred_to": ""},
+    ],
+)
+def test_the_loader_refuses_bad_revise_values(tmp_path, changes):
+    with pytest.raises(ValueError):
+        _load_one(tmp_path, **changes)
+
+
+def test_follow_up_titles_must_be_in_the_library(tmp_path):
+    for changes in (
+        {"first_plan": ["不存在的菜"]},
+        {"edits_between_turns": [{"add": "不存在的菜"}]},
+        {"library_exclude": ["不存在的菜"]},
+        {"expect_removed": ["不存在的菜"]},
+        {"expect_any_of": [{"expect_removed_any": ["不存在的菜"]}]},
+    ):
+        with pytest.raises(ValueError):
+            _load_one(tmp_path, library_titles=["番茄炒蛋"], follow_up="x", **changes)
+        # Without the library the titles are not checked.
+        _load_one(tmp_path, follow_up="x", **changes)
+
+
+BEFORE = {1: "番茄炒蛋", 2: "红烧茄子", 3: "清炒小白菜"}
+
+
+def _facts(after=(1, 3, 4), **changes):
+    titles = {**BEFORE, 4: "蒜蓉西兰花", 5: "青椒肉丝"}
+    values = {
+        "turn": "revision",
+        "route": "revise",
+        "before": dict(BEFORE),
+        "after": {i: titles[i] for i in after},
+        **changes,
+    }
+    return TurnFacts(**values)
+
+
+def _judge(facts, passed=True, plan=None, **keys):
+    scenario = _scenario(follow_up="x", **keys)
+    return expectation_failures(scenario, plan or _plan(["番茄炒蛋"]), passed, 3, facts)
+
+
+def test_each_follow_up_key_reports_a_failure_when_unmet():
+    met = _facts()
+    cases = [
+        {"expect_route": "plan"},
+        {"expect_choice_card": True},
+        {"expect_question": True},
+        {"expect_unchanged": True},
+        {"expect_removed": ["番茄炒蛋"]},
+        {"expect_removed": ["青椒肉丝"]},  # never in the plan before
+        {"expect_max_changed": 0},
+        {"expect_removed_any": ["番茄炒蛋", "清炒小白菜"]},
+    ]
+    for keys in cases:
+        assert _judge(met, **keys), keys
+    good = {
+        "expect_route": "revise",
+        "expect_choice_card": False,
+        "expect_question": False,
+        "expect_unchanged": False,
+        "expect_removed": ["红烧茄子"],
+        "expect_max_changed": 1,
+        "expect_removed_any": ["番茄炒蛋", "红烧茄子"],
+    }
+    assert _judge(met, **good) == []
+    assert _judge(_facts(after=(3, 1, 2)), expect_unchanged=True) == []
+
+
+def test_existing_keys_judge_the_follow_up_plan():
+    plan = _plan(["番茄炒蛋", "清炒小白菜"])
+    assert _judge(_facts(), plan=plan, expect_titles_include=["清炒小白菜"]) == []
+    assert _judge(_facts(), plan=plan, expect_titles_none=["清炒小白菜"]) != []
+
+
+def test_any_of_passes_when_one_entry_is_met():
+    entries = [{"expect_question": True}, {"expect_removed": ["红烧茄子"], "expect_route": "revise"}]
+    assert _judge(_facts(), expect_any_of=entries) == []
+    # Every key of the entry must be met.
+    entries = [{"expect_question": True}, {"expect_removed": ["红烧茄子"], "expect_route": "plan"}]
+    failures = _judge(_facts(), expect_any_of=entries)
+    assert len(failures) == 1 and "expect_any_of" in failures[0]
+    # Keys outside the list are still required.
+    failures = _judge(_facts(), expect_any_of=[{"expect_question": False}], expect_route="plan")
+    assert len(failures) == 1 and "route" in failures[0]
+    # An entry may hold the plan flag; without it the flag is not judged by the entry.
+    assert _judge(_facts(), passed=False, expect_plan=False,
+                  expect_any_of=[{"expect_unchanged": False}]) == []
+    assert _judge(_facts(), passed=False, expect_plan=False,
+                  expect_any_of=[{"expect_plan": True}]) != []
+
+
+def test_a_locked_dish_gone_counts_unless_expected_removed():
+    facts = _facts(locked_before=frozenset({2, 3}))
+    failures = _judge(facts)
+    assert len(failures) == 1 and "红烧茄子" in failures[0] and "locked" in failures[0]
+    assert _judge(facts, expect_removed=["红烧茄子"]) == []
+    assert _judge(facts, expect_any_of=[{"expect_removed": ["红烧茄子"]}]) == []
+    # A new plan starts from scratch: no locked dish is judged.
+    assert _judge(_facts(turn="plan", locked_before=frozenset({2}))) == []
+
+
+def test_the_plan_flag_is_not_judged_on_a_turn_without_a_run():
+    facts = TurnFacts(turn="none", route="unsure", choice_card=True, before=BEFORE, after=BEFORE)
+    scenario = _scenario(follow_up="x", expect_choice_card=True, expect_unchanged=True)
+    assert expectation_failures(scenario, _plan(), False, 3, facts, check_plan_flag=False) == []
+
+
+def _revise_outcome(name, turn="revision", passed=True, **changes):
+    return RunOutcome(
+        name, passed, passed, 0, Decimal("0.01"), 100, 4, turn=turn, follow_up=True, **changes
+    )
+
+
+def test_summarize_keeps_revisions_and_deferred_apart():
+    s = summarize(
+        [
+            RunOutcome("p1", True, True, 0, Decimal("0.01"), 100, 3, route_intent="plan",
+                       route_as_expected=True),
+            RunOutcome("p2", False, False, 1, Decimal("0.01"), 100, 3, as_expected=False),
+            _revise_outcome("r1", changed=1, route_intent="revise", route_as_expected=True,
+                            turn_model_calls=4),
+            _revise_outcome("r2", passed=False, changed=0, locked_removed=1,
+                            route_intent="plan", route_as_expected=False, as_expected=False,
+                            turn_model_calls=6),
+            _revise_outcome("r3", changed=2, turn_model_calls=2),
+            _revise_outcome("none", turn="none", passed=False, route_intent="unsure",
+                            route_as_expected=True),
+            _revise_outcome("later", passed=False, deferred_to="3b-2", as_expected=False,
+                            locked_removed=3, changed=4, route_as_expected=False,
+                            turn_model_calls=9),
+        ]
+    )
+    # Planning rates stay on new plans; revisions have their own.
+    assert s["first_pass_rate"] == 0.5 and s["final_pass_rate"] == 0.5
+    assert s["revisions"] == 3
+    assert s["revision_pass_rate"] == pytest.approx(2 / 3)
+    assert s["avg_changed"] == 1.0
+    assert s["locked_removed"] == 1
+    # Model calls of the revise turns only (Task 9's threshold).
+    assert s["avg_turn_model_calls"] == 4.0 and s["max_turn_model_calls"] == 6
+    # Route accuracy: follow-ups and first messages apart.
+    assert s["route_as_expected"] == "2/3" and s["route_first_as_expected"] == "1/1"
+    # The deferred scenario is reported apart, out of every rate, but its cost counts.
+    assert s["as_expected"] == "4/6" and s["deferred"] == "0/1"
+    assert s["cost_usd"] == Decimal("0.07")
+
+
+# A small library for the follow-up runs: one peanut dish, the rest plain.
+REVISE_LIBRARY = [
+    {"title": t, "dish_type": kind, "servings": 1, "cookware": ["炒锅"],
+     "lines": [{"name": main, "role": "main"}, *extra]}
+    for t, kind, main, extra in [
+        ("宫保鸡丁", "meat dish", "鸡胸肉", [{"name": "花生"}]),
+        ("青椒肉丝", "meat dish", "猪肉", [{"name": "青椒"}]),
+        ("番茄炒蛋", "vegetable dish", "番茄", [{"name": "鸡蛋"}]),
+        ("清炒小白菜", "vegetable dish", "小白菜", []),
+        ("红烧茄子", "vegetable dish", "茄子", []),
+        ("蒜蓉西兰花", "vegetable dish", "西兰花", []),
+    ]
+]
+
+
+class ScriptModel(ScriptedChatModel):
+    """Planner and reviser replies built at call time from library titles: each entry of
+    `script` is a function of a title-to-id lookup, used once and in order."""
+
+    def __init__(self, factory, script, intents, parses, **kwargs):
+        super().__init__(
+            replies=[final_proposal([1])],
+            structured={"Intent": list(intents), "ParsedRequest": list(parses)},
+            **kwargs,
+        )
+        self.factory = factory
+        self.script = list(script)
+        self.seen_titles: list[set[str]] = []
+
+    def invoke(self, messages, config=None, **kwargs):
+        with self.factory() as session:
+            ids = dict(session.execute(select(Recipe.title, Recipe.id)).all())
+        self.seen_titles.append(set(ids))
+        if self.script:
+            self.replies = [self.script.pop(0)(ids)]
+        return super().invoke(messages, config, **kwargs)
+
+
+def _propose(*titles):
+    return lambda ids: final_proposal([ids[t] for t in titles])
+
+
+def _revision(target, remove=(), add=(), note="改好了。"):
+    return lambda ids: tool_call(
+        "RevisionProposal",
+        {
+            "target": target,
+            "remove": [{"id": ids[t], "quote": q} for t, q in remove],
+            "add": [ids[t] for t in add],
+            "note": note,
+        },
+    )
+
+
+def _revise_scenario(name, **changes):
+    values = {
+        "name": name,
+        "request": "今晚三个菜，可以买菜。",
+        "locale": "zh",
+        "inventory": {},
+        "cookware": ["炒锅"],
+        "rules": [{"type": "allergy", "allergen": "peanut"}],
+        "follow_up": "茄子这道不要，换一个别的",
+    }
+    return Scenario(**{**values, **changes})
+
+
+def _revise_sent(model):
+    return [m for m in model.sent if m and "RevisionProposal" in str(m[0].content)]
+
+
+def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
+    """first_plan replaces the model's plan as a model version; the edits keep (the peanut
+    dish's conflict confirmed), add (locked), and remove; the revision is judged."""
+    model = ScriptModel(
+        eval_db,
+        [
+            _propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"),
+            _revision("named", remove=[("红烧茄子", "茄子这道")], add=["清炒小白菜"]),
+        ],
+        intents=[{"intent": "plan"}, {"intent": "revise"}],
+        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+    )
+    scenario = _revise_scenario(
+        "fixed",
+        first_plan=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
+        edits_between_turns=[{"keep": "宫保鸡丁"}, {"add": "蒜蓉西兰花"}, {"remove": "番茄炒蛋"}],
+        expect_route="revise",
+        expect_choice_card=False,
+        expect_question=False,
+        expect_unchanged=False,
+        expect_removed=["红烧茄子"],
+        expect_max_changed=1,
+        expect_titles_exact=["宫保鸡丁", "蒜蓉西兰花", "清炒小白菜"],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    assert outcome.turn == "revision" and outcome.route_intent == "revise"
+    assert outcome.final_passed and outcome.changed == 1 and outcome.locked_removed == 0
+    # The revise turn's own calls (route, parse, revise) apart from the scenario's six.
+    assert outcome.model_calls == 6 and outcome.turn_model_calls == 3
+    # The revision started from the manual version (index 1) after the fixed model version.
+    first_run, second_run = outcome.record["planning_runs"]
+    assert second_run["request"]["revision"] == {"from_version": 1}
+    # The reviser saw the fixed plan's dishes after the edits, with the two locks.
+    opening = str(_revise_sent(model)[0][1].content)
+    plan_lines = opening.split("Current plan:")[1]
+    assert "红烧茄子" in plan_lines and "番茄炒蛋" not in plan_lines
+    assert "宫保鸡丁" in plan_lines and plan_lines.count("LOCKED") == 2
+    _assert_clean(eval_db)
+
+
+def test_the_choice_card_is_answered_or_stops_the_turn(tmp_path, eval_db):
+    model = ScriptModel(
+        eval_db,
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _propose("宫保鸡丁", "番茄炒蛋", "红烧茄子"),
+         _propose("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
+        intents=[{"intent": "plan"}, {"intent": "unsure"}, {"intent": "plan"},
+                 {"intent": "unsure"}],
+        parses=[{"dishes": 3, "mode": "shopping"}],
+    )
+    answered = _revise_scenario(
+        "answered",
+        rules=[],
+        follow_up="换一下吧",
+        choice_answer="plan",
+        expect_route="unsure",
+        expect_choice_card=True,
+        expect_titles_exact=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
+    )
+    stopped = _revise_scenario(
+        "stopped",
+        rules=[],
+        follow_up="换一下吧",
+        expect_route="unsure",
+        expect_choice_card=True,
+        expect_unchanged=True,
+    )
+    first, second = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [answered, stopped],
+        InMemorySaver(),
+    )
+    assert first.as_expected, (first.failures, first.note)
+    assert first.turn == "plan" and first.route_intent == "unsure" and first.final_passed
+    assert second.as_expected, (second.failures, second.note)
+    assert second.turn == "none" and second.route_intent == "unsure"
+    # The stop is not a failure: the first turn's run stays passed.
+    [run] = second.record["planning_runs"]
+    assert run["final_passed"] is True
+    _assert_clean(eval_db)
+
+
+def test_library_exclude_hides_dishes_for_one_scenario(tmp_path, eval_db):
+    model = ScriptModel(
+        eval_db,
+        [_propose("番茄炒蛋"), _propose("红烧茄子")],
+        intents=[{"intent": "plan"}],
+        parses=[{"dishes": 1, "mode": "shopping"}],
+    )
+    hidden = _scenario("hidden", library_exclude=["红烧茄子", "蒜蓉西兰花"])
+    after = _scenario("after")
+    outcomes = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [hidden, after],
+        InMemorySaver(),
+    )
+    assert all(o.as_expected for o in outcomes), [(o.failures, o.note) for o in outcomes]
+    first_seen, second_seen = model.seen_titles
+    assert "红烧茄子" not in first_seen and "蒜蓉西兰花" not in first_seen
+    assert {"红烧茄子", "蒜蓉西兰花"} <= second_seen
+    assert outcomes[1].titles == ["红烧茄子"]
+    _assert_clean(eval_db)
+
+
+def test_hide_and_bring_back_keep_ids(eval_db):
+    from minemydinner.evaluation.planning import clear_app_tables
+    from minemydinner.evaluation.revise_eval import bring_back, hide_dishes
+
+    try:
+        with eval_db() as session:
+            seed_all(session)
+            load_library(session, REVISE_LIBRARY)
+            session.commit()
+            before = dict(session.execute(select(Recipe.title, Recipe.id)).all())
+        saved = hide_dishes(eval_db, ["红烧茄子"])
+        with eval_db() as session:
+            assert session.scalar(select(Recipe.id).where(Recipe.title == "红烧茄子")) is None
+        bring_back(eval_db, saved)
+        with eval_db() as session:
+            assert dict(session.execute(select(Recipe.title, Recipe.id)).all()) == before
+            recipe = session.get(Recipe, before["红烧茄子"])
+            assert [line.name for line in recipe.ingredients] == ["茄子"]
+            assert len(recipe.cookware) == 1
+    finally:
+        clear_app_tables(eval_db)
+    _assert_clean(eval_db)
+
+
+def test_a_nothing_fits_revision_is_not_passed_and_unchanged(tmp_path, eval_db):
+    model = ScriptModel(
+        eval_db,
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _revision("general", note="没有更辣的。")],
+        intents=[{"intent": "plan"}, {"intent": "revise"}],
+        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+    )
+    scenario = _revise_scenario(
+        "nothing",
+        rules=[],
+        follow_up="想要辣一些的",
+        expect_plan=False,
+        expect_unchanged=True,
+        expect_any_code=["wish_unmet"],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    assert outcome.turn == "revision" and not outcome.final_passed and outcome.changed == 0
+    _assert_clean(eval_db)
+
+
+def test_an_unclear_revision_is_a_question(tmp_path, eval_db):
+    model = ScriptModel(
+        eval_db,
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"),
+         _revision("unclear", note="你说的是哪一道？")],
+        intents=[{"intent": "plan"}, {"intent": "revise"}],
+        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+    )
+    scenario = _revise_scenario(
+        "ask", rules=[], follow_up="那道不要了", expect_plan=False, expect_question=True,
+        expect_unchanged=True,
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    _assert_clean(eval_db)
+
+
+def test_the_run_folder_records_the_revise_answer_schema(tmp_path):
+    import json
+
+    from minemydinner.agent.planner import REVISE_TOOLS_VERSION, TOOLS_VERSION
+    from minemydinner.agent.revision import RevisionProposal
+
+    folder, data = _write(tmp_path)
+    tools = json.loads((folder / "tools.json").read_text(encoding="utf-8"))
+    assert tools["revise_final_answer"] == {
+        "name": "RevisionProposal", "schema": RevisionProposal.model_json_schema()
+    }
+    assert tools["tools_version"] == TOOLS_VERSION
+    assert tools["revise_tools_version"] == REVISE_TOOLS_VERSION
+    assert data["conditions"]["revise_tools_version"] == REVISE_TOOLS_VERSION
+    revisions = data["metrics"]["groups"]["all"]["revisions"]
+    assert set(revisions) == {
+        "turns", "pass_rate", "locked_removed", "avg_changed", "avg_turn_model_calls",
+        "max_turn_model_calls", "route_as_expected", "route_first_as_expected",
+    }
+
+
+def test_the_revise_development_set_fits_its_library(session):
+    """Every scenario of scenarios_revise.yaml loads against library_revise.yaml, its stock,
+    cookware and rules exist in the dictionary, and every expected title is a library dish."""
+    from minemydinner.evaluation.planning import read_library, reset_scenario_state
+
+    library = read_library(EVAL_DIR / "library_revise.yaml")
+    titles = {dish["title"] for dish in library}
+    scenarios = load_scenarios(EVAL_DIR / "scenarios_revise.yaml", library_titles=titles)
+    assert len({s.name for s in scenarios}) == len(scenarios)
+    seed_all(session)
+    session.flush()
+    load_library(session, library)
+    for scenario in scenarios:
+        assert scenario.max_model_calls is not None, scenario.name
+        reset_scenario_state(session, scenario)
+        named = [
+            *scenario.expect_titles_none, *scenario.expect_titles_include,
+            *scenario.expect_titles_exact, *scenario.expect_titles_any,
+        ]
+        assert set(named) <= titles, scenario.name
+
+
+def test_a_follow_up_that_cannot_be_set_up_is_out_of_the_rates(tmp_path, eval_db):
+    """An edit the plan refuses (removing a dish not in it) stops the scenario before the
+    follow-up: turn "none", never as expected, and not a failed new plan."""
+    model = ScriptModel(
+        eval_db,
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
+        intents=[{"intent": "plan"}],
+        parses=[{"dishes": 3, "mode": "shopping"}],
+    )
+    scenario = _revise_scenario(
+        "bad_edit", rules=[], expect_plan=False, edits_between_turns=[{"remove": "红烧茄子"}]
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.turn == "none" and not outcome.as_expected
+    assert "edit remove 红烧茄子: not_in_plan" in outcome.note
+    assert any("follow-up not sent" in f for f in outcome.failures)
+    # Next to a passed new plan, the new-plan rates stay 1.0.
+    s = summarize([outcome, RunOutcome("p", True, True, 0, Decimal("0"), 0, 3)])
+    assert s["as_expected"] == "1/2" and s["final_pass_rate"] == 1.0 and s["revisions"] == 0
+    _assert_clean(eval_db)

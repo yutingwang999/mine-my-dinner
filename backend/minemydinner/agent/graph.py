@@ -98,6 +98,7 @@ from minemydinner.agent.revise_step import (
 from minemydinner.agent.revision import (
     RevisionProblem,
     RevisionProposal,
+    asks_back,
     changed_text,
     check_revision,
     revised_ids,
@@ -436,11 +437,6 @@ def _notes_from_searches(notes: dict | None, messages: list) -> dict | None:
             bool(result.get("semantic_paused")),
         )
     return notes
-
-
-def _asks_back(proposal: RevisionProposal) -> bool:
-    """An unclear target with no change: the model asks which dish is meant."""
-    return proposal.target == "unclear" and not proposal.remove and not proposal.add
 
 
 def _empty_search_notes() -> dict:
@@ -1204,7 +1200,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         current_ids = [r["id"] for r in plan["recipes"]]
         data = state["proposal"]
         proposal = RevisionProposal.model_validate(data) if data is not None else None
-        if proposal is not None and _asks_back(proposal):
+        if proposal is not None and asks_back(proposal):
             # Unclear: the plan stays and the model's question is the reply. Any other empty
             # change ("nothing fits") is checked like a change: an open conflict still fails
             # H2 and a changed count still fails H4.
@@ -1288,7 +1284,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         passed = validation is not None and validation["passed"]
         update: dict[str, Any] = {}
         with deps.session_factory() as session:
-            if proposal is not None and _asks_back(proposal):
+            if proposal is not None and asks_back(proposal):
                 card = unchanged_card(plan, [], [])
                 note = proposal.note.strip() or unchanged_note(locale)
             elif changed and passed:

@@ -1,0 +1,301 @@
+# Plan 3b-1 development set: revising the plan in the conversation (spec 5.6). Run with
+# library_revise.yaml.
+#
+# This is the development set: Claude wrote these requests (the follow-ups include the user's
+# five example sentences from the spec, Section 1, and phrases quoted in the spec), and they
+# are used while building. It shares no request with the held-out set
+# (scenarios_revise_heldout.yaml), which is never tuned against.
+#
+# Most scenarios fix the first plan (first_plan) so the follow-up starts from known dishes;
+# some add or remove dishes by hand first (edits_between_turns): a dish added by hand is
+# locked. Every revision is also checked for locked dishes removed without being named.
+# The keys are defined in the header of scenarios_revise_heldout.yaml and in Scenario
+# (minemydinner/evaluation/planning.py).
+scenarios:
+  # ---- "茄子这道不要，换一个别的": a named dish swapped, the rest kept ----
+  - name: named_swap_eggplant
+    request: 今晚两个人吃饭，做三个菜，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 红烧茄子, 蒜蓉西兰花]
+    follow_up: 茄子这道不要，换一个别的
+    expect_route: revise
+    expect_choice_card: false
+    expect_removed: [红烧茄子]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花]
+    expect_counts: {dishes: 3}
+    expect_locale_reply: zh
+    max_model_calls: 12
+    expect: Only the eggplant dish is replaced by another dish; the count stays three.
+  - name: named_swap_eggplant_after_hand_add
+    request: 今晚两个人吃饭，做三个菜，缺什么可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 红烧茄子, 蒜蓉西兰花]
+    edits_between_turns: [{add: 清炒菠菜}]
+    follow_up: 茄子这道不要，换一个别的
+    expect_route: revise
+    expect_removed: [红烧茄子]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花, 清炒菠菜]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: The hand-grown plan of four keeps its count; only the eggplant dish changes and the spinach added by hand stays.
+
+  # ---- "想要辣一些的": a general wish, at most half the unlocked dishes change ----
+  - name: general_spicier
+    request: 周末家里四口人，安排四个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [番茄炒蛋, 清蒸鲈鱼, 蒜蓉西兰花, 土豆炖牛腩]
+    follow_up: 想要辣一些的
+    expect_route: revise
+    expect_unchanged: false
+    expect_max_changed: 2
+    expect_titles_any: [辣子鸡, 水煮鱼片, 辣椒炒肉, 酸辣土豆丝]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: One or two dishes are replaced by spicy ones (half of four, rounded up, at most); the count stays four.
+  - name: general_spicier_keeps_hand_added
+    request: 周末家里四口人，安排四个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [番茄炒蛋, 清蒸鲈鱼, 蒜蓉西兰花, 土豆炖牛腩]
+    edits_between_turns: [{remove: 蒜蓉西兰花}, {add: 清炒小白菜}]
+    follow_up: 想要辣一些的
+    expect_route: revise
+    expect_unchanged: false
+    expect_max_changed: 2
+    expect_titles_include: [清炒小白菜]
+    expect_titles_any: [辣子鸡, 水煮鱼片, 辣椒炒肉, 酸辣土豆丝]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: The bok choy added by hand is locked and a general wish names no dish, so it stays; at most two of the other three change.
+
+  # ---- "再加一道吧": the current count plus one, nothing removed ----
+  - name: add_one_more
+    request: 今晚就我自己吃，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花]
+    follow_up: 再加一道吧
+    expect_route: revise
+    expect_unchanged: false
+    expect_max_changed: 0
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花]
+    expect_counts: {dishes: 3}
+    max_model_calls: 12
+    expect: A third dish is added and both dishes stay.
+  - name: add_one_more_after_hand_remove_and_add
+    request: 今晚就我自己吃，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花]
+    edits_between_turns: [{remove: 蒜蓉西兰花}, {add: 麻婆豆腐}, {add: 清炒蘑菇}]
+    follow_up: 再加一道吧
+    expect_route: revise
+    expect_max_changed: 0
+    expect_titles_include: [青椒肉丝, 麻婆豆腐, 清炒蘑菇]
+    expect_titles_none: [蒜蓉西兰花]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: The baseline is the hand-edited plan of three, so one more makes four; the hand-added dishes stay and the broccoli removed by hand does not come back.
+
+  # ---- "不要这么多鸡蛋的": a general wish; egg dishes go, a locked egg dish stays ----
+  - name: fewer_eggs
+    request: 今天三个人，做四个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [番茄炒蛋, 嫩滑蒸蛋, 鸡蛋饼, 青椒肉丝]
+    follow_up: 不要这么多鸡蛋的
+    expect_route: revise
+    expect_unchanged: false
+    expect_max_changed: 2
+    expect_removed_any: [番茄炒蛋, 嫩滑蒸蛋, 鸡蛋饼]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: One or two of the three egg dishes are replaced by dishes without egg; the count stays four.
+  - name: fewer_eggs_keeps_locked_egg_dish
+    request: 今天三个人，做四个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [番茄炒蛋, 嫩滑蒸蛋, 鸡蛋饼, 青椒肉丝]
+    edits_between_turns: [{remove: 鸡蛋饼}, {add: 煎荷包蛋}]
+    follow_up: 不要这么多鸡蛋的
+    expect_route: revise
+    expect_unchanged: false
+    expect_max_changed: 2
+    expect_titles_include: [煎荷包蛋]
+    expect_removed_any: [番茄炒蛋, 嫩滑蒸蛋]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: The fried egg was added by hand, so it is locked; the general wish names no dish, so it stays and another egg dish goes instead.
+
+  # ---- "重新设计一顿4个菜的吧": a new plan from scratch ----
+  - name: new_plan_four_dishes
+    request: 今晚三个人，两个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤]
+    follow_up: 重新设计一顿4个菜的吧
+    expect_route: plan
+    expect_choice_card: false
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: A fresh plan of four dishes; this is a new meal, not a change of the current one.
+  - name: new_plan_after_hand_add
+    request: 今晚三个人，两个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤]
+    edits_between_turns: [{add: 红烧茄子}]
+    follow_up: 重新设计一顿4个菜的吧
+    expect_route: plan
+    expect_choice_card: false
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: A hand edit does not turn an explicit fresh start into a revision; the meal is planned anew with four dishes.
+
+  # ---- an explicit scope with an exception: locked dishes in the scope may go ----
+  - name: scope_all_but_corn
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [松仁玉米, 青椒肉丝, 红烧茄子]
+    edits_between_turns: [{add: 清炒菠菜}]
+    follow_up: 除了玉米这道剩下全换
+    expect_route: revise
+    expect_removed: [青椒肉丝, 红烧茄子, 清炒菠菜]
+    expect_titles_include: [松仁玉米]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: The scope covers every dish but the corn one, the spinach added by hand included; all three are replaced and the corn stays.
+
+  # ---- a stated count on a hand-grown plan ----
+  - name: fewer_dishes_on_hand_grown_plan
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
+    edits_between_turns: [{add: 清炒小白菜}, {add: 麻婆豆腐}]
+    follow_up: 4个菜就够了
+    expect_route: revise
+    expect_max_changed: 1
+    expect_removed_any: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
+    expect_titles_include: [清炒小白菜, 麻婆豆腐]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: Five dishes down to four; one of the model's dishes goes and both dishes added by hand stay.
+
+  # ---- "那道汤不要了" with two soups: the step must ask which one ----
+  - name: which_soup_asks
+    request: 今晚四个人吃，两个菜两个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤, 紫菜豆腐汤]
+    follow_up: 那道汤不要了
+    expect_route: revise
+    expect_plan: false
+    expect_question: true
+    expect_unchanged: true
+    max_model_calls: 12
+    expect: Two soups fit "那道汤", so the assistant asks which one and the plan stays as it was.
+
+  # ---- a wish that fridge-only stock cannot meet ----
+  - name: fridge_only_wish_unmet
+    request: 今晚一个人，就用冰箱里现有的做两个菜，不去买了。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 6, 青椒: 2, 土豆: 2, 盐: plenty, 食用油: plenty}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [番茄炒蛋, 青椒土豆片]
+    follow_up: 想吃点海鲜
+    expect_route: revise
+    expect_plan: false
+    expect_unchanged: true
+    expect_any_code: [wish_unmet, H1]
+    expect_spec: {mode: fridge_only}
+    max_model_calls: 12
+    expect: No seafood is in stock and the meal stays fridge-only, so the plan stays as it was and the reply says why, with a way forward.
+
+  # ---- the choice card, answered both ways ----
+  - name: choice_card_answered_plan
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
+    follow_up: 要不换个思路？
+    choice_answer: plan
+    expect_route: unsure
+    expect_choice_card: true
+    expect_counts: {dishes: 3}
+    max_model_calls: 12
+    expect: The message could mean either, so the choice card shows; answered "plan", the latest request is planned from scratch.
+  - name: choice_card_answered_revise
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
+    edits_between_turns: [{add: 松仁玉米}]
+    follow_up: 感觉差点意思，再调调？
+    choice_answer: revise
+    expect_route: unsure
+    expect_choice_card: true
+    expect_titles_include: [松仁玉米]
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: The choice card shows; answered "revise", the plan is changed, not replaced, and the corn added by hand stays.
+
+  # ---- a revision that brings a new guest: the diner card, then a new plan (until 3b-2) ----
+  - name: revise_with_new_guest
+    request: 今晚我一个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
+    follow_up: 同事阿杰等会儿也过来吃，再多做一道吧
+    # The route reads a revision; the new plan shows in the diner card (a revision never
+    # shows one: a change in who eats goes to the card, then plans from scratch) and in the
+    # outcome's `turn: plan` (no scenario key judges the turn kind). The parse sees the
+    # plan's three dishes, so "再多做一道" makes four.
+    expect_route: revise
+    expect_card: true
+    expect_counts: {dishes: 4}
+    max_model_calls: 12
+    expect: A change in who eats plans anew after the diner card, even inside a revision; the new plan has four dishes.
+
+  # ---- first messages: route_v3 still routes a new request to a plan ----
+  - name: first_message_routes_to_plan
+    request: 今晚吃点什么好？我们俩，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    expect_route: plan
+    expect_counts: {dishes: 2}
+    max_model_calls: 6
+    expect: A first message is a new plan.
+  - name: first_message_routes_to_plan_en
+    request: Plan dinner for the two of us tonight, two dishes and a soup. Shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    expect_route: plan
+    expect_counts: {dishes: 2, soups: 1}
+    expect_locale_reply: en
+    max_model_calls: 6
+    expect: The English twin; a first message is a new plan and the reply stays in English.
