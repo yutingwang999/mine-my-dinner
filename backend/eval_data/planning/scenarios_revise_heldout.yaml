@@ -1,6 +1,9 @@
-# Plan 3b-1 held-out revision set. Run with library_revise.yaml.
+# Plan 3b-1 revision set, a REGRESSION set since plan 3b-1b. Run with library_revise.yaml.
 #
-# Held-out set written by the user on 2026-11-20. Not used for tuning in plan 3b-1; do not edit.
+# Written by the user on 2026-11-20 as plan 3b-1's held-out set. Its results were read in
+# plan 3b-1's round 9, so from plan 3b-1b on it is a regression set: run every round, every
+# miss explained, not counted in the held-out threshold. Expectations change only with the
+# user's approval (plan 3b-1b Task 1 found none that its design changes, 2026-11-21).
 # The follow-up sentences and the expected results are the user's. The first requests, the
 # first plans and the stock that set each sentence up were filled in from the user's notes.
 #

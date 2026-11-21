@@ -2,6 +2,24 @@
 
 A running record of the paid planning evaluations: for each round, what changed since the round before, which runs it made, and how the results compare across rounds. Add a round after every evaluation. How to run the evaluation and what each metric means is in `docs/local-development.md` (Planning evaluation).
 
+## Scenario sets
+
+Every scenario file under `backend/eval_data/planning/`, with its role. **Development**: written by Claude, may be used for tuning in its plan. **Regression**: run every round to catch a step backwards, every miss explained; its results have been read, so it no longer measures unseen requests. **Held-out**: written by the user, never used for tuning, run once its plan's code is final. A set's role changes only by a plan's decision, recorded in the last column.
+
+| File | Library | Scenarios | Author | What it tests | Role | Role history |
+|---|---|---|---|---|---|---|
+| `scenarios_baseline.yaml` | `library.yaml` | 7 | Claude | Plan 1's first planning slice: fridge-only and shopping meals, counts, infeasible requests | Regression | Development in plan 1 and plan 2a (rounds 1-5 tuned on it); regression since then |
+| `scenarios_plan2a.yaml` | `library_extended.yaml` | 19 (18 scored, 1 check-only) | Claude | Plan 2a: feasibility stops, the shortlist, named ingredients, next actions | Regression | Development in plan 2a; regression since then |
+| `scenarios_counts.yaml` | `library_extended.yaml` | 10 | Claude | Meat and vegetable bounds, the implied side, the next-action buttons' messages | Regression | Added in round 6, never tuned on |
+| `scenarios_diners.yaml` | `library_diners.yaml` | 17 | Claude | Plan 2b: the diner card, friends and guests, nicknames, ask-first answers, plan again | Regression | Development in plan 2b; regression since plan 3b-1 |
+| `scenarios_heldout.yaml` | `library_diners.yaml` | 14 | User (requests), Claude (set-up) | Plan 2b: requests with several diners | Regression | Held-out in plan 2b (round 8); its results were read, so a regression set since plan 3b-1 (round 9) |
+| `scenarios_heldout_core.yaml` | `library_diners.yaml` | 22 | User (requests), Claude (set-up) | Plan 2b: one-diner requests | Regression | Held-out in plan 2b (round 8); a regression set since plan 3b-1 (round 9) |
+| `scenarios_revise.yaml` | `library_revise.yaml` | 19 | Claude | Plan 3b-1: follow-ups that revise the plan, the choice card, hand edits between turns | Development | Development in plan 3b-1; development again in plan 3b-1b |
+| `scenarios_revise_heldout.yaml` | `library_revise.yaml` | 18 (1 deferred to 3b-2) | User (sentences), Claude (set-up) | Plan 3b-1: revision sentences | Regression | Held-out in plan 3b-1 (round 9); a regression set since plan 3b-1b (decided 2026-11-21; no expectation changed) |
+| `scenarios_revise_heldout2.yaml` | `library_revise2.yaml` | 20 | User (sentences), Claude (set-up) | Plan 3b-1b: drops, replacements, one-meal wishes, a lasting rule, add-only, buttons, unmeetable wishes, new plans | Held-out | Written for plan 3b-1b (2026-11-21) |
+
+`library_revise2.yaml` is `library_revise.yaml` unchanged plus eight dishes the plan 3b-1b sentences need; `library_revise.yaml` stays frozen so the regression set compares across rounds.
+
 ## How to add a round
 
 1. Run the evaluation on a clean, committed tree (the script refuses otherwise), so each run belongs to one commit.

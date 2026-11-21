@@ -78,13 +78,14 @@ The principle: **if the words want another dish in its place ("换 / 换成 / �
 | A named dish that was added by hand or kept by confirmation | Named, so it is dropped or replaced as above |
 | A message that would drop every dish ("全都不要了") | Nothing changes; the reply (plain text, no card) asks whether to plan a new meal. There is no "skip this meal" feature, and none is added (Claude's call) |
 
+- **The boundary between a dish and an ingredient (decided by the user, 2026-11-21):** words that point at a dish ("茄子这道不要", "玉米的不要") follow the table above (drop unless the words want a replacement); words that say the user does not want an ingredient for this meal ("不想吃茄子", "今天不想吃肉") are a one-meal avoidance (Section 5.4): the dishes with it are replaced and the plan keeps its size.
 - The change list (`RevisionProposal`) marks each removed dish as `drop` or `replace`, and gains a kind for a message that only adds ("再加一道", "加个青菜"). Code checks: a drop under `named` or `scope` needs the quote as today; an add-only answer removes nothing; a replacement is the same dish type as the dish it replaces; a change list that leaves no dish is refused and answered with the question above.
 - The revision's counts are computed by code (approach B): when the message states a number (`counts_stated_now`), the stated counts win; otherwise the counts are the current plan's own counts minus the dropped dishes (by dish type) plus the added ones. The parse no longer guesses a count change for a removal. This replaces plan 3b-1's rule that a named removal without a number keeps the plan's size.
 - A general wish never drops and never removes a locked dish (unchanged from 3b-1).
 
 ### 5.2 General wishes and same-type replacement
 
-- A replacement is always the same dish type as the dish it replaces, unless the message states a count change.
+- A replacement is always the same dish type as the dish it replaces, unless the message states a count change, or **the user names the replacement dish** ("用西红柿炒鸡蛋换掉鱼香肉丝": the named dish is used even when it is another type, and the counts by type follow it; decided by the user, 2026-11-21), or the dish breaks a one-meal avoidance (Section 5.4).
 - When a count check fails on a revision, the retry message names the concrete dishes of the right type that may be replaced ("replace one of these meat dishes: 清蒸鲈鱼 (id 12), 土豆炖牛腩 (id 18)"), not only which side is off.
 - When the wish fits no dish of the type that could be replaced, the answer is "nothing fits" with the reason (3b-1's nothing-fits path), not a swap that ignores the wish.
 - An asked-for dish that is not in the library ("换成西红柿炒鸡蛋" when there is none) is answered as nothing fits, saying the dish is not in the library and offering import, without a search loop.
