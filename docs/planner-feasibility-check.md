@@ -9,6 +9,8 @@ It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning
 - After the request is parsed and its defaults applied, **before the first planner model call**.
 - Again **before every retry**, so a request that turns out impossible does not keep retrying. Within one planning run its inputs do not change today, so this second check always repeats the first; it is kept for when stock can change during a run (an inventory-changing planner tool). Plan 2b's diner card settles the diners before the run starts, so they do not change within it either. See `docs/phase-1-carryover.md`.
 
+A revision run (plan 3b-1, changing the current plan) does not run it: `start_revision` goes straight to the revise step. A plan that cannot be changed ends as a failed revision with the plan unchanged.
+
 It only reads the database and computes; it calls no model. On the chat page it shows as the step "Checking the fridge and dietary rules".
 
 ## 2. What it checks
@@ -72,7 +74,7 @@ Two buttons appear only when they can help:
 - **Fewer dishes** only when the meal has more than one dish in total.
 - **Any mix of meat and vegetable dishes** only when the user named a meat or vegetable count and a meat or vegetable side, named or implied, is short. A short dish total alone does not offer it, because dropping the split would not add a dish.
 
-"Allow shopping", "Fewer dishes", "Drop the time limit", "Any mix of meat and vegetable dishes", and "The named ingredients are optional" send a short fixed message. "Update inventory", "Register cookware", and "Import recipes" are links to the inventory and import pages.
+"Allow shopping", "Fewer dishes", "Drop the time limit", "Any mix of meat and vegetable dishes", and "The named ingredients are optional" send a short fixed message; since plan 3b-1 these messages skip the route and are parsed as a new plan. "Update inventory", "Register cookware", and "Import recipes" are links to the inventory and import pages.
 
 ## 5. How it relates to validation
 
