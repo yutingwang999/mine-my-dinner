@@ -27,13 +27,15 @@ FACTS = {
     10: DishFacts("醋溜白菜", ["白菜"], [], "vegetable dish"),
     11: DishFacts("干煸四季豆", ["四季豆"], [], "vegetable dish"),
     12: DishFacts("拍黄瓜", ["黄瓜"], [], "vegetable dish"),
+    13: DishFacts("青椒肉丝", ["青椒", "猪肉"], [], "meat dish"),
+    14: DishFacts("蒜蓉西兰花", ["西兰花", "大蒜"], [], "vegetable dish"),
 }
 
 
 def _plan(ids, locked=(), conflicts=(), overrides=()):
     veg, meat = "vegetable dish", "meat dish"
     types = {1: veg, 2: veg, 3: veg, 4: "soup", 5: veg, 6: meat, 7: meat, 8: "soup",
-             9: veg, 10: veg, 11: veg, 12: veg}
+             9: veg, 10: veg, 11: veg, 12: veg, 13: meat, 14: veg}
     return {
         "recipes": [{"id": i, "title": FACTS[i].title, "dish_type": types[i]} for i in ids],
         "spec": {"mode": "fridge_only", "dishes": 3, "soups": 0},
@@ -339,19 +341,19 @@ def test_replace_must_keep_the_dish_type():
 
 
 def test_named_replacement_may_change_type():
-    plan = _plan([7, 1, 5])
-    message = "用西红柿炒鸡蛋换掉鱼香肉丝"
-    named = _change("named", [_removed(7, "鱼香肉丝", "replace", 2, "西红柿炒鸡蛋")], [2])
+    plan = _plan([13, 1, 2])
+    message = "把青椒肉丝换成蒜蓉西兰花"
+    named = _change("named", [_removed(13, "青椒肉丝", "replace", 14, "蒜蓉西兰花")], [14])
     assert check_revision(plan, named, message, FACTS) == []
-    bare = _change("named", [_removed(7, "鱼香肉丝")], [2])
+    bare = _change("named", [_removed(13, "青椒肉丝")], [14])
     assert _codes(check_revision(plan, bare, message, FACTS)) == ["R7"]
     # The named dish's words must be in the message and name that dish.
-    absent = _change("named", [_removed(7, "鱼香肉丝", "replace", 2, "土豆炖牛腩")], [2])
+    absent = _change("named", [_removed(13, "青椒肉丝", "replace", 14, "土豆炖牛腩")], [14])
     assert "R1" in _codes(check_revision(plan, absent, message, FACTS))
-    stranger = _change("named", [_removed(7, "鱼香肉丝", "replace", 2, "鱼香")], [2])
+    stranger = _change("named", [_removed(13, "青椒肉丝", "replace", 14, "青椒")], [14])
     assert "R2" in _codes(check_revision(plan, stranger, message, FACTS))
     # replace_with must also be added.
-    unadded = _change("named", [_removed(7, "鱼香肉丝", "replace", 2, "西红柿炒鸡蛋")])
+    unadded = _change("named", [_removed(13, "青椒肉丝", "replace", 14, "蒜蓉西兰花")])
     assert "R6" in _codes(check_revision(plan, unadded, message, FACTS))
 
 
@@ -374,7 +376,6 @@ def test_extra_added_dishes_need_a_reason():
     plan = _plan([1, 2])
     extra = _change("general", [_removed(1)], [5, 4])
     assert _codes(check_revision(plan, extra, "x", FACTS)) == ["R7"]
-    spec = revision_spec(plan, {"dishes": 2}, {"dishes": 3, "counts_stated_now": True})
     assert check_revision(plan, extra, "x", FACTS, counts_stated=True) == []
     assert check_revision(plan, _change("add", add=[5, 4]), "再加两道", FACTS) == []
 
@@ -457,6 +458,9 @@ def test_a_general_wish_never_drops():
     plan = _plan([1, 2, 4])
     proposal = _change("general", [_removed(1, mode="drop")])
     assert _codes(check_revision(plan, proposal, "想吃辣的", FACTS)) == ["R7"]
+    # A message that lowers the count ("两个菜就够了") points at no dish, so it is general,
+    # and its removals are drops (plan 3b-1b Task 3).
+    assert check_revision(plan, proposal, "两个菜就够了", FACTS, counts_stated=True) == []
 
 
 def test_a_replace_without_an_added_dish_is_refused():

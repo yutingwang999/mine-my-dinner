@@ -47,7 +47,7 @@ class RemovedDish(BaseModel):
         default=None,
         description=(
             "Only for mode \"replace\", when the user names the dish that takes this one's place "
-            "(\"用西红柿炒鸡蛋换掉鱼香肉丝\"): the recipe id of that dish. It must also be in add, "
+            "(\"把青椒肉丝换成蒜蓉西兰花\"): the recipe id of that dish. It must also be in add, "
             "and replace_with_quote must hold the user's words that name it. The named dish is "
             "used even when it is another dish type. Leave it null otherwise."
         ),
@@ -74,7 +74,9 @@ class RevisionProposal(BaseModel):
             "leaves out in excepted. \"general\": it is a wish that points at no particular "
             "dish (\"something spicier\", \"not so many egg dishes\"); a general ingredient or "
             "taste word that does not point at one dish is a general wish, not a named dish, "
-            "and so is a wish to change without saying how (\"换个思路\"); locked dishes stay. "
+            "and so is a wish to change without saying how (\"来点不一样的\"); it replaces "
+            "dishes and never drops one, and locked dishes stay. A message that lowers the "
+            "number of dishes (\"两个菜就够了\") is general too, and its removals are drops. "
             "\"add\": the message only adds dishes (\"再加一道\", \"add a green vegetable\") and "
             "removes nothing: remove must be empty and add holds the new dishes. "
             "\"unclear\": only when the message points at a dish but you cannot tell which one "
@@ -109,8 +111,11 @@ class RevisionProposal(BaseModel):
     )
     note: str = Field(
         description=(
-            "One or two sentences for the user, in the user's language, on what you changed "
-            "and why, or, for \"unclear\", the question that asks which dish is meant."
+            "One or two sentences for the user, in the reply locale: only why the new dishes "
+            "fit the wish, or, for \"unclear\", the question that asks which dish is meant, "
+            "or, when nothing fits, why. Do not list what changed; code writes "
+            "that. Never use internal words such as LOCKED, OPEN CONFLICT, KEPT CONFLICT or "
+            "recipe ids, nor their translations."
         )
     )
 
@@ -315,15 +320,16 @@ def check_revision(
 
 
 def _check_pairing(proposal, removed, types, dish_facts, avoided, counts_stated, add) -> None:
-    """The size rules (R7). A general wish never drops (R7). Every replace-removal needs one
-    added dish: matched by dish type; a dish named by `replace_with` and a replacement of an
+    """The size rules (R7). A general wish never drops (R7), unless the message states a
+    count change ("两个菜就够了" points at no dish, and its removals are drops). Every
+    replace-removal needs one added dish: matched by dish type; a dish named by `replace_with` and a replacement of an
     avoided dish may be another type; so may any replacement when the message states a count
     (`counts_stated`). An added dish whose type is unknown here (no facts yet) matches any
     removal, so this never misfires before the caller supplies facts for the added ids. A
     replace-removal left without an added dish is a missing replacement, and an added dish left
     over is an extra; both are allowed only when counts are stated (extras also under target
     add)."""
-    if proposal.target == "general":
+    if proposal.target == "general" and not counts_stated:
         for item in removed:
             if item.mode == "drop":
                 add(

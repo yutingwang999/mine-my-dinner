@@ -68,7 +68,7 @@ git commit -m "eval: plan 3b-1b held-out batch, 3b-1 held-out set becomes a regr
 **Interfaces:**
 - Produces: `RemovedDish.mode: Literal["drop", "replace"] = "replace"` (the default keeps stored 3b-1 proposals valid). Field description: drop when the words only say not to have the dish; replace when they want another dish in its place ("换 / 换成 / 换一个 / 来个 / 再要一道").
 - Produces: `RevisionProposal.target` gains `"add"` (a message that only adds dishes: `remove` must be empty).
-- Produces: `RemovedDish.replace_with: int | None = None` — the id of the dish the user named as the replacement ("用西红柿炒鸡蛋换掉鱼香肉丝"); it must also be in `add`, and its quote (the named dish's words) must be in the message.
+- Produces: `RemovedDish.replace_with: int | None = None` — the id of the dish the user named as the replacement ("把青椒肉丝换成蒜蓉西兰花"); it must also be in `add`, and its quote (the named dish's words) must be in the message.
 - Produces: new problem codes on `RevisionProblem.code`: `"R7"` a replacement of another dish type (allowed only for a dish in `avoid_ids`, or when the replacement is the dish the user named in `replace_with`, spec 5.2); `"R8"` an `add` answer that removes a dish; `"R9"` a change that leaves no dish.
 - Produces: `check_revision(plan, proposal, message, dish_facts, *, spec=None, avoid_ids: Collection[int] = ()) -> list[RevisionProblem]`. `avoid_ids` are the plan's dishes that break this meal's `meal_avoid` (Task 5 computes them): they count as named (no quote needed, locked allowed, outside the R4 limit) and may be replaced by another dish type. Pairing rule for R7: replacements are matched to the `mode == "replace"` removals by dish type; every unmatched added dish is an extra (allowed only when the message states a count, `spec` given, or under `add`); `DishFacts` gains `dish_type: str`.
 - Produces: `attempt_counts(plan: dict, proposal: RevisionProposal, dish_types: dict[int, str]) -> dict[str, int]` — the category counts of the revised plan (`count_categories` over the revised dish types); Task 3 uses it as the attempt's exact counts when the message states no count.
@@ -78,7 +78,7 @@ git commit -m "eval: plan 3b-1b held-out batch, 3b-1 held-out set becomes a regr
 - [ ] **Step 1: Write the failing tests** in `test_agent_revision.py`:
   - `test_drop_needs_a_quote_and_counts_go_down` — "茄子这道不要" removes 红烧茄子 with `mode="drop"`, quote "茄子这道" → no problem; `attempt_counts` shows one vegetable dish fewer.
   - `test_replace_must_keep_the_dish_type` — `mode="replace"` of a vegetable dish with a meat dish → `["R7"]`; with a vegetable dish → `[]`.
-  - `test_named_replacement_may_change_type` — "用西红柿炒鸡蛋换掉鱼香肉丝": remove 鱼香肉丝 (`mode="replace"`, `replace_with` = 番茄炒蛋's id) and add 番茄炒蛋 → `[]`; the same swap without `replace_with` → `["R7"]`.
+  - `test_named_replacement_may_change_type` — "把青椒肉丝换成蒜蓉西兰花": remove 青椒肉丝 (`mode="replace"`, `replace_with` = 蒜蓉西兰花's id) and add 蒜蓉西兰花 → `[]`; the same swap without `replace_with` → `["R7"]`.
   - `test_avoid_ids_allow_another_type_and_locked_dishes` — a locked meat dish in `avoid_ids`, target `general`, replaced by a vegetable dish with no quote → `[]`; the same dish not in `avoid_ids` → R3 and R7.
   - `test_add_only_removes_nothing` — target `add` with one removal → `["R8"]`; with only `add` → `[]`.
   - `test_a_change_leaving_no_dish_is_refused` — dropping every dish of a 3-dish plan → contains `"R9"`.

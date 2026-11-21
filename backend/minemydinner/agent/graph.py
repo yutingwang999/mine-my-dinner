@@ -78,17 +78,22 @@ from minemydinner.agent.request import (
 )
 from minemydinner.agent.revise_step import (
     WISH_UNMET,
+    attempt_spec,
     card_search_notes,
     carried_overrides,
     count_fix_hint,
     deleted_note,
     dish_facts,
+    empty_plan_question,
     failed_note,
     from_version,
     kept_locked,
     must_unmet_names,
     open_conflict_ids,
+    pairing_detail,
+    replaceable_dishes,
     reply_text,
+    revision_actions,
     revision_defaults,
     revision_opening,
     split_violations,
@@ -1196,10 +1201,30 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         ids = state["revision"]["recipe_ids"]
         text = retry_text(state, session, ctx, header, ids, problems)
         # Which categories are off and how to fix them, after the H4 line (task 8b): the
-        # reviser swapped a vegetable dish for a meat dish and then gave up.
+        # reviser swapped a vegetable dish for a meat dish and then gave up. Plan 3b-1b
+        # spec 5.2: the hint names the dishes of the category that is over. Without a stated
+        # count the attempt is checked against its own counts, so the type pairing (R7)
+        # stands in for H4 and gets the same hint.
+        plan = revision_plan(state)
+        replaceable = replaceable_dishes(plan)
         h4 = [v for v in state["validation"]["violations"] if v["code"] == "H4"]
+        codes = {p["code"] for p in state["revision"]["problems"]}
         if h4:
-            text += "\n\nTo fix the counts: " + count_fix_hint(h4[0]["detail"])
+            text += "\n\nTo fix the counts: " + count_fix_hint(h4[0]["detail"], replaceable)
+        elif "R7" in codes and data is not None:
+            proposal = RevisionProposal.model_validate(data)
+            new = [i for i in proposal.add if i not in {r["id"] for r in plan["recipes"]}]
+            types: dict[int, str] = {}
+            if new:
+                rows = session.execute(
+                    select(Recipe.id, Recipe.dish_type).where(Recipe.id.in_(new))
+                ).all()
+                types = {recipe_id: dish_type for recipe_id, dish_type in rows}
+            detail = pairing_detail(plan, proposal, types)
+            # Only a general wish may pick other dishes to replace; a named or scoped change
+            # must keep its dishes, so it gets the same-type line alone.
+            names = replaceable if proposal.target == "general" else {}
+            text += "\n\nTo fix the dish types: " + count_fix_hint(detail, names)
         return text
 
     def revise_attempt(state: ChatState) -> dict:
@@ -1237,6 +1262,36 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "search_notes": _merge_notes(notes, [], False),
         }
 
+    def empty_plan_update(
+        state: ChatState, revision: dict, current_ids: list[int], problems: list
+    ) -> dict:
+        """The state update of an attempt whose change would leave no dish (R9): recorded as a
+        failed validation, the plan's own dishes kept, and marked `empty` for the reply."""
+        problem_dumps = [p.model_dump() for p in problems]
+        deps.recorder.add_event(
+            state["run_id"],
+            {
+                "kind": "validation",
+                "attempt": state["retries"],
+                "recipe_ids": [],
+                "passed": False,
+                "problems": problem_dumps,
+                "result": None,
+            },
+        )
+        update: dict[str, Any] = {
+            "validation": {"passed": False, "violations": [], "allowed": [], "warnings": []},
+            "revision": {
+                **revision,
+                "recipe_ids": current_ids,
+                "problems": problem_dumps,
+                "empty": True,
+            },
+        }
+        if state.get("first_passed") is None:
+            update["first_passed"] = False
+        return update
+
     def check_revised(state: ChatState) -> Command:
         """The revision's own rules (revision.check_revision), then the hard checks with the
         carried overrides. H1, H3, H6 and H7 caused only by locked dishes are warnings."""
@@ -1259,6 +1314,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         with deps.session_factory() as session:
             if proposal is None:
                 ids = current_ids
+                checked = spec
                 problems = [
                     RevisionProblem(
                         code="R6", text="No revision was given: answer with RevisionProposal."
@@ -1266,18 +1322,28 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 ]
             else:
                 ids = revised_ids(plan, proposal)
-                facts, _ = dish_facts(session, current_ids, plan=plan)
+                # The added dishes need facts too: their dish type for the type pairing (R7)
+                # and their words for a named replacement's quote. An id that is not in the
+                # library has none and reads as an unknown type.
+                facts, _ = dish_facts(session, [*current_ids, *proposal.add], plan=plan)
                 baseline = state.get("plan_request") or state.get("previous_request")
+                counts_stated = counts_changed(state["request"], baseline)
+                # The plan's dishes that break this meal's avoidance (spec 5.4); filled by
+                # Task 5 (the one-meal avoidance field), empty until then.
+                avoid_ids: list[int] = []
                 problems = check_revision(
                     plan,
                     proposal,
                     revision["message"],
                     facts,
                     spec=spec,
-                    counts_stated=counts_changed(state["request"], baseline),
+                    avoid_ids=avoid_ids,
+                    counts_stated=counts_stated,
                 )
+                types = {i: f.dish_type for i, f in facts.items()}
+                checked = attempt_spec(spec, plan, proposal, types, counts_stated)
             ctx = load_planning_context(session, meal_constraints(state))
-            result = validate_plan(session, ctx, spec, ids, carried_overrides(plan, ids))
+            result = validate_plan(session, ctx, checked, ids, carried_overrides(plan, ids))
             missed_before: set[str] = set()
             if must_unmet_names(result.violations):
                 # A "must use" name the current plan already missed (under its own spec) is
@@ -1290,6 +1356,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     carried_overrides(plan, current_ids),
                 )
                 missed_before = must_unmet_names(before.violations)
+        codes = {p.code for p in problems}
+        if "R9" in codes and not codes & {"R1", "R2", "R6"}:
+            # The change would leave no dish (spec 5.1): no retry; the plan stays and the
+            # reply asks whether to plan a new meal. Drops the message does not justify (a
+            # quote or scope problem, a malformed list) are retried as usual instead.
+            return Command(
+                update=empty_plan_update(state, revision, current_ids, problems),
+                goto="present_revision",
+            )
         locked = (locked_ids(plan) - open_conflict_ids(plan)) & set(ids)
         failing, allowed = split_violations(result.violations, locked, missed_before)
         passed = not problems and not failing
@@ -1313,7 +1388,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 "allowed": [v.model_dump(mode="json") for v in allowed],
                 "warnings": dumped["warnings"],
             },
-            "revision": {**revision, "recipe_ids": ids, "problems": problem_dumps},
+            # The attempt's own spec: a passed revision's card carries it, so the new
+            # version's counts match its dishes.
+            "revision": {
+                **revision,
+                "recipe_ids": ids,
+                "problems": problem_dumps,
+                "spec": checked.model_dump(),
+            },
         }
         if state.get("first_passed") is None:
             update["first_passed"] = passed
@@ -1340,8 +1422,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         changed = proposal is not None and bool(proposal.remove or proposal.add)
         passed = validation is not None and validation["passed"]
         update: dict[str, Any] = {}
+        # Only a card in `reply_plans` follows the reply; the empty-plan question has none.
+        shows_card = True
         with deps.session_factory() as session:
-            if proposal is not None and asks_back(proposal):
+            if revision.get("empty"):
+                # The change would leave no dish (spec 5.1): nothing changes, and the reply
+                # is a plain question with no card.
+                card = unchanged_card(plan, [], [])
+                note = empty_plan_question(locale)
+                shows_card = False
+            elif proposal is not None and asks_back(proposal):
                 card = unchanged_card(plan, [], [])
                 note = proposal.note.strip() or unchanged_note(locale)
             elif changed and passed:
@@ -1352,10 +1442,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     warnings=[Finding(**w) for w in validation["warnings"]],
                     passed=False,
                 )
+                # The attempt's own spec (its counts follow the change list), so the new
+                # version's counts match its dishes.
+                checked = revision.get("spec") or state["spec"]
                 card = revised_card(
                     session,
                     ctx,
-                    state,
+                    {**state, "spec": checked},
                     recipe_ids=ids,
                     result=result,
                     overrides=carried_overrides(live, ids),
@@ -1370,6 +1463,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     current_plan=card,
                     plan_versions=[*versions, card],
                     plan_request=state["request"],
+                    spec=checked,
                 )
             elif passed:
                 # The checks passed with no change: the model found nothing that fits the
@@ -1397,7 +1491,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                         ).all()
                     )
                 violations = (validation or {}).get("violations", [])
-                actions = next_actions(state["spec"], [], [v["code"] for v in violations])
+                actions = revision_actions(
+                    state["spec"],
+                    [p["code"] for p in revision["problems"]],
+                    [v["code"] for v in violations],
+                )
                 unmet = unmet_entries(revision["problems"], violations, titles, locale)
                 card = unchanged_card(plan, unmet, actions)
                 note = failed_note(locale, bool(actions))
@@ -1419,9 +1517,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             final_plan=map_strings(card, deps.client.prepare_text),
         )
         reply_id = str(uuid.uuid4())
+        reply_plans = dict(state.get("reply_plans") or {})
+        if shows_card:
+            reply_plans[reply_id] = card
         return {
             **update,
-            "reply_plans": {**(state.get("reply_plans") or {}), reply_id: card},
+            "reply_plans": reply_plans,
             "messages": [AIMessage(note, id=reply_id)],
         }
 

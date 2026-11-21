@@ -38,7 +38,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
+    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v3"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -394,26 +394,36 @@ def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
+    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v3"
     assert PROMPT_VERSIONS["parse"] == "parse_v6"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
 
 
-def test_revise_v1_is_frozen_and_revise_v2_is_current():
+def test_revise_v1_and_v2_are_frozen_and_revise_v3_is_current():
     import hashlib
 
     v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
-    # revise_v1 was used by plan 3b-1 development runs, so it must never change.
+    # revise_v1 and revise_v2 were used by plan 3b-1 runs, so they must never change.
     assert hashlib.sha256(v1).hexdigest() == (
         "9062ccb0da4dfd894023e79f6fabe118c5484f9dcc94c32ddc6563f55fbb4fc3"
     )
-    assert PROMPT_VERSIONS["revise"] == "revise_v2"
-    v2 = load_prompt("revise")
-    assert v2 == (PROMPT_DIR / "revise_v2.md").read_text(encoding="utf-8")
-    # The fixes of the 20261120T091620Z development run (task 8b).
-    assert "meat dish for a meat dish" in v2
-    assert "integers" in v2 and "never in both add and remove" in v2
-    assert "换个思路" in v2
+    v2 = (PROMPT_DIR / "revise_v2.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v2).hexdigest() == (
+        "90696404beb4ed7bfb54c36c666160d7462477cf8e916c2c1510609d7f1b5266"
+    )
+    assert PROMPT_VERSIONS["revise"] == "revise_v3"
+    v3 = load_prompt("revise")
+    assert v3 == (PROMPT_DIR / "revise_v3.md").read_text(encoding="utf-8")
+    # Plan 3b-1b: drop or replace, the add-only kind, wishes for this meal only, the note.
+    assert "mode drop" in v3 and "mode replace" in v3
+    assert "- add: the message only adds dishes" in v3
+    assert "LOCKED KEPT CONFLICT" in v3 and "replace_with" in v3
+    assert "not in the library and can be imported" in v3
+    assert "\"锁定\"" in v3 and "so do not repeat that" in v3
+    # No rule about counting dishes (plan 3b-1b spec 5.7, the user's decision).
+    assert "count the dishes" not in v3
+    # Development-set sentences stay out of the prompt (plan 3b-1b brief).
+    assert "换个思路" not in v3 and "差点意思" not in v3
 
 
 def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():

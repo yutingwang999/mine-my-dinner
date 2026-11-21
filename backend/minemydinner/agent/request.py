@@ -20,7 +20,7 @@ PROMPT_VERSIONS = {
     "route": "route_v3",
     "parse": "parse_v6",
     "planner": "planner_v4",
-    "revise": "revise_v2",
+    "revise": "revise_v3",
 }
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
