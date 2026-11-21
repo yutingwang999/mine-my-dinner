@@ -81,6 +81,7 @@ from minemydinner.agent.revise_step import (
     card_search_notes,
     carried_overrides,
     count_fix_hint,
+    deleted_note,
     dish_facts,
     failed_note,
     from_version,
@@ -96,6 +97,7 @@ from minemydinner.agent.revise_step import (
     unmet_entries,
     untouched_locked,
     wish_unmet_actions,
+    without_deleted,
 )
 from minemydinner.agent.revision import (
     RevisionProblem,
@@ -1092,6 +1094,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         reply_id = str(uuid.uuid4())
         return {
             "current_plan": plan,
+            "plan_request": state["request"],
             "plan_versions": [*(state.get("plan_versions") or []), plan],
             "reply_plans": {**(state.get("reply_plans") or {}), reply_id: plan},
             "messages": [AIMessage(note, id=reply_id)],
@@ -1103,10 +1106,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         """Start a planning run that changes the current plan: the revision's spec (the plan's
         counts, the message's changes on top) and the run's record, marked with the version
         it starts from. Who eats is the current plan's (a change in who eats plans anew)."""
-        plan = state["current_plan"]
-        index = from_version(plan, state.get("plan_versions") or [])
+        index = from_version(state["current_plan"], state.get("plan_versions") or [])
+        shown_ids = [r["id"] for r in state["current_plan"]["recipes"]]
+        with deps.session_factory() as session:
+            existing = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(shown_ids))))
+        deleted = [i for i in shown_ids if i not in existing]
+        # A dish deleted from the library since the plan was shown leaves the revision.
+        plan = without_deleted(state["current_plan"], deleted)
         parsed = ParsedRequest.model_validate(state["request"])
-        spec = revision_spec(plan, state.get("previous_request"), state["request"])
+        # The baseline is the request the plan was built from, not the thread's last parse: a
+        # turn that left the plan as it was (failed, unclear, nothing fits) still replaced
+        # `request`, and its wishes are not in the plan.
+        baseline = state.get("plan_request") or state.get("previous_request")
+        spec = revision_spec(plan, baseline, state["request"])
         defaults_used = revision_defaults(plan.get("defaults_used") or [], plan["spec"], spec)
         texts = _current_request(state["messages"])
         settled_data = state.get("settled_diners")
@@ -1151,8 +1163,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 "message": "\n".join(texts),
                 "recipe_ids": [r["id"] for r in plan["recipes"]],
                 "problems": [],
+                "deleted": deleted,
             },
         }
+
+    def revision_plan(state: ChatState) -> dict:
+        """The plan the revision changes: the current plan without its deleted dishes."""
+        return without_deleted(
+            state["current_plan"], (state.get("revision") or {}).get("deleted") or []
+        )
 
     def reviser(state: ChatState) -> dict:
         try:
@@ -1188,7 +1207,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         update: dict[str, Any] = {}
         notes = state.get("search_notes")
         opening = state.get("planner_opening")
-        plan = state["current_plan"]
+        plan = revision_plan(state)
         with deps.session_factory() as session:
             ctx = load_planning_context(session, meal_constraints(state))
             if opening is None:
@@ -1220,7 +1239,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def check_revised(state: ChatState) -> Command:
         """The revision's own rules (revision.check_revision), then the hard checks with the
         carried overrides. H1, H3, H6 and H7 caused only by locked dishes are warnings."""
-        plan = state["current_plan"]
+        plan = revision_plan(state)
         spec = PlanSpec.model_validate(state["spec"])
         revision = dict(state["revision"])
         current_ids = [r["id"] for r in plan["recipes"]]
@@ -1303,6 +1322,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         plan = state["current_plan"]
         versions = list(state.get("plan_versions") or [])
         revision = state["revision"]
+        deleted = revision.get("deleted") or []
+        # What the revision worked on; an unchanged reply card still shows the plan as it was.
+        live = without_deleted(plan, deleted)
         validation = state.get("validation")
         data = state["proposal"]
         proposal = RevisionProposal.model_validate(data) if data is not None else None
@@ -1327,14 +1349,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     state,
                     recipe_ids=ids,
                     result=result,
-                    overrides=carried_overrides(plan, ids),
-                    locked=kept_locked(plan, ids),
+                    overrides=carried_overrides(live, ids),
+                    locked=kept_locked(live, ids),
                     index=len(versions),
                     locale=locale,
                 )
                 card["revision"] = {"from_version": revision["from_version"]}
-                note = reply_text(plan, proposal, card, locale)
-                update.update(current_plan=card, plan_versions=[*versions, card])
+                card["notes"] = deleted_note(plan, deleted)
+                note = reply_text(live, proposal, card, locale)
+                update.update(
+                    current_plan=card,
+                    plan_versions=[*versions, card],
+                    plan_request=state["request"],
+                )
             elif passed:
                 # The checks passed with no change: the model found nothing that fits the
                 # wish. The plan stays; the reply says so with next actions (spec 5.4).
@@ -1343,8 +1370,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 )
                 actions = wish_unmet_actions(state["spec"])
                 card = unchanged_card(plan, unmet, actions)
-                titles_now = {r["id"]: r["title"] for r in plan["recipes"]}
-                hand, kept = untouched_locked(plan, proposal, titles_now)
+                titles_now = {r["id"]: r["title"] for r in live["recipes"]}
+                hand, kept = untouched_locked(live, proposal, titles_now)
                 parts = [
                     failed_note(locale, True),
                     changed_text([], [], hand, locale, kept),

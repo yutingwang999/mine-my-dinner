@@ -353,6 +353,22 @@ def unchanged_card(current: dict, unmet: list[dict], actions: list[str]) -> dict
     return {**current, "passed": False, "unmet": unmet, "next_actions": actions}
 
 
+def without_deleted(plan: dict, deleted: Collection[int]) -> dict:
+    """The plan a revision works on: the current plan without the dishes that left the
+    library since it was shown. They leave quietly, as on a manual edit (3a `_check`)."""
+    if not deleted:
+        return plan
+    gone = set(deleted)
+    return {**plan, "recipes": [r for r in plan["recipes"] if r["id"] not in gone]}
+
+
+def deleted_note(plan: dict, deleted: Collection[int]) -> list[dict]:
+    """The card's quiet note for the dishes `without_deleted` dropped, or none."""
+    gone = set(deleted)
+    titles = [r["title"] for r in plan["recipes"] if r["id"] in gone]
+    return [{"field": "deleted_recipes", "titles": titles}] if titles else []
+
+
 def card_search_notes(card: dict) -> dict:
     """A card's search notes in the state's `search_notes` shape."""
     return {

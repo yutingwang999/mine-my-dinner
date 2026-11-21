@@ -2379,6 +2379,9 @@ def test_revise_goes_to_the_revise_step(revise_env):
     # The route input carries no plan line.
     assert model_calls_by_prompt(env, "route")[-1][-1].content == "想要辣一些的"
     assert out["previous_request"] == first["request"]
+    # The plan was built from the first request; the passed revision is built from this one.
+    assert first["plan_request"] == first["request"]
+    assert out["plan_request"] == out["request"]
 
 
 def test_unsure_shows_the_choice_card(revise_env):

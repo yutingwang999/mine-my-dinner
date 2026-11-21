@@ -100,8 +100,9 @@ def proposal(target: str, remove=(), add=(), note: str = "", **fields):
 
 
 def revise(env: Env, text: str, replies: list, parse: dict | None = None) -> dict:
-    """A follow-up turn routed to the revise step, with no earlier request to compare with
-    (previous_request stays unset), so every field the parse states counts as changed."""
+    """A follow-up turn routed to the revise step. The revision compares the parse with the
+    request the current plan was built from (`plan_request`), so a field counts as changed
+    when the parse states it with a value that differs from that request."""
     env.model.replies = list(replies)
     env.model.structured["ParsedRequest"] = [parse or {}]
     env.graph.update_state(
@@ -500,3 +501,68 @@ def test_must_use_the_revision_breaks_fails():
     must = Finding(code="H7", detail={"name": "茄子", "rule": "must", "recipes_without": []})
     assert split_violations([must], set(), {"茄子"}) == ([], [must])
     assert split_violations([must], set(), {"玉米"}) == ([must], [])
+
+
+def routed_revise(env: Env, text: str, replies: list, parse: dict) -> dict:
+    """A follow-up turn through the real route (scripted as revise), so route_intent keeps the
+    thread's request as `previous_request` as it does in the app."""
+    env.model.replies = list(replies)
+    env.model.structured["Intent"] = [{"intent": "revise"}]
+    env.model.structured["ParsedRequest"] = [parse]
+    return env.graph.invoke({"messages": [HumanMessage(text)], "locale": "zh"}, env.config)
+
+
+def test_a_turn_that_left_the_plan_does_not_move_the_baseline(env):
+    """The plan was made for shopping. A wish to cook from the fridge finds nothing, so the
+    plan stays; the next message still asks for the fridge, and the revision must take it."""
+    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    out = routed_revise(
+        env,
+        "只用冰箱里的，换个辣的",
+        [proposal("general", note="没有合适的。")],
+        parse={"mode": "fridge_only", "query": "辣的"},
+    )
+    assert out["current_plan"] == before["current_plan"]
+    assert out["request"]["mode"] == "fridge_only"
+    routed_revise(
+        env,
+        "还是只用冰箱里的吧",
+        [proposal("general", note="没有合适的。")],
+        parse={"mode": "fridge_only"},
+    )
+    assert last_record(env).request["spec"]["mode"] == "fridge_only"
+
+
+def test_a_side_count_asked_again_after_a_failed_turn_still_counts(env):
+    """The plan has one meat dish. Two meat dishes fail; asking for two again must still ask
+    for two, not drop the side as a split carried over from an earlier message."""
+    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    parse = {"meat_dishes": 2, "counts_stated_now": True}
+    out = routed_revise(env, "要两个荤菜", [proposal("general", note="没有合适的。")], parse)
+    assert out["current_plan"] == before["current_plan"]
+    routed_revise(env, "还是要两个荤菜", [proposal("general", note="没有合适的。")], parse)
+    spec = last_record(env).request["spec"]
+    assert (spec["meat_dishes"], spec["meat_bound"]) == (2, "exact")
+
+
+def test_a_dish_deleted_from_the_library_leaves_the_revision_quietly(env):
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    eggplant, beef, cabbage = ids_of(env, "鱼香茄子", "土豆炖牛肉", "清炒小白菜")
+    env.session.delete(env.dishes["清炒小白菜"])
+    env.session.flush()
+    out = revise(
+        env,
+        "茄子这道不要，换一个别的",
+        [proposal("named", remove=[(eggplant, "茄子这道")], add=[beef])],
+    )
+    assert out["retries"] == 0
+    plan = out["current_plan"]
+    assert recipe_ids(plan) == ids_of(env, "番茄炒蛋", "土豆炖牛肉")
+    assert plan["passed"] is True
+    assert plan["notes"] == [{"field": "deleted_recipes", "titles": ["清炒小白菜"]}]
+    assert out["messages"][-1].content.startswith("把鱼香茄子换成了土豆炖牛肉。")
+    # The model never sees the deleted dish.
+    [opening] = [m for m in reviser_requests(env)[0] if m.type == "human"]
+    assert f"{cabbage} 清炒小白菜" not in opening.content
+    # The revision keeps the plan's size without the deleted dish.
+    assert last_record(env).request["spec"]["dishes"] == 2

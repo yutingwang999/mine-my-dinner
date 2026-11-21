@@ -639,3 +639,67 @@ def test_choice_card_resumes_and_shows_in_history(client, tmp_path, session, rec
         "message": "来点辣的",
         "choice": "revise",
     }
+
+
+def revision_reply(target: str, remove=(), add=(), note: str = "") -> AIMessage:
+    removed = [{"id": i, "quote": q} for i, q in remove]
+    return tool_call(
+        "RevisionProposal", {"target": target, "remove": removed, "add": list(add), "note": note}
+    )
+
+
+def revise_env(tmp_path, session, recipe) -> tuple[ChatEnv, Any]:
+    """A chat whose first message plans one dish and whose later messages revise it."""
+    other = make_recipe(session, "白菜汤", "vegetable dish", [L("小白菜")], servings=2)
+    model = plan_model(recipe)
+    model.structured["Intent"] = [{"intent": "plan"}, {"intent": "revise"}]
+    return install(tmp_path, session, model, "plan_then_adjust"), other
+
+
+def plan_then(client, env: ChatEnv, replies: list) -> list:
+    tid = new_thread(client)
+    first = sse(post_message(client, tid, "今晚吃什么"))
+    assert len(of(first, "plan")) == 1
+    env.model.replies = replies
+    return sse(post_message(client, tid, "清炒白菜这道换掉吧"))
+
+
+def test_nothing_fits_revision_streams_its_card(client, tmp_path, session, recipe):
+    env, _ = revise_env(tmp_path, session, recipe)
+    events = plan_then(client, env, [revision_reply("general", note="没有更合适的了。")])
+    [card] = of(events, "plan")
+    assert [r["id"] for r in card["recipes"]] == [recipe.id]
+    assert card["passed"] is False
+    assert [u["code"] for u in card["unmet"]] == ["wish_unmet"]
+    assert "import_recipes" in card["next_actions"]
+    # The card follows its reply, so the client puts it on that reply.
+    assert names(events).index("plan") == names(events).index("message") + 1
+
+
+def test_unclear_revision_streams_the_unchanged_card(client, tmp_path, session, recipe):
+    env, _ = revise_env(tmp_path, session, recipe)
+    events = plan_then(client, env, [revision_reply("unclear", note="是哪一道？")])
+    [card] = of(events, "plan")
+    assert [r["id"] for r in card["recipes"]] == [recipe.id]
+    assert card["unmet"] == [] and card["next_actions"] == []
+    assert of(events, "message") == [{"role": "assistant", "text": "是哪一道？"}]
+
+
+def test_passed_revision_streams_one_card_and_its_steps(client, tmp_path, session, recipe):
+    env, other = revise_env(tmp_path, session, recipe)
+    events = plan_then(
+        client,
+        env,
+        [
+            # The first answer adds a dish already in the plan, so the check retries.
+            revision_reply("named", remove=[(recipe.id, "清炒白菜")], add=[recipe.id]),
+            revision_reply("named", remove=[(recipe.id, "清炒白菜")], add=[other.id]),
+        ],
+    )
+    [card] = of(events, "plan")
+    assert [r["id"] for r in card["recipes"]] == [other.id]
+    assert card["passed"] is True
+    steps = [e["step"] for e in of(events, "progress")]
+    assert steps[0] == "parse" and steps[-1] == "present"
+    assert {"context", "check", "retry"} <= set(steps)
+    assert steps.index("retry") > steps.index("check")
