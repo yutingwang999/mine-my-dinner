@@ -1,14 +1,16 @@
 """The plan card's builder, shared by the planning graph's `present_plan` and manual edits,
 and the meal constraints of a thread's state."""
 
+from dataclasses import asdict
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from minemydinner.agent.card_text import next_actions, unmet_for_user
-from minemydinner.models import Diner, Recipe
-from minemydinner.planning.context import MealConstraints, PlanningContext, RuleRef
+from minemydinner.extraction.normalize import match_ingredient
+from minemydinner.models import Diner, Ingredient, Recipe
+from minemydinner.planning.context import MEAL_KEY, MealConstraints, PlanningContext, RuleRef
 from minemydinner.planning.stock import compute_missing, missing_cookware
 
 
@@ -19,7 +21,73 @@ def meal_constraints(values: dict) -> MealConstraints:
         diner_ids=tuple(data["diner_ids"]),
         guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
         unconfirmed_diners=data["unconfirmed_diners"],
+        meal_avoid=tuple(data.get("meal_avoid") or ()),
     )
+
+
+# Group words of a one-meal avoidance and the dictionary category each covers ("今天不想吃肉"
+# leaves out every meat entry, not only names that contain 肉). Person rules have no groups.
+MEAL_GROUP_WORDS = {
+    "肉": "meat",
+    "肉类": "meat",
+    "荤": "meat",
+    "荤菜": "meat",
+    "meat": "meat",
+    "海鲜": "seafood",
+    "水产": "seafood",
+    "seafood": "seafood",
+}
+
+
+def _group_ingredient_ids(session: Session, category: str) -> list[int]:
+    """Every dictionary entry of `category`, and their children, in id order."""
+    ids = set(session.scalars(select(Ingredient.id).where(Ingredient.category == category)))
+    if ids:
+        ids |= set(session.scalars(select(Ingredient.id).where(Ingredient.parent_id.in_(ids))))
+    return sorted(ids)
+
+
+def meal_rules(session: Session, names: list[str]) -> list[RuleRef]:
+    """This meal's own rules for a one-meal avoidance (plan 3b-1b spec 5.4), all "dietary
+    restriction" under MEAL_KEY: a group word (MEAL_GROUP_WORDS) gives one ingredient rule per
+    entry of its category; another name gives the ingredient the dictionary matches (personal
+    aliases included) or else a text rule, as a stated restriction becomes."""
+    rules: list[RuleRef] = []
+
+    def add(rule: RuleRef) -> None:
+        if rule not in rules:
+            rules.append(rule)
+
+    for raw in names:
+        name = raw.strip()
+        if not name:
+            continue
+        category = MEAL_GROUP_WORDS.get(name.casefold())
+        group = _group_ingredient_ids(session, category) if category else []
+        for ingredient_id in group:
+            add(RuleRef(MEAL_KEY, "dietary restriction", None, ingredient_id, None))
+        if group:
+            continue
+        entry = match_ingredient(session, name)
+        add(
+            RuleRef(MEAL_KEY, "dietary restriction", None, entry.id, None)
+            if entry is not None
+            else RuleRef(MEAL_KEY, "dietary restriction", None, None, name)
+        )
+    return rules
+
+
+def with_meal_avoid(session: Session, constraints: dict, names: list[str]) -> dict:
+    """The state's constraints with this meal's own rules replaced by those of `names`; the
+    names are kept as `meal_avoid`, which the plan card carries so a later revision knows the
+    plan's wish. A person's rules are untouched."""
+    kept = [r for r in constraints.get("guest_rules") or [] if r["diner_key"] != MEAL_KEY]
+    names = [name for name in dict.fromkeys(n.strip() for n in names) if name]
+    return {
+        **constraints,
+        "guest_rules": [*kept, *(asdict(rule) for rule in meal_rules(session, names))],
+        "meal_avoid": names,
+    }
 
 
 def diners_line(session: Session, settled: dict | None, constraints: dict) -> tuple[list, int]:
@@ -64,6 +132,8 @@ def card_base(state_values: dict, session: Session) -> dict:
         "diners": diners,
         "others": others,
         "reasons": [],
+        # This meal's one-meal avoidance (plan 3b-1b spec 5.4), the base a revision carries.
+        "meal_avoid": list(state_values["constraints"].get("meal_avoid") or []),
     }
 
 

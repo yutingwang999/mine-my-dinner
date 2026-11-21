@@ -38,7 +38,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v3"
+    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v4+revise_v3"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -394,9 +394,9 @@ def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v3"
-    assert PROMPT_VERSIONS["parse"] == "parse_v6"
-    assert load_prompt("parse") == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v4+revise_v3"
+    assert PROMPT_VERSIONS["parse"] == "parse_v7"
+    assert load_prompt("parse") == (PROMPT_DIR / "parse_v7.md").read_text(encoding="utf-8")
 
 
 def test_revise_v1_and_v2_are_frozen_and_revise_v3_is_current():
@@ -418,6 +418,10 @@ def test_revise_v1_and_v2_are_frozen_and_revise_v3_is_current():
     assert "mode drop" in v3 and "mode replace" in v3
     assert "- add: the message only adds dishes" in v3
     assert "LOCKED KEPT CONFLICT" in v3 and "replace_with" in v3
+    # Task 5: the reviser's mark of a dish that breaks this meal's one-meal avoidance.
+    from minemydinner.agent.revise_step import BREAKS_MEAL_WISH
+
+    assert v3.count(BREAKS_MEAL_WISH) == 3
     assert "not in the library and can be imported" in v3
     assert "\"锁定\"" in v3 and "so do not repeat that" in v3
     # No rule about counting dishes (plan 3b-1b spec 5.7, the user's decision).
@@ -450,7 +454,7 @@ def test_parse_v5_is_frozen_and_parse_v6_only_adds_lines():
         "8798894242eceaa040e5a8ff948767707d3c1f47741172eb8bc8ce30554cab82"
     )
     old = v5.decode("utf-8").splitlines()
-    new = load_prompt("parse").splitlines()
+    new = (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8").splitlines()
     # Every parse_v5 line stays, unchanged and in order: parse_v6 only adds lines.
     rest = iter(new)
     assert all(any(line == other for other in rest) for line in old)
@@ -461,13 +465,47 @@ def test_parse_v5_is_frozen_and_parse_v6_only_adds_lines():
         assert example in added
 
 
+def test_parse_v6_is_frozen_and_parse_v7_only_adds_lines():
+    import hashlib
+
+    v6 = (PROMPT_DIR / "parse_v6.md").read_bytes().replace(b"\r\n", b"\n")
+    # parse_v6 was used by plan 3b-1 and 3b-1b runs, so it must never change.
+    assert hashlib.sha256(v6).hexdigest() == (
+        "a78a47933737b77133940290acc1c4b55e0ca5212bb44685e9f2958c2061dd00"
+    )
+    old = v6.decode("utf-8").splitlines()
+    new = load_prompt("parse").splitlines()
+    # Every parse_v6 line stays, unchanged and in order: parse_v7 only adds lines.
+    rest = iter(new)
+    assert all(any(line == other for other in rest) for line in old)
+    added = "\n".join(line for line in new if line not in old)
+    assert "meal_avoid" in added
+    # Plan 3b-1b spec 5.4: one-meal wishes, taste words and remarks, and lasting rules.
+    for example in (
+        "今天不想吃肉",
+        "不想吃土豆",
+        "这顿不要辣的",
+        "西红柿太多了",
+        "我不吃肉",
+        "我对花生过敏",
+    ):
+        assert example in added
+    # Spec 5.1's boundary: "不想吃X" is a one-meal wish even without a time word; it holds
+    # for this meal only (spec 5.4).
+    assert "with or without a word about this meal" in added
+    assert "until the user starts another meal" in added
+    # Kept out on purpose: close to held-out sentences.
+    assert "我对虾过敏" not in added
+
+
 def test_parse_v5_is_no_longer_than_parse_v3():
     v3 = (PROMPT_DIR / "parse_v3.md").read_text(encoding="utf-8").splitlines()
     v5 = (PROMPT_DIR / "parse_v5.md").read_text(encoding="utf-8").splitlines()
     assert len(v5) <= len(v3) == 79
     current = load_prompt("parse")
-    # The current prompt may grow only a little past parse_v5.
-    assert len(current.splitlines()) <= 90
+    # The current prompt may grow only a little past parse_v5 (parse_v7 adds the one-meal
+    # versus lasting rule).
+    assert len(current.splitlines()) <= 100
     # A named removal is not a count change (spec 5.2).
     assert "汤就不要了" not in current and "那道汤不要了" in current
     for field in ("guests", "friend_rules", "self_rules", "diet_words"):
@@ -528,6 +566,20 @@ def test_parsed_request_old_shape_still_loads():
     assert request.guests == [] and request.friend_rules == []
     assert request.self_rules is None
     assert request.headcount == 2 and request.mode == "fridge_only"
+
+
+def test_old_request_without_meal_avoid_loads():
+    old = {"dishes": 2, "soups": 1, "mode": "shopping", "query": None, "must_use": []}
+    request = ParsedRequest.model_validate(old)
+    assert request.meal_avoid == []
+    assert ParsedRequest(meal_avoid=["肉"]).meal_avoid == ["肉"]
+    with pytest.raises(ValidationError):
+        ParsedRequest(meal_avoid=["肉"] * 11)
+    schema = ParsedRequest.model_json_schema()["properties"]["meal_avoid"]
+    assert "this meal only" in schema["description"]
+    # A one-meal avoidance never changes the spec or the people of a new plan: graph code
+    # adds it to the meal's constraints as the meal's own rule.
+    assert apply_defaults(ParsedRequest(meal_avoid=["肉"])) == apply_defaults(ParsedRequest())
 
 
 def _chat_strings(locale: str) -> dict:

@@ -2628,11 +2628,12 @@ def test_add_one_more_to_a_hand_trimmed_plan(revise_env):
     )
     assert latest_record(env).request["spec"]["dishes"] == 3
     assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 3
-    # The parse ran with parse_v6, and its input still ends with the app note.
-    from minemydinner.agent.request import PROMPT_DIR
+    # The parse ran with the current parse prompt, and its input still ends with the app note.
+    from minemydinner.agent.request import PROMPT_DIR, PROMPT_VERSIONS
 
     (parse_input,) = model_calls_by_prompt(env, "parse")[-1:]
-    assert parse_input[0].content == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+    current = PROMPT_DIR / f"{PROMPT_VERSIONS['parse']}.md"
+    assert parse_input[0].content == current.read_text(encoding="utf-8")
     assert parse_input[-2].content == "再加一道吧"
     assert parse_input[-1].content == PLAN_NOTE + "2 dishes (1 meat, 1 vegetable): 土豆炖牛肉, 清炒小白菜"
 
@@ -2656,3 +2657,140 @@ def test_revise_under_ask_first_keeps_fridge_only(revise_env):
     assert record.request["revision"] == {"from_version": 0}
     assert record.request["spec"]["mode"] == "fridge_only"
     assert out["current_plan"]["passed"]
+
+
+# ---- plan 3b-1b Task 5: one-meal wishes versus lasting rules (spec 5.4) ----
+
+
+def _rule_count(session) -> int:
+    from sqlalchemy import func
+
+    from minemydinner.models import DietaryRule
+
+    return session.scalar(select(func.count()).select_from(DietaryRule))
+
+
+def test_meal_avoid_is_not_a_rule(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, beans = dish_ids(env, "土豆炖牛肉", "干煸豆角")
+    rules = _rule_count(env.session)
+    out = say(
+        env,
+        "今天不想吃肉",
+        "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping", "meal_avoid": ["肉"]},
+        replies=[revision("general", remove=[(beef, "")], add=[beans])],
+    )
+    # No diner card: the revise step ran on the current plan.
+    assert "__interrupt__" not in out
+    assert len(reviser_calls(env)) == 1 and out["current_plan"]["passed"]
+    assert out["request"]["meal_avoid"] == ["肉"]
+    # The wish is this meal's own rule, never a person's, and never saved.
+    # "肉" is a group word: one ingredient rule per meat entry of the dictionary.
+    rules_now = out["constraints"]["guest_rules"]
+    assert rules_now and {r["diner_key"] for r in rules_now} == {"meal"}
+    assert {r["rule_type"] for r in rules_now} == {"dietary restriction"}
+    assert all(r["ingredient_id"] is not None and r["text"] is None for r in rules_now)
+    assert out["constraints"]["meal_avoid"] == ["肉"]
+    assert "meal" not in json.dumps(out.get("diner_labels") or {})
+    assert _rule_count(env.session) == rules
+    assert out.get("settled_diners") is None
+
+
+def test_lasting_rule_still_shows_the_card(revise_env):
+    env = revise_env
+    first_meal(env)
+    out = say(
+        env,
+        "我不吃肉",
+        "revise",
+        parse={
+            "dishes": 2,
+            "soups": 1,
+            "mode": "shopping",
+            "self_rules": {"avoid": [{"name": "肉", "kind": "restriction"}]},
+        },
+    )
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    planned = len(planner_runs(env))
+    env.model.replies = [final_proposal(dish_ids(env, "清炒小白菜", "干煸豆角", "紫菜蛋花汤"))]
+    out = resume(env, {card.id: None})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    # Planned anew (3b-1 behaviour), not revised.
+    assert len(planner_runs(env)) == planned + 1 and not reviser_calls(env)
+    assert "revision" not in out["current_plan"]
+
+
+def test_meal_avoid_applies_to_a_new_plan(revise_env):
+    env = revise_env
+    rules = _rule_count(env.session)
+    beef, cabbage, soup, pork = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤", "青椒炒肉")
+    out = say(
+        env,
+        "今天不想吃牛肉，两菜一汤",
+        "plan",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping", "meal_avoid": ["牛肉"]},
+        replies=[final_proposal([beef, cabbage, soup]), final_proposal([pork, cabbage, soup])],
+    )
+    assert "__interrupt__" not in out
+    plan = out["current_plan"]
+    assert plan["passed"] and beef not in [r["id"] for r in plan["recipes"]]
+    assert plan["meal_avoid"] == ["牛肉"]
+    # The beef dish failed as this meal's wish, named as the meal's, never as a diner's.
+    record = latest_record(env)
+    validations = [e for e in record.events if e["kind"] == "validation"]
+    h2 = [v for v in validations[0]["result"]["violations"] if v["code"] == "H2"]
+    assert h2 and {v["detail"]["diner_key"] for v in h2} == {"meal"}
+    [rule_ref] = out["constraints"]["guest_rules"]
+    assert rule_ref["diner_key"] == "meal" and rule_ref["ingredient_id"] is not None
+    assert rule_ref["text"] is None
+    opening, retry = [
+        [m for m in s if m.type == "human"] for s in planner_runs(env)
+    ][-1][:2]
+    assert "This meal only, not a diner's rule: leave out 牛肉" in opening.content
+    assert "left out of this meal" in retry.content
+    assert "dietary limit of" not in retry.content
+    assert _rule_count(env.session) == rules
+    assert out.get("settled_diners") is None
+
+
+def test_meal_avoid_block_is_worded_as_the_meals_wish(revise_env):
+    """Every attempt breaks only this meal's wish: no plan is shown, and the reason names the
+    wish, never a diner's allergy or restriction (fix round 1)."""
+    env = revise_env
+    beef, cabbage, soup = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤")
+    out = say(
+        env,
+        "今天不想吃牛肉，两菜一汤",
+        "plan",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping", "meal_avoid": ["牛肉"]},
+        replies=[final_proposal([beef, cabbage, soup])] * (MAX_RETRIES + 1),
+    )
+    plan = out["current_plan"]
+    assert not plan["passed"] and plan["recipes"] == []
+    assert plan["unmet"] == [
+        {"code": "H2", "recipe_id": None, "text": "这顿不吃牛肉，菜谱库里没有足够不含它的菜"}
+    ]
+
+
+def test_meal_avoid_survives_a_diner_card_in_the_same_turn(revise_env):
+    """The confirmed card replaces the constraints; the meal's wish is added after it."""
+    env = revise_env
+    me = self_diner(env.session)
+    beef, cabbage, soup, pork = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤", "青椒炒肉")
+    parse = {**ALEX_PARSE, "dishes": 2, "soups": 1, "meal_avoid": ["牛肉"]}
+    out = say(env, "我和 Alex，今天不想吃牛肉", "plan", parse=parse)
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    env.model.replies = [final_proposal([beef, cabbage, soup]), final_proposal([pork, cabbage, soup])]
+    chosen = {"selected": [me.id], "guests": [{"name": "Alex", "rules": [PEANUT_RULE]}]}
+    out = resume(env, {card.id: chosen})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert beef not in [r["id"] for r in out["current_plan"]["recipes"]]
+    rules_now = out["constraints"]["guest_rules"]
+    assert GUEST_PEANUT in rules_now
+    assert {r["diner_key"] for r in rules_now} == {"guest:1", "meal"}
+    assert out["constraints"]["meal_avoid"] == ["牛肉"]
+    assert out["current_plan"]["meal_avoid"] == ["牛肉"]

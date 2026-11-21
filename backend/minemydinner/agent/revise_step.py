@@ -32,6 +32,7 @@ from minemydinner.planning.composition import (
     SPLIT_CATEGORIES,
     count_categories,
 )
+from minemydinner.planning.context import MEAL_KEY
 from minemydinner.planning.validate import Finding, H2Override, PlanSpec
 
 # The category words a quote may use to point at a dish of each type ("那道汤").
@@ -46,6 +47,9 @@ CATEGORY_WORDS = {
 # Words that point at the dishes that do not suit ("不适合的菜拿掉", spec 5.4): added to the
 # words of every dish with an open conflict or a kept override.
 CONFLICT_WORDS = ["不适合", "不合适", "不能吃", "doesn't suit", "not suitable"]
+# The mark of a dish that breaks this meal's one-meal avoidance in the reviser's current plan
+# (plan 3b-1b spec 5.4); revise_v3 names it.
+BREAKS_MEAL_WISH = "BREAKS THIS MEAL'S WISH"
 # The unmet code of a revision that found nothing fitting the wish.
 WISH_UNMET = "wish_unmet"
 # Main ingredients shown per dish when a recipe marks none as main.
@@ -139,11 +143,15 @@ def dish_facts(
     return facts, mains
 
 
-def current_plan_text(plan: dict, mains: dict[int, list[str]]) -> str:
+def current_plan_text(
+    plan: dict, mains: dict[int, list[str]], avoid_ids: Collection[int] = ()
+) -> str:
     """The current plan for the model, one line per dish:
-    `id title (dish type; main ingredients) LOCKED|LOCKED KEPT CONFLICT|OPEN CONFLICT`. A
+    `id title (dish type; main ingredients) LOCKED|LOCKED KEPT CONFLICT|OPEN CONFLICT`, then
+    BREAKS_MEAL_WISH for a dish in `avoid_ids` (it breaks this meal's one-meal avoidance). A
     dish kept by the user despite a conflict is marked so (plan 3b-1b spec 5.4), so "the
     dishes that do not suit" can name it."""
+    avoided = set(avoid_ids)
     conflicted = open_conflict_ids(plan)
     locked = locked_ids(plan)
     kept = {o["recipe_id"] for o in (plan.get("edit") or {}).get("overrides", [])}
@@ -158,14 +166,24 @@ def current_plan_text(plan: dict, mains: dict[int, list[str]]) -> str:
             line += " LOCKED KEPT CONFLICT"
         elif recipe_id in locked:
             line += " LOCKED"
+        if recipe_id in avoided:
+            line += f" {BREAKS_MEAL_WISH}"
         lines.append(line)
     return "Current plan:\n" + ("\n".join(lines) or "- no dishes")
 
 
-def revision_opening(base: str, plan: dict, mains: dict[int, list[str]], message: str) -> str:
+def revision_opening(
+    base: str,
+    plan: dict,
+    mains: dict[int, list[str]],
+    message: str,
+    avoid_ids: Collection[int] = (),
+) -> str:
     """The revise step's first message: the shortlist and the request summary (`base`, as the
-    planner's opening), then the current plan, then the user's message."""
-    return f"{base}\n\n{current_plan_text(plan, mains)}\n\nThe user's message: {message}"
+    planner's opening), then the current plan (`avoid_ids` marked), then the user's
+    message."""
+    plan_text = current_plan_text(plan, mains, avoid_ids)
+    return f"{base}\n\n{plan_text}\n\nThe user's message: {message}"
 
 
 def carried_overrides(plan: dict, recipe_ids: list[int]) -> list[H2Override]:
@@ -409,19 +427,30 @@ def empty_plan_question(locale: str) -> str:
     return EMPTY_PLAN_QUESTION_ZH if is_zh(locale) else EMPTY_PLAN_QUESTION_EN
 
 
+def meal_only_h2(findings: list[dict]) -> bool:
+    """True when there is an H2 finding and every one is this meal's one-meal avoidance."""
+    h2 = [f for f in findings if f["code"] == "H2"]
+    return bool(h2) and all((f.get("detail") or {}).get("diner_key") == MEAL_KEY for f in h2)
+
+
 def unmet_entries(
-    problems: list[dict], violations: list[dict], titles: dict[int, str], locale: str
+    problems: list[dict],
+    violations: list[dict],
+    titles: dict[int, str],
+    locale: str,
+    meal_avoid: Collection[str] = (),
 ) -> list[dict]:
     """What stopped the last attempt, in the card's unmet shape: the revision problems, then
     the failing checks. H2 and H5 are worded without naming the dish, as on a plan that is
-    not shown."""
+    not shown; an H2 that is only this meal's avoidance (`meal_avoid`, its names) says so."""
     entries = [
         {"code": p["code"], "recipe_id": p.get("recipe_id"), "text": problem_for_user(p, titles, locale)}
         for p in problems
     ]
+    meal = list(meal_avoid) if meal_only_h2(violations) else []
     for finding in violations:
         if finding["code"] in ("H2", "H5"):
-            text = no_plan_reason(finding["code"], locale)
+            text = no_plan_reason(finding["code"], locale, meal)
         else:
             text = unmet_for_user(finding, titles, locale)
         entries.append({"code": finding["code"], "recipe_id": finding["recipe_id"], "text": text})
@@ -472,14 +501,26 @@ def untouched_locked(
     return [after[i] for i in hand], [after[i] for i in kept]
 
 
+def meal_avoid_reason(names: list[str], locale: str) -> str:
+    """Why a locked dish changed for this meal's one-meal avoidance, for `locked_changed_text`
+    ("这顿不吃肉")."""
+    if is_zh(locale):
+        return f"这顿不吃{'、'.join(names)}"
+    return f"this meal leaves out {', '.join(names)}"
+
+
 def reply_text(
     plan: dict,
     proposal: RevisionProposal,
     card: dict,
     locale: str,
+    avoid_ids: Collection[int] = (),
+    meal_avoid: Collection[str] = (),
 ) -> str:
     """What changed, written by code from the change list (spec 5.4), then the model's note.
-    For a general wish, the locked dishes it left are named too."""
+    For a general wish, the locked dishes it left are named too. A locked dish changed because
+    it breaks this meal's avoidance (`avoid_ids`, the names in `meal_avoid`) is named with
+    that reason."""
     before = {r["id"]: r["title"] for r in plan["recipes"]}
     after = {r["id"]: r["title"] for r in card["recipes"]}
     removed_ids = {r.id for r in proposal.remove}
@@ -498,9 +539,14 @@ def reply_text(
     changes = [
         (before[i], after.get(pairs.get(i)), i in hand_added) for i in changed_locked
     ]
+    avoided = set(avoid_ids)
+    reason = meal_avoid_reason(list(meal_avoid), locale) if meal_avoid else ""
+    by_wish = [c for i, c in zip(changed_locked, changes, strict=True) if i in avoided]
+    by_words = [c for i, c in zip(changed_locked, changes, strict=True) if i not in avoided]
     parts = [
         changed_text(removed, added, hand, locale, kept),
-        locked_changed_text(changes, locale),
+        locked_changed_text(by_wish, locale, reason=reason),
+        locked_changed_text(by_words, locale),
     ]
     text = ("" if is_zh(locale) else " ").join(p for p in parts if p)
     note = proposal.note.strip()

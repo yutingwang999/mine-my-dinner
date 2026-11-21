@@ -657,6 +657,9 @@
       "deletedRecipes": "{titles}: no longer in the recipe library, so taken out of the plan.",
       "kept": "Kept anyway: {who} {rule}",
       "keptUnknown": "Kept anyway: allergens of {lines} unknown",
+      "mealWish": "Not this meal: {name}",
+      "keptMealWish": "Kept anyway: not this meal: {name}",
+      "reasonMealWish": "{wish}; this dish contains {lines}.",
       "showMore": "Show more"
     }
   }

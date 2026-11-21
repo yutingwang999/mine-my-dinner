@@ -1,6 +1,8 @@
 """Fixed card wording: plain words for counts, unmet rules, feasibility reasons and next
 actions, in the request's locale. Never model output."""
 
+from collections.abc import Sequence
+
 from minemydinner.planning.composition import ranges_for
 
 
@@ -135,9 +137,15 @@ def unmet_for_user(finding: dict, titles: dict[int, str], locale: str) -> str:
     return f"{title}: {code}"
 
 
-def no_plan_reason(code: str, locale: str) -> str:
-    """Why no plan is shown (H2 or H5), without naming the dishes."""
+def no_plan_reason(code: str, locale: str, meal_avoid: Sequence[str] = ()) -> str:
+    """Why no plan is shown (H2 or H5), without naming the dishes. `meal_avoid` is given when
+    every H2 finding was this meal's one-meal avoidance (plan 3b-1b spec 5.4): the reason then
+    names the meal's wish, never a diner's rule."""
     zh = is_zh(locale)
+    if code == "H2" and meal_avoid:
+        if zh:
+            return f"这顿不吃{'、'.join(meal_avoid)}，菜谱库里没有足够不含它的菜"
+        return f"No plan fits leaving out {', '.join(meal_avoid)} at this meal"
     if code == "H2":
         if zh:
             return "找到的方案都含有用餐者过敏或忌口的食材"

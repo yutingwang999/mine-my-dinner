@@ -478,6 +478,16 @@ def revision_spec(plan: dict, previous_request: dict | None, request: dict) -> P
     return PlanSpec.model_validate({**spec.model_dump(), **updates})
 
 
+def revision_meal_avoid(plan: dict, previous_request: dict | None, request: dict) -> list[str]:
+    """This meal's one-meal avoidance for a revision (plan 3b-1b spec 5.4), like the other
+    conditions of `revision_spec`: the request's when it states one that differs from the
+    previous request, else the plan's own (a card saved before the field has none). An empty
+    list never clears it."""
+    if _stated(request, previous_request, "meal_avoid"):
+        return list(request["meal_avoid"])
+    return list(plan.get("meal_avoid") or [])
+
+
 def revised_ids(plan: dict, proposal: RevisionProposal) -> list[int]:
     """The plan's ids in order without the removed ones, then the added ones."""
     removed = {r.id for r in proposal.remove}

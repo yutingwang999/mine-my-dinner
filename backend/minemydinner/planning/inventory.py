@@ -10,10 +10,14 @@ from sqlalchemy.orm import Session
 from minemydinner.constants import STOCK_LEVELS
 from minemydinner.extraction.normalize import match_ingredient
 from minemydinner.models import AlwaysInStock, Cookware, CookwareOwned, Ingredient, Inventory
-from minemydinner.planning.context import PlanningContext, diner_codes
+from minemydinner.planning.context import MEAL_KEY, PlanningContext, diner_codes
 
 if TYPE_CHECKING:
     from minemydinner.agent.labels import LabelTable
+
+
+# The line of this meal's own rules among the meal preferences: no diner's rule.
+MEAL_LINE_PREFIX = "This meal only, not a diner's rule: leave out "
 
 
 @dataclass(frozen=True)
@@ -117,7 +121,8 @@ def meal_preferences(
     session: Session, ctx: PlanningContext, table: "LabelTable | None" = None
 ) -> list[str]:
     """Constraint lines for the selected diners only, under anonymous codes (the
-    conversation's labels when a table is given)."""
+    conversation's labels when a table is given), then one line for this meal's own rules
+    (a one-meal avoidance, plan 3b-1b spec 5.4), which are no diner's."""
     codes = diner_codes(ctx.constraints, table)
     ids = {rule.ingredient_id for rule in ctx.rules if rule.ingredient_id is not None}
     names = {
@@ -125,14 +130,23 @@ def meal_preferences(
         for entry in session.scalars(select(Ingredient).where(Ingredient.id.in_(ids)))
     }
     lines: list[str] = []
+    meal: list[str] = []
     for rule in ctx.rules:
         subject = rule.allergen or names.get(rule.ingredient_id) or rule.text or ""
+        if rule.diner_key == MEAL_KEY:
+            meal.append(subject)
+            continue
         verb = {"allergy": "allergy", "dislike": "dislikes"}.get(rule.rule_type, "does not eat")
         lines.append(f"{codes[rule.diner_key]}: {verb} {subject}")
     # Unconfirmed diners have no rules to number from, so they continue after the highest
     # label in use. They are not added to the table: restoring an unknown label gives
     # "another diner", which is what they are.
-    highest = table.highest_number() if table is not None else len(codes)
+    diners = len([key for key in codes if key != MEAL_KEY])
+    highest = table.highest_number() if table is not None else diners
     for number in range(highest + 1, highest + ctx.constraints.unconfirmed_diners + 1):
         lines.append(f"Diner {number}: dietary limits unconfirmed")
+    if meal:
+        # The user's own words when known: a group word ("肉") stands for many ingredients.
+        said = list(ctx.constraints.meal_avoid) or list(dict.fromkeys(meal))
+        lines.append(f"{MEAL_LINE_PREFIX}{', '.join(said)}")
     return lines

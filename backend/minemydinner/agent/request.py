@@ -18,7 +18,7 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 # any record has used is never edited; a change makes the next version of that prompt.
 PROMPT_VERSIONS = {
     "route": "route_v3",
-    "parse": "parse_v6",
+    "parse": "parse_v7",
     "planner": "planner_v4",
     "revise": "revise_v3",
 }
@@ -222,6 +222,17 @@ class ParsedRequest(BaseModel):
     )
     exclude_recent_days: int | None = Field(
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
+    )
+    # Plan 3b-1b spec 5.4. Code applies it to this meal as the meal's own rule (diner key
+    # "meal"), never to a profile; requests stored before parse_v7 load it as empty.
+    meal_avoid: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "Ingredients or ingredient groups the user does not want at this meal only "
+            "(\"今天不想吃肉\" is [\"肉\"]), as said. Never taste words (\"不要辣的\" goes to "
+            "query) and never a lasting rule of a person (\"我不吃肉\" goes to self_rules)."
+        ),
     )
     # None on requests parsed before parse_v6; a revision then compares counts with the
     # previous request instead (agent/revision.py).

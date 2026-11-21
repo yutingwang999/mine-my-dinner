@@ -20,6 +20,9 @@ export type Conflict = {
   lines: string[];
 };
 
+/** The `diner_key` of this meal's own wish ("今天不想吃肉"): never a person (plan 3b-1b spec 5.4). */
+export const MEAL_KEY = "meal";
+
 /** A diner's dislike a search result touches, named like a conflict. */
 export type SearchDislike = { diner_key: string; diner_name: string | null; is_self: boolean; line: string };
 

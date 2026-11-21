@@ -53,6 +53,7 @@ from minemydinner.agent.plan_card import (
     build_dishes_card,
     card_base,
     meal_constraints,
+    with_meal_avoid,
 )
 from minemydinner.agent.planner import (
     REVISE_TOOLS_VERSION,
@@ -112,13 +113,14 @@ from minemydinner.agent.revision import (
     check_revision,
     counts_changed,
     revised_ids,
+    revision_meal_avoid,
     revision_spec,
 )
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
 from minemydinner.planning.composition import composition_gap, count_categories, side_ranges
-from minemydinner.planning.context import diner_codes, load_planning_context
+from minemydinner.planning.context import MEAL_KEY, diner_codes, load_planning_context
 from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
@@ -332,6 +334,13 @@ def _violation_for_model(finding: dict, codes: dict[str, str]) -> str:
         return (
             f"Recipe {recipe_id}: ingredients with unknown allergens ({unknown}) while a diner "
             "has an allergy, so it cannot be used."
+        )
+    if code == "H2" and detail.get("diner_key") == MEAL_KEY:
+        # This meal's one-meal avoidance (spec 5.4), never worded as a diner's limit.
+        subject = detail.get("line") or detail.get("text") or "an ingredient"
+        return (
+            f"Recipe {recipe_id}: {subject} is left out of this meal (the user's wish for "
+            "this meal only), so the dish cannot be used."
         )
     if code == "H2":
         who = codes.get(detail["diner_key"], "a diner")
@@ -733,6 +742,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         )
         if settled is not None:
             constraints = constraints_from(settled)
+        constraints_state = {
+            "diner_ids": list(constraints.diner_ids),
+            "guest_rules": [asdict(rule) for rule in constraints.guest_rules],
+            "unconfirmed_diners": constraints.unconfirmed_diners,
+            "headcount": headcount,
+        }
+        with deps.session_factory() as session:
+            # A one-meal avoidance is this meal's own rule, never a person's (spec 5.4).
+            constraints_state = with_meal_avoid(session, constraints_state, parsed.meal_avoid)
         request = {
             "messages": [deps.client.prepare_text(t) for t in _current_request(state["messages"])],
             "parsed": map_strings(parsed.model_dump(), deps.client.prepare_text),
@@ -764,12 +782,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "intent": "plan",
             "model_calls": [],
             "spec": spec.model_dump(),
-            "constraints": {
-                "diner_ids": list(constraints.diner_ids),
-                "guest_rules": [asdict(rule) for rule in constraints.guest_rules],
-                "unconfirmed_diners": constraints.unconfirmed_diners,
-                "headcount": headcount,
-            },
+            "constraints": constraints_state,
             "defaults_used": defaults_used,
             "run_id": run_id,
             "retries": 0,
@@ -778,6 +791,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "first_passed": None,
             "best": None,
             "blocked_codes": [],
+            "blocked_h2_keys": [],
             "shortfalls": [],
             "search_notes": {
                 "left_out_unknown_allergens": [],
@@ -993,6 +1007,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if blocked:
             seen = state.get("blocked_codes") or []
             update["blocked_codes"] = [c for c in NEVER_SHOWN if c in seen or c in blocked]
+            # Whose rules the H2 findings broke, so a meal-wish-only block is worded as the
+            # meal's wish (spec 5.4), never as a diner's rule.
+            keys = {
+                v.detail.get("diner_key", "*") for v in result.violations if v.code == "H2"
+            }
+            update["blocked_h2_keys"] = sorted(set(state.get("blocked_h2_keys") or []) | keys)
         else:
             best = state.get("best")
             gap = _composition_gap_of(spec, dumped)
@@ -1061,8 +1081,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             note = EARLY_STOP_NOTE_ZH if is_zh(locale) else EARLY_STOP_NOTE_EN
         elif shown is None:
             # Design 6.3: a plan breaking H2 or H5 is never shown; the note is fixed text.
+            keys = state.get("blocked_h2_keys") or []
+            meal = (
+                state["constraints"].get("meal_avoid") or []
+                if keys and all(key == MEAL_KEY for key in keys)
+                else []
+            )
             plan["unmet"] = [
-                {"code": code, "recipe_id": None, "text": no_plan_reason(code, locale)}
+                {"code": code, "recipe_id": None, "text": no_plan_reason(code, locale, meal)}
                 for code in state.get("blocked_codes") or []
             ]
             plan["next_actions"] = next_actions(spec, [], list(state.get("blocked_codes") or []))
@@ -1125,6 +1151,27 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # `request`, and its wishes are not in the plan.
         baseline = state.get("plan_request") or state.get("previous_request")
         spec = revision_spec(plan, baseline, state["request"])
+        # This meal's one-meal avoidance joins the revision like the other conditions (spec
+        # 5.4); the plan's dishes that break it are named by it (`avoid_ids`).
+        meal_avoid = revision_meal_avoid(plan, baseline, state["request"])
+        shown = [r["id"] for r in plan["recipes"]]
+        with deps.session_factory() as session:
+            constraints = with_meal_avoid(session, state["constraints"], meal_avoid)
+            ctx = load_planning_context(session, meal_constraints({"constraints": constraints}))
+            found = validate_plan(
+                session,
+                ctx,
+                PlanSpec.model_validate(plan["spec"]),
+                shown,
+                carried_overrides(plan, shown),
+            )
+        avoid_ids = list(
+            dict.fromkeys(
+                v.recipe_id
+                for v in found.violations
+                if v.code == "H2" and v.detail.get("diner_key") == MEAL_KEY
+            )
+        )
         defaults_used = revision_defaults(plan.get("defaults_used") or [], plan["spec"], spec)
         texts = _current_request(state["messages"])
         settled_data = state.get("settled_diners")
@@ -1152,6 +1199,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return {
             "model_calls": [],
             "spec": spec.model_dump(),
+            "constraints": constraints,
             "defaults_used": defaults_used,
             "run_id": run_id,
             "retries": 0,
@@ -1160,6 +1208,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "first_passed": None,
             "best": None,
             "blocked_codes": [],
+            "blocked_h2_keys": [],
             "shortfalls": [],
             "search_notes": _empty_search_notes(),
             "planner_opening": None,
@@ -1167,9 +1216,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "revision": {
                 "from_version": index,
                 "message": "\n".join(texts),
-                "recipe_ids": [r["id"] for r in plan["recipes"]],
+                "recipe_ids": shown,
                 "problems": [],
                 "deleted": deleted,
+                "avoid_ids": avoid_ids,
             },
         }
 
@@ -1241,7 +1291,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     state, session, ctx, spec, vectors, "Revise this meal."
                 )
                 _, mains = dish_facts(session, [r["id"] for r in plan["recipes"]])
-                opening = revision_opening(base, plan, mains, state["revision"]["message"])
+                opening = revision_opening(
+                    base,
+                    plan,
+                    mains,
+                    state["revision"]["message"],
+                    state["revision"].get("avoid_ids") or [],
+                )
                 update["planner_opening"] = opening
                 update["shortlist_ids"] = shortlist_ids
             messages = [HumanMessage(opening)]
@@ -1328,9 +1384,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 facts, _ = dish_facts(session, [*current_ids, *proposal.add], plan=plan)
                 baseline = state.get("plan_request") or state.get("previous_request")
                 counts_stated = counts_changed(state["request"], baseline)
-                # The plan's dishes that break this meal's avoidance (spec 5.4); filled by
-                # Task 5 (the one-meal avoidance field), empty until then.
-                avoid_ids: list[int] = []
+                # The plan's dishes that break this meal's avoidance (spec 5.4), found when
+                # the revision started.
+                avoid_ids = revision.get("avoid_ids") or []
                 problems = check_revision(
                     plan,
                     proposal,
@@ -1459,7 +1515,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 )
                 card["revision"] = {"from_version": revision["from_version"]}
                 card["notes"] = deleted_note(plan, deleted)
-                note = reply_text(live, proposal, card, locale)
+                note = reply_text(
+                    live,
+                    proposal,
+                    card,
+                    locale,
+                    avoid_ids=revision.get("avoid_ids") or [],
+                    meal_avoid=state["constraints"].get("meal_avoid") or [],
+                )
                 update.update(
                     current_plan=card,
                     plan_versions=[*versions, card],
@@ -1498,15 +1561,27 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     [p["code"] for p in revision["problems"]],
                     [v["code"] for v in violations],
                 )
-                unmet = unmet_entries(revision["problems"], violations, titles, locale)
+                unmet = unmet_entries(
+                    revision["problems"],
+                    violations,
+                    titles,
+                    locale,
+                    state["constraints"].get("meal_avoid") or [],
+                )
                 card = unchanged_card(live, unmet, actions)
                 card["notes"] = deleted_note(plan, deleted)
                 note = failed_note(locale, bool(actions))
         if "current_plan" not in update:
             # The plan stays, but `request` keeps this turn's parse (decided for plan 3b-1):
-            # "plan again" then plans the latest request from scratch (spec 5.1).
+            # "plan again" then plans the latest request from scratch (spec 5.1). The meal's
+            # one-meal avoidance goes back to the plan's own, like the spec.
+            with deps.session_factory() as session:
+                constraints = with_meal_avoid(
+                    session, state["constraints"], plan.get("meal_avoid") or []
+                )
             update.update(
                 spec=plan["spec"],
+                constraints=constraints,
                 defaults_used=plan.get("defaults_used") or [],
                 search_notes=card_search_notes(plan),
             )

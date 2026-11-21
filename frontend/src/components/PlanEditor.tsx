@@ -11,6 +11,7 @@ import {
   addDish,
   type Conflict,
   keepDish,
+  MEAL_KEY,
   removeDish,
   restorePlan,
   type SearchDislike,
@@ -39,28 +40,35 @@ export function useConflictText() {
         ? (conflict.ingredient_name ?? "")
         : (conflict.text ?? "");
   const lines = (conflict: Conflict) => conflict.lines.join(t("lineSeparator"));
+  // This meal's own wish ("今天不想吃肉", plan 3b-1b spec 5.4) is never shown as a person's rule.
+  const mealWish = (conflict: Conflict) =>
+    conflict.diner_key === MEAL_KEY ? t("mealWish", { name: target(conflict) }) : null;
   return {
-    /** "小王：忌口 豆腐", or "花椒油：过敏原未知" for unknown allergens. */
+    /** "小王：忌口 豆腐", "这顿不要肉", or "花椒油：过敏原未知" for unknown allergens. */
     line: (conflict: Conflict) =>
       conflict.kind === "unknown_allergens"
         ? t("unknownLine", { lines: lines(conflict) })
-        : t("line", { who: who(conflict), rule: rule(conflict, conflict.rule_type, target(conflict)) }),
+        : (mealWish(conflict) ??
+          t("line", { who: who(conflict), rule: rule(conflict, conflict.rule_type, target(conflict)) })),
     dislike: (dislike: SearchDislike) =>
       t("line", { who: who(dislike), rule: rule(dislike, "dislike", dislike.line) }),
     /** A conflict the user confirmed: "已确认保留：小王 忌口 牛肉". */
-    kept: (conflict: Conflict) =>
-      conflict.kind === "unknown_allergens"
-        ? t("keptUnknown", { lines: lines(conflict) })
-        : t("kept", { who: who(conflict), rule: rule(conflict, conflict.rule_type, target(conflict)) }),
+    kept: (conflict: Conflict) => {
+      if (conflict.kind === "unknown_allergens") return t("keptUnknown", { lines: lines(conflict) });
+      if (conflict.diner_key === MEAL_KEY) return t("keptMealWish", { name: target(conflict) });
+      return t("kept", { who: who(conflict), rule: rule(conflict, conflict.rule_type, target(conflict)) });
+    },
     /** Why a dish already in the plan is marked red: what changed since planning. */
-    reason: (conflict: Conflict) =>
-      conflict.kind === "unknown_allergens"
-        ? t("reasonUnknown", { lines: lines(conflict) })
-        : t("reason", {
-            who: who(conflict),
-            rule: rule(conflict, conflict.rule_type, target(conflict)),
-            lines: lines(conflict) || target(conflict),
-          }),
+    reason: (conflict: Conflict) => {
+      if (conflict.kind === "unknown_allergens") return t("reasonUnknown", { lines: lines(conflict) });
+      const wish = mealWish(conflict);
+      if (wish !== null) return t("reasonMealWish", { wish, lines: lines(conflict) || target(conflict) });
+      return t("reason", {
+        who: who(conflict),
+        rule: rule(conflict, conflict.rule_type, target(conflict)),
+        lines: lines(conflict) || target(conflict),
+      });
+    },
   };
 }
 

@@ -44,6 +44,9 @@ class ChatState(TypedDict):
     best: dict | None
     # H2 and H5, in that order, when any attempt of the run had them.
     blocked_codes: list[str]
+    # The diner keys of the run's H2 findings ("meal" for this meal's one-meal avoidance), so a
+    # block caused only by the meal's wish is worded as the meal's (plan 3b-1b spec 5.4).
+    blocked_h2_keys: list[str]
     # The feasibility shortfalls (dicts); non-empty means the planner is skipped.
     shortfalls: list[dict]
     # From the shortlist and the planner's searches: left_out_unknown_allergens and

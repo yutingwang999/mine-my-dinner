@@ -10,7 +10,7 @@ import { AddDish, ConfirmConflicts, type PlanEdit, useConflictText, usePlanEdit 
 import { RecipeToggles } from "@/components/RecipeToggles";
 import { type ChatPlan, KNOWN_ACTIONS, type NextAction, type PlanFinding } from "@/lib/chat";
 import { useErrorText } from "@/lib/errors";
-import type { Conflict } from "@/lib/planEdits";
+import { type Conflict, MEAL_KEY } from "@/lib/planEdits";
 
 type Props = {
   plan: ChatPlan;
@@ -197,7 +197,10 @@ function DinersLine({ plan }: { plan: ChatPlan }) {
   else if (others > 0) text = t("dinersLineOthers", { names, count: others });
   else text = t("dinersLine", { names });
   // Dishes kept against someone's rule: the line no longer says the plan follows every rule.
-  const kept = new Set((plan.edit?.kept ?? []).map((conflict) => conflict.recipe_id)).size;
+  // This meal's own wish is no one's rule, so a dish kept against it is not counted here.
+  const kept = new Set(
+    (plan.edit?.kept ?? []).filter((conflict) => conflict.diner_key !== MEAL_KEY).map((conflict) => conflict.recipe_id),
+  ).size;
   if (kept > 0) text += t("dinersKept", { count: kept });
   return <p className="hint">{text}</p>;
 }
