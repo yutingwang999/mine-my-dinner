@@ -23,6 +23,11 @@ class ChatState(TypedDict):
     # never by a turn that leaves the plan as it was. A revision compares the new request with
     # this one; a thread saved before it existed falls back to `previous_request`.
     plan_request: dict | None
+    # The next-action button of this turn when code changed the request of the card that
+    # offered it (plan 3b-1b spec 5.5): no parse ran, and the run's record notes it. Reset by
+    # every new message. A reply card in `reply_plans` keeps the request it was built from
+    # (`request`) and, on a revision that left the plan as it was, `plan_kept`.
+    button: str | None
     defaults_used: list[str]
     # PlanSpec as a dict, and the meal constraints: diner_ids, guest_rules (RuleRef dicts),
     # unconfirmed_diners, headcount.

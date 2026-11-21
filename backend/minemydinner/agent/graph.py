@@ -14,6 +14,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from minemydinner.agent.actions import action_of, apply_action, on_plan_counts, spec_changes
 from minemydinner.agent.card_text import (
     counts_text,
     is_zh,
@@ -66,7 +67,6 @@ from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
-    ACTION_MESSAGES,
     REPLAN_MESSAGE,
     REQUEST_STYLES,
     ParsedRequest,
@@ -280,17 +280,44 @@ def _reuses_parse(state: ChatState) -> bool:
 
 def _is_action_message(state: ChatState) -> bool:
     """True when the latest message is a fixed next-action button message and the thread has a
-    request. Such a turn is a plan without a route call (a no-plan reply counts as a current
-    plan, so a route would send it to revise), but it is still parsed: the parse relaxes the
-    request. As a thread's first message the text takes the normal path. Known limitation: on
-    a failed-revision card it plans from scratch; hand edits are not carried."""
+    request. Such a turn never makes a route call (a no-plan reply counts as a current plan, so
+    a route would send it to revise). On a card that keeps its request (`_button_card`) code
+    changes that request and nothing is parsed (plan 3b-1b spec 5.5); on an older card the
+    parse relaxes the request (3b-1). As a thread's first message the text takes the normal
+    path."""
     last = state["messages"][-1]
     return (
         state.get("request") is not None
         and isinstance(last, HumanMessage)
         and isinstance(last.content, str)
-        and any(last.content.strip() in texts.values() for texts in ACTION_MESSAGES.values())
+        and action_of(last.content) is not None
     )
+
+
+def _button_card(state: ChatState) -> dict | None:
+    """The card that offered the button of this turn: the card of the newest assistant reply,
+    when it keeps the request it was built from. None when that reply has no card or the card
+    was saved before cards kept their request (or was replaced by a hand edit)."""
+    for message in reversed(state["messages"][:-1]):
+        if isinstance(message, AIMessage):
+            card = (state.get("reply_plans") or {}).get(message.id or "")
+            return card if card is not None and card.get("request") is not None else None
+    return None
+
+
+def _button_turn(state: ChatState) -> bool:
+    """This turn is a button whose request code changed (route_intent set `button`)."""
+    return bool(state.get("button")) and _is_action_message(state)
+
+
+def _reply_card(card: dict, request: dict | None, plan_kept: bool = False) -> dict:
+    """A reply card as `reply_plans` keeps it: with the request of the turn it was built from,
+    so a button on it changes that request (spec 5.5), and `plan_kept` on a revision card that
+    left the plan as it was (failed, unclear, nothing fits), so the button revises again."""
+    shown = {**card, "request": request}
+    if plan_kept:
+        shown["plan_kept"] = True
+    return shown
 
 
 def _revises(state: ChatState) -> bool:
@@ -497,14 +524,38 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def route_intent(state: ChatState) -> dict:
         # Each new message is a new request, which may be asked about once. The thread's
         # request is kept before this turn's parse replaces it: a revision compares the two.
-        fresh = {"asked_question": False, "previous_request": state.get("request")}
+        fresh = {
+            "asked_question": False,
+            "previous_request": state.get("request"),
+            "button": None,
+        }
         if _reuses_parse(state):
             # "Plan again": the previous parsed request stands as this turn's parse, with
             # no model call; choose sends the turn on as after a parse.
             return {**fresh, "intent": "plan", "model_calls": [{"kind": "parse_reused"}]}
         if _is_action_message(state):
-            # No route call; choose sends the turn to the parse.
-            return {**fresh, "intent": "plan", "model_calls": []}
+            card = _button_card(state)
+            if card is None:
+                # A card without its request (3b-1): no route call; choose parses the message.
+                return {**fresh, "intent": "plan", "model_calls": []}
+            # Spec 5.5: the card's request with the button's change, in code. On a revision
+            # card that kept the plan the turn revises the current plan again; on any other
+            # card it plans from scratch.
+            action = action_of(state["messages"][-1].content)
+            revises = bool(card.get("plan_kept")) and state.get("current_plan") is not None
+            base = card["request"]
+            if revises and not base.get("counts_stated_now"):
+                # The card's turn stated no count: the counts are the plan the user sees
+                # (3b-1 spec 5.2), so "one fewer" is one fewer than the dishes shown. A turn
+                # that stated counts (a failed "再加一道") keeps them.
+                base = on_plan_counts(base, state["current_plan"])
+            return {
+                **fresh,
+                "intent": "revise" if revises else "plan",
+                "request": apply_action(base, action, card.get("spec")),
+                "button": action,
+                "model_calls": [],
+            }
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
         intent = result.parsed.intent
@@ -533,6 +584,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return "ask_revise_or_plan"
         if state["intent"] not in ("plan", "revise"):
             return "other"
+        if _button_turn(state):
+            # The request is complete: no parse and no question (spec 5.5). Who eats is the
+            # card's, so the diner card shows only when a settled friend was deleted since.
+            if _revises(state):
+                return "start_revision"
+            return "select_diners" if friend_deleted_since(state) else "load_context"
         return after_parse(state) if _reuses_parse(state) else "parse_request"
 
     def ask_revise_or_plan(state: ChatState) -> dict:
@@ -759,6 +816,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "headcount": headcount,
             "locale": state.get("locale", "en"),
         }
+        if _button_turn(state):
+            # The request came from code, not from a parse (spec 5.5).
+            request["button"] = state["button"]
         run_id = deps.recorder.start(
             thread_id=config["configurable"]["thread_id"],
             request=request,
@@ -1113,6 +1173,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 # The fixed closest note always leads; the model's own note may follow it.
                 closest = CLOSEST_NOTE_ZH if is_zh(locale) else CLOSEST_NOTE_EN
                 note = closest + "\n\n" + note if note else closest
+        # The card keeps the request it was built from, for a button on it (spec 5.5).
+        plan = _reply_card(plan, state["request"])
         # The run is over: its query embeddings are no longer needed.
         deps.run_query_vectors.pop(state["run_id"], None)
         deps.recorder.finish(
@@ -1151,6 +1213,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # `request`, and its wishes are not in the plan.
         baseline = state.get("plan_request") or state.get("previous_request")
         spec = revision_spec(plan, baseline, state["request"])
+        button = state["button"] if _button_turn(state) else None
+        if button is not None:
+            # A cleared time limit or emptied named list is no statement to revision_spec.
+            spec = spec.model_copy(update=spec_changes(state["request"], button))
         # This meal's one-meal avoidance joins the revision like the other conditions (spec
         # 5.4); the plan's dishes that break it are named by it (`avoid_ids`).
         meal_avoid = revision_meal_avoid(plan, baseline, state["request"])
@@ -1184,6 +1250,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "locale": state.get("locale", "en"),
             "revision": {"from_version": index},
         }
+        if button is not None:
+            request["button"] = button
         run_id = deps.recorder.start(
             thread_id=config["configurable"]["thread_id"],
             request=request,
@@ -1585,13 +1653,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 defaults_used=plan.get("defaults_used") or [],
                 search_notes=card_search_notes(plan),
             )
+        # The card keeps this turn's request, for a button on it (spec 5.5); a passed
+        # revision's card is also the new current plan.
+        kept = "current_plan" not in update
+        card = _reply_card(card, state["request"], plan_kept=kept)
+        if not kept:
+            update.update(current_plan=card, plan_versions=[*versions, card])
         deps.run_query_vectors.pop(state["run_id"], None)
         deps.recorder.finish(
             state["run_id"],
             retries=state["retries"],
             first_passed=bool(state.get("first_passed")),
             # Only a revision that became the current plan passed.
-            final_passed="current_plan" in update,
+            final_passed=not kept,
             final_plan=map_strings(card, deps.client.prepare_text),
         )
         reply_id = str(uuid.uuid4())

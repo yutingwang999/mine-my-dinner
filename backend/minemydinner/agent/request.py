@@ -30,9 +30,8 @@ REPLAN_MESSAGE = {"zh": "按同样的要求重新规划", "en": "Plan again with
 
 # The fixed messages of the plan card's next-action buttons, by locale and action. They must
 # equal chat.actionMessage in the frontend message files (a test checks it). Code skips the
-# route call for them (the turn is a plan) but still parses them: the parse relaxes the request.
-# Known limitation: pressing one on a failed-revision card plans from scratch; hand edits are
-# not carried.
+# route call for them and changes the request of the card that offered the button itself
+# (agent/actions.py, plan 3b-1b spec 5.5); only a card saved without its request is parsed.
 ACTION_MESSAGES = {
     "zh": {
         "switch_to_shopping": "允许购物",

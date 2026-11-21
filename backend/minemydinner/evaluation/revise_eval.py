@@ -196,6 +196,9 @@ def replace_first_plan(
                 locale=locale,
             )
     card["locked"] = []
+    # The first turn's request, as present_plan keeps it on the card, so a next-action button
+    # right after the seeded plan changes it in code (plan 3b-1b spec 5.5).
+    card["request"] = values.get("request")
     versions = list(values.get("plan_versions") or [])
     if versions:
         versions[-1] = card

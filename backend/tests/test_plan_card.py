@@ -49,9 +49,10 @@ def test_build_dishes_card_matches_present_plan_shape(graph_env, veg, meat):  # 
         base=base,
         locale="en",
     )
-    # present_plan adds the (empty) locks of a model plan; the builder does not.
-    assert current["locked"] == []
-    assert card == {k: v for k, v in current.items() if k != "locked"}
+    # present_plan adds the (empty) locks of a model plan and the request the card was built
+    # from (plan 3b-1b spec 5.5); the builder does not.
+    assert current["locked"] == [] and current["request"] == out["request"]
+    assert card == {k: v for k, v in current.items() if k not in ("locked", "request")}
 
 
 def test_build_dishes_card_failed_validation_lists_unmet(graph_env, veg):  # noqa: F811

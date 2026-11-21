@@ -489,6 +489,11 @@ def _restored_card(
         count_notes=[],
         notes=notes,
     )
+    # The request the version was built from (and `plan_kept`), so a next-action button on the
+    # restored card changes that request in code (plan 3b-1b spec 5.5).
+    for key in ("request", "plan_kept"):
+        if key in model:
+            card[key] = model[key]
     return card
 
 

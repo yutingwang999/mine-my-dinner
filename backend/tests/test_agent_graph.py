@@ -23,6 +23,7 @@ from minemydinner.agent.graph import (
     EARLY_STOP_NOTE_ZH,
     build_graph,
 )
+from minemydinner.agent.actions import apply_action
 from minemydinner.agent.card_text import next_actions, reason_text
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
@@ -2500,38 +2501,36 @@ ACTION_TEXTS = [
 
 @pytest.mark.parametrize(("locale", "key", "text"), ACTION_TEXTS)
 def test_action_message_after_a_no_plan_reply_plans_from_scratch(revise_env, locale, key, text):
+    # Plan 3b-1b spec 5.5: the card's own request, changed in code; no route, no parse.
     env = revise_env
     # Nothing in stock, fridge only: the request stops before the planner (a no-plan reply).
-    stopped = say(env, "今晚吃什么", "plan", parse={"dishes": 1, "mode": "fridge_only"})
+    stopped = say(env, "今晚吃什么", "plan", parse={"dishes": 2, "mode": "fridge_only"})
     assert stopped["current_plan"]["recipes"] == [] and not stopped["current_plan"]["passed"]
+    card = stopped["reply_plans"][stopped["messages"][-1].id]
+    assert card["request"] == stopped["request"]
     since = len(env.model.sent)
-    ids = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤")
-    out = say(
-        env, f" {text} ", "revise",
-        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
-        replies=[final_proposal(ids)], locale=locale,
-    )
-    assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert route_and_parse_calls(env, since) == ["parse"]
-    assert reviser_calls(env) == [] and len(planner_runs(env)) == 1
+    out = say(env, f" {text} ", "revise", replies=[final_proposal([])], locale=locale)
+    assert "__interrupt__" not in out
+    assert route_and_parse_calls(env, since) == []
+    assert reviser_calls(env) == []
     assert out["intent"] == "plan" and "revision" not in out["current_plan"]
+    assert out["request"] == apply_action(card["request"], key, card["spec"])
+    record = latest_record(env)
+    assert record.request["button"] == key and "revision" not in record.request
 
 
 @pytest.mark.parametrize(("locale", "key", "text"), ACTION_TEXTS)
 def test_action_message_after_a_plan_plans_from_scratch(revise_env, locale, key, text):
     env = revise_env
-    first_meal(env)
+    first = first_meal(env)
     since = len(env.model.sent)
     ids = dish_ids(env, "青椒炒肉", "干煸豆角", "紫菜蛋花汤")
-    out = say(
-        env, text, "revise",
-        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
-        replies=[final_proposal(ids)], locale=locale,
-    )
+    out = say(env, text, "revise", replies=[final_proposal(ids)], locale=locale)
     assert "__interrupt__" not in out
-    assert route_and_parse_calls(env, since) == ["parse"]
-    assert reviser_calls(env) == [] and len(planner_runs(env)) == 2
-    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    assert route_and_parse_calls(env, since) == []
+    # Planned anew (fewer_dishes retries the scripted three dishes against its new total).
+    assert reviser_calls(env) == [] and len(planner_runs(env)) >= 2
+    assert out["request"] == apply_action(first["request"], key, first["current_plan"]["spec"])
     assert "revision" not in out["current_plan"]
 
 
@@ -2544,6 +2543,197 @@ def test_action_message_as_first_message_takes_the_normal_path(revise_env):
     )
     assert out["current_plan"]["passed"]
     assert route_and_parse_calls(env, 0) == ["route", "parse"]
+
+
+# ---- plan 3b-1b Task 6: next-action buttons in code (spec 5.5) ----
+
+
+def test_button_on_failed_revision_revises_again(revise_env):
+    env = revise_env
+    for name in ("牛肉", "小白菜", "紫菜", "豆角", "辣椒"):
+        stock(env.session, name, level="plenty")
+    first = first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "fridge_only"})
+    cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
+    _hand_add(env, beans)
+    # Nothing in the library fits the wish: the plan stays and the card offers shopping.
+    failed = say(
+        env, "想吃点海鲜", "revise",
+        parse={
+            "dishes": 2, "soups": 1, "mode": "fridge_only", "query": "海鲜",
+            "counts_stated_now": False,
+        },
+        replies=[revision("general", note="冰箱里没有海鲜。")],
+    )
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["next_actions"] == ["switch_to_shopping", "import_recipes"]
+    assert card["request"]["query"] == "海鲜" and card["plan_kept"] is True
+    assert failed["plan_request"] == first["request"]
+    since = len(env.model.sent)
+    revisions = len(reviser_calls(env))
+    out = say(
+        env, "允许购物", "plan",
+        replies=[revision("general", remove=[(cabbage, "")], add=[cucumber])],
+    )
+    assert "__interrupt__" not in out
+    # No route, no parse: the request is the card's, changed in code.
+    assert route_and_parse_calls(env, since) == []
+    assert len(reviser_calls(env)) == revisions + 1
+    assert out["intent"] == "revise"
+    assert out["request"]["mode"] == "shopping" and out["request"]["query"] == "海鲜"
+    record = latest_record(env)
+    assert record.request["button"] == "switch_to_shopping"
+    assert "from_version" in record.request["revision"]
+    assert record.request["spec"]["mode"] == "shopping"
+    assert record.request["messages"] == ["允许购物"]
+    # The revision ran on the current plan: the hand-added dish stays, still locked.
+    plan = out["current_plan"]
+    assert plan["passed"] and plan["spec"]["mode"] == "shopping"
+    ids = [r["id"] for r in plan["recipes"]]
+    assert beans in ids and cucumber in ids and cabbage not in ids and len(ids) == 4
+    assert beans in plan["locked"]
+    # The wish reached the reviser through the request summary.
+    [opening] = [m for m in reviser_calls(env)[-1] if m.type == "human"][:1]
+    assert "The user feels like: 海鲜" in opening.content
+
+
+def _hand_grown_failed_wish(env: ReviseEnv) -> None:
+    """Asked 3 dishes and a soup; a 4th dish added and the soup removed by hand; then a wish
+    that states no count and fits nothing (the plan stays, the card keeps that turn's request
+    with its stale counts: 3 dishes, 1 soup)."""
+    from minemydinner.agent.edits import Remove, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    first_meal(env, (*THREE, "紫菜蛋花汤"), parse={"dishes": 3, "soups": 1, "mode": "shopping"})
+    beans, soup = dish_ids(env, "干煸豆角", "紫菜蛋花汤")
+    _hand_add(env, beans)
+    values = env.graph.get_state(env.config).values
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=soup), "zh")
+    assert outcome.plan is not None
+    env.graph.update_state(env.config, update, as_node="present_plan")
+    failed = say(
+        env, "想吃点海鲜", "revise",
+        parse={
+            "dishes": 3, "soups": 1, "mode": "shopping", "query": "海鲜",
+            "counts_stated_now": False,
+        },
+        replies=[revision("general", note="没有海鲜菜。")],
+    )
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["plan_kept"] and len(failed["current_plan"]["recipes"]) == 4
+
+
+def test_fewer_dishes_after_a_failed_wish_counts_from_the_plan_shown(revise_env):
+    # Fix round 1: "one fewer" is one fewer than the 4 dishes shown, not the stale request's
+    # 3, and the soup removed by hand does not come back.
+    env = revise_env
+    _hand_grown_failed_wish(env)
+    cabbage, soup = dish_ids(env, "清炒小白菜", "紫菜蛋花汤")
+    since = len(env.model.sent)
+    out = say(env, "少做几道菜", "plan", replies=[revision("general", remove=[(cabbage, "")])])
+    assert "__interrupt__" not in out and route_and_parse_calls(env, since) == []
+    record = latest_record(env)
+    assert record.request["button"] == "fewer_dishes"
+    assert (record.request["spec"]["dishes"], record.request["spec"]["soups"]) == (3, 0)
+    plan = out["current_plan"]
+    ids = [r["id"] for r in plan["recipes"]]
+    assert plan["passed"] and len(ids) == 3 and cabbage not in ids and soup not in ids
+
+
+def test_relax_split_after_a_failed_wish_keeps_the_plan_shown(revise_env):
+    env = revise_env
+    _hand_grown_failed_wish(env)
+    out = say(env, "荤素都行", "plan", replies=[revision("general")])
+    assert "__interrupt__" not in out
+    spec = latest_record(env).request["spec"]
+    assert (spec["dishes"], spec["soups"]) == (4, 0)
+    assert spec["meat_dishes"] is None and spec["vegetable_dishes"] is None
+    assert len(out["current_plan"]["recipes"]) == 4
+
+
+def test_restored_card_keeps_its_request(revise_env):
+    from minemydinner.agent.edits import Restore, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    env = revise_env
+    first = first_meal(env)
+    _hand_add(env, dish_ids(env, "干煸豆角")[0])
+    values = env.graph.get_state(env.config).values
+    assert "request" not in values["current_plan"]
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, _ = apply_edit(env.session, ctx, values, Restore(), "zh")
+    assert outcome.plan["request"] == first["request"]
+    assert "plan_kept" not in outcome.plan
+
+
+def test_seeded_first_plan_keeps_the_request(revise_env):
+    # The revise evaluation's fixed first plan keeps the first turn's request, so a button
+    # right after it takes the code path.
+    from minemydinner.evaluation.revise_eval import replace_first_plan
+
+    env = revise_env
+    first = first_meal(env)
+    factory = rollback_session_factory(env.session)
+    replace_first_plan(env.graph, factory, env.config, ["青椒炒肉", "清炒小白菜", "紫菜蛋花汤"], "zh")
+    values = env.graph.get_state(env.config).values
+    assert values["current_plan"]["request"] == first["request"]
+    since = len(env.model.sent)
+    out = say(env, "允许购物", "plan", replies=[final_proposal(dish_ids(env, *MEAL))])
+    assert route_and_parse_calls(env, since) == []
+    assert out["request"] == apply_action(first["request"], "switch_to_shopping")
+
+
+def test_button_on_a_new_plan_card_plans_from_scratch(revise_env):
+    env = revise_env
+    for name in ("小白菜", "豆角", "辣椒"):
+        stock(env.session, name, level="plenty")
+    # Two meat dishes from the fridge, with no meat at home: an early stop.
+    stopped = say(
+        env, "两个荤菜", "plan", parse={"dishes": 2, "meat_dishes": 2, "meat_bound": "exact"}
+    )
+    card = stopped["reply_plans"][stopped["messages"][-1].id]
+    assert stopped["current_plan"]["reasons"] and "relax_split" in card["next_actions"]
+    assert "plan_kept" not in card
+    # Ask first now: the button's request is complete, so nothing is asked.
+    set_request_style(env.session, "ask_first")
+    since = len(env.model.sent)
+    out = say(
+        env, "荤素都行", "plan",
+        replies=[final_proposal(dish_ids(env, "清炒小白菜", "干煸豆角"))],
+    )
+    assert "__interrupt__" not in out
+    assert route_and_parse_calls(env, since) == []
+    assert reviser_calls(env) == [] and len(planner_runs(env)) == 1
+    assert out["request"]["meat_dishes"] is None and out["request"]["meat_bound"] is None
+    assert out["request"]["dishes"] == 2 and out["request"]["mode"] is None
+    record = latest_record(env)
+    assert record.request["button"] == "relax_split" and "revision" not in record.request
+    assert record.request["spec"]["meat_dishes"] is None
+    assert out["current_plan"]["passed"]
+
+
+def test_button_on_an_old_card_parses(revise_env):
+    env = revise_env
+    stopped = say(env, "今晚吃什么", "plan", parse={"dishes": 2, "mode": "fridge_only"})
+    # A thread saved before cards kept their request.
+    old = {
+        reply_id: {k: v for k, v in card.items() if k != "request"}
+        for reply_id, card in stopped["reply_plans"].items()
+    }
+    env.graph.update_state(env.config, {"reply_plans": old}, as_node="present_plan")
+    since = len(env.model.sent)
+    out = say(
+        env, "允许购物", "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(dish_ids(env, *MEAL))],
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    # 3b-1 behaviour: no route call, but the parse relaxes the request.
+    assert route_and_parse_calls(env, since) == ["parse"]
+    assert out["request"]["soups"] == 1
+    assert "button" not in latest_record(env).request
 
 
 def _hand_add(env: ReviseEnv, recipe_id: int) -> None:

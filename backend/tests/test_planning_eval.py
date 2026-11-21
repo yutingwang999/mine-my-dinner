@@ -897,12 +897,11 @@ def test_a_follow_up_message_runs_on_the_same_thread(tmp_path, eval_db):
     drops the split, and the second plan is the one judged."""
     model = TitleModel(eval_db, "清炒小白菜")
     model.structured["ParsedRequest"] = [
-        {"meat_dishes": 1, "vegetable_dishes": 1, "mode": "fridge_only"},
-        {"dishes": 1, "mode": "fridge_only"},
+        {"dishes": 1, "meat_dishes": 1, "meat_bound": "exact", "mode": "fridge_only"},
     ]
     scenario = _scenario(
         "button",
-        request="一荤一素，只用冰箱里的",
+        request="一个荤菜，只用冰箱里的",
         follow_up="荤素都行",
         expect_first_reasons=["not_enough_in_library"],
         expect_spec={"meat_dishes": None, "vegetable_dishes": None, "dishes": 1},
@@ -914,15 +913,16 @@ def test_a_follow_up_message_runs_on_the_same_thread(tmp_path, eval_db):
     )
     assert outcome.as_expected, outcome.failures
     assert outcome.final_passed
-    # Route and parse for the first message; parse and planner for the second: the button's
-    # fixed message skips the route call (it is a plan by design).
-    assert outcome.model_calls == 4
-    # The second parse read the whole conversation, ending with the button's message.
+    # Route and parse for the first message; the planner alone for the second: the button
+    # changes the card's request in code, with no route and no parse call (plan 3b-1b spec
+    # 5.5; it was 4 calls while the button's message was still parsed).
+    assert outcome.model_calls == 3
     parse_calls = [m for m in model.sent if "extract the details" in str(m[0].content)]
-    texts = [str(m.content) for m in parse_calls[-1][1:]]
-    assert texts[0] == "一荤一素，只用冰箱里的" and texts[-1] == "荤素都行"
+    assert len(parse_calls) == 1
     # Both turns' runs are saved in order; the single-run field is the judged (last) one.
     first_run, second_run = outcome.record["planning_runs"]
+    assert second_run["request"]["button"] == "relax_split"
+    assert second_run["request"]["spec"]["dishes"] == 1
     assert first_run["id"] < second_run["id"]
     assert outcome.record["planning_run"] == second_run
     assert outcome.planning_run_id == second_run["id"]
