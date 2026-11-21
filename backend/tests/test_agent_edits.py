@@ -489,6 +489,16 @@ def test_unstated_zero_count_gives_no_note(env):
     assert outcome.plan["count_notes"] == [{"field": "soups", "stated": 0, "now": 1}]
 
 
+def test_count_note_reads_the_plans_request(env):
+    values = model_state(env, [env.veg.id, env.egg.id])
+    # The plan was built from a request that never named soups; a later unclear turn
+    # parsed another request that stated 0 soups.
+    values["plan_request"] = {"dishes": 2, "soups": None}
+    values["request"] = {"dishes": 2, "soups": 0}
+    outcome, _, _ = run(env, values, Add(recipe_id=env.soup.id, confirm=[]))
+    assert outcome.plan["count_notes"] == []
+
+
 def test_h1_h3_h6_h7_are_warnings(env):
     session = env.session
     stock(session, "小白菜", count=2)

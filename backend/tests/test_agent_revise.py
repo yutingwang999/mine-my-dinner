@@ -602,6 +602,23 @@ def test_a_dish_deleted_from_the_library_leaves_the_revision_quietly(env):
     assert last_record(env).request["spec"]["dishes"] == 2
 
 
+def test_failed_card_drops_a_deleted_dish(env):
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    ids_before = ids_of(env, "鱼香茄子", "番茄炒蛋")
+    env.session.delete(env.dishes["清炒小白菜"])
+    env.session.flush()
+    out = revise(
+        env,
+        "想要辣一些的",
+        [proposal("general", note="库里没有更辣的菜了。")],
+        parse={"query": "辣一些的"},
+    )
+    shown = reply_plan(out)
+    assert shown["passed"] is False
+    assert recipe_ids(shown) == ids_before
+    assert shown["notes"] == [{"field": "deleted_recipes", "titles": ["清炒小白菜"]}]
+
+
 # ---- plan 3b-1b: drop or replace, add-only, the attempt's counts, the empty plan ----
 
 

@@ -85,6 +85,10 @@ scenarios:
     expect_counts: {dishes: 3}
     expect_locale_reply: zh
     expect: The named replacement is used though it is a vegetable dish (the user's reading, 2026-11-21).
+    # This sentence reached the 3b-1b design, plan and code by mistake before any run (removed
+    # again in Task 3). The user decided (2026-11-22) to run it but report it apart, not in the
+    # held-out threshold.
+    deferred_to: not counted (sentence seen while building plan 3b-1b)
 
   - name: no_porridge
     request: 两个人吃晚饭，两个菜一个主食，可以买菜。

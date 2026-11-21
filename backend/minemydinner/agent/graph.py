@@ -1432,7 +1432,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 note = empty_plan_question(locale)
                 shows_card = False
             elif proposal is not None and asks_back(proposal):
-                card = unchanged_card(plan, [], [])
+                card = unchanged_card(live, [], [])
+                card["notes"] = deleted_note(plan, deleted)
                 note = proposal.note.strip() or unchanged_note(locale)
             elif changed and passed:
                 ctx = load_planning_context(session, meal_constraints(state))
@@ -1472,7 +1473,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     [{"code": WISH_UNMET, "recipe_id": None}], [], {}, locale
                 )
                 actions = wish_unmet_actions(state["spec"])
-                card = unchanged_card(plan, unmet, actions)
+                card = unchanged_card(live, unmet, actions)
+                card["notes"] = deleted_note(plan, deleted)
                 titles_now = {r["id"]: r["title"] for r in live["recipes"]}
                 hand, kept = untouched_locked(live, proposal, titles_now)
                 parts = [
@@ -1497,7 +1499,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     [v["code"] for v in violations],
                 )
                 unmet = unmet_entries(revision["problems"], violations, titles, locale)
-                card = unchanged_card(plan, unmet, actions)
+                card = unchanged_card(live, unmet, actions)
+                card["notes"] = deleted_note(plan, deleted)
                 note = failed_note(locale, bool(actions))
         if "current_plan" not in update:
             # The plan stays, but `request` keeps this turn's parse (decided for plan 3b-1):

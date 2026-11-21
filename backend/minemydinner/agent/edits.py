@@ -304,7 +304,8 @@ def _count_notes(values: dict, spec: PlanSpec, recipes: list[dict]) -> list[dict
     present = count_categories(r["dish_type"] for r in recipes)
     ranges = side_ranges(spec)
     defaults = set(values.get("defaults_used") or [])
-    request = values.get("request")
+    # The request the plan was built from; a later unclear turn may have parsed another.
+    request = values.get("plan_request") or values.get("request")
     notes = []
     for field in COUNT_NOTE_FIELDS:
         stated = getattr(spec, field)
