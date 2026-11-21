@@ -202,6 +202,8 @@ Findings judged safe to defer during plan 2a's task reviews. The final whole-bra
 - The allergy check posts on every keystroke in the review form; a ~300 ms debounce would cut the chatter (database-only, no model cost).
 - An empty Content-Type is treated as HTML in the web import, yielding `no_main_text` instead of the more accurate `not_html`.
 - `GET /api/recipes` loads ingredients, cookware, and images per row (N+1); use `selectinload` when the library grows.
+- A failed `llm_calls` write discards the paid model result: `_log` in `llm/client.py` has no error handling, so a database error while logging raises after the model already answered (still true on 2026-11-21).
+- Choice groups (ingredient alternatives, plan of 2026-11-11): the drag handle that groups ingredient lines has `role="button"` but no keyboard path, so grouping is mouse-only (→ T1.9b). The PUT and library-edit paths are not pinned by group tests; they share `RecipeWrite` and `toLine` with the tested paths, so they work today (code health, any step).
 
 ## Deferred from Phase 1 plan 2b
 
