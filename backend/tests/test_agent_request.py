@@ -5,6 +5,7 @@ from minemydinner.agent.request import (
     PROMPT_DIR,
     PROMPT_VERSION,
     PROMPT_VERSIONS,
+    ACTION_MESSAGES,
     REPLAN_MESSAGE,
     ParsedRequest,
     apply_defaults,
@@ -35,9 +36,9 @@ def test_default_composition(n, expected):
 
 
 def test_prompt_versions_name_existing_files():
-    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner"]
+    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v2+parse_v5+planner_v4"
+    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -393,8 +394,26 @@ def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v2+parse_v5+planner_v4"
-    assert PROMPT_VERSIONS["parse"] == "parse_v5"
+    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
+    assert PROMPT_VERSIONS["parse"] == "parse_v6"
+    assert load_prompt("parse") == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+
+
+def test_revise_v1_is_frozen_and_revise_v2_is_current():
+    import hashlib
+
+    v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
+    # revise_v1 was used by plan 3b-1 development runs, so it must never change.
+    assert hashlib.sha256(v1).hexdigest() == (
+        "9062ccb0da4dfd894023e79f6fabe118c5484f9dcc94c32ddc6563f55fbb4fc3"
+    )
+    assert PROMPT_VERSIONS["revise"] == "revise_v2"
+    v2 = load_prompt("revise")
+    assert v2 == (PROMPT_DIR / "revise_v2.md").read_text(encoding="utf-8")
+    # The fixes of the 20261120T091620Z development run (task 8b).
+    assert "meat dish for a meat dish" in v2
+    assert "integers" in v2 and "never in both add and remove" in v2
+    assert "换个思路" in v2
 
 
 def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():
@@ -406,19 +425,57 @@ def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():
         "d5544c3033136c757d740f7818275c2ac732cbbb4c48bc8b89e5eb83fd33345f"
     )
     old = v4.decode("utf-8").splitlines()
-    new = load_prompt("parse").splitlines()
+    new = (PROMPT_DIR / "parse_v5.md").read_text(encoding="utf-8").splitlines()
     changed = [i for i, (a, b) in enumerate(zip(old, new)) if a != b]
     assert len(old) == len(new) and len(changed) == 1
     assert "就做两个凉菜" in new[changed[0]] and "来个凉菜" in new[changed[0]]
 
 
-def test_parse_prompt_is_no_longer_than_parse_v3():
+def test_parse_v5_is_frozen_and_parse_v6_only_adds_lines():
+    import hashlib
+
+    v5 = (PROMPT_DIR / "parse_v5.md").read_bytes().replace(b"\r\n", b"\n")
+    # parse_v5 was used by evaluation round 8 and plan 3b-1 runs, so it must never change.
+    assert hashlib.sha256(v5).hexdigest() == (
+        "8798894242eceaa040e5a8ff948767707d3c1f47741172eb8bc8ce30554cab82"
+    )
+    old = v5.decode("utf-8").splitlines()
+    new = load_prompt("parse").splitlines()
+    # Every parse_v5 line stays, unchanged and in order: parse_v6 only adds lines.
+    rest = iter(new)
+    assert all(any(line == other for other in rest) for line in old)
+    added = "\n".join(line for line in new if line not in old)
+    assert "[App note, not written by the user] Current plan:" in added
+    assert "counts_stated_now" in added
+    for example in ("再加一道吧", "4个菜就够了", "想要辣一些的"):
+        assert example in added
+
+
+def test_parse_v5_is_no_longer_than_parse_v3():
     v3 = (PROMPT_DIR / "parse_v3.md").read_text(encoding="utf-8").splitlines()
+    v5 = (PROMPT_DIR / "parse_v5.md").read_text(encoding="utf-8").splitlines()
+    assert len(v5) <= len(v3) == 79
     current = load_prompt("parse")
-    assert len(current.splitlines()) <= len(v3) == 79
+    # The current prompt may grow only a little past parse_v5.
+    assert len(current.splitlines()) <= 90
+    # A named removal is not a count change (spec 5.2).
+    assert "汤就不要了" not in current and "那道汤不要了" in current
     for field in ("guests", "friend_rules", "self_rules", "diet_words"):
         assert field in current
     assert "三个菜，不要素菜" in current and REPLAN_MESSAGE["zh"] in current
+
+
+def test_parsed_request_counts_stated_now():
+    # Requests stored before the field still load, as "not known".
+    assert ParsedRequest.model_validate({"dishes": 3}).counts_stated_now is None
+    assert ParsedRequest(dishes=4, counts_stated_now=True).counts_stated_now is True
+    schema = ParsedRequest.model_json_schema()["properties"]["counts_stated_now"]
+    assert "newest" in schema["description"] and "relative" in schema["description"]
+    # It never changes a new plan: the defaults and the ask-first question ignore it.
+    for flag in (None, True, False):
+        request = ParsedRequest(counts_stated_now=flag)
+        assert apply_defaults(request) == apply_defaults(ParsedRequest())
+        assert needs_question(request, "ask_first") == ["mode", "composition"]
 
 
 def test_parsed_request_drops_unknown_allergen_values():
@@ -516,3 +573,10 @@ def test_parse_messages_interleaves_questions():
     assert [m.type for m in out] == ["human", "human", "ai"]
     assert len(messages) == 2
     assert parse_messages(messages, [], "zh") == messages
+
+
+@pytest.mark.parametrize("locale", ["zh", "en"])
+def test_fixed_messages_match_the_frontend_files(locale):
+    chat = _chat_strings(locale)
+    assert REPLAN_MESSAGE[locale] == chat["replanMessage"]
+    assert ACTION_MESSAGES[locale] == chat["actionMessage"]

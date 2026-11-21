@@ -67,7 +67,7 @@ In the order of one planning run:
 | Search | Each hit carries the names it is missing | `search.py` |
 | Candidate list | Fridge-only: only makeable recipes are kept, a filter (the planner's own searches apply it too). Shopping: fewer missing ranks higher. The "enough makeable dishes" safeguard after the spread | `shortlist.py` and `tools.py`, through search |
 | Planner tools | Search hits carry missing items; the `compute_missing` tool lists them on request | `tools.py` |
-| Validation H1 (fridge-only) | A dish in the plan that is missing something breaks H1 | `validate.py` |
+| Validation H1 (fridge-only) | A dish in the plan that is missing something breaks H1. A revision run has no feasibility check; in a revision, H1 caused only by a locked dish (added by hand) is a warning, not a failure (plan 3b-1) | `validate.py`, `revise_step.py` `split_violations` |
 | Plan card | "Missing: …" under each dish | `graph.py` |
 
 ### Places that look at stock differently

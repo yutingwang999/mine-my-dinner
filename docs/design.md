@@ -359,10 +359,17 @@ parse_request ─key information missing→ [interrupt to ask, such as "How many
   → planner (LLM) ⇄ tools (may load_skill)
   → validate_plan (code check) ─fails→ return to planner with specific errors (at most N times)
   → present_plan → END
-Next turn, "swap the second dish / make it spicier" → revise_plan (only the current plan + the instruction) → validate_plan → present_plan *(T1.5; until then the instruction is planned as a new request.)*
-"Xiao Li is coming too / Xiao Wang isn't coming" → update diners → validate_plan → replace only dishes that break the rules → present_plan *(T1.5; until then a change in who eats shows the diner card and the meal is planned as a new request.)*
+Next turn, "swap the second dish / make it spicier" → route_intent: revise → parse_request (the whole conversation, plus an app-written line describing the current plan; the result is the full request with the message's changes on top)
+  → revise_plan (LLM: the current plan with its locked dishes + the message + the request; the planner's shortlist and search tools) → a change list: dishes to remove, each named one with its quote from the message, and dishes to add
+  → revision checks (code: a locked dish leaves only when the message names it, quotes match their dishes, change size, the plan's counts unless the message states new ones; *T1.5 part 3b-1b changes this so that a named dish removed without a number leaves the plan smaller, and only "换 / 换成 / 换一个" replaces it*) → validate_plan ─either fails→ return to revise_plan with the reason (at most N times)
+  → present_plan (a new model version; what changed is written by code, followed by the model's note)
+  ─every attempt fails, or the revise step reports that nothing fits→ the plan stays as it was; the reply says why and offers next actions
+  ─the revise step cannot tell which dish is meant→ ask which one (the plan stays as it was)
+  After a plan, a message the route cannot place between revising and a new meal (unsure) → [interrupt: choice card "在这份方案上改 / 重新规划一顿"] → continues as revise or plan. Without a plan in the conversation, revise and unsure are treated as plan.
+"Xiao Li is coming too / Xiao Wang isn't coming" → update diners → validate_plan → replace only dishes that break the rules → present_plan *(T1.5 part 3b-2; until then a change in who eats, found by the parse on a revise turn too, shows the diner card and the meal is planned from scratch as a new request, without the hand edits.)*
 "This one is good" → save the plan → if ingredients are missing: make_shopping_list → [interrupt to confirm] → save the list
 "Plan again" (after resolving unknown allergens, 5.5) → reuse the previous parsed request (no route or parse call) → load_context → planner → … → present_plan
+A fixed next-action button message ("允许购物", "少做几道菜", and the others, both languages) → no route call → parse_request → planned from scratch as a new request, without the hand edits (these messages relax a condition, and a revision cannot clear a time limit or a named ingredient)
 ```
 
 **Subgraph B: recipe import**
@@ -446,7 +453,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 
 Import confirmation shows the duration and its source. A changed duration becomes `user` by default, and the user can mark it `stated` when the source gives it, which also corrects an extraction that mislabeled a stated time. `estimated` is offered only while the model's own number is unchanged. A later "cooked this meal" feature could let the user record actual time.
 
-**Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written to the conversation state (`current_plan`) so later turns can read it; until T1.5 part 3b, a new message plans again from the request (3b revises the edited plan). Edits live in the conversation state until the plan is saved (T1.5 part 3c); "restore the model's plan" brings back the model's last version and checks it again against today's data. The user can also add, remove, and change items when confirming the shopping list.
+**Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written to the conversation state (`current_plan`) so later turns can read it. A new message now revises the edited plan (T1.5 part 3b-1, see 7.3): a dish added by hand, and a dish whose conflict the user confirmed or kept, is locked and leaves only when the message names it, and its override stays with it while it is in the plan; the plan's dish count and categories, hand changes included, stay unless the message states a count. A revision is a new model version, and later edits start a new manual version on top of it. "Plan again", a fixed next-action button message, and a change in who eats still plan from scratch, without the edits. Edits live in the conversation state until the plan is saved (T1.5 part 3c); "restore the model's plan" brings back the model's last version (a revision included, with that version's locks and overrides) and checks it again against today's data. The user can also add, remove, and change items when confirming the shopping list.
 
 | Rule | When the user adds a dish that breaks it |
 |---|---|
@@ -492,7 +499,7 @@ Import confirmation shows the duration and its source. A changed duration become
 - The delete dialog says that related conversations may still contain this friend's information and links to conversation deletion. Conversations are not cleaned automatically, because their content cannot be scrubbed reliably.
 - If an open conversation's plan includes a deleted diner, code asks the user to confirm again who is eating this meal. It must not silently drop the person, because their limits would then stop applying without notice.
 
-**Changes mid-conversation:** when someone is added, rerun `validate_plan` and replace only the dishes that break the rules. When someone is removed, the plan does not need to change unless the user asks to replan. *(T1.5; until then a change in who eats shows the diner card and the meal is planned as a new request.)*
+**Changes mid-conversation:** when someone is added, rerun `validate_plan` and replace only the dishes that break the rules. When someone is removed, the plan does not need to change unless the user asks to replan. *(T1.5 part 3b-2. Until then a change in who eats shows the diner card and the meal is planned from scratch as a new request. Since part 3b-1 other follow-ups revise the plan, but a follow-up whose parse finds a change in who eats, alone or mixed with a dish change, still becomes a new plan, and hand edits are not carried into it.)*
 
 **Conversation records:** temporary guests' information does not enter friend profiles, but what the user said stays in the checkpointer's conversation records. Saved friends' nicknames are replaced with codes before model calls, but anonymity cannot be guaranteed for temporary guests' names. The product must therefore provide conversation deletion and explain in the UI how conversations are kept and that their content may be sent to the model provider.
 

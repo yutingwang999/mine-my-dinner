@@ -27,6 +27,7 @@ from minemydinner.agent.card_text import next_actions, reason_text
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
+    ACTION_MESSAGES,
     REPLAN_MESSAGE,
     get_request_style,
     set_request_style,
@@ -481,6 +482,8 @@ def test_failed_validation_retries_with_errors(graph_env, veg, meat):
     assert record.retries == 1 and record.first_passed is False and record.final_passed is True
     retry_request = planner_requests(graph_env)[1]
     assert "the user wants 2 dishes" in retry_request and str(veg.id) in retry_request
+    # The category hint is the revise step's; a new plan's retry is unchanged.
+    assert "same dish type" not in retry_request
 
 
 def test_h2_failure_after_retries_is_never_shown(graph_env, session, veg):
@@ -2185,3 +2188,471 @@ def test_replan_message_with_more_words_routes_and_parses(tmp_path, session, see
     assert route_and_parse_calls(env, since) == ["route", "parse"]
     assert out["request"]["query"] == "辣"
     assert {"kind": "parse_reused"} not in run_record(env).events
+
+
+# ---- routing a follow-up (plan 3b-1 spec 5.1, 5.3) ----
+
+
+@dataclass
+class ReviseEnv:
+    graph: Any
+    model: ScriptedChatModel
+    session: Any
+    config: dict
+    dishes: dict
+
+
+@pytest.fixture
+def revise_env(tmp_path, session, seeded):
+    session.execute(delete(AppPreference))
+    session.flush()
+    set_request_style(session, "plan_then_adjust")
+    model = ScriptedChatModel(
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "ParsedRequest": [{"dishes": 2, "soups": 1, "mode": "shopping"}],
+        }
+    )
+    factory = rollback_session_factory(session)
+    client = make_llm_client(tmp_path, factory, model)
+    deps = GraphDeps(factory, client, PlanningRecorder(factory))
+    dishes = {
+        "土豆炖牛肉": make_recipe(session, "土豆炖牛肉", "meat dish", [L("牛肉", "main")]),
+        "清炒小白菜": make_recipe(session, "清炒小白菜", "vegetable dish", [L("小白菜")]),
+        "紫菜蛋花汤": make_recipe(session, "紫菜蛋花汤", "soup", [L("紫菜")]),
+        "干煸豆角": make_recipe(session, "干煸豆角", "vegetable dish", [L("豆角"), L("辣椒")]),
+        "青椒炒肉": make_recipe(session, "青椒炒肉", "meat dish", [L("青椒"), L("猪肉")]),
+        "凉拌黄瓜": make_recipe(session, "凉拌黄瓜", "vegetable dish", [L("黄瓜"), L("辣椒")]),
+    }
+    return ReviseEnv(build_graph(deps, InMemorySaver()), model, session, thread("route-3"), dishes)
+
+
+def dish_ids(env: ReviseEnv, *titles: str) -> list[int]:
+    return [env.dishes[t].id for t in titles]
+
+
+def say(env, text: str, intent: str, parse: dict | None = None, replies=None, locale="zh"):
+    """A message whose route call answers `intent`."""
+    env.model.structured["Intent"] = [{"intent": intent}]
+    if parse is not None:
+        env.model.structured["ParsedRequest"] = [parse]
+    if replies is not None:
+        env.model.replies = list(replies)
+    return env.graph.invoke({"messages": [HumanMessage(text)], "locale": locale}, env.config)
+
+
+MEAL = ("土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤")
+
+
+def first_meal(env: ReviseEnv, titles=MEAL, parse: dict | None = None) -> dict:
+    ids = dish_ids(env, *titles)
+    out = say(
+        env,
+        "今晚吃什么",
+        "plan",
+        parse=parse or {"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)],
+    )
+    assert out["current_plan"]["passed"]
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    return out
+
+
+def revision(target: str, remove=(), add=(), note: str = ""):
+    removed = [{"id": i, "quote": q} for i, q in remove]
+    args = {"target": target, "remove": removed, "add": list(add), "note": note}
+    return tool_call("RevisionProposal", args)
+
+
+def model_calls_by_prompt(env, kind: str) -> list[list]:
+    from minemydinner.agent.request import load_prompt
+
+    prompt = load_prompt(kind)
+    return [s for s in env.model.sent if s and s[0].type == "system" and s[0].content == prompt]
+
+
+def reviser_calls(env) -> list[list]:
+    return [
+        s for s in env.model.sent
+        if s and s[0].type == "system" and "RevisionProposal" in s[0].content
+    ]
+
+
+def planner_runs(env) -> list[list]:
+    return [
+        s for s in env.model.sent
+        if s and s[0].type == "system" and "PlanProposal" in s[0].content
+    ]
+
+
+def latest_record(env) -> PlanningRun:
+    env.session.expire_all()
+    return env.session.scalars(select(PlanningRun).order_by(PlanningRun.id.desc())).first()
+
+
+PLAN_NOTE = "[App note, not written by the user] Current plan: "
+
+
+def test_current_plan_line():
+    from minemydinner.agent.graph import current_plan_line
+
+    def dish(title, dish_type):
+        return {"id": 1, "title": title, "dish_type": dish_type}
+
+    plan = {
+        "recipes": [
+            dish("土豆炖牛肉", "meat dish"),
+            dish("清炒小白菜", "vegetable dish"),
+            dish("紫菜蛋花汤", "soup"),
+        ]
+    }
+    assert current_plan_line(plan) == PLAN_NOTE + (
+        "2 dishes (1 meat, 1 vegetable), 1 soup: 土豆炖牛肉, 清炒小白菜, 紫菜蛋花汤"
+    )
+    many = {
+        "recipes": [
+            dish("清炒小白菜", "vegetable dish"),
+            dish("米饭", "staple food"),
+            dish("布丁", "dessert"),
+            dish("薯片", "snack"),
+            dish("汤A", "soup"),
+            dish("汤B", "soup"),
+        ]
+    }
+    assert current_plan_line(many) == PLAN_NOTE + (
+        "1 dish (0 meat, 1 vegetable), 2 soups, 1 staple food, 1 dessert, "
+        "1 snack: 清炒小白菜, 米饭, 布丁, 薯片, 汤A, 汤B"
+    )
+    assert current_plan_line({"recipes": [dish("汤A", "soup")]}) == PLAN_NOTE + "1 soup: 汤A"
+    assert current_plan_line({"recipes": []}) == PLAN_NOTE + "no dishes"
+
+
+def test_revise_without_a_plan_plans(revise_env):
+    env = revise_env
+    ids = dish_ids(env, *MEAL)
+    out = say(env, "想要辣一些的", "revise", replies=[final_proposal(ids)])
+    assert out["intent"] == "plan"
+    assert out["current_plan"]["passed"] and "revision" not in out["current_plan"]
+    assert len(planner_runs(env)) == 1 and reviser_calls(env) == []
+    # No plan yet: the parse input has no plan line.
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content == "想要辣一些的"
+
+
+def test_unsure_without_a_plan_plans(revise_env):
+    env = revise_env
+    out = say(env, "今晚吃什么", "unsure", replies=[final_proposal(dish_ids(env, *MEAL))])
+    assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert out["current_plan"]["passed"] and reviser_calls(env) == []
+
+
+def test_revise_goes_to_the_revise_step(revise_env):
+    """End to end through the real route: a scripted route answers "revise" after a plan, and
+    the turn becomes a revised model version."""
+    env = revise_env
+    first = first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    planned = len(planner_runs(env))
+    out = say(
+        env,
+        "想要辣一些的",
+        "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping", "query": "辣一些的"},
+        replies=[revision("general", remove=[(cabbage, "")], add=[beans], note="加了点辣。")],
+    )
+    assert out["intent"] == "revise"
+    # No load_context: the planner did not run again and the run is a revision.
+    assert len(planner_runs(env)) == planned and len(reviser_calls(env)) == 1
+    record = latest_record(env)
+    assert record.request["revision"] == {"from_version": 0}
+    assert [e.get("step") for e in record.events[:2]] == ["route", "parse"]
+    plan = out["current_plan"]
+    assert [r["id"] for r in plan["recipes"]] == dish_ids(env, "土豆炖牛肉", "紫菜蛋花汤", "干煸豆角")
+    assert plan["passed"] and plan["revision"] == {"from_version": 0}
+    assert len(out["plan_versions"]) == len(first["plan_versions"]) + 1
+    assert out["messages"][-1].content.startswith("把清炒小白菜换成了干煸豆角。")
+    # The parse input ends with the current plan's line, after the user's message.
+    parse_input = model_calls_by_prompt(env, "parse")[-1]
+    assert parse_input[-2].content == "想要辣一些的"
+    assert parse_input[-1].content == PLAN_NOTE + (
+        "2 dishes (1 meat, 1 vegetable), 1 soup: 土豆炖牛肉, 清炒小白菜, 紫菜蛋花汤"
+    )
+    # The route input carries no plan line.
+    assert model_calls_by_prompt(env, "route")[-1][-1].content == "想要辣一些的"
+    assert out["previous_request"] == first["request"]
+    # The plan was built from the first request; the passed revision is built from this one.
+    assert first["plan_request"] == first["request"]
+    assert out["plan_request"] == out["request"]
+
+
+def test_unsure_shows_the_choice_card(revise_env):
+    env = revise_env
+    first_meal(env)
+    parse = {"query": "辣", "dishes": 2, "soups": 1, "mode": "shopping"}
+    out = say(env, "来点辣的", "unsure", parse=parse)
+    (card,) = out["__interrupt__"]
+    assert card.value == {"kind": "revise_or_plan", "message": "来点辣的"}
+    # The card comes before the parse.
+    assert len(model_calls_by_prompt(env, "parse")) == 1
+    ids = dish_ids(env, "青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
+    env.model.replies = [final_proposal(ids)]
+    planned = len(planner_runs(env))
+    out = env.graph.invoke(Command(resume="plan"), env.config)
+    assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert len(planner_runs(env)) == planned + 1 and reviser_calls(env) == []
+    assert "revision" not in out["current_plan"]
+    assert out["questions"][-1] == {
+        "at": len(out["messages"]) - 1,
+        "value": {"kind": "revise_or_plan", "message": "来点辣的", "choice": "plan"},
+    }
+    # Each other answer revises; the vegetable dish is swapped each time.
+    vegetables = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
+    for answer, choice in (("revise", "revise"), (None, None), ("随便", None)):
+        out = say(env, "来点辣的", "unsure", parse={"query": "辣"})
+        (card,) = out["__interrupt__"]
+        recipes = out["current_plan"]["recipes"]
+        current = next(r["id"] for r in recipes if r["dish_type"] == "vegetable dish")
+        new = next(i for i in vegetables if i != current)
+        env.model.replies = [revision("general", remove=[(current, "")], add=[new])]
+        calls = len(reviser_calls(env))
+        # Answered by interrupt id: LangGraph ignores a bare resume of None.
+        out = env.graph.invoke(Command(resume={card.id: answer}), env.config)
+        assert "__interrupt__" not in out and out["intent"] == "revise"
+        assert len(reviser_calls(env)) == calls + 1
+        assert out["current_plan"]["passed"]
+        assert out["questions"][-1]["value"]["choice"] == choice
+        # The parse of a revise turn ends with the plan line.
+        assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+
+
+def test_revise_never_asks_the_ask_first_question(revise_env):
+    env = revise_env
+    set_request_style(env.session, "ask_first")
+    first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    out = say(
+        env, "想要辣一些的", "revise", parse={"query": "辣一些的"},
+        replies=[revision("general", remove=[(cabbage, "")], add=[beans])],
+    )
+    assert "__interrupt__" not in out
+    assert out["current_plan"]["passed"] and len(reviser_calls(env)) == 1
+    # A contradiction is still asked about on a revise turn.
+    contradiction = {"dishes": 2, "meat_dishes": 3, "meat_bound": "exact"}
+    out = say(env, "两个菜，三个荤菜", "revise", parse=contradiction)
+    (question,) = out["__interrupt__"]
+    assert question.value["kind"] == "question" and question.value["problem"]
+    # The answer is parsed again (with the plan line) and the turn revises.
+    env.model.structured["ParsedRequest"] = [
+        {"dishes": 2, "meat_dishes": 1, "meat_bound": "exact"}
+    ]
+    current = [r["id"] for r in out["current_plan"]["recipes"]]
+    env.model.replies = [revision("general")]
+    calls = len(reviser_calls(env))
+    out = env.graph.invoke(Command(resume="一荤一素"), env.config)
+    assert "__interrupt__" not in out and len(reviser_calls(env)) == calls + 1
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == current
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+
+
+def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    env = labelled_env(tmp_path, session)
+    out = plan(
+        env, "今晚吃什么", parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([veg.id])],
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    env.model.structured["Intent"] = [{"intent": "revise"}]
+    out = plan(env, "再加一道，Alex 也来，他对花生过敏", parse=ALEX_PARSE)
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    # The turn was routed as a revision: its parse input carried the plan line.
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+    env.model.replies = [final_proposal([veg.id])]
+    chosen = {"selected": [me.id], "guests": [{"name": "Alex", "rules": [PEANUT_RULE]}]}
+    planned = len(planner_requests(env))
+    out = resume(env, {card.id: chosen})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    # Planned from scratch: the planner ran, the reviser never did.
+    assert len(planner_requests(env)) == planned + 1
+    assert not any("RevisionProposal" in s[0].content for s in env.model.sent if s)
+    assert "revision" not in out["current_plan"]
+    assert "revision" not in run_record(env).request
+    assert out["constraints"]["guest_rules"] == [GUEST_PEANUT]
+
+
+def test_plan_again_still_plans_from_scratch(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    since = len(env.model.sent)
+    ids = dish_ids(env, "青椒炒肉", "干煸豆角", "紫菜蛋花汤")
+    out = say(env, REPLAN_MESSAGE["zh"], "revise", replies=[final_proposal(ids)])
+    assert route_and_parse_calls(env, since) == []
+    assert reviser_calls(env) == [] and len(planner_runs(env)) == 2
+    assert out["request"] == first["request"]
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    assert "revision" not in out["current_plan"]
+
+
+ACTION_TEXTS = [
+    (locale, key, text) for locale, texts in ACTION_MESSAGES.items() for key, text in texts.items()
+]
+
+
+@pytest.mark.parametrize(("locale", "key", "text"), ACTION_TEXTS)
+def test_action_message_after_a_no_plan_reply_plans_from_scratch(revise_env, locale, key, text):
+    env = revise_env
+    # Nothing in stock, fridge only: the request stops before the planner (a no-plan reply).
+    stopped = say(env, "今晚吃什么", "plan", parse={"dishes": 1, "mode": "fridge_only"})
+    assert stopped["current_plan"]["recipes"] == [] and not stopped["current_plan"]["passed"]
+    since = len(env.model.sent)
+    ids = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤")
+    out = say(
+        env, f" {text} ", "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)], locale=locale,
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert route_and_parse_calls(env, since) == ["parse"]
+    assert reviser_calls(env) == [] and len(planner_runs(env)) == 1
+    assert out["intent"] == "plan" and "revision" not in out["current_plan"]
+
+
+@pytest.mark.parametrize(("locale", "key", "text"), ACTION_TEXTS)
+def test_action_message_after_a_plan_plans_from_scratch(revise_env, locale, key, text):
+    env = revise_env
+    first_meal(env)
+    since = len(env.model.sent)
+    ids = dish_ids(env, "青椒炒肉", "干煸豆角", "紫菜蛋花汤")
+    out = say(
+        env, text, "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)], locale=locale,
+    )
+    assert "__interrupt__" not in out
+    assert route_and_parse_calls(env, since) == ["parse"]
+    assert reviser_calls(env) == [] and len(planner_runs(env)) == 2
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    assert "revision" not in out["current_plan"]
+
+
+def test_action_message_as_first_message_takes_the_normal_path(revise_env):
+    env = revise_env
+    ids = dish_ids(env, *MEAL)
+    out = say(
+        env, ACTION_MESSAGES["zh"]["relax_split"], "plan",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"}, replies=[final_proposal(ids)],
+    )
+    assert out["current_plan"]["passed"]
+    assert route_and_parse_calls(env, 0) == ["route", "parse"]
+
+
+def _hand_add(env: ReviseEnv, recipe_id: int) -> None:
+    from minemydinner.agent.edits import Add, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    values = env.graph.get_state(env.config).values
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, update = apply_edit(env.session, ctx, values, Add(recipe_id=recipe_id), "zh")
+    assert outcome.plan is not None
+    env.graph.update_state(env.config, update, as_node="present_plan")
+
+
+THREE = ("土豆炖牛肉", "清炒小白菜", "青椒炒肉")
+
+
+def test_hand_grown_plan_keeps_its_size_when_the_parse_repeats_the_count(revise_env):
+    # Spec 5.2: asked for 3 dishes, a 4th added by hand; "想要辣一些的" keeps 4 even though
+    # the parse repeats the first turn's dishes: 3.
+    env = revise_env
+    first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
+    cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
+    _hand_add(env, beans)
+    out = say(
+        env, "想要辣一些的", "revise",
+        parse={"dishes": 3, "mode": "shopping", "query": "辣一些的"},
+        replies=[revision("general", remove=[(cabbage, "")], add=[cucumber])],
+    )
+    assert latest_record(env).request["spec"]["dishes"] == 4
+    assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 4
+
+
+def test_add_one_more_takes_the_new_count(revise_env):
+    # "再加一道吧" parsed as dishes 4 against the previous 3, on a 3-dish plan: 4.
+    env = revise_env
+    first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
+    beans = dish_ids(env, "干煸豆角")[0]
+    out = say(
+        env, "再加一道吧", "revise",
+        parse={"dishes": 4, "mode": "shopping"},
+        replies=[revision("general", add=[beans])],
+    )
+    assert latest_record(env).request["spec"]["dishes"] == 4
+    assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 4
+
+
+def test_add_one_more_to_a_hand_grown_plan(revise_env):
+    # "再加一道吧" on a hand-grown plan of 4 (asked 3): the parse says 5 against the previous 3.
+    env = revise_env
+    first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
+    beans, cucumber = dish_ids(env, "干煸豆角", "凉拌黄瓜")
+    _hand_add(env, beans)
+    out = say(
+        env, "再加一道吧", "revise",
+        parse={"dishes": 5, "mode": "shopping"},
+        replies=[revision("general", add=[cucumber])],
+    )
+    assert latest_record(env).request["spec"]["dishes"] == 5
+    assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 5
+
+
+def test_add_one_more_to_a_hand_trimmed_plan(revise_env):
+    # Asked 3, one removed by hand (plan 2); "再加一道吧" is parsed from the app note as 3,
+    # equal to the previous request's 3. The message stated a count, so the plan grows to 3.
+    from minemydinner.agent.edits import Remove, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    env = revise_env
+    first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    values = env.graph.get_state(env.config).values
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=pepper), "zh")
+    assert outcome.plan is not None
+    env.graph.update_state(env.config, update, as_node="present_plan")
+    out = say(
+        env, "再加一道吧", "revise",
+        parse={"dishes": 3, "mode": "shopping", "counts_stated_now": True},
+        replies=[revision("general", add=[beans])],
+    )
+    assert latest_record(env).request["spec"]["dishes"] == 3
+    assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 3
+    # The parse ran with parse_v6, and its input still ends with the app note.
+    from minemydinner.agent.request import PROMPT_DIR
+
+    (parse_input,) = model_calls_by_prompt(env, "parse")[-1:]
+    assert parse_input[0].content == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+    assert parse_input[-2].content == "再加一道吧"
+    assert parse_input[-1].content == PLAN_NOTE + "2 dishes (1 meat, 1 vegetable): 土豆炖牛肉, 清炒小白菜"
+
+
+def test_revise_under_ask_first_keeps_fridge_only(revise_env):
+    # Spec 5.3: a field the revise turn's parse leaves unstated comes from the current plan,
+    # never from defaults, and nothing is asked.
+    env = revise_env
+    set_request_style(env.session, "ask_first")
+    for name in ("牛肉", "小白菜", "紫菜", "豆角", "辣椒"):
+        stock(env.session, name, level="plenty")
+    first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "fridge_only"})
+    assert latest_record(env).request["spec"]["mode"] == "fridge_only"
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    out = say(
+        env, "想要辣一些的", "revise", parse={"query": "辣一些的"},
+        replies=[revision("general", remove=[(cabbage, "")], add=[beans])],
+    )
+    assert "__interrupt__" not in out and len(reviser_calls(env)) == 1
+    record = latest_record(env)
+    assert record.request["revision"] == {"from_version": 0}
+    assert record.request["spec"]["mode"] == "fridge_only"
+    assert out["current_plan"]["passed"]

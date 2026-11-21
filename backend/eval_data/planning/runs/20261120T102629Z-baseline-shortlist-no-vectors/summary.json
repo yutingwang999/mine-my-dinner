@@ -1,0 +1,617 @@
+{
+  "run_id": "20261120T102629Z-baseline-shortlist-no-vectors",
+  "started_at": "2026-11-20T10:26:29.105085+00:00",
+  "finished_at": "2026-11-20T10:26:59.555819+00:00",
+  "conditions": {
+    "git_commit": "7e8a9d02f6be30fba8fc09a524fd26c5390ac70e",
+    "planning_model": "deepseek-flash",
+    "scenarios_file": {
+      "path": "backend/eval_data/planning/scenarios_baseline.yaml",
+      "sha256": "76b0ba09b859e1c1f3b08baf91f613485950ff9df8c33a608a9a871f6c555906"
+    },
+    "library_file": {
+      "path": "backend/eval_data/planning/library.yaml",
+      "sha256": "cb7803c0bf89387fcb4e91fd608fade3ef2bbd978a70aef6d4c4b2178740d96d"
+    },
+    "prompt_version": "route_v3+parse_v6+planner_v4+revise_v2",
+    "prompt_versions": {
+      "route": "route_v3",
+      "parse": "parse_v6",
+      "planner": "planner_v4",
+      "revise": "revise_v2"
+    },
+    "prompt_files": {
+      "route_v3.md": "154a7b399f6d8a509fbdd88921f071c83e7210ff27c22e73331cd221ae764438",
+      "parse_v6.md": "c12cc98eb396fd87648ed4f4b339ea56982a86a6b3711add03f30f44ee17cab1",
+      "planner_v4.md": "0a47d4ae66a229ea7fd764904919fb43d7c1be59605b92601b7abaa8b4a4cdf6",
+      "revise_v2.md": "90696404beb4ed7bfb54c36c666160d7462477cf8e916c2c1510609d7f1b5266"
+    },
+    "tools_version": "f8e0a9e09f6e",
+    "revise_tools_version": "1f17814b542a",
+    "flags": {
+      "no_shortlist": false,
+      "with_embeddings": false
+    },
+    "constants": {
+      "MODEL_CALL_LIMIT": 6,
+      "TOOL_CALL_LIMIT": 10,
+      "PLANNER_INPUT_TOKEN_BUDGET": 32000,
+      "SHORTLIST_MIN_PER_CATEGORY": 5,
+      "SHORTLIST_MARGIN": 3,
+      "SHORTLIST_SAME_MAIN": 2
+    },
+    "models": {
+      "planning_eval": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "input_usd_per_mtok": "0.3",
+            "cached_input_usd_per_mtok": "0.006",
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "1.2"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-6-luna",
+            "input_usd_per_mtok": "0.1",
+            "cached_input_usd_per_mtok": "0.01",
+            "cache_write_usd_per_mtok": "0.125",
+            "output_usd_per_mtok": "0.5"
+          }
+        ]
+      },
+      "embeddings": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "google_genai",
+            "model": "gemini-embedding-001",
+            "input_usd_per_mtok": "0.15",
+            "cached_input_usd_per_mtok": null,
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "0"
+          }
+        ]
+      },
+      "prices_updated": "2026-11-14"
+    }
+  },
+  "timing": {
+    "total_seconds": 30.5
+  },
+  "metrics": {
+    "basis": "model_time_ms: sum of the scenario's model-call latencies; wall_ms: scenario start to finish (database and tool time included); per_call: individual planning_eval model calls. Groups: all and expect_plan/expect_stop (by the scenario's expect_plan); check-only scenarios are in no group. Aggregates compare only within the same scenario set; compare same-named scenarios across different sets. Outcomes (first and final pass rate, retries) are over new plans only; revisions (the judged turn ran the revise step) have their own pass rate, locked dishes removed (target 0), dishes changed and model calls per revise turn (turn_model_calls: that turn's calls only). Route accuracy is reported for follow-ups (route_as_expected) and first messages apart. Deferred scenarios (deferred_to) are left out of every rate and as_expected, and counted in `deferred`; their cost, calls, tokens and latency count.",
+    "checks": "0/0",
+    "groups": {
+      "all": {
+        "scenarios": 7,
+        "outcomes": {
+          "first_pass_rate": 0.8571428571428571,
+          "final_pass_rate": 0.8571428571428571,
+          "as_expected": "7/7",
+          "avg_retries": 0.0,
+          "deferred": "0/0"
+        },
+        "calls": {
+          "model_calls": 20,
+          "avg_model_calls": 2.857142857142857,
+          "max_model_calls": 3,
+          "embedding_calls": {
+            "library": 0,
+            "scenarios": 0,
+            "total": 0
+          }
+        },
+        "tokens": {
+          "input": 62298,
+          "cached": 58239,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 8900,
+            "cached": 8320,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9348454203987286,
+          "max_call_input": 5984
+        },
+        "cost": {
+          "cache_aware_usd": "0.003932",
+          "uncached_usd": "0.0210522",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000562",
+            "uncached_usd": "0.003007"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 4253,
+            "p50": 4081,
+            "p95": 6166,
+            "max": 6166
+          },
+          "model_time_ms": {
+            "avg": 3988,
+            "p50": 3815,
+            "p95": 5865
+          },
+          "per_call_ms": {
+            "avg": 1396,
+            "p50": 1389,
+            "p95": 1947
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0"
+        },
+        "notes": {
+          "checked": 6,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 3,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.5
+        }
+      },
+      "expect_plan": {
+        "scenarios": 6,
+        "outcomes": {
+          "first_pass_rate": 1.0,
+          "final_pass_rate": 1.0,
+          "as_expected": "6/6",
+          "avg_retries": 0.0,
+          "deferred": "0/0"
+        },
+        "calls": {
+          "model_calls": 18,
+          "avg_model_calls": 3.0,
+          "max_model_calls": 3,
+          "embedding_calls": {
+            "scenarios": 0
+          }
+        },
+        "tokens": {
+          "input": 55730,
+          "cached": 52095,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 9288,
+            "cached": 8682,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9347748071056882,
+          "max_call_input": 5984
+        },
+        "cost": {
+          "cache_aware_usd": "0.003624",
+          "uncached_usd": "0.0189378",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000604",
+            "uncached_usd": "0.003156"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 4535,
+            "p50": 4081,
+            "p95": 6166,
+            "max": 6166
+          },
+          "model_time_ms": {
+            "avg": 4256,
+            "p50": 3815,
+            "p95": 5865
+          },
+          "per_call_ms": {
+            "avg": 1419,
+            "p50": 1389,
+            "p95": 2659
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0"
+        },
+        "notes": {
+          "checked": 6,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 3,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.5
+        }
+      },
+      "expect_stop": {
+        "scenarios": 1,
+        "outcomes": {
+          "first_pass_rate": 0.0,
+          "final_pass_rate": 0.0,
+          "as_expected": "1/1",
+          "avg_retries": 0.0,
+          "deferred": "0/0"
+        },
+        "calls": {
+          "model_calls": 2,
+          "avg_model_calls": 2.0,
+          "max_model_calls": 2,
+          "embedding_calls": {
+            "scenarios": 0
+          }
+        },
+        "tokens": {
+          "input": 6568,
+          "cached": 6144,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 6568,
+            "cached": 6144,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9354445797807551,
+          "max_call_input": 5976
+        },
+        "cost": {
+          "cache_aware_usd": "0.000308",
+          "uncached_usd": "0.0021144",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000308",
+            "uncached_usd": "0.002114"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 2563,
+            "p50": 2563,
+            "p95": 2563,
+            "max": 2563
+          },
+          "model_time_ms": {
+            "avg": 2379,
+            "p50": 2379,
+            "p95": 2379
+          },
+          "per_call_ms": {
+            "avg": 1190,
+            "p50": 977,
+            "p95": 1402
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0"
+        },
+        "notes": {
+          "checked": 0,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 0,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.0
+        }
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000612",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9148,
+      "cached_input_tokens": 8576,
+      "max_call_input_tokens": 5975,
+      "uncached_cost": "0.0031332",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "6c85968d-280c-4112-b4e9-115e99a622b3",
+      "planning_run_id": 20511,
+      "titles": [
+        "番茄炒蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 6166,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": false,
+      "cards_shown": 0,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "fridge_only_one_person",
+      "model_time_ms": 5865
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000532",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9314,
+      "cached_input_tokens": 8704,
+      "max_call_input_tokens": 5978,
+      "uncached_cost": "0.0030906",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "10354f44-cccd-471f-9e41-0dbd58c886ee",
+      "planning_run_id": 20512,
+      "titles": [
+        "青椒肉丝",
+        "番茄炒蛋",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3864,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "two_people_with_a_soup",
+      "model_time_ms": 3571
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000606",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9196,
+      "cached_input_tokens": 8576,
+      "max_call_input_tokens": 5972,
+      "uncached_cost": "0.0031272",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "6c10717f-57ec-4119-9908-f645c1e7860a",
+      "planning_run_id": 20513,
+      "titles": [
+        "红烧茄子",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4425,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": false,
+      "cards_shown": 0,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "egg_allergy_and_unknown_ingredient",
+      "model_time_ms": 4152
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000662",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9207,
+      "cached_input_tokens": 8576,
+      "max_call_input_tokens": 5979,
+      "uncached_cost": "0.0031833",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "9b28cd29-f995-408f-be52-34883a2a73d5",
+      "planning_run_id": 20514,
+      "titles": [
+        "麻婆豆腐",
+        "蒜蓉西兰花"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3899,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": false,
+      "cards_shown": 0,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "time_limit_estimated_and_stated",
+      "model_time_ms": 3645
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000622",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9649,
+      "cached_input_tokens": 9087,
+      "max_call_input_tokens": 5978,
+      "uncached_cost": "0.0032931",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "c6332813-ba8f-4ba6-9e75-a9d0382b9e60",
+      "planning_run_id": 20515,
+      "titles": [
+        "宫保鸡丁",
+        "番茄炒蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4774,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "shopping_allowed_nearly_empty_fridge",
+      "model_time_ms": 4490
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000590",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9216,
+      "cached_input_tokens": 8576,
+      "max_call_input_tokens": 5984,
+      "uncached_cost": "0.0031104",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "3b3a11ad-645e-4aa1-b6b1-25050a1f36e8",
+      "planning_run_id": 20516,
+      "titles": [
+        "青椒肉丝",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4081,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "english_request",
+      "model_time_ms": 3815
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000308",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 6568,
+      "cached_input_tokens": 6144,
+      "max_call_input_tokens": 5976,
+      "uncached_cost": "0.0021144",
+      "reasons": [
+        "no_cookware"
+      ],
+      "next_actions": [
+        "fewer_dishes",
+        "register_cookware"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "b54b14d3-3cd8-4847-b71a-4e2dc93a29a0",
+      "planning_run_id": 20517,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 2563,
+      "note_flags": [],
+      "note_checked": false,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 2,
+      "follow_up": false,
+      "name": "shopping_allowed_key_cookware_missing",
+      "model_time_ms": 2379
+    }
+  ]
+}

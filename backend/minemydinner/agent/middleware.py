@@ -69,11 +69,15 @@ class CallLayerMiddleware(AgentMiddleware):
     """Sends each planner model call through `LLMClient` and records calls and tool use
     under the run's `run_id` (from the agent state)."""
 
-    def __init__(self, client: LLMClient, task: str, recorder: PlanningRecorder) -> None:
+    def __init__(
+        self, client: LLMClient, task: str, recorder: PlanningRecorder, step: str = "planner"
+    ) -> None:
         super().__init__()
         self.client = client
         self.task = task
         self.recorder = recorder
+        # The `step` of each recorded model call: "planner", or "revise" for the revise step.
+        self.step = step
 
     def wrap_model_call(
         self,
@@ -111,7 +115,7 @@ class CallLayerMiddleware(AgentMiddleware):
                 run_id,
                 {
                     "kind": "model_call",
-                    "step": "planner",
+                    "step": self.step,
                     "model_name": outcome.model_name,
                     "provider": used["provider"],
                     "fallback_used": outcome.fallback_used,

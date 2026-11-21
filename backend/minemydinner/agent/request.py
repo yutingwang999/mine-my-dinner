@@ -14,14 +14,41 @@ from minemydinner.planning.composition import Bound, ranges_for
 from minemydinner.planning.context import MealConstraints
 from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
-# One version per prompt, so route, parse, and planner change independently. A version any
-# record has used is never edited; a change makes the next version of that prompt.
-PROMPT_VERSIONS = {"route": "route_v2", "parse": "parse_v5", "planner": "planner_v4"}
+# One version per prompt, so route, parse, planner, and revise change independently. A version
+# any record has used is never edited; a change makes the next version of that prompt.
+PROMPT_VERSIONS = {
+    "route": "route_v3",
+    "parse": "parse_v6",
+    "planner": "planner_v4",
+    "revise": "revise_v2",
+}
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
 # The fixed message of "plan again" (spec 5.7); code reuses the previous parsed request for it.
 REPLAN_MESSAGE = {"zh": "按同样的要求重新规划", "en": "Plan again with the same request"}
+
+# The fixed messages of the plan card's next-action buttons, by locale and action. They must
+# equal chat.actionMessage in the frontend message files (a test checks it). Code skips the
+# route call for them (the turn is a plan) but still parses them: the parse relaxes the request.
+# Known limitation: pressing one on a failed-revision card plans from scratch; hand edits are
+# not carried.
+ACTION_MESSAGES = {
+    "zh": {
+        "switch_to_shopping": "允许购物",
+        "fewer_dishes": "少做几道菜",
+        "drop_time_limit": "不限时间",
+        "relax_split": "荤素都行",
+        "relax_named": "不一定要用指定的食材",
+    },
+    "en": {
+        "switch_to_shopping": "Allow shopping",
+        "fewer_dishes": "Fewer dishes",
+        "drop_time_limit": "No time limit",
+        "relax_split": "Any mix of meat and vegetable dishes is fine",
+        "relax_named": "The named ingredients are optional",
+    },
+}
 
 REQUEST_STYLE_KEY = "request_style"
 REQUEST_STYLES = ("ask_first", "plan_then_adjust")
@@ -46,7 +73,7 @@ def prompt_files() -> list[Path]:
     return [PROMPT_DIR / f"{version}.md" for version in PROMPT_VERSIONS.values()]
 
 
-def load_prompt(kind: Literal["route", "parse", "planner"]) -> str:
+def load_prompt(kind: Literal["route", "parse", "planner", "revise"]) -> str:
     """The current version of one prompt."""
     return (PROMPT_DIR / f"{PROMPT_VERSIONS[kind]}.md").read_text(encoding="utf-8")
 
@@ -195,6 +222,18 @@ class ParsedRequest(BaseModel):
     )
     exclude_recent_days: int | None = Field(
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
+    )
+    # None on requests parsed before parse_v6; a revision then compares counts with the
+    # previous request instead (agent/revision.py).
+    counts_stated_now: bool | None = Field(
+        default=None,
+        description=(
+            "True when the newest user message itself states or changes a count of any "
+            "category, as a number (\"4个菜就够了\") or relative to the plan (\"再加一道吧\"). "
+            "False when the newest message states no count, even if the count fields carry "
+            "counts from earlier messages. The app note about the current plan never makes "
+            "it true."
+        ),
     )
     guests: list[StatedGuest] = Field(
         default_factory=list,

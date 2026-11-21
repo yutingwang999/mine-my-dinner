@@ -39,7 +39,13 @@ NODE_STEPS = {
     "check_feasibility": "context",
     "validate_plan": "check",
     "present_plan": "present",
+    # The revise step (plan 3b-1) reuses the planner's steps.
+    "start_revision": "context",
+    "check_revised": "check",
+    "present_revision": "present",
 }
+# The nodes whose update carries `retries` when they send the run back for another attempt.
+RETRY_NODES = ("validate_plan", "check_revised")
 # Planner tool names and the step each one reports.
 TOOL_STEPS = {
     "get_inventory": "context",
@@ -183,7 +189,7 @@ def _steps_for(namespace: tuple, node: str, update: Any) -> list[str]:
                     steps.append(step)
         return steps
     steps = [NODE_STEPS[node]] if node in NODE_STEPS else []
-    if node == "validate_plan" and "retries" in update:
+    if node in RETRY_NODES and "retries" in update:
         steps.append("retry")
     return steps
 
@@ -193,11 +199,16 @@ def _events_for_update(namespace: tuple, node: str, update: Any) -> Iterator[str
         yield event("progress", {"step": step})
     if namespace or not isinstance(update, dict):
         return
+    # Each reply's card follows the reply, from `reply_plans`: a revision that leaves the plan
+    # unchanged writes its card there only, not to `current_plan`.
+    reply_plans = update.get("reply_plans") or {}
     for message in update.get("messages") or []:
-        if isinstance(message, AIMessage) and not message.tool_calls and message.content:
+        if not isinstance(message, AIMessage) or message.tool_calls:
+            continue
+        if message.content:
             yield event("message", {"role": "assistant", "text": message.content})
-    if update.get("current_plan") is not None:
-        yield event("plan", update["current_plan"])
+        if message.id is not None and message.id in reply_plans:
+            yield event("plan", reply_plans[message.id])
 
 
 def _fail_record(runtime: ChatRuntime, config: dict) -> None:

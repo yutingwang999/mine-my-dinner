@@ -470,6 +470,13 @@
       "skip": "Skip",
       "switchLabel": "Ask me first when details are missing"
     },
+    "reviseOrPlan": {
+      "title": "Change this plan or plan a new meal?",
+      "revise": "Change this plan",
+      "plan": "Plan a new meal",
+      "chose": "You chose: {choice}",
+      "skipped": "Skipped"
+    },
     "diners": {
       "title": "Who is eating?",
       "totalBefore": "",
@@ -628,7 +635,6 @@
       "missingCookware": "Missing cookware: {list}",
       "edited": "Edited by hand",
       "restore": "Restore the model's plan",
-      "quiet": "Sending another message plans again; manual changes are not carried over.",
       "noteForOriginal": "The note above describes the original plan.",
       "unresolved": "Some dishes have a new conflict: keep or remove each one.",
       "keep": "Keep it",

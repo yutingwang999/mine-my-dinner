@@ -1,0 +1,924 @@
+{
+  "run_id": "20261120T103101Z-heldout-shortlist-no-vectors",
+  "started_at": "2026-11-20T10:31:01.414139+00:00",
+  "finished_at": "2026-11-20T10:32:10.557554+00:00",
+  "conditions": {
+    "git_commit": "7e8a9d02f6be30fba8fc09a524fd26c5390ac70e",
+    "planning_model": "deepseek-flash",
+    "scenarios_file": {
+      "path": "backend/eval_data/planning/scenarios_heldout.yaml",
+      "sha256": "b7d4beea52008a435f6765a4be7c467e591128bab9793eadf854a0b54348f71d"
+    },
+    "library_file": {
+      "path": "backend/eval_data/planning/library_diners.yaml",
+      "sha256": "b54d1bb385a7f2bc4a525d00c1cf8ef582709613551143aa3e40b93ac22c0352"
+    },
+    "prompt_version": "route_v3+parse_v6+planner_v4+revise_v2",
+    "prompt_versions": {
+      "route": "route_v3",
+      "parse": "parse_v6",
+      "planner": "planner_v4",
+      "revise": "revise_v2"
+    },
+    "prompt_files": {
+      "route_v3.md": "154a7b399f6d8a509fbdd88921f071c83e7210ff27c22e73331cd221ae764438",
+      "parse_v6.md": "c12cc98eb396fd87648ed4f4b339ea56982a86a6b3711add03f30f44ee17cab1",
+      "planner_v4.md": "0a47d4ae66a229ea7fd764904919fb43d7c1be59605b92601b7abaa8b4a4cdf6",
+      "revise_v2.md": "90696404beb4ed7bfb54c36c666160d7462477cf8e916c2c1510609d7f1b5266"
+    },
+    "tools_version": "f8e0a9e09f6e",
+    "revise_tools_version": "1f17814b542a",
+    "flags": {
+      "no_shortlist": false,
+      "with_embeddings": false
+    },
+    "constants": {
+      "MODEL_CALL_LIMIT": 6,
+      "TOOL_CALL_LIMIT": 10,
+      "PLANNER_INPUT_TOKEN_BUDGET": 32000,
+      "SHORTLIST_MIN_PER_CATEGORY": 5,
+      "SHORTLIST_MARGIN": 3,
+      "SHORTLIST_SAME_MAIN": 2
+    },
+    "models": {
+      "planning_eval": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "input_usd_per_mtok": "0.3",
+            "cached_input_usd_per_mtok": "0.006",
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "1.2"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-6-luna",
+            "input_usd_per_mtok": "0.1",
+            "cached_input_usd_per_mtok": "0.01",
+            "cache_write_usd_per_mtok": "0.125",
+            "output_usd_per_mtok": "0.5"
+          }
+        ]
+      },
+      "embeddings": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "google_genai",
+            "model": "gemini-embedding-001",
+            "input_usd_per_mtok": "0.15",
+            "cached_input_usd_per_mtok": null,
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "0"
+          }
+        ]
+      },
+      "prices_updated": "2026-11-14"
+    }
+  },
+  "timing": {
+    "total_seconds": 69.1
+  },
+  "metrics": {
+    "basis": "model_time_ms: sum of the scenario's model-call latencies; wall_ms: scenario start to finish (database and tool time included); per_call: individual planning_eval model calls. Groups: all and expect_plan/expect_stop (by the scenario's expect_plan); check-only scenarios are in no group. Aggregates compare only within the same scenario set; compare same-named scenarios across different sets. Outcomes (first and final pass rate, retries) are over new plans only; revisions (the judged turn ran the revise step) have their own pass rate, locked dishes removed (target 0), dishes changed and model calls per revise turn (turn_model_calls: that turn's calls only). Route accuracy is reported for follow-ups (route_as_expected) and first messages apart. Deferred scenarios (deferred_to) are left out of every rate and as_expected, and counted in `deferred`; their cost, calls, tokens and latency count.",
+    "checks": "0/0",
+    "groups": {
+      "all": {
+        "scenarios": 14,
+        "outcomes": {
+          "first_pass_rate": 1.0,
+          "final_pass_rate": 1.0,
+          "as_expected": "13/14",
+          "avg_retries": 0.0,
+          "deferred": "0/0"
+        },
+        "calls": {
+          "model_calls": 44,
+          "avg_model_calls": 3.142857142857143,
+          "max_model_calls": 4,
+          "embedding_calls": {
+            "library": 0,
+            "scenarios": 6,
+            "total": 6
+          }
+        },
+        "tokens": {
+          "input": 147187,
+          "cached": 136704,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 10513,
+            "cached": 9765,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9287776773763987,
+          "max_call_input": 6016
+        },
+        "cost": {
+          "cache_aware_usd": "0.008971",
+          "uncached_usd": "0.0491625",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000641",
+            "uncached_usd": "0.003512"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 4883,
+            "p50": 4958,
+            "p95": 6864,
+            "max": 6864
+          },
+          "model_time_ms": {
+            "avg": 4227,
+            "p50": 3964,
+            "p95": 6431
+          },
+          "per_call_ms": {
+            "avg": 1345,
+            "p50": 1299,
+            "p95": 1931
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0"
+        },
+        "notes": {
+          "checked": 14,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 5,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.35714285714285715
+        }
+      },
+      "expect_plan": {
+        "scenarios": 14,
+        "outcomes": {
+          "first_pass_rate": 1.0,
+          "final_pass_rate": 1.0,
+          "as_expected": "13/14",
+          "avg_retries": 0.0,
+          "deferred": "0/0"
+        },
+        "calls": {
+          "model_calls": 44,
+          "avg_model_calls": 3.142857142857143,
+          "max_model_calls": 4,
+          "embedding_calls": {
+            "scenarios": 6
+          }
+        },
+        "tokens": {
+          "input": 147187,
+          "cached": 136704,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 10513,
+            "cached": 9765,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9287776773763987,
+          "max_call_input": 6016
+        },
+        "cost": {
+          "cache_aware_usd": "0.008971",
+          "uncached_usd": "0.0491625",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000641",
+            "uncached_usd": "0.003512"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 4883,
+            "p50": 4958,
+            "p95": 6864,
+            "max": 6864
+          },
+          "model_time_ms": {
+            "avg": 4227,
+            "p50": 3964,
+            "p95": 6431
+          },
+          "per_call_ms": {
+            "avg": 1345,
+            "p50": 1299,
+            "p95": 1931
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0"
+        },
+        "notes": {
+          "checked": 14,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 5,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.35714285714285715
+        }
+      },
+      "expect_stop": {
+        "scenarios": 0,
+        "outcomes": {
+          "first_pass_rate": 0.0,
+          "final_pass_rate": 0.0,
+          "as_expected": "0/0",
+          "avg_retries": 0.0,
+          "deferred": "0/0"
+        },
+        "calls": {
+          "model_calls": 0,
+          "avg_model_calls": 0.0,
+          "max_model_calls": 0,
+          "embedding_calls": {
+            "scenarios": 0
+          }
+        },
+        "tokens": {
+          "input": 0,
+          "cached": 0,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 0,
+            "cached": 0,
+            "written": 0
+          },
+          "cache_hit_rate": 0.0,
+          "max_call_input": 0
+        },
+        "cost": {
+          "cache_aware_usd": "0",
+          "uncached_usd": "0",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0",
+            "uncached_usd": "0"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 0,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "model_time_ms": {
+            "avg": 0,
+            "p50": 0,
+            "p95": 0
+          },
+          "per_call_ms": {
+            "avg": 0,
+            "p50": 0,
+            "p95": 0
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0"
+        },
+        "notes": {
+          "checked": 0,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 0,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.0
+        }
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000591",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9599,
+      "cached_input_tokens": 8960,
+      "max_call_input_tokens": 5971,
+      "uncached_cost": "0.0032253",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "2834ebae-0243-419a-a386-5b5e7fa8cdde",
+      "planning_run_id": 20565,
+      "titles": [
+        "葱爆羊肉",
+        "清炒菠菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 5178,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_with_laoli",
+      "model_time_ms": 4749
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000517",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9802,
+      "cached_input_tokens": 9088,
+      "max_call_input_tokens": 5985,
+      "uncached_cost": "0.0031890",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "e207fec0-dfa0-4e2e-93e4-d6c1188a4302",
+      "planning_run_id": 20566,
+      "titles": [
+        "腰果鸡丁",
+        "清炒菠菜",
+        "冬瓜排骨汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 4958,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_xiaowang_laoli_shopping",
+      "model_time_ms": 3964
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000476",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9599,
+      "cached_input_tokens": 8960,
+      "max_call_input_tokens": 5972,
+      "uncached_cost": "0.0031101",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "367c66d2-9448-4ee7-b5d2-5b83140d8b89",
+      "planning_run_id": 20567,
+      "titles": [
+        "葱爆羊肉",
+        "清炒菠菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3560,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_en_lily_lunch",
+      "model_time_ms": 3179
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000499",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9897,
+      "cached_input_tokens": 9216,
+      "max_call_input_tokens": 5977,
+      "uncached_cost": "0.0032091",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "614dbb76-b6a0-4dac-b143-c901a9a3b0da",
+      "planning_run_id": 20568,
+      "titles": [
+        "葱爆羊肉",
+        "腰果鸡丁",
+        "清炒菠菜",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4130,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_five_people_two_friends_unsure",
+      "model_time_ms": 3763
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.001046",
+      "model_calls": 4,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 14231,
+      "cached_input_tokens": 12544,
+      "max_call_input_tokens": 5977,
+      "uncached_cost": "0.0047337",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "2ef536d7-a5da-413c-a32a-68943c1e94d1",
+      "planning_run_id": 20569,
+      "titles": [
+        "腰果鸡丁",
+        "清炒菠菜",
+        "酸辣土豆丝",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 6078,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 4,
+      "follow_up": false,
+      "name": "diners_five_lunch_guest_fish_allergy",
+      "model_time_ms": 5015
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000504",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9611,
+      "cached_input_tokens": 8960,
+      "max_call_input_tokens": 5977,
+      "uncached_cost": "0.0031389",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": false,
+      "failures": [
+        "card guests do not match [{'allergens': ['tree nut']}]; got [{'name': None, 'proposed': [{'rule_type': 'dietary restriction', 'allergen': None, 'ingredient_id': None, 'ingredient_name': None, 'text': '坚果', 'by_wording': True}], 'diet_words': []}]",
+        "rule not applied: {'who': 'guest', 'allergen': 'tree nut'}"
+      ],
+      "check_only": false,
+      "thread_id": "a526f0a1-3c64-4ab0-b69b-cca3714625ca",
+      "planning_run_id": 20570,
+      "titles": [
+        "葱爆羊肉",
+        "清炒菠菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4289,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_friend_cannot_eat_nuts",
+      "model_time_ms": 3907
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000552",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9774,
+      "cached_input_tokens": 9088,
+      "max_call_input_tokens": 5979,
+      "uncached_cost": "0.0032238",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "43ed6c44-b638-4b96-8778-e9f9f58413ab",
+      "planning_run_id": 20571,
+      "titles": [
+        "水煮鱼片",
+        "清炒菠菜",
+        "冬瓜排骨汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4051,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_three_people_one_no_lamb",
+      "model_time_ms": 3571
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000505",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9750,
+      "cached_input_tokens": 9088,
+      "max_call_input_tokens": 5968,
+      "uncached_cost": "0.0031770",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "cfaa1f73-6000-41d2-a5e3-aed1ba3f66d7",
+      "planning_run_id": 20572,
+      "titles": [
+        "葱爆羊肉",
+        "清炒菠菜",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 4976,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "unsure",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_three_people_not_too_spicy",
+      "model_time_ms": 4002
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000517",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9610,
+      "cached_input_tokens": 8960,
+      "max_call_input_tokens": 5972,
+      "uncached_cost": "0.0031506",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "c311424c-d2cf-409a-a456-081e409c4e47",
+      "planning_run_id": 20573,
+      "titles": [
+        "葱爆羊肉"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 5608,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_solo_no_pork",
+      "model_time_ms": 4643
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000527",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9854,
+      "cached_input_tokens": 9216,
+      "max_call_input_tokens": 5977,
+      "uncached_cost": "0.0032370",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "4b490391-c784-4e79-a45b-63420de413f7",
+      "planning_run_id": 20574,
+      "titles": [
+        "孜然羊排",
+        "辣子鸡",
+        "清炒菠菜",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3998,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_five_with_vegetarian",
+      "model_time_ms": 3621
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000631",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9618,
+      "cached_input_tokens": 8960,
+      "max_call_input_tokens": 5980,
+      "uncached_cost": "0.0032658",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "59e27e70-97e5-433f-8d02-8458285f8a54",
+      "planning_run_id": 20575,
+      "titles": [
+        "葱爆羊肉",
+        "清炒菠菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3613,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_laoli_one_hour_fridge",
+      "model_time_ms": 3243
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000726",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 10154,
+      "cached_input_tokens": 9472,
+      "max_call_input_tokens": 5986,
+      "uncached_cost": "0.0035106",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "4fa2880b-47c4-4766-b586-9bc1f77edd35",
+      "planning_run_id": 20576,
+      "titles": [
+        "孜然羊排",
+        "油焖大虾",
+        "清炒菠菜",
+        "红烧茄子",
+        "紫菜豆腐汤",
+        "蜜烤红薯"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 5228,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_feast_xiaowang_laoli_dessert",
+      "model_time_ms": 4248
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.001102",
+      "model_calls": 4,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 15927,
+      "cached_input_tokens": 15104,
+      "max_call_input_tokens": 6016,
+      "uncached_cost": "0.0055425",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "e80efe6f-299c-49e5-be08-5ce0cfc1570c",
+      "planning_run_id": 20577,
+      "titles": [
+        "孜然羊排",
+        "腰果鸡丁",
+        "清炒菠菜",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 6864,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 4,
+      "follow_up": false,
+      "name": "diners_six_people_ask_first",
+      "model_time_ms": 6431
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000778",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 9761,
+      "cached_input_tokens": 9088,
+      "max_call_input_tokens": 5976,
+      "uncached_cost": "0.0034491",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "7f54f059-4bbf-4982-adf6-52c5c673b476",
+      "planning_run_id": 20578,
+      "titles": [
+        "葱爆羊肉",
+        "清炒菠菜",
+        "番茄鸡蛋面"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 1,
+      "wall_ms": 5830,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "name": "diners_unknown_name_xiaodou",
+      "model_time_ms": 4842
+    }
+  ]
+}

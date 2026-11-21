@@ -16,8 +16,8 @@ import time
 import uuid
 from collections import Counter
 import re
-from collections.abc import Callable, Iterator, Sequence
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Collection, Iterator, Sequence
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -31,6 +31,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from minemydinner.agent.checkpoint import open_checkpointer
+from minemydinner.agent.edits import EditError, newest_reply_id
 from minemydinner.agent.graph import CLOSEST_NOTE_EN, CLOSEST_NOTE_ZH, GraphDeps, build_graph
 from minemydinner.agent.diners import DinerAnswer, GuestAnswer, RuleChoice
 from minemydinner.agent.labels import (
@@ -63,6 +64,24 @@ from minemydinner.models import (
     Recipe,
     RecipeCookware,
     RecipeIngredient,
+)
+from minemydinner.evaluation.revise_eval import (
+    CHOICE_STOP,
+    NOT_IN_ANY_OF,
+    FollowUpSetupError,
+    TurnFacts,
+    apply_edits,
+    asked_back,
+    bring_back,
+    check_revise_keys,
+    follow_up_failures,
+    hide_dishes,
+    locked_of,
+    locked_removed,
+    plan_dishes,
+    replace_first_plan,
+    route_of,
+    title_problems,
 )
 from minemydinner.recipes.embedding import try_embed_recipe
 from minemydinner.planning.composition import count_categories
@@ -144,6 +163,27 @@ class RunOutcome:
     card_shown: bool = False
     cards_shown: int = 0
     card: dict[str, Any] | None = None
+    # ---- plan 3b-1: the judged turn (the follow-up, else the first message) ----
+    # "plan" (planned from scratch), "revision" (the revise step ran), or "none" (the
+    # follow-up made no planning run: an unanswered choice card, an "other" reply).
+    # first_passed, final_passed and retries are the judged turn's run's.
+    turn: str = "plan"
+    # The route model's answer for the judged turn; None when no route call was made.
+    route_intent: str | None = None
+    # Whether the route matched expect_route; None when the scenario states none.
+    route_as_expected: bool | None = None
+    # Locked dishes a revision removed without the scenario expecting it (target 0).
+    locked_removed: int = 0
+    # Dishes of the plan before the follow-up that are gone after it.
+    changed: int = 0
+    # The later plan the expected result needs: reported, kept out of every rate.
+    deferred_to: str | None = None
+    # planning_eval model calls of the judged turn only (route, parse, planner or revise
+    # attempts); model_calls counts the whole scenario.
+    turn_model_calls: int = 0
+    # Whether the judged turn is a follow-up (route accuracy is reported apart for follow-ups
+    # and first messages).
+    follow_up: bool = False
 
 
 @dataclass(frozen=True)
@@ -212,44 +252,86 @@ class Scenario:
     expect_rules_not_applied: list[dict[str, Any]] = field(default_factory=list)
     # Database actions before the follow-up: [{confirm_allergens: {name, allergens: []}}].
     between_turns: list[dict[str, Any]] = field(default_factory=list)
+    # ---- plan 3b-1: revising the plan (spec 5.6; the keys are defined in the header of
+    # scenarios_revise_heldout.yaml). Titles are library titles. ----
+    # After the first message's turn, the newest reply's dishes become these, as a model
+    # version (not edited, no locks), so the follow-up starts from a known plan.
+    first_plan: list[str] = field(default_factory=list)
+    # 3a edits applied in order after between_turns: [{add | remove | keep: title}]; an add
+    # or keep that needs confirmation is confirmed.
+    edits_between_turns: list[dict[str, str]] = field(default_factory=list)
+    # The answer to the choice card (revise | plan); with none the runner stops at the card.
+    choice_answer: str | None = None
+    # The route result of the follow-up (plan | revise | unsure).
+    expect_route: str | None = None
+    # Whether the choice card appeared on the follow-up.
+    expect_choice_card: bool | None = None
+    # The follow-up ends with a question to the user and no new plan version.
+    expect_question: bool | None = None
+    # The dishes after the follow-up equal those before it.
+    expect_unchanged: bool | None = None
+    # Each is gone after the follow-up.
+    expect_removed: list[str] = field(default_factory=list)
+    # At most this many dishes of the plan before the follow-up are gone.
+    expect_max_changed: int | None = None
+    # At least one of them is gone after the follow-up.
+    expect_removed_any: list[str] = field(default_factory=list)
+    # Met when the follow-up meets every key of at least one entry ({expect_* keys}); keys
+    # outside the list are still all required.
+    expect_any_of: list[dict[str, Any]] = field(default_factory=list)
+    # Library dishes that do not exist for this scenario (hidden, then brought back).
+    library_exclude: list[str] = field(default_factory=list)
+    # The expected result needs a later plan: run and reported, kept out of the rates.
+    deferred_to: str | None = None
+
+
+def _ratio(part: float, whole: int) -> float:
+    return part / whole if whole else 0.0
 
 
 def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
-    """Rates and averages over the scenario runs; check-only runs are counted apart in
-    `checks` ("passed/total") and never in the rates, latency, or cost. Pure."""
+    """Rates and averages over the scenario runs. Check-only runs are counted apart in
+    `checks` ("passed/total") and never in the rates, latency, or cost. Deferred scenarios
+    (`deferred_to`) are counted apart in `deferred` ("as expected/total") and kept out of every
+    rate, but their cost, calls, tokens and latency count. The planning rates (first and final
+    pass, retries) are over new plans only; revisions have their own (spec 5.6). Pure."""
     runs = [r for r in all_runs if not r.check_only]
     checks = [r for r in all_runs if r.check_only]
     checks_text = f"{sum(r.as_expected for r in checks)}/{len(checks)}"
+    rated = [r for r in runs if not r.deferred_to]
+    deferred = [r for r in runs if r.deferred_to]
+    plans = [r for r in rated if r.turn == "plan"]
+    revisions = [r for r in rated if r.turn == "revision"]
+    routed = [r for r in rated if r.route_as_expected is not None and r.follow_up]
+    routed_first = [r for r in rated if r.route_as_expected is not None and not r.follow_up]
     count = len(runs)
-    if count == 0:
-        return {
-            "first_pass_rate": 0.0,
-            "final_pass_rate": 0.0,
-            "avg_retries": 0.0,
-            "cost_usd": Decimal("0"),
-            "avg_latency_ms": 0,
-            "avg_model_calls": 0.0,
-            "as_expected": "0/0",
-            "checks": checks_text,
-            "cache_hit_rate": 0.0,
-            "max_call_input_tokens": 0,
-            "uncached_cost_usd": Decimal("0"),
-        }
     input_total = sum(r.input_tokens for r in runs)
     return {
-        "first_pass_rate": sum(r.first_passed for r in runs) / count,
-        "final_pass_rate": sum(r.final_passed for r in runs) / count,
-        "avg_retries": sum(r.retries for r in runs) / count,
+        "first_pass_rate": _ratio(sum(r.first_passed for r in plans), len(plans)),
+        "final_pass_rate": _ratio(sum(r.final_passed for r in plans), len(plans)),
+        "avg_retries": _ratio(sum(r.retries for r in plans), len(plans)),
         "cost_usd": sum((r.cost for r in runs), Decimal("0")),
-        "avg_latency_ms": round(sum(r.latency_ms for r in runs) / count),
-        "avg_model_calls": sum(r.model_calls for r in runs) / count,
-        "as_expected": f"{sum(r.as_expected for r in runs)}/{count}",
+        "avg_latency_ms": round(_ratio(sum(r.latency_ms for r in runs), count)),
+        "avg_model_calls": _ratio(sum(r.model_calls for r in runs), count),
+        "as_expected": f"{sum(r.as_expected for r in rated)}/{len(rated)}",
         "checks": checks_text,
-        "cache_hit_rate": (
-            sum(r.cached_input_tokens for r in runs) / input_total if input_total else 0.0
-        ),
-        "max_call_input_tokens": max(r.max_call_input_tokens for r in runs),
+        "cache_hit_rate": _ratio(sum(r.cached_input_tokens for r in runs), input_total),
+        "max_call_input_tokens": max((r.max_call_input_tokens for r in runs), default=0),
         "uncached_cost_usd": sum((r.uncached_cost for r in runs), Decimal("0")),
+        "deferred": f"{sum(r.as_expected for r in deferred)}/{len(deferred)}",
+        "revisions": len(revisions),
+        "revision_pass_rate": _ratio(sum(r.final_passed for r in revisions), len(revisions)),
+        "locked_removed": sum(r.locked_removed for r in revisions),
+        "avg_changed": _ratio(sum(r.changed for r in revisions), len(revisions)),
+        "avg_turn_model_calls": _ratio(
+            sum(r.turn_model_calls for r in revisions), len(revisions)
+        ),
+        "max_turn_model_calls": max((r.turn_model_calls for r in revisions), default=0),
+        # Over follow-ups (the brief's route accuracy) and over first messages, apart.
+        "route_as_expected": f"{sum(bool(r.route_as_expected) for r in routed)}/{len(routed)}",
+        "route_first_as_expected": (
+            f"{sum(bool(r.route_as_expected) for r in routed_first)}/{len(routed_first)}"
+        ),
     }
 
 
@@ -286,12 +368,14 @@ def check_expectations(
     reply: str = "",
     library_titles: Sequence[str] = (),
     first_plan: dict[str, Any] | None = None,
+    check_plan_flag: bool = True,
 ) -> list[str]:
-    """What did not match the scenario. `expect_plan` is always checked; the other
-    expectations only when the scenario states them. `first_plan` is the plan of the first
-    message when the scenario has a follow-up. Pure."""
+    """What did not match the scenario. `expect_plan` is always checked (unless
+    `check_plan_flag` is False: a follow-up that made no planning run); the other expectations
+    only when the scenario states them. `first_plan` is the plan of the first message when
+    the scenario has a follow-up. Pure."""
     failures = []
-    if passed != scenario.expect_plan:
+    if check_plan_flag and passed != scenario.expect_plan:
         failures.append(f"plan passed={passed}, expected {scenario.expect_plan}")
     plan = plan or {}
     reasons = [r["reason"] for r in plan.get("reasons", [])]
@@ -386,6 +470,66 @@ def check_expectations(
             failures.append(problem)
     if scenario.max_model_calls is not None and model_calls > scenario.max_model_calls:
         failures.append(f"{model_calls} model calls, at most {scenario.max_model_calls}")
+    return failures
+
+
+# The expect_* keys an expect_any_of entry may hold.
+ANY_OF_KEYS = frozenset(
+    f.name for f in fields(Scenario) if f.name.startswith("expect_") and f.name not in NOT_IN_ANY_OF
+)
+
+
+def _any_of_entry(scenario: Scenario, entry: dict[str, Any]) -> Scenario:
+    """A scenario that states only the entry's keys."""
+    return Scenario(
+        name=scenario.name,
+        request=scenario.request,
+        locale=scenario.locale,
+        inventory={},
+        cookware=[],
+        follow_up=scenario.follow_up,
+        **entry,
+    )
+
+
+def expectation_failures(
+    scenario: Scenario,
+    plan: dict[str, Any] | None,
+    passed: bool,
+    model_calls: int,
+    facts: TurnFacts,
+    *,
+    first_passed: bool = True,
+    reply: str = "",
+    library_titles: Sequence[str] = (),
+    first_plan: dict[str, Any] | None = None,
+    check_plan_flag: bool = True,
+) -> list[str]:
+    """Every expectation of the judged turn: `check_expectations` on its plan, the plan 3b-1
+    follow-up keys on `facts`, `expect_any_of` (met when one entry's keys are all met), and
+    the locked dishes a revision removed without the scenario expecting it. Pure."""
+
+    def judged(s: Scenario, plan_flag: bool) -> list[str]:
+        return [
+            *check_expectations(
+                s, plan, passed, model_calls, first_passed, reply, library_titles, first_plan,
+                check_plan_flag=plan_flag,
+            ),
+            *follow_up_failures(s, facts),
+        ]
+
+    failures = judged(scenario, check_plan_flag)
+    if scenario.expect_any_of:
+        missed = [
+            judged(_any_of_entry(scenario, entry), check_plan_flag and "expect_plan" in entry)
+            for entry in scenario.expect_any_of
+        ]
+        if all(missed):
+            details = "; ".join(f"[{i}] " + ", ".join(items) for i, items in enumerate(missed))
+            failures.append(f"no entry of expect_any_of met: {details}")
+    removed = locked_removed(scenario, facts)
+    if removed:
+        failures.append(f"locked dishes removed without being named: {removed}")
     return failures
 
 
@@ -730,7 +874,9 @@ def read_library(path: Path) -> list[dict[str, Any]]:
     return _read_yaml(path, "dishes")
 
 
-def load_scenarios(path: Path) -> list[Scenario]:
+def load_scenarios(path: Path, library_titles: Collection[str] | None = None) -> list[Scenario]:
+    """Read and check the scenarios. With `library_titles`, every title a follow-up key names
+    must be a library dish (`check_titles`)."""
     scenarios = []
     for item in _read_yaml(path, "scenarios"):
         try:
@@ -740,8 +886,22 @@ def load_scenarios(path: Path) -> list[Scenario]:
         if scenario.locale not in ("zh", "en"):
             raise ValueError(f"Scenario {scenario.name}: locale must be zh or en")
         _check_diner_keys(scenario)
+        check_revise_keys(scenario, ANY_OF_KEYS)
+        for entry in scenario.expect_any_of:
+            # The entry's own values are checked as a scenario's (unknown values refused).
+            check_revise_keys(_any_of_entry(scenario, entry), ANY_OF_KEYS)
         scenarios.append(scenario)
+    if library_titles is not None:
+        check_titles(scenarios, library_titles)
     return scenarios
+
+
+def check_titles(scenarios: Sequence[Scenario], library_titles: Collection[str]) -> None:
+    """Refuse a follow-up key that names a dish the library does not hold."""
+    for scenario in scenarios:
+        problems = title_problems(scenario, library_titles)
+        if problems:
+            raise ValueError(f"Scenario {scenario.name}: not library titles: {problems}")
 
 
 DINERS_ANSWER_KEYS = {"selected", "guests", "others", "others_answer"}
@@ -996,6 +1156,8 @@ def diner_answer(
 
 # More questions than this in one turn means the conversation is going in circles.
 MAX_ANSWERS_PER_TURN = 8
+# _drive's note when a turn stopped at a question the scenario gives no answer for.
+QUESTION_STOP = "stopped at a question: question"
 
 
 def _drive(
@@ -1006,11 +1168,14 @@ def _drive(
     text: str,
     answers: list[str],
     cards: list[dict[str, Any]],
+    choices: list[dict[str, Any]] | None = None,
 ) -> str:
     """Send one user message and answer what the graph asks, the way the chat API resumes:
-    the diner card from `diners_answer` (every card shown is added to `cards`), and other
-    questions with the next of `answers` (consumed). Returns "" when the turn ended, or a
-    note when it stopped at a question the scenario does not answer."""
+    the diner card from `diners_answer` (every card shown is added to `cards`), the choice
+    card from `choice_answer` (every one shown is added to `choices`), and other questions
+    with the next of `answers` (consumed). Returns "" when the turn ended, CHOICE_STOP when
+    it stopped at a choice card the scenario does not answer, or a note when it stopped at a
+    question the scenario does not answer."""
     graph.invoke({"messages": [HumanMessage(text)], "locale": scenario.locale}, config)
     for _ in range(MAX_ANSWERS_PER_TURN):
         pending = graph.get_state(config).interrupts
@@ -1025,6 +1190,12 @@ def _drive(
                     value, scenario.diners_answer, lambda name: _one(session, Ingredient, name).id
                 )
             resume: Any = answer.model_dump(mode="json")
+        elif kind == "revise_or_plan":
+            if choices is not None:
+                choices.append(value)
+            if scenario.choice_answer is None:
+                return CHOICE_STOP
+            resume = scenario.choice_answer
         elif kind == "question" and answers:
             resume = answers.pop(0)
         else:
@@ -1102,6 +1273,17 @@ def _diner_failures(
     ]
 
 
+def _shown_plan(values: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest reply's plan card: on a revision that changed nothing it shows the dishes
+    with what stopped it, while the current plan stays. The current plan when no reply has a
+    card."""
+    try:
+        reply_id = newest_reply_id(values)
+    except EditError:
+        return values.get("current_plan")
+    return values["reply_plans"][reply_id]
+
+
 def run_scenario(
     graph,
     factory: sessionmaker[Session],
@@ -1111,6 +1293,9 @@ def run_scenario(
     client: LLMClient | None = None,
     library_titles: Sequence[str] = (),
 ) -> RunOutcome:
+    """Run one scenario on a fresh thread and judge its last turn: the follow-up when the
+    scenario has one, else the first message. With a follow-up, the first turn's plan may be
+    replaced (`first_plan`) and edited by hand (`edits_between_turns`) before it."""
     if scenario.shortlist_spread is not None:
         if client is None:
             raise ValueError(f"Scenario {scenario.name} is check-only and needs a client")
@@ -1124,36 +1309,87 @@ def run_scenario(
     note = ""
     first_plan = None
     cards: list[dict[str, Any]] = []
+    # The choice cards of the judged turn.
+    choices: list[dict[str, Any]] = []
     answers = list(scenario.answers)
+    # Set once the follow-up is sent: the plan before it, its version count, and the last
+    # planning run before it (the follow-up's runs come after).
+    follow_up_sent = False
+    before: dict[str, Any] | None = None
+    versions_before = 0
+    run_mark = 0
+    # The last llm_calls row before the follow-up: the follow-up turn's calls come after.
+    call_mark = watermark
+    asked = False
+    setup_failed = False
+    hidden = None
     try:
-        note = _drive(graph, factory, config, scenario, scenario.request, answers, cards)
+        if scenario.library_exclude:
+            hidden = hide_dishes(factory, scenario.library_exclude)
+        note = _drive(
+            graph, factory, config, scenario, scenario.request, answers, cards,
+            None if scenario.follow_up else choices,
+        )
+        asked = note == QUESTION_STOP
         if not note and scenario.follow_up:
+            # expect_first_reasons judges the model's own first plan, before first_plan
+            # replaces its dishes.
             first_plan = graph.get_state(config).values.get("current_plan")
+            if scenario.first_plan:
+                replace_first_plan(graph, factory, config, scenario.first_plan, scenario.locale)
             run_between_turns(factory, scenario.between_turns)
+            apply_edits(graph, factory, config, scenario.edits_between_turns, scenario.locale)
+            values = graph.get_state(config).values
+            before = values.get("current_plan")
+            versions_before = len(values.get("plan_versions") or [])
+            with factory() as session:
+                run_mark = session.scalar(
+                    select(func.coalesce(func.max(PlanningRun.id), 0)).where(
+                        PlanningRun.thread_id == thread_id
+                    )
+                )
+                call_mark = session.scalar(select(func.coalesce(func.max(LlmCall.id), 0)))
+            follow_up_sent = True
             note = _drive(
-                graph, factory, config, scenario, scenario.follow_up, answers, cards
+                graph, factory, config, scenario, scenario.follow_up, answers, cards, choices
             )
+            asked = note == QUESTION_STOP
             if note:
                 note = note.replace("at a question", "at a question after the follow-up")
+                note = note.replace("at the choice card", "at the choice card after the follow-up")
+    except FollowUpSetupError as error:
+        # The follow-up was never sent: no turn to rate (turn "none"), never as expected.
+        note = f"failed: {error}"
+        setup_failed = True
     except Exception as error:
         # Includes AllModelsFailed and MonthlyCapExceeded: record it and go on.
         note = f"failed: {type(error).__name__}"
+    finally:
+        if hidden is not None:
+            bring_back(factory, hidden)
+    choice_stop = note.startswith(CHOICE_STOP)
     state = graph.get_state(config).values
-    if note and state.get("run_id") is not None:
+    # Only the judged turn's own run is failed: a follow-up that stopped before its run
+    # leaves the first turn's record as it was.
+    if note and not choice_stop and (state.get("run_id") or 0) > run_mark:
         recorder.fail(state["run_id"], state.get("retries") or 0)
     with factory() as session:
-        # With a follow-up the thread has a run per message, in id order; the last one is
-        # judged, and every one is saved so a first-turn mismatch can be investigated.
+        # With a follow-up the thread has a run per message, in id order; the judged turn's
+        # last one is judged, and every one is saved so a first-turn mismatch can be
+        # investigated.
         runs = session.scalars(
             select(PlanningRun)
             .where(PlanningRun.thread_id == thread_id)
             .order_by(PlanningRun.id)
         ).all()
-        run = runs[-1] if runs else None
+        turn_runs = [r for r in runs if r.id > run_mark]
+        run = turn_runs[-1] if turn_runs else None
+        turn_events = [list(r.events or []) for r in turn_runs]
         all_rows = session.scalars(
             select(LlmCall).where(LlmCall.id > watermark).order_by(LlmCall.id)
         ).all()
         rows = [r for r in all_rows if r.task == EVAL_TASK]
+        turn_rows = [r for r in rows if r.id > call_mark]
         embedding_calls = sum(r.task == "embeddings" for r in all_rows)
         record = {
             "planning_run": _run_row(run),
@@ -1161,7 +1397,32 @@ def run_scenario(
             "llm_calls": [_call_row(r) for r in all_rows],
         }
         diner_checks = _diner_failures(session, scenario, state, cards, [r.events for r in runs])
-    plan = state.get("current_plan")
+    if setup_failed:
+        # The judged turn never ran; the first turn's run is not judged in its place.
+        turn = "none"
+        run = None
+    elif run is None:
+        turn = "none" if follow_up_sent else "plan"
+    elif (run.request or {}).get("revision") is not None:
+        turn = "revision"
+    else:
+        turn = "plan"
+    route = route_of(turn_events, state) if follow_up_sent or not scenario.follow_up else None
+    if follow_up_sent:
+        versions_now = len(state.get("plan_versions") or [])
+        facts = TurnFacts(
+            turn=turn,
+            route=route,
+            choice_card=bool(choices),
+            question=versions_now == versions_before
+            and (asked or (turn == "revision" and asked_back(state))),
+            before=plan_dishes(before),
+            after=plan_dishes(state.get("current_plan")),
+            locked_before=locked_of(before),
+        )
+    else:
+        facts = TurnFacts(turn=turn, route=route, choice_card=bool(choices), question=asked)
+    plan = _shown_plan(state)
     passed = bool(run and run.final_passed)
     first_passed = bool(run and run.first_passed)
     reply = next(
@@ -1172,16 +1433,31 @@ def run_scenario(
         ),
         "",
     )
-    failures = check_expectations(
-        scenario, plan, passed, len(rows), first_passed, reply, library_titles, first_plan
+    failures = expectation_failures(
+        scenario,
+        plan,
+        passed,
+        len(rows),
+        facts,
+        first_passed=first_passed,
+        reply=reply,
+        library_titles=library_titles,
+        first_plan=first_plan,
+        # A follow-up that ended without a planning run (an unanswered choice card, an
+        # "other" reply) has no plan to pass or fail.
+        check_plan_flag=not (turn == "none" and (not note or choice_stop)),
     )
     failures += diner_checks
+    if setup_failed:
+        failures.append(f"follow-up not sent: {note}")
     titles = [r["title"] for r in (plan or {}).get("recipes", [])]
-    model_note = shown_model_note(reply, scenario.locale, bool(titles))
+    # The note checks are for the planner's own note; a revision's reply starts with
+    # code-written text naming the removed dishes.
+    model_note = shown_model_note(reply, scenario.locale, bool(titles)) if turn == "plan" else ""
     flags = note_flags(model_note, titles, list(library_titles), scenario.locale)
     return RunOutcome(
         scenario=scenario.name,
-        first_passed=bool(run and run.first_passed),
+        first_passed=first_passed,
         final_passed=passed,
         retries=run.retries if run else 0,
         cost=sum((Decimal(r.cost_estimate or 0) for r in rows), Decimal("0")),
@@ -1214,6 +1490,16 @@ def run_scenario(
         card_shown=bool(cards),
         cards_shown=len(cards),
         card=cards[0] if cards else None,
+        turn=turn,
+        route_intent=facts.route,
+        route_as_expected=(
+            None if scenario.expect_route is None else facts.route == scenario.expect_route
+        ),
+        locked_removed=len(locked_removed(scenario, facts)),
+        changed=len(facts.gone()),
+        deferred_to=scenario.deferred_to,
+        turn_model_calls=len(turn_rows),
+        follow_up=bool(scenario.follow_up),
     )
 
 
@@ -1268,8 +1554,10 @@ def evaluate(
 ) -> list[RunOutcome]:
     """Seed, load the library, run every scenario, and always empty the app tables after.
 
-    Refuses before touching anything when the database already holds recipes or ingredients.
+    Refuses before touching anything when the database already holds recipes or ingredients,
+    or when a follow-up key names a dish the library does not hold.
     """
+    check_titles(scenarios, [dish["title"] for dish in library])
     with factory() as session:
         ensure_empty(session)
     outcomes: list[RunOutcome] = []
@@ -1334,6 +1622,13 @@ def _rate(part: int, whole: int) -> float:
 def print_outcome(outcome: RunOutcome) -> None:
     print(_line(outcome))
     print(f"  {outcome.detail}")
+    if outcome.turn != "plan" or outcome.route_intent is not None:
+        print(
+            f"  turn: {outcome.turn}; route: {outcome.route_intent}; "
+            f"changed: {outcome.changed}; locked removed: {outcome.locked_removed}; "
+            f"turn model calls: {outcome.turn_model_calls}"
+            + (f"; deferred to {outcome.deferred_to}" if outcome.deferred_to else "")
+        )
     if outcome.reasons or outcome.next_actions:
         print(f"  reasons: {outcome.reasons}; next actions: {outcome.next_actions}")
     for failure in outcome.failures:
@@ -1358,6 +1653,21 @@ def print_summary(outcomes: list[RunOutcome]) -> None:
     print(f"  cache hit rate:          {s['cache_hit_rate']:.2f}")
     print(f"  largest call input:      {s['max_call_input_tokens']} tokens")
     print(f"  average latency:         {s['avg_latency_ms']} ms")
+    if s["revisions"]:
+        print(f"Revisions ({s['revisions']}; planning rates above are over new plans only)")
+        print(f"  pass rate:               {s['revision_pass_rate']:.2f}")
+        print(f"  locked dishes removed:   {s['locked_removed']}  (target 0)")
+        print(f"  dishes changed (avg):    {s['avg_changed']:.2f}")
+        print(
+            f"  model calls per turn:    {s['avg_turn_model_calls']:.1f} avg, "
+            f"{s['max_turn_model_calls']} max"
+        )
+    if s["route_as_expected"] != "0/0":
+        print(f"  route as expected (follow-ups):      {s['route_as_expected']}")
+    if s["route_first_as_expected"] != "0/0":
+        print(f"  route as expected (first messages):  {s['route_first_as_expected']}")
+    if s["deferred"] != "0/0":
+        print(f"  deferred (not rated):    {s['deferred']} as expected")
     print(
         "  (latency is summed over each scenario's model calls; a failed run counts as not passed)"
     )
@@ -1456,6 +1766,7 @@ def run_info(
         MODEL_CALL_LIMIT,
         PLANNER_INPUT_TOKEN_BUDGET,
         TOOL_CALL_LIMIT,
+        REVISE_TOOLS_VERSION,
         TOOLS_VERSION,
     )
     from minemydinner.agent.request import PROMPT_VERSION, PROMPT_VERSIONS, prompt_files
@@ -1480,6 +1791,7 @@ def run_info(
                 path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in prompt_files()
             },
             "tools_version": TOOLS_VERSION,
+            "revise_tools_version": REVISE_TOOLS_VERSION,
             "flags": {"no_shortlist": no_shortlist, "with_embeddings": with_embeddings},
             "constants": {
                 "MODEL_CALL_LIMIT": MODEL_CALL_LIMIT,
@@ -1538,7 +1850,13 @@ METRICS_BASIS = (
     "finish (database and tool time included); per_call: individual planning_eval model "
     "calls. Groups: all and expect_plan/expect_stop (by the scenario's expect_plan); "
     "check-only scenarios are in no group. Aggregates compare only within the same scenario "
-    "set; compare same-named scenarios across different sets."
+    "set; compare same-named scenarios across different sets. Outcomes (first and final pass "
+    "rate, retries) are over new plans only; revisions (the judged turn ran the revise step) "
+    "have their own pass rate, locked dishes removed (target 0), dishes changed and model "
+    "calls per revise turn (turn_model_calls: that turn's calls only). Route accuracy is "
+    "reported for follow-ups (route_as_expected) and first messages apart. Deferred "
+    "scenarios (deferred_to) are left out of every rate and as_expected, and counted in "
+    "`deferred`; their cost, calls, tokens and latency count."
 )
 
 
@@ -1583,6 +1901,7 @@ def group_metrics(
             "final_pass_rate": s["final_pass_rate"],
             "as_expected": s["as_expected"],
             "avg_retries": s["avg_retries"],
+            "deferred": s["deferred"],
         },
         "calls": {
             "model_calls": sum(o.model_calls for o in runs),
@@ -1614,6 +1933,16 @@ def group_metrics(
             "wall_ms": _stats([o.wall_ms for o in runs], with_max=True),
             "model_time_ms": _stats([o.latency_ms for o in runs]),
             "per_call_ms": _stats(per_call),
+        },
+        "revisions": {
+            "turns": s["revisions"],
+            "pass_rate": s["revision_pass_rate"],
+            "locked_removed": s["locked_removed"],
+            "avg_changed": s["avg_changed"],
+            "avg_turn_model_calls": s["avg_turn_model_calls"],
+            "max_turn_model_calls": s["max_turn_model_calls"],
+            "route_as_expected": s["route_as_expected"],
+            "route_first_as_expected": s["route_first_as_expected"],
         },
         "notes": {
             "checked": len(checked),
@@ -1661,7 +1990,14 @@ def build_summary(
 
 
 def _tools_document() -> dict[str, Any]:
-    from minemydinner.agent.planner import PlanProposal
+    """The model-facing surface: the planner's tools (the revise step uses the same ones), each
+    step's final-answer schema, and the tools version each step's records carry."""
+    from minemydinner.agent.planner import (
+        REVISE_TOOLS_VERSION,
+        TOOLS_VERSION,
+        PlanProposal,
+    )
+    from minemydinner.agent.revision import RevisionProposal
     from minemydinner.planning.tools import PLANNER_TOOLS
 
     return {
@@ -1674,6 +2010,12 @@ def _tools_document() -> dict[str, Any]:
             for tool in PLANNER_TOOLS
         ],
         "final_answer": {"name": "PlanProposal", "schema": PlanProposal.model_json_schema()},
+        "revise_final_answer": {
+            "name": "RevisionProposal",
+            "schema": RevisionProposal.model_json_schema(),
+        },
+        "tools_version": TOOLS_VERSION,
+        "revise_tools_version": REVISE_TOOLS_VERSION,
     }
 
 
@@ -1748,6 +2090,7 @@ def main(argv: list[str] | None = None) -> int:
         check_test_database(settings)
         library = read_library(args.library)
         scenarios = load_scenarios(args.scenarios)
+        check_titles(scenarios, [dish["title"] for dish in library])
     except (UnsafeDatabase, InputError, ValueError) as error:
         print(error, file=sys.stderr)
         return 2

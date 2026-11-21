@@ -150,12 +150,20 @@ def newest_reply_id(values: dict) -> str:
     raise EditError("no_plan")
 
 
-def _model_index(versions: list[dict]) -> int:
+def latest_model_index(versions: list[dict]) -> int:
     """The latest model version: manual versions are the only entries marked `edited`."""
     for index in range(len(versions) - 1, -1, -1):
         if not versions[index].get("edited"):
             return index
     raise EditError("no_plan")
+
+
+def locked_ids(plan: dict) -> set[int]:
+    """The dishes a revision must keep: those added by hand and still in the plan (`locked`)
+    and those an override covers. A card saved before locks existed reads as no locks."""
+    ids = set(plan.get("locked") or [])
+    ids.update(o["recipe_id"] for o in (plan.get("edit") or {}).get("overrides", []))
+    return ids
 
 
 def _now() -> str:
@@ -381,6 +389,7 @@ def _edited_card(
     result: ValidationResult,
     conflicts: list[Conflict],
     overrides: list[H2Override],
+    locked: list[int],
     log: list[dict],
     notes: list[dict],
     model_index: int,
@@ -413,6 +422,7 @@ def _edited_card(
     card.update(
         passed=not conflicts,
         edited=True,
+        locked=locked,
         model_version=model_index,
         edit={
             "overrides": [o.model_dump() for o in overrides],
@@ -434,10 +444,13 @@ def _restored_card(
     model_index: int,
     locale: str,
 ) -> dict:
-    """The model version's dishes checked again against today's data, with no overrides: the
-    card the model's plan would get today. A new H2 conflict is marked, not listed as unmet."""
+    """The model version's dishes checked again against today's data, with the overrides and
+    locks the version carries (a revised version has some; the model's own plan has none):
+    the card the model's plan would get today. A new H2 conflict is marked, not listed as
+    unmet."""
     titles = {r["id"]: r["title"] for r in model["recipes"]}
-    ids, _, notes, result = _check(session, ctx, values, list(titles), [], titles)
+    carried = [H2Override(**o) for o in (model.get("edit") or {}).get("overrides", [])]
+    ids, overrides, notes, result = _check(session, ctx, values, list(titles), carried, titles)
     conflicts = _conflicts(session, values, result.violations, locale)
     others = [v for v in result.violations if v.code not in ("H2", "H5")]
     card = build_dishes_card(
@@ -452,19 +465,57 @@ def _restored_card(
         base=_base(session, values, ids),
         locale=locale,
     )
+    spec = PlanSpec.model_validate(values["spec"])
+    kept = _kept(session, ctx, values, spec, ids, overrides, locale)
     card.update(
         passed=not others and not conflicts,
         edited=False,
+        locked=[i for i in model.get("locked") or [] if i in ids],
         model_version=model_index,
         edit={
-            "overrides": [],
+            "overrides": [o.model_dump() for o in overrides],
             "log": [],
             "conflicts": [c.model_dump() for c in conflicts],
-            "kept": [],
+            "kept": [c.model_dump() for c in kept],
         },
         count_notes=[],
         notes=notes,
     )
+    return card
+
+
+def revised_card(
+    session: Session,
+    ctx: PlanningContext,
+    values: dict,
+    *,
+    recipe_ids: list[int],
+    result: ValidationResult,
+    overrides: list[H2Override],
+    locked: list[int],
+    index: int,
+    locale: str,
+) -> dict:
+    """A revision that passed its checks, as a model version (plan 3b-1 spec 5.5): the card of
+    a manual version (H1, H3, H6 and H7 of locked dishes as warnings, the carried overrides
+    with their kept conflicts), but not edited, with `model_version` its own index in
+    `plan_versions`, an empty edit log and no count notes. `values["spec"]` is the
+    revision's spec. The caller adds `revision`."""
+    card = _edited_card(
+        session,
+        ctx,
+        values,
+        recipe_ids=recipe_ids,
+        result=result,
+        conflicts=_conflicts(session, values, result.violations, locale),
+        overrides=overrides,
+        locked=locked,
+        log=[],
+        notes=[],
+        model_index=index,
+        locale=locale,
+    )
+    card.update(edited=False, count_notes=[])
     return card
 
 
@@ -490,7 +541,7 @@ def apply_edit(
     reply_id = newest_reply_id(values)
     current = values["reply_plans"][reply_id]
     versions = list(values.get("plan_versions") or [])
-    model_index = _model_index(versions)
+    model_index = latest_model_index(versions)
     editing = bool(current.get("edited"))
 
     if isinstance(action, Restore):
@@ -507,9 +558,12 @@ def apply_edit(
         versions[-1] = {**manual, "edit": {**manual["edit"], "log": log}}
         return EditOutcome(plan=card), _update(values, reply_id, versions, card)
 
-    edit = (current.get("edit") or {}) if editing else {}
+    # A model version may carry overrides and locks too (revised or restored): they carry into
+    # the manual version, whose log starts empty.
+    edit = current.get("edit") or {}
     overrides = [H2Override(**o) for o in edit.get("overrides", [])]
-    log = list(edit.get("log", []))
+    log = list(edit.get("log", [])) if editing else []
+    locked = list(current.get("locked") or [])
     recipe_ids = [r["id"] for r in current["recipes"]]
     titles = {r["id"]: r["title"] for r in current["recipes"]}
     target = action.recipe_id
@@ -520,12 +574,14 @@ def apply_edit(
         recipe_ids.remove(target)
         # Removing a dish removes its overrides: adding it back asks again.
         overrides = [o for o in overrides if o.recipe_id != target]
+        locked = [i for i in locked if i != target]
     elif isinstance(action, Add):
         if target in recipe_ids:
             raise EditError("already_in_plan")
         if session.get(Recipe, target) is None:
             raise EditError("not_found")
         recipe_ids.append(target)
+        locked.append(target)
     elif target not in recipe_ids:
         raise EditError("not_in_plan")
 
@@ -564,6 +620,7 @@ def apply_edit(
         result=result,
         conflicts=conflicts,
         overrides=overrides,
+        locked=[i for i in locked if i in ids],
         log=log if entry is None else [*log, entry],
         notes=notes,
         model_index=model_index,

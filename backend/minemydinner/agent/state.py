@@ -16,6 +16,13 @@ class ChatState(TypedDict):
     intent: str | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
+    # The thread's request before this turn's parse replaced it (plan 3b-1): a revision takes a
+    # count or field from the new request only when it differs from this one.
+    previous_request: dict | None
+    # The request the current plan was built from: set by a new plan and by a passed revision,
+    # never by a turn that leaves the plan as it was. A revision compares the new request with
+    # this one; a thread saved before it existed falls back to `previous_request`.
+    plan_request: dict | None
     defaults_used: list[str]
     # PlanSpec as a dict, and the meal constraints: diner_ids, guest_rules (RuleRef dicts),
     # unconfirmed_diners, headcount.
@@ -48,6 +55,11 @@ class ChatState(TypedDict):
     # The recipe ids the shortlist offered, in opening order, for the retry message.
     shortlist_ids: list[int]
     retries: int
+    # The revision in progress (plan 3b-1): `from_version` (the plan_versions index of the plan
+    # it changes), `message` (the user's words it is checked against), and the last attempt's
+    # `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then holds the
+    # RevisionProposal dump, or None when an attempt gave no answer.
+    revision: dict | None
     current_plan: dict | None
     plan_versions: list[dict]
     # reply_plans is display only, never sent to a model: each plan by the id of the assistant
