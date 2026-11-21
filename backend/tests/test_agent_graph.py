@@ -27,6 +27,7 @@ from minemydinner.agent.card_text import next_actions, reason_text
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
+    ACTION_MESSAGES,
     REPLAN_MESSAGE,
     get_request_style,
     set_request_style,
@@ -2487,6 +2488,59 @@ def test_plan_again_still_plans_from_scratch(revise_env):
     assert out["request"] == first["request"]
     assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
     assert "revision" not in out["current_plan"]
+
+
+ACTION_TEXTS = [
+    (locale, key, text) for locale, texts in ACTION_MESSAGES.items() for key, text in texts.items()
+]
+
+
+@pytest.mark.parametrize(("locale", "key", "text"), ACTION_TEXTS)
+def test_action_message_after_a_no_plan_reply_plans_from_scratch(revise_env, locale, key, text):
+    env = revise_env
+    # Nothing in stock, fridge only: the request stops before the planner (a no-plan reply).
+    stopped = say(env, "今晚吃什么", "plan", parse={"dishes": 1, "mode": "fridge_only"})
+    assert stopped["current_plan"]["recipes"] == [] and not stopped["current_plan"]["passed"]
+    since = len(env.model.sent)
+    ids = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤")
+    out = say(
+        env, f" {text} ", "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)], locale=locale,
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert route_and_parse_calls(env, since) == ["parse"]
+    assert reviser_calls(env) == [] and len(planner_runs(env)) == 1
+    assert out["intent"] == "plan" and "revision" not in out["current_plan"]
+
+
+@pytest.mark.parametrize(("locale", "key", "text"), ACTION_TEXTS)
+def test_action_message_after_a_plan_plans_from_scratch(revise_env, locale, key, text):
+    env = revise_env
+    first_meal(env)
+    since = len(env.model.sent)
+    ids = dish_ids(env, "青椒炒肉", "干煸豆角", "紫菜蛋花汤")
+    out = say(
+        env, text, "revise",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)], locale=locale,
+    )
+    assert "__interrupt__" not in out
+    assert route_and_parse_calls(env, since) == ["parse"]
+    assert reviser_calls(env) == [] and len(planner_runs(env)) == 2
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    assert "revision" not in out["current_plan"]
+
+
+def test_action_message_as_first_message_takes_the_normal_path(revise_env):
+    env = revise_env
+    ids = dish_ids(env, *MEAL)
+    out = say(
+        env, ACTION_MESSAGES["zh"]["relax_split"], "plan",
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"}, replies=[final_proposal(ids)],
+    )
+    assert out["current_plan"]["passed"]
+    assert route_and_parse_calls(env, 0) == ["route", "parse"]
 
 
 def _hand_add(env: ReviseEnv, recipe_id: int) -> None:

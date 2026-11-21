@@ -65,6 +65,7 @@ from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
     PROMPT_VERSION,
+    ACTION_MESSAGES,
     REPLAN_MESSAGE,
     REQUEST_STYLES,
     ParsedRequest,
@@ -264,6 +265,21 @@ def _reuses_parse(state: ChatState) -> bool:
         and isinstance(last, HumanMessage)
         and isinstance(last.content, str)
         and last.content.strip() in REPLAN_MESSAGE.values()
+    )
+
+
+def _is_action_message(state: ChatState) -> bool:
+    """True when the latest message is a fixed next-action button message and the thread has a
+    request. Such a turn is a plan without a route call (a no-plan reply counts as a current
+    plan, so a route would send it to revise), but it is still parsed: the parse relaxes the
+    request. As a thread's first message the text takes the normal path. Known limitation: on
+    a failed-revision card it plans from scratch; hand edits are not carried."""
+    last = state["messages"][-1]
+    return (
+        state.get("request") is not None
+        and isinstance(last, HumanMessage)
+        and isinstance(last.content, str)
+        and any(last.content.strip() in texts.values() for texts in ACTION_MESSAGES.values())
     )
 
 
@@ -469,6 +485,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # "Plan again": the previous parsed request stands as this turn's parse, with
             # no model call; choose sends the turn on as after a parse.
             return {**fresh, "intent": "plan", "model_calls": [{"kind": "parse_reused"}]}
+        if _is_action_message(state):
+            # No route call; choose sends the turn to the parse.
+            return {**fresh, "intent": "plan", "model_calls": []}
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
         intent = result.parsed.intent

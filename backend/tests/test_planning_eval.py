@@ -914,8 +914,9 @@ def test_a_follow_up_message_runs_on_the_same_thread(tmp_path, eval_db):
     )
     assert outcome.as_expected, outcome.failures
     assert outcome.final_passed
-    # Route and parse for the first message; route, parse, and planner for the second.
-    assert outcome.model_calls == 5
+    # Route and parse for the first message; parse and planner for the second: the button's
+    # fixed message skips the route call (it is a plan by design).
+    assert outcome.model_calls == 4
     # The second parse read the whole conversation, ending with the button's message.
     parse_calls = [m for m in model.sent if "extract the details" in str(m[0].content)]
     texts = [str(m.content) for m in parse_calls[-1][1:]]

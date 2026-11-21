@@ -5,6 +5,7 @@ from minemydinner.agent.request import (
     PROMPT_DIR,
     PROMPT_VERSION,
     PROMPT_VERSIONS,
+    ACTION_MESSAGES,
     REPLAN_MESSAGE,
     ParsedRequest,
     apply_defaults,
@@ -572,3 +573,10 @@ def test_parse_messages_interleaves_questions():
     assert [m.type for m in out] == ["human", "human", "ai"]
     assert len(messages) == 2
     assert parse_messages(messages, [], "zh") == messages
+
+
+@pytest.mark.parametrize("locale", ["zh", "en"])
+def test_fixed_messages_match_the_frontend_files(locale):
+    chat = _chat_strings(locale)
+    assert REPLAN_MESSAGE[locale] == chat["replanMessage"]
+    assert ACTION_MESSAGES[locale] == chat["actionMessage"]

@@ -28,6 +28,28 @@ PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 # The fixed message of "plan again" (spec 5.7); code reuses the previous parsed request for it.
 REPLAN_MESSAGE = {"zh": "按同样的要求重新规划", "en": "Plan again with the same request"}
 
+# The fixed messages of the plan card's next-action buttons, by locale and action. They must
+# equal chat.actionMessage in the frontend message files (a test checks it). Code skips the
+# route call for them (the turn is a plan) but still parses them: the parse relaxes the request.
+# Known limitation: pressing one on a failed-revision card plans from scratch; hand edits are
+# not carried.
+ACTION_MESSAGES = {
+    "zh": {
+        "switch_to_shopping": "允许购物",
+        "fewer_dishes": "少做几道菜",
+        "drop_time_limit": "不限时间",
+        "relax_split": "荤素都行",
+        "relax_named": "不一定要用指定的食材",
+    },
+    "en": {
+        "switch_to_shopping": "Allow shopping",
+        "fewer_dishes": "Fewer dishes",
+        "drop_time_limit": "No time limit",
+        "relax_split": "Any mix of meat and vegetable dishes is fine",
+        "relax_named": "The named ingredients are optional",
+    },
+}
+
 REQUEST_STYLE_KEY = "request_style"
 REQUEST_STYLES = ("ask_first", "plan_then_adjust")
 
