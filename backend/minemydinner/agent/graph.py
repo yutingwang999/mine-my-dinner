@@ -105,6 +105,7 @@ from minemydinner.agent.revision import (
     asks_back,
     changed_text,
     check_revision,
+    counts_changed,
     revised_ids,
     revision_spec,
 )
@@ -1265,8 +1266,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 ]
             else:
                 ids = revised_ids(plan, proposal)
-                facts, _ = dish_facts(session, current_ids)
-                problems = check_revision(plan, proposal, revision["message"], facts, spec=spec)
+                facts, _ = dish_facts(session, current_ids, plan=plan)
+                baseline = state.get("plan_request") or state.get("previous_request")
+                problems = check_revision(
+                    plan,
+                    proposal,
+                    revision["message"],
+                    facts,
+                    spec=spec,
+                    counts_stated=counts_changed(state["request"], baseline),
+                )
             ctx = load_planning_context(session, meal_constraints(state))
             result = validate_plan(session, ctx, spec, ids, carried_overrides(plan, ids))
             missed_before: set[str] = set()
