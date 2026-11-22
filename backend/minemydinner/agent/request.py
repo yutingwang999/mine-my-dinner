@@ -17,7 +17,7 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 # One version per prompt, so route, parse, planner, and revise change independently. A version
 # any record has used is never edited; a change makes the next version of that prompt.
 PROMPT_VERSIONS = {
-    "route": "route_v5",
+    "route": "route_v6",
     "parse": "parse_v8",
     "planner": "planner_v5",
     "revise": "revise_v4",

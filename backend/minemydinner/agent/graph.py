@@ -112,6 +112,7 @@ from minemydinner.agent.revision import (
     RevisionProblem,
     RevisionProposal,
     asks_back,
+    carry_unstated,
     changed_text,
     check_revision,
     counts_changed,
@@ -717,8 +718,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             conversation.append(HumanMessage(current_plan_line(state["current_plan"])))
         messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
+        parsed = _restore_parsed(result.parsed.model_dump())
+        if _revises(state):
+            # A null is no statement on a revise turn either: the request behind the plan fills
+            # it before the diner-card check reads it, so a parse that left out the headcount
+            # is not "only me", and a fallback new plan keeps the plan's conditions (dev run 3).
+            parsed = carry_unstated(
+                parsed, state.get("plan_request") or state.get("previous_request")
+            )
         return {
-            "request": _restore_parsed(result.parsed.model_dump()),
+            "request": parsed,
             "model_calls": [
                 *(state.get("model_calls") or []),
                 _model_call_event(deps.client, "parse", messages, result),

@@ -38,7 +38,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v5+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -402,7 +402,7 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v5+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
@@ -474,9 +474,7 @@ def test_route_v4_is_frozen_and_route_v5_narrows_its_rule():
     assert hashlib.sha256(v4).hexdigest() == (
         "1ee449adb21d6c81ff457abc73bce2a8a6ea160c2a417f6abdfbc2157acaf6a9"
     )
-    assert PROMPT_VERSIONS["route"] == "route_v5"
-    v5 = load_prompt("route")
-    assert v5 == (PROMPT_DIR / "route_v5.md").read_text(encoding="utf-8")
+    v5 = (PROMPT_DIR / "route_v5.md").read_text(encoding="utf-8")
     old = v4.decode("utf-8").splitlines()
     new = v5.splitlines()
     # route_v4's own rule is replaced (narrowed), two rules are added; nothing else changed.
@@ -500,6 +498,38 @@ def test_route_v4_is_frozen_and_route_v5_narrows_its_rule():
     # Development-set sentences stay out of the prompt (plan 3b-1b brief).
     for sentence in ("琢磨", "折腾", "鱼或者虾", "海鲜", "虾", "清淡点"):
         assert sentence not in "\n".join(added)
+
+
+def test_route_v5_is_frozen_and_route_v6_names_dishes_pointed_at():
+    import hashlib
+
+    # route_v5 was used by development run 3 of plan 3b-1b, so it must never change.
+    v5 = (PROMPT_DIR / "route_v5.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v5).hexdigest() == (
+        "5c94492f9faf6251295371aaaa7ea3b421b18b67cd3bff7bc182d57f1f170e29"
+    )
+    assert PROMPT_VERSIONS["route"] == "route_v6"
+    v6 = load_prompt("route")
+    assert v6 == (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
+    old = v5.decode("utf-8").splitlines()
+    new = v6.splitlines()
+    # One rule added, right after the "only says to reconsider" rule; nothing else changed.
+    added = [line for line in new if line not in old]
+    assert len(added) == 1
+    (rule,) = added
+    assert [line for line in new if line in old] == old
+    reconsider = next(line for line in old if "only says to reconsider or change" in line)
+    assert new.index(rule) == new.index(reconsider) + 1
+    # Development run 3: words that point at the plan's dishes, with a word that removes or
+    # swaps them, name those dishes ("revise"), also when every dish goes; a message that only
+    # says to reconsider, with no such word on dishes, stays "unsure".
+    assert '"这两道"' in rule and '"全都"' in rule and '"剩下的"' in rule
+    assert '"both of them"' in rule
+    assert "removes or swaps" in rule and '"revise"' in rule and '"unsure"' in rule
+    assert '"全都不要了"' in rule
+    # Development-set sentences stay out of the prompt (plan 3b-1b brief).
+    for sentence in ("拿掉", "琢磨", "折腾", "这桌菜", "海鲜", "清淡", "再加一道", "全要辣的"):
+        assert sentence not in rule
 
 
 def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():

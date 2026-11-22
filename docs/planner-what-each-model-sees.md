@@ -1,6 +1,6 @@
 # What Each Model Sees
 
-A planning conversation calls up to four models: the route, the parse, the planner, and the revise step. This document says, for each one, what it receives, what it never receives, and why, with complete example inputs. It describes the code as of Phase 1 plan 3b-1b, with the prompt versions `route_v5`, `parse_v8`, `planner_v5`, and `revise_v4` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`). The design is in `docs/superpowers/specs/2026-11-21-phase-1-plan-3b1b-revise-fixes-design.md`, Section 5.8. Related: `docs/planner-request-and-counts.md` (the steps and the counts), `docs/planner-shortlist-and-ranking.md` (the candidate list), `docs/planner-feasibility-check.md`, and `docs/planner-stock-rules.md`.
+A planning conversation calls up to four models: the route, the parse, the planner, and the revise step. This document says, for each one, what it receives, what it never receives, and why, with complete example inputs. It describes the code as of Phase 1 plan 3b-1b, with the prompt versions `route_v6`, `parse_v8`, `planner_v5`, and `revise_v4` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`). The design is in `docs/superpowers/specs/2026-11-21-phase-1-plan-3b1b-revise-fixes-design.md`, Section 5.8. Related: `docs/planner-request-and-counts.md` (the steps and the counts), `docs/planner-shortlist-and-ranking.md` (the candidate list), `docs/planner-feasibility-check.md`, and `docs/planner-stock-rules.md`.
 
 **Whenever a model's input changes, this document is updated in the same change.**
 
@@ -15,7 +15,7 @@ A planning conversation calls up to four models: the route, the parse, the plann
 
 | Model | Receives | Never receives | Why |
 |---|---|---|---|
-| Route (`route_v5`) | The route prompt and the conversation's messages: every user message and every assistant reply's text | Cards (plan, diner, choice), the assistant's questions, the app note about the current plan | Telling "change this plan" from "plan again" needs context; the answer is one word, so the whole conversation is cheap |
+| Route (`route_v6`) | The route prompt and the conversation's messages: every user message and every assistant reply's text | Cards (plan, diner, choice), the assistant's questions, the app note about the current plan | Telling "change this plan" from "plan again" needs context; the answer is one word, so the whole conversation is cheap |
 | Parse (`parse_v8`) | The parse prompt, the conversation with the assistant's questions placed as assistant messages, and on a revise turn the app note line describing the current plan | The diner card's contents, the rest of the plan card, the dietary rules on record | It merges several turns into one full request; a question lets a short answer ("两个") attach to it; the plan line lets "再加一道" count from the plan; the card is kept from models for privacy |
 | Planner (`planner_v5`) | The planner prompt, one opening message (the shortlist, then the code-written request summary with anonymous diner rule lines), a retry message after a failed attempt, and its own tool calls and results within the attempt | The conversation, the user's words (except the wish, the named ingredients, and the one-meal avoidance as the request holds them), earlier attempts' tool calls | The request is already read and completed; raw words could pull it away from what code checks; the fixed opening is cached across attempts |
 | Revise (`revise_v4`) | The revise prompt, an opening with the same shortlist and summary under "Revise this meal.", the current plan one dish per line with its marks, the user's words of this turn, a retry message, and its own tool calls | Earlier turns, the plan card's other fields (diners line, warnings, unmet list), earlier attempts' tool calls | It must see the plan it changes and the exact words it quotes (code checks quotes against them); earlier conditions are in the summary |
@@ -38,7 +38,7 @@ All examples are generated from the code, not written by hand. A test-only scrip
 
 The assistant's note and the scripted answers are made up; the inputs around them are exactly what the code sends. Recipe ids are the test database's and differ between runs.
 
-## 5. Route (`route_v5`)
+## 5. Route (`route_v6`)
 
 **Built by** `route_intent` in `agent/graph.py`: `[SystemMessage(route prompt), *state["messages"]]`.
 
@@ -51,7 +51,7 @@ The assistant's note and the scripted answers are made up; the inputs around the
 Example, the second turn:
 
 ```
-[system] <the route_v5 prompt file>
+[system] <the route_v6 prompt file>
 [human] 今晚两个人，三个菜，可以买菜
 [ai] 先炖土豆炖牛腩，再快炒青椒肉丝和红烧茄子。
 [human] 茄子这道不要

@@ -478,6 +478,65 @@ def revision_spec(plan: dict, previous_request: dict | None, request: dict) -> P
     return PlanSpec.model_validate({**spec.model_dump(), **updates})
 
 
+# The conditions of a request a revise turn's parse may leave unstated: a null or an empty list
+# is no statement, so the plan's request fills it (development run 3 of plan 3b-1b).
+_CARRIED_CONDITIONS = (
+    "mode",
+    "time_limit_min",
+    "query",
+    "must_use",
+    "prefer_use",
+    "all_use",
+    "exclude_recent_days",
+    "meal_avoid",
+)
+_COUNT_GROUP = (*COUNT_FIELDS, "meat_bound", "vegetable_bound", "range_fields")
+
+
+def _unset(value) -> bool:
+    return value is None or value == []
+
+
+def carry_unstated(parsed: dict, plan_request: dict | None) -> dict:
+    """A revise turn's parse with its unstated fields filled from the request the current plan
+    was built from, so a null never reads as a value: not as "only me" in the diner-card check
+    and not as a default in a new plan the turn falls back to (a change in who eats).
+
+    - The conditions (`_CARRIED_CONDITIONS`) are filled one by one.
+    - The counts are filled as a group, only when the parse states none and the message
+      states no count (`counts_stated_now` not true), so an old split never joins a new total.
+    - Who eats (`headcount`, `others_mentioned`) is filled only when the parse says nothing
+      about people: no headcount, nobody else mentioned, no guest and no friend rule. A stated
+      headcount (also 1) stays, so "就我自己吃" still shows the card.
+    - Guests, friend rules and the user's own rules are never filled: the settled diner set
+      holds them, and a stated one is a change in who eats.
+
+    The revision itself compares with the same request (`revision_spec`), where a value equal
+    to it is no change, so filling changes nothing there."""
+    if not plan_request:
+        return parsed
+    filled = dict(parsed)
+    for name in _CARRIED_CONDITIONS:
+        if _unset(filled.get(name)) and not _unset(plan_request.get(name)):
+            filled[name] = plan_request[name]
+    if filled.get("counts_stated_now") is not True and all(
+        _unset(filled.get(name)) for name in _COUNT_GROUP
+    ):
+        for name in _COUNT_GROUP:
+            if not _unset(plan_request.get(name)):
+                filled[name] = plan_request[name]
+    mentions_people = (
+        filled.get("headcount") is not None
+        or filled.get("others_mentioned")
+        or filled.get("guests")
+        or filled.get("friend_rules")
+    )
+    if not mentions_people:
+        filled["headcount"] = plan_request.get("headcount")
+        filled["others_mentioned"] = bool(plan_request.get("others_mentioned"))
+    return filled
+
+
 def revision_meal_avoid(plan: dict, previous_request: dict | None, request: dict) -> list[str]:
     """This meal's one-meal avoidance for a revision (plan 3b-1b spec 5.4), like the other
     conditions of `revision_spec`: the request's when it states one that differs from the

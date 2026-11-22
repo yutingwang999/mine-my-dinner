@@ -2484,6 +2484,82 @@ def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
     assert out["constraints"]["guest_rules"] == [GUEST_PEANUT]
 
 
+# ---- a revise turn's unstated fields come from the plan's request (dev run 3 of 3b-1b) ----
+
+
+def two_for_shopping(tmp_path, session, veg):
+    """"我和小王吃饭" for two with shopping, the card confirming the user and 小王."""
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    spinach = make_recipe(session, "清炒菠菜", "vegetable dish", [L("菠菜")])
+    env = labelled_env(tmp_path, session)
+    parse = {"headcount": 2, "others_mentioned": True, "dishes": 1, "mode": "shopping"}
+    (card,) = plan(env, "我和小王吃饭", parse=parse, locale="zh")["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: {"selected": [me.id, wang.id], "headcount": 2}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    env.model.structured["Intent"] = [{"intent": "revise"}]
+    return env, me, wang, spinach
+
+
+def test_revise_with_nothing_said_about_who_eats_revises(tmp_path, session, seeded, veg):
+    """Development run 3: the parse of "白菜那道换个别的" gave no headcount and no mode. A
+    null is not "only me": the plan's request fills it, so no card shows and the turn revises
+    with the plan's shopping mode."""
+    env, _, _, spinach = two_for_shopping(tmp_path, session, veg)
+    swap = tool_call(
+        "RevisionProposal",
+        {"target": "named", "remove": [{"id": veg.id, "quote": "白菜那道"}],
+         "add": [spinach.id], "note": ""},
+    )
+    out = plan(env, "白菜那道换个别的", parse={"dishes": 1}, replies=[swap], locale="zh")
+    assert "__interrupt__" not in out
+    assert len(reviser_calls(env)) == 1
+    assert out["request"]["headcount"] == 2 and out["request"]["mode"] == "shopping"
+    record = run_record(env)
+    assert record.request["revision"]["from_version"] == 0
+    assert record.request["spec"]["mode"] == "shopping"
+    assert "mode" not in (record.defaults_used or [])
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == [spinach.id]
+
+
+def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
+    tmp_path, session, seeded, veg
+):
+    """A lasting rule in a follow-up shows the card and plans anew (spec 5.4); the new plan
+    keeps the conditions of the plan's request that the parse does not state."""
+    env, me, wang, _ = two_for_shopping(tmp_path, session, veg)
+    parse = {"dishes": 1, "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}]}
+    out = plan(env, "小王对花生过敏，白菜那道换个别的", parse=parse, locale="zh")
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    env.model.replies = [final_proposal([veg.id])]
+    chosen = {"selected": [me.id, wang.id], "stated": {wang.id: [PEANUT_RULE]}, "headcount": 2}
+    out = resume(env, {card.id: chosen})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert reviser_calls(env) == []
+    record = run_record(env)
+    assert "revision" not in record.request
+    assert record.request["spec"]["mode"] == "shopping"
+    assert "mode" not in (record.defaults_used or [])
+    assert out["constraints"]["headcount"] == 2
+
+
+def test_revise_saying_only_me_still_shows_the_card(tmp_path, session, seeded, veg):
+    """A stated headcount of 1 after a set of two is a change in who eats (decided by the
+    user, 2026-11-19): the card shows, and the new plan keeps the plan's shopping mode."""
+    env, me, _, _ = two_for_shopping(tmp_path, session, veg)
+    out = plan(env, "就我自己吃", parse={"headcount": 1, "dishes": 1}, locale="zh")
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners" and card.value["headcount"] == 1
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert reviser_calls(env) == []
+    assert run_record(env).request["spec"]["mode"] == "shopping"
+    assert out["constraints"]["headcount"] == 1
+
+
 def test_plan_again_still_plans_from_scratch(revise_env):
     env = revise_env
     first = first_meal(env)

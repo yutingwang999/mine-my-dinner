@@ -489,3 +489,88 @@ def test_short_override_text_is_not_a_match_word():
     plan = {"edit": {"conflicts": [{"recipe_id": 1, "text": "辣", "ingredient_name": "辣椒"}]}}
     assert "辣" not in conflict_words(plan)[1]
     assert "辣椒" in conflict_words(plan)[1]
+
+
+# ---- a revise turn's unstated fields come from the plan's request (dev run 3 of 3b-1b) ----
+
+PLAN_REQUEST = {
+    "headcount": 2,
+    "others_mentioned": True,
+    "dishes": 3,
+    "meat_dishes": 1,
+    "meat_bound": "at_least",
+    "range_fields": ["dishes"],
+    "mode": "shopping",
+    "time_limit_min": 40,
+    "query": "下饭的",
+    "must_use": ["茄子"],
+    "prefer_use": ["土豆"],
+    "all_use": [],
+    "exclude_recent_days": 3,
+    "meal_avoid": ["羊肉"],
+    "guests": [{"name": "Alex", "allergens": ["peanut"]}],
+    "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}],
+    "self_rules": {"avoid": ["香菜"]},
+}
+
+
+def test_unstated_fields_come_from_the_plan_request():
+    from minemydinner.agent.revision import carry_unstated
+
+    filled = carry_unstated({"dishes": None, "counts_stated_now": False}, PLAN_REQUEST)
+    for name in (
+        "headcount", "others_mentioned", "mode", "time_limit_min", "query", "must_use",
+        "prefer_use", "exclude_recent_days", "meal_avoid", "dishes", "meat_dishes",
+        "meat_bound", "range_fields",
+    ):
+        assert filled[name] == PLAN_REQUEST[name], name
+    assert filled["counts_stated_now"] is False
+    # Statements about people are never carried: the settled diner set holds them.
+    assert not filled.get("guests") and not filled.get("friend_rules")
+    assert filled.get("self_rules") is None
+
+
+def test_stated_fields_are_kept():
+    from minemydinner.agent.revision import carry_unstated
+
+    parsed = {
+        "headcount": 1,
+        "mode": "fridge_only",
+        "query": "辣的",
+        "must_use": ["豆角"],
+        "soups": 1,
+        "counts_stated_now": False,
+    }
+    filled = carry_unstated(parsed, PLAN_REQUEST)
+    assert (filled["headcount"], bool(filled.get("others_mentioned"))) == (1, False)
+    assert (filled["mode"], filled["query"], filled["must_use"]) == ("fridge_only", "辣的", ["豆角"])
+    # A stated count keeps the other counts unstated: the counts carry only as a group.
+    assert filled["soups"] == 1 and filled.get("dishes") is None
+    assert filled.get("meat_dishes") is None and not filled.get("range_fields")
+    assert filled["time_limit_min"] == 40
+
+
+def test_who_eats_carries_only_when_the_parse_mentions_nobody():
+    from minemydinner.agent.revision import carry_unstated
+
+    for said in (
+        {"others_mentioned": True},
+        {"guests": [{"name": "小李"}]},
+        {"friend_rules": [{"code": "Diner 3", "avoid": ["香菜"]}]},
+    ):
+        filled = carry_unstated(said, PLAN_REQUEST)
+        assert filled.get("headcount") is None, said
+        assert filled["mode"] == "shopping"
+
+
+def test_counts_do_not_carry_into_a_message_that_states_a_count():
+    from minemydinner.agent.revision import carry_unstated
+
+    filled = carry_unstated({"counts_stated_now": True}, PLAN_REQUEST)
+    assert all(filled.get(name) is None for name in ("dishes", "meat_dishes", "meat_bound"))
+
+
+def test_no_plan_request_changes_nothing():
+    from minemydinner.agent.revision import carry_unstated
+
+    assert carry_unstated({"dishes": 2}, None) == {"dishes": 2}
