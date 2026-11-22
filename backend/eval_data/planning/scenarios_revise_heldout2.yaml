@@ -8,9 +8,11 @@
 # button scenario starts from four dishes; for "四个菜全要辣的" either leaving the plan or a
 # partial change is right, as long as the reply says the wish cannot be met in full.
 #
-# Keys are the runner's (plan 3b-1 Task 7). Lines marked "TODO(Task 9)" use keys plan 3b-1b
-# Task 9 adds (button_after, expect_wish_unmet, expect_no_question); the controller turns them
-# into keys after Task 9 and shows the user the converted lines. No subagent opens this file.
+# Keys are the runner's (plan 3b-1 Task 7, plan 3b-1b Task 9). The user's notes for keys that
+# plan 3b-1b Task 9 added (button_after, expect_no_question, expect_wish_unmet,
+# expect_follow_up_diner_card) were turned into keys by the controller after Task 9
+# (2026-11-22) and shown to the user. No subagent opens this file.
+role: held-out
 scenarios:
   # ---- bare drops: the plan gets smaller ----
   - name: drop_both_eggplant_dishes
@@ -182,7 +184,7 @@ scenarios:
     expect_counts: {dishes: 2, soups: 1}
     expect_locale_reply: zh
     expect: The diner card was confirmed on the first turn; the follow-up states a lasting rule for 小王, so the card shows again, then the meal is planned without shrimp (until 3b-2 a diner change plans from scratch).
-    # TODO(Task 9): check the diner card is shown on the follow-up itself (a second card).
+    expect_follow_up_diner_card: true
 
   # ---- general wishes and add-only ----
   - name: lighter_please
@@ -237,7 +239,8 @@ scenarios:
     expect_counts: {dishes: 5}
     expect_locale_reply: zh
     expect: The fridge allows no fifth dish, so the revision cannot be done; the user presses "允许购物"; the four dishes stay and one more is added.
-    # TODO(Task 9): button_after: switch_to_shopping; expect_no_question: true.
+    button_after: switch_to_shopping
+    expect_no_question: true
 
   - name: any_mix_button_after_one_more_meat
     request: 两个人吃晚饭，四个菜，只用冰箱里有的。
@@ -250,7 +253,8 @@ scenarios:
     expect_counts: {dishes: 5, meat_dishes: 1, vegetable_dishes: 4}
     expect_locale_reply: zh
     expect: No second meat dish can be made from the fridge; the user presses "荤素都行"; the four dishes stay and a vegetable dish is added.
-    # TODO(Task 9): button_after: relax_split; expect_no_question: true.
+    button_after: relax_split
+    expect_no_question: true
 
   # ---- wishes that cannot be met ----
   - name: all_four_spicy
@@ -265,7 +269,7 @@ scenarios:
     expect_counts: {dishes: 4}
     expect_locale_reply: zh
     expect: The library has fewer than four spicy dishes, so the wish cannot be met in full. Leaving the plan or a partial change are both right; the reply must say it cannot all be spicy.
-    # TODO(Task 9): expect_wish_unmet: true.
+    expect_wish_unmet: true
 
   - name: add_seafood_all_allergic
     request: 两个人吃晚饭，三个菜，可以买菜。
@@ -283,7 +287,7 @@ scenarios:
     expect_titles_none: [清蒸鲈鱼, 红烧带鱼, 水煮鱼片, 油焖大虾]
     expect_locale_reply: zh
     expect: The user is allergic to every seafood in the library, so no seafood dish can be added; the plan stays and the reply says why.
-    # TODO(Task 9): expect_wish_unmet: true.
+    expect_wish_unmet: true
 
   # ---- new plans ----
   - name: not_great_another_set

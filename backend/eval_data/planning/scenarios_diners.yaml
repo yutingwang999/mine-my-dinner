@@ -8,6 +8,8 @@
 #
 # Every scenario also gets the two automatic checks: no saved nickname in any model-bound
 # message (nickname_sent) and no "Diner N" label in what the user sees (label_shown).
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   # ---- a saved friend named by nickname, with an allergy ----
   - name: friend_named_with_allergy

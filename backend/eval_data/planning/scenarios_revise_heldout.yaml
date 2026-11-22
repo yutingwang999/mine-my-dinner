@@ -37,6 +37,8 @@
 # - Locked dishes are checked for every scenario without a key: a dish locked before the
 #   follow-up and absent after it, not listed in expect_removed, counts as a wrongly removed
 #   locked dish.
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   - name: drop_the_corn_dish_keep_the_rest
     request: 两个人吃晚饭，三个菜一个汤，缺的可以去买。

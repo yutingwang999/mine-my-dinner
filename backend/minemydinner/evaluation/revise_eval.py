@@ -7,7 +7,8 @@ dishes kept).
 imports `planning.py`, so the scenario is typed loosely (any object with the Scenario fields).
 """
 
-from collections.abc import Collection, Iterator, Sequence
+import re
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +16,7 @@ from typing import Any
 from sqlalchemy import Table, delete, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from minemydinner.agent.actions import ACTIONS
 from minemydinner.agent.edits import (
     Add,
     EditError,
@@ -24,9 +26,11 @@ from minemydinner.agent.edits import (
     locked_ids,
     newest_reply_id,
 )
+from minemydinner.agent.graph import WISH_UNMET_NOTE_EN, WISH_UNMET_NOTE_ZH
 from minemydinner.agent.labels import LabelTable, labels_scope, load_label_context
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
-from minemydinner.agent.revise_step import open_conflict_ids
+from minemydinner.agent.request import ParsedRequest
+from minemydinner.agent.revise_step import WISH_UNMET, open_conflict_ids
 from minemydinner.agent.revision import asks_back
 from minemydinner.models import Diner, Rating, Recipe, RecipeCookware, RecipeImage, RecipeIngredient
 from minemydinner.planning.context import load_planning_context
@@ -44,6 +48,7 @@ FOLLOW_UP_KEYS = (
     "expect_removed",
     "expect_max_changed",
     "expect_removed_any",
+    "expect_follow_up_diner_card",
 )
 # expect_* keys an expect_any_of entry may not hold: the list itself, and the diner checks,
 # which are judged once over the whole scenario.
@@ -106,9 +111,24 @@ def check_revise_keys(scenario: Any, any_of_keys: Collection[str]) -> None:
         raise bad(f"choice_answer must be one of {list(CHOICE_ANSWERS)}")
     if scenario.expect_route not in (None, *ROUTES):
         raise bad(f"expect_route must be one of {list(ROUTES)}")
-    for key in ("expect_choice_card", "expect_question", "expect_unchanged"):
-        if getattr(scenario, key) not in (None, True, False):
+    for key in (
+        "expect_choice_card",
+        "expect_question",
+        "expect_unchanged",
+        "expect_wish_unmet",
+        "expect_no_question",
+        "expect_follow_up_diner_card",
+    ):
+        value = getattr(scenario, key)
+        if value is not None and not isinstance(value, bool):
             raise bad(f"{key} must be true or false")
+    if scenario.button_after is not None and scenario.button_after not in ACTIONS:
+        raise bad(f"button_after must be one of {list(ACTIONS)}")
+    kept = scenario.expect_request_kept
+    if not isinstance(kept, list) or not all(
+        isinstance(name, str) and name in ParsedRequest.model_fields for name in kept
+    ):
+        raise bad("expect_request_kept must be a list of request field names")
     limit = scenario.expect_max_changed
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
         raise bad("expect_max_changed must be a whole number of dishes, 0 or more")
@@ -279,6 +299,25 @@ class TurnFacts:
     before: dict[int, str] | None = None
     after: dict[int, str] | None = None
     locked_before: frozenset[int] = field(default_factory=frozenset)
+    # ---- plan 3b-1b ----
+    # Questions the judged turn asked: ask-first and count questions (answered or not), a
+    # revision that asked which dish was meant, and the empty-plan question. The choice card
+    # is `choice_card`.
+    questions: int = 0
+    # A diner card appeared on the follow-up turn itself (not on the first message).
+    follow_up_card: bool = False
+    # The judged turn told the user, in code-written form, that the wish was not met
+    # (`wish_unmet_said`).
+    wish_unmet_said: bool = False
+    # The next actions of the card the button was pressed on (with button_after).
+    offered: tuple[str, ...] = ()
+    # With button_after: why the button was not pressed because the turn before it stopped
+    # (the runner's note), else None.
+    button_blocked: str | None = None
+    # The judged run's request["button"]: set when code built the request from a button.
+    button: str | None = None
+    # The judged run's parsed request (the request the turn planned or revised with).
+    request: dict | None = None
 
     def gone(self) -> list[str]:
         """Titles of the plan before the follow-up that are not in the plan after it."""
@@ -343,6 +382,7 @@ def follow_up_failures(scenario: Any, facts: TurnFacts) -> list[str]:
         )
     if scenario.expect_question is not None and facts.question != scenario.expect_question:
         failures.append(f"question to the user={facts.question}, expected {scenario.expect_question}")
+    failures += _3b1b_failures(scenario, facts)
     wants_change_keys = (
         scenario.expect_unchanged is not None
         or scenario.expect_removed
@@ -374,6 +414,110 @@ def follow_up_failures(scenario: Any, facts: TurnFacts) -> list[str]:
     if scenario.expect_removed_any and not set(scenario.expect_removed_any) & set(gone):
         failures.append(f"none of {scenario.expect_removed_any} removed; removed {gone}")
     return failures
+
+
+def _3b1b_failures(scenario: Any, facts: TurnFacts) -> list[str]:
+    """The plan 3b-1b keys (button_after, expect_no_question, expect_wish_unmet,
+    expect_follow_up_diner_card, expect_request_kept) on `facts`. Pure."""
+    failures = []
+    action = getattr(scenario, "button_after", None)
+    if action is not None:
+        if facts.button_blocked:
+            failures.append(
+                f"the {action} button was not pressed: the turn before it stopped "
+                f"({facts.button_blocked})"
+            )
+        elif action not in facts.offered:
+            failures.append(
+                f"the card did not offer the {action} button; offered {list(facts.offered)}"
+            )
+        elif facts.button != action:
+            failures.append(
+                f"the {action} button turn's request was not built in code "
+                f"(request button {facts.button})"
+            )
+    wanted = scenario.expect_no_question
+    if wanted is not None:
+        asked = facts.questions > 0 or facts.choice_card
+        if wanted and asked:
+            failures.append(
+                f"a question was asked ({facts.questions} questions, choice card "
+                f"{facts.choice_card}), expected none"
+            )
+        elif not wanted and not asked:
+            failures.append("no question was asked, expected one")
+    if scenario.expect_wish_unmet is not None and facts.wish_unmet_said != scenario.expect_wish_unmet:
+        failures.append(
+            f"unmet wish said={facts.wish_unmet_said}, expected {scenario.expect_wish_unmet}"
+        )
+    card = scenario.expect_follow_up_diner_card
+    if card is not None and facts.follow_up_card != card:
+        failures.append(f"diner card on the follow-up={facts.follow_up_card}, expected {card}")
+    request = facts.request or {}
+    lost = [name for name in scenario.expect_request_kept if not request.get(name)]
+    if lost:
+        failures.append(f"request fields empty on the judged turn: {lost}")
+    return failures
+
+
+# An empty plan's count in words, as the old H4 text showed it for a missing answer ("方案有
+# 0 道菜", "The plan has 0 dishes"). Another category at 0 ("0 道汤", "0 meat dishes") is a
+# real count on a plan with dishes and does not match.
+_ZERO_DISHES = re.compile(r"(?<![\d.])0\s*道菜|(?<![\w.])0\s+dish(?:es)?(?![a-z])", re.IGNORECASE)
+
+
+def zero_dish_texts(texts: Iterable[str]) -> list[str]:
+    """The texts that say the plan has 0 dishes (plan 3b-1b spec 5.6: never shown). Pure."""
+    return [text for text in texts if text and _ZERO_DISHES.search(text)]
+
+
+def _template_pattern(template: str) -> re.Pattern[str]:
+    head, tail = template.split("{wish}")
+    return re.compile(re.escape(head) + ".+?" + re.escape(tail), re.DOTALL)
+
+
+_WISH_UNMET_NOTES = tuple(_template_pattern(t) for t in (WISH_UNMET_NOTE_ZH, WISH_UNMET_NOTE_EN))
+
+
+def wish_unmet_said(card: dict | None, reply: str, turn: str) -> bool:
+    """Whether the judged turn told the user, in code-written form, that the wish was not
+    (fully) met. `card` is the card of the turn's last reply (None when that reply has no
+    card, as the empty-plan question), `reply` its text, `turn` the judged turn's kind.
+    Counts:
+    - a `wish_unmet` entry in the card's unmet (a new plan whose planner said the wish was
+      not met, or a revision that found nothing that fits);
+    - the new-plan wish-unmet sentence (WISH_UNMET_NOTE_ZH / _EN, any wish) in the reply;
+    - a revision whose card kept the plan as it was (`plan_kept`) and has at least one unmet
+      entry: a failed revision (every attempt failed a check) or a nothing-fits revision.
+      Its reply says the change could not be made and the card says why, so the wish
+      counts as said even when no entry names the wish itself (controller ruling, Task 9).
+      A kept card with no unmet entry (a which-dish question) does not count.
+    Not detected: a passed revision that met the wish only in part and says so only in the
+    model's own note. Pure."""
+    card = card or {}
+    if any(entry.get("code") == WISH_UNMET for entry in card.get("unmet") or []):
+        return True
+    if any(pattern.search(reply or "") for pattern in _WISH_UNMET_NOTES):
+        return True
+    return turn == "revision" and bool(card.get("plan_kept")) and bool(card.get("unmet"))
+
+
+def fallback_count(runs_events: Iterable[Iterable[dict]]) -> int:
+    """Attempts whose dishes code picked because the planner gave no answer (validation
+    events marked `fallback`, plan 3b-1b spec 5.6). Pure."""
+    return sum(
+        1
+        for events in runs_events
+        for event in events or []
+        if event.get("kind") == "validation" and event.get("fallback")
+    )
+
+
+def asked_empty(values: dict) -> bool:
+    """The revision would have left no dish and asked whether to plan a new meal (spec 5.1)
+    instead; read from the state's revision of the judged run."""
+    revision = values.get("revision")
+    return isinstance(revision, dict) and bool(revision.get("empty"))
 
 
 def locked_removed(scenario: Any, facts: TurnFacts) -> list[str]:

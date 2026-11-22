@@ -4,7 +4,7 @@ A running record of the paid planning evaluations: for each round, what changed 
 
 ## Scenario sets
 
-Every scenario file under `backend/eval_data/planning/`, with its role. **Development**: written by Claude, may be used for tuning in its plan. **Regression**: run every round to catch a step backwards, every miss explained; its results have been read, so it no longer measures unseen requests. **Held-out**: written by the user, never used for tuning, run once its plan's code is final. A set's role changes only by a plan's decision, recorded in the last column.
+Every scenario file under `backend/eval_data/planning/`, with its role. Each file states its role in a top-level `role:` key (`development`, `regression` or `held-out`), which the runner reports with each role's rate apart. **Development**: written by Claude, may be used for tuning in its plan. **Regression**: run every round to catch a step backwards, every miss explained; its results have been read, so it no longer measures unseen requests. **Held-out**: written by the user, never used for tuning, run once its plan's code is final. A set's role changes only by a plan's decision, recorded in the last column.
 
 | File | Library | Scenarios | Author | What it tests | Role | Role history |
 |---|---|---|---|---|---|---|
@@ -14,7 +14,7 @@ Every scenario file under `backend/eval_data/planning/`, with its role. **Develo
 | `scenarios_diners.yaml` | `library_diners.yaml` | 17 | Claude | Plan 2b: the diner card, friends and guests, nicknames, ask-first answers, plan again | Regression | Development in plan 2b; regression since plan 3b-1 |
 | `scenarios_heldout.yaml` | `library_diners.yaml` | 14 | User (requests), Claude (set-up) | Plan 2b: requests with several diners | Regression | Held-out in plan 2b (round 8); its results were read, so a regression set since plan 3b-1 (round 9) |
 | `scenarios_heldout_core.yaml` | `library_diners.yaml` | 22 | User (requests), Claude (set-up) | Plan 2b: one-diner requests | Regression | Held-out in plan 2b (round 8); a regression set since plan 3b-1 (round 9) |
-| `scenarios_revise.yaml` | `library_revise.yaml` | 19 | Claude | Plan 3b-1: follow-ups that revise the plan, the choice card, hand edits between turns | Development | Development in plan 3b-1; development again in plan 3b-1b |
+| `scenarios_revise.yaml` | `library_revise.yaml` | 37 (19 from plan 3b-1, 18 added in plan 3b-1b) | Claude | Plan 3b-1: follow-ups that revise the plan, the choice card, hand edits between turns. Plan 3b-1b: drops, replacements, add-only, one-meal avoidances, a lasting rule, a staple quote, a dish not in the library, the empty-plan question, buttons after a failed revision and after an early stop, an unmeetable wish | Development | Development in plan 3b-1; development again in plan 3b-1b |
 | `scenarios_revise_heldout.yaml` | `library_revise.yaml` | 18 (1 deferred to 3b-2) | User (sentences), Claude (set-up) | Plan 3b-1: revision sentences | Regression | Held-out in plan 3b-1 (round 9); a regression set since plan 3b-1b (decided 2026-11-21; no expectation changed) |
 | `scenarios_revise_heldout2.yaml` | `library_revise2.yaml` | 20 | User (sentences), Claude (set-up) | Plan 3b-1b: drops, replacements, one-meal wishes, a lasting rule, add-only, buttons, unmeetable wishes, new plans | Held-out | Written for plan 3b-1b (2026-11-21) |
 

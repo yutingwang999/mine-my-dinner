@@ -36,6 +36,8 @@ x-profiles:
     - {name: 老李, rules: [{type: dietary restriction, ingredient: 牛肉}]}
     - {name: Lily, rules: [{type: allergy, allergen: crustaceans}]}
   me: &me [{type: dislike, ingredient: 香菜}]
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   - name: diners_with_laoli
     request: 今天和老李吃饭，设计
