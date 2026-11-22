@@ -19,7 +19,7 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 PROMPT_VERSIONS = {
     "route": "route_v3",
     "parse": "parse_v7",
-    "planner": "planner_v4",
+    "planner": "planner_v5",
     "revise": "revise_v3",
 }
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())

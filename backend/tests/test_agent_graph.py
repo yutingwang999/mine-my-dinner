@@ -21,6 +21,9 @@ from minemydinner.agent.graph import (
     GraphDeps,
     EARLY_STOP_NOTE_EN,
     EARLY_STOP_NOTE_ZH,
+    EMPTY_PLAN_NOTE_ZH,
+    FALLBACK_NOTE_EN,
+    WISH_UNMET_NOTE_ZH,
     build_graph,
 )
 from minemydinner.agent.actions import apply_action
@@ -35,7 +38,7 @@ from minemydinner.agent.request import (
 )
 from minemydinner.planning.feasibility import Shortfall
 from minemydinner.models import AppPreference, LlmCall, PlanningRun
-from minemydinner.agent.planner import TOOLS_VERSION
+from minemydinner.agent.planner import MODEL_CALL_LIMIT, TOOLS_VERSION
 from tests.agentfakes import (
     FakeEmbeddings,
     ScriptedChatModel,
@@ -2984,3 +2987,170 @@ def test_meal_avoid_survives_a_diner_card_in_the_same_turn(revise_env):
     assert {r["diner_key"] for r in rules_now} == {"guest:1", "meal"}
     assert out["constraints"]["meal_avoid"] == ["牛肉"]
     assert out["current_plan"]["meal_avoid"] == ["牛肉"]
+
+
+# ---- a new plan with a taste wish the library cannot meet (plan 3b-1b spec 5.6) ----
+
+
+def _unmet_proposal(ids: list[int], note: str) -> AIMessage:
+    return tool_call(
+        "PlanProposal",
+        {
+            "recipe_ids": ids,
+            "note": note,
+            "wish_met": False,
+            "wish_unmet_reason": "菜谱库里没有辣的菜",
+        },
+    )
+
+
+def test_unmet_wish_plans_and_says_so(graph_env, veg, meat):
+    out = plan(
+        graph_env,
+        "两个菜，想吃辣的",
+        parse={"dishes": 2, "query": "辣的"},
+        replies=[_unmet_proposal([meat.id, veg.id], "先炖土豆炖肉，再炒白菜。")],
+        locale="zh",
+    )
+    current = out["current_plan"]
+    assert current["passed"] is True
+    assert {r["id"] for r in current["recipes"]} == {meat.id, veg.id}
+    reply = out["messages"][-1].content
+    assert reply == WISH_UNMET_NOTE_ZH.format(wish="辣的") + "\n\n" + "先炖土豆炖肉，再炒白菜。"
+    assert [u["code"] for u in current["unmet"]] == ["wish_unmet"]
+    # Fridge-only mode (the default): allow shopping, and import recipes.
+    assert current["next_actions"] == ["switch_to_shopping", "import_recipes"]
+    assert len(planner_requests(graph_env)) == 1
+
+
+def test_unmet_flag_without_a_wish_adds_nothing(graph_env, veg, meat):
+    # wish_met=False without a wish in the request is ignored.
+    out = plan(
+        graph_env,
+        "two dishes",
+        parse={"dishes": 2},
+        replies=[_unmet_proposal([meat.id, veg.id], "Start the stew first.")],
+    )
+    assert out["messages"][-1].content == "Start the stew first."
+    assert out["current_plan"]["unmet"] == [] and out["current_plan"]["next_actions"] == []
+
+
+def test_met_wish_adds_nothing(graph_env, veg, meat):
+    met = tool_call(
+        "PlanProposal",
+        {"recipe_ids": [meat.id, veg.id], "note": "先炖土豆炖肉。", "wish_met": True},
+    )
+    out = plan(
+        graph_env, "两个菜，想吃家常的", parse={"dishes": 2, "query": "家常的"},
+        replies=[met], locale="zh",
+    )
+    assert out["current_plan"]["passed"] is True
+    assert out["messages"][-1].content == "先炖土豆炖肉。"
+    assert out["current_plan"]["unmet"] == [] and out["current_plan"]["next_actions"] == []
+    assert run_record(graph_env).first_passed is True
+
+
+def test_no_answer_falls_back_to_the_shortlist(graph_env, veg, meat):
+    # The planner searches on every call and never answers, so every attempt hits its limit.
+    out = plan(
+        graph_env,
+        "两个菜，想吃辣的",
+        parse={"dishes": 2, "query": "辣的"},
+        replies=[tool_call("search_recipes", {"query": "辣的"})],
+        locale="zh",
+    )
+    current = out["current_plan"]
+    assert current["passed"] is True and out["retries"] == 0
+    assert {r["id"] for r in current["recipes"]} == {meat.id, veg.id}
+    reply = out["messages"][-1].content
+    assert reply.startswith(WISH_UNMET_NOTE_ZH.format(wish="辣的"))
+    texts = [reply, *(u["text"] for u in current["unmet"])]
+    assert not any("0 道菜" in text for text in texts)
+    assert [u["code"] for u in current["unmet"]] == ["wish_unmet"]
+    assert "import_recipes" in current["next_actions"]
+    (validation,) = [e for e in planning_events(run_record(graph_env)) if e["kind"] == "validation"]
+    assert sorted(validation["recipe_ids"]) == sorted([meat.id, veg.id])
+    assert validation["fallback"] is True
+    # The planner did not pass: a passing code fallback is never a first pass.
+    record = run_record(graph_env)
+    assert record.first_passed is False and record.final_passed is True
+
+
+def test_no_answer_without_a_wish_falls_back_with_a_plain_note(graph_env, veg, meat):
+    out = plan(
+        graph_env,
+        "two dishes",
+        parse={"dishes": 2},
+        replies=[tool_call("search_recipes", {"query": "anything"})],
+    )
+    current = out["current_plan"]
+    assert current["passed"] is True and current["unmet"] == []
+    assert out["messages"][-1].content == FALLBACK_NOTE_EN
+
+
+def test_hard_shortfall_still_stops(graph_env, veg, meat):
+    # Three dishes from a library with two: the request stops before the planner, with reasons.
+    out = plan(
+        graph_env,
+        "三个菜，想吃辣的",
+        parse={"dishes": 3, "query": "辣的"},
+        replies=[tool_call("search_recipes", {"query": "辣的"})],
+        locale="zh",
+    )
+    current = out["current_plan"]
+    assert planner_requests(graph_env) == []
+    assert current["recipes"] == [] and current["passed"] is False
+    assert current["reasons"]
+    assert out["messages"][-1].content == EARLY_STOP_NOTE_ZH
+    assert "0 道菜" not in out["messages"][-1].content
+
+
+def test_an_empty_answer_is_never_shown_as_zero_dishes(graph_env, veg):
+    out = plan(graph_env, "晚饭", replies=[final_proposal([])], locale="zh")
+    current = out["current_plan"]
+    assert current["recipes"] == [] and current["passed"] is False
+    texts = [out["messages"][-1].content, *(u["text"] for u in current["unmet"])]
+    assert not any("0 道菜" in text for text in texts)
+    assert out["messages"][-1].content == EMPTY_PLAN_NOTE_ZH
+    assert current["unmet"] == [] and current["next_actions"] == []
+
+
+def test_a_failing_fallback_is_retried_like_any_attempt(graph_env, session, veg, monkeypatch):
+    # The fallback is checked like any attempt: here it picks a dish that cannot be made from
+    # the fridge (H1), and the retry tells the planner that code picked it.
+    pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
+    monkeypatch.setattr("minemydinner.agent.graph.fallback_ids", lambda entries, spec: [pork.id])
+    replies = [tool_call("search_recipes", {})] * MODEL_CALL_LIMIT + [final_proposal([veg.id])]
+    out = plan(graph_env, "dinner", parse={"dishes": 1}, replies=replies)
+    assert out["retries"] == 1 and out["current_plan"]["passed"] is True
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == [veg.id]
+    retry = planner_requests(graph_env)[MODEL_CALL_LIMIT]
+    assert f"You gave no final answer, so code picked [{pork.id}] from the shortlist" in retry
+    assert "not in stock: 五花肉" in retry
+    validations = [e for e in planning_events(run_record(graph_env)) if e["kind"] == "validation"]
+    assert [v.get("fallback", False) for v in validations] == [True, False]
+
+
+def test_a_fallback_failing_every_attempt_ends_as_the_closest_plan(
+    graph_env, session, veg, monkeypatch
+):
+    # The planner never answers, and every fallback picks a dish the fridge cannot make (H1):
+    # the closest plan is shown with the wish sentence, then the closest note.
+    pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉", role="main")])
+    monkeypatch.setattr("minemydinner.agent.graph.fallback_ids", lambda entries, spec: [pork.id])
+    out = plan(
+        graph_env,
+        "一个菜，想吃辣的",
+        parse={"dishes": 1, "query": "辣的"},
+        replies=[tool_call("search_recipes", {"query": "辣的"})],
+        locale="zh",
+    )
+    current = out["current_plan"]
+    assert out["retries"] == MAX_RETRIES and current["passed"] is False
+    assert [r["id"] for r in current["recipes"]] == [pork.id]
+    assert out["messages"][-1].content == (
+        WISH_UNMET_NOTE_ZH.format(wish="辣的") + "\n\n" + CLOSEST_NOTE_ZH
+    )
+    assert [u["code"] for u in current["unmet"]] == ["H1", "wish_unmet"]
+    assert current["next_actions"] == ["switch_to_shopping", "update_inventory", "import_recipes"]
+    assert run_record(graph_env).first_passed is False

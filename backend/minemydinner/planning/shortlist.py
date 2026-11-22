@@ -280,3 +280,46 @@ def build_shortlist_result(
         result.semantic_paused,
         frozenset(complete),
     )
+
+
+def fallback_ids(entries: dict[str, list[ShortlistEntry]], spec: "PlanSpec") -> list[int]:
+    """A plan code picks from the shortlist when the planner gave no answer (plan 3b-1b spec
+    5.6): the usable entries (nothing missing in fridge-only mode, no missing cookware) in
+    shortlist order, filling the spec's counts. Each single category takes its count from
+    its own list; the meat and vegetable sides first take their minimums, then the rest of
+    the dish total by turns (meat first) within their maximums. A type with too few usable
+    entries is left short; validation then reports it."""
+
+    def usable(dish_type: str) -> list[int]:
+        return [
+            entry.id
+            for entry in entries.get(dish_type, [])
+            if not entry.missing_cookware and (spec.mode == "shopping" or not entry.missing)
+        ]
+
+    required = required_counts(spec)
+    chosen: list[int] = []
+    ranges = side_ranges(spec)
+    sides = {side: usable(DISH_TYPE_OF_CATEGORY[side]) for side in ranges}
+    taken = {side: 0 for side in ranges}
+
+    def take(side: str) -> bool:
+        if taken[side] >= len(sides[side]):
+            return False
+        chosen.append(sides[side][taken[side]])
+        taken[side] += 1
+        return True
+
+    for side, (low, _) in ranges.items():
+        while taken[side] < low and take(side):
+            pass
+    while sum(taken.values()) < spec.dishes:
+        progressed = False
+        for side, (_, high) in ranges.items():
+            if sum(taken.values()) < spec.dishes and taken[side] < high and take(side):
+                progressed = True
+        if not progressed:
+            break
+    for category in SINGLE_CATEGORIES:
+        chosen.extend(usable(DISH_TYPE_OF_CATEGORY[category])[: required[category]])
+    return chosen

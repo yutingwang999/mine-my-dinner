@@ -38,7 +38,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v4+revise_v3"
+    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v5+revise_v3"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -380,21 +380,29 @@ def test_both_sides_at_most_zero_is_a_contradiction():
     assert request_problem(request) == "split_conflicts_total"
 
 
-def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
+def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
     import hashlib
 
-    assert PROMPT_VERSIONS["planner"] == "planner_v4"
     v3 = (PROMPT_DIR / "planner_v3.md").read_bytes().replace(b"\r\n", b"\n")
-    # The committed planner_v3.md (a version records used) must never change.
+    # The committed planner_v3.md and planner_v4.md (versions records used) must never change.
     assert hashlib.sha256(v3).hexdigest() == (
         "123206bf2e1030911e6c7ecf80a0854d9336fc1c110e2c8715f6232b7c89fa1e"
     )
-    v4 = (PROMPT_DIR / "planner_v4.md").read_text(encoding="utf-8")
-    assert "Do not count or list" in v4 and "one sentence" in v4
+    v4 = (PROMPT_DIR / "planner_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v4).hexdigest() == (
+        "8326569c8612e1c4b8b0a32f291fb0d976f261899ff86ce0f4d895b5b69b713b"
+    )
+    assert PROMPT_VERSIONS["planner"] == "planner_v5"
+    v5 = load_prompt("planner")
+    assert v5 == (PROMPT_DIR / "planner_v5.md").read_text(encoding="utf-8")
+    # Plan 3b-1b spec 5.6: a taste wish the library cannot meet is answered, not searched on.
+    assert "is a taste wish, not a requirement" in v5 and "wish_met to false" in v5
+    assert "do not say in the note that the wish was not met" in v5
+    assert "Do not count or list" in v5 and "one sentence" in v5
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v4+revise_v3"
+    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v5+revise_v3"
     assert PROMPT_VERSIONS["parse"] == "parse_v7"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v7.md").read_text(encoding="utf-8")
 

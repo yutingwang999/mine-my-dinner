@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from minemydinner.agent.actions import action_of, apply_action, on_plan_counts, spec_changes
 from minemydinner.agent.card_text import (
+    NEXT_ACTION_ORDER,
     counts_text,
     is_zh,
     next_actions,
@@ -124,7 +125,11 @@ from minemydinner.planning.context import MEAL_KEY, diner_codes, load_planning_c
 from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
 from minemydinner.planning.inventory import meal_preferences
 from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
-from minemydinner.planning.shortlist import ShortlistEntry, build_shortlist_result
+from minemydinner.planning.shortlist import (
+    ShortlistEntry,
+    build_shortlist_result,
+    fallback_ids,
+)
 from minemydinner.planning.stock import compute_missing
 from minemydinner.planning.tools import PlannerDeps
 from minemydinner.planning.validate import Finding, PlanSpec, ValidationResult, validate_plan
@@ -161,6 +166,20 @@ UNCLEAR_REPLY_EN = (
 )
 UNCLEAR_REPLY_ZH = "我没能理解这次要几道菜，所以没有出方案。请再告诉我每一类各要几道。"
 CLOSEST_NOTE_ZH = "这是我能找到的最接近的方案，有些规则没有满足，详见下方。"
+# A new plan whose taste wish the planner could not meet (plan 3b-1b spec 5.6); {wish} is the
+# request's query, the "The user feels like" line of the planner's opening.
+WISH_UNMET_NOTE_ZH = "菜谱库里没有符合“{wish}”的菜，先按其他要求给你配了这份。"
+WISH_UNMET_NOTE_EN = "Nothing in your library fits “{wish}”, so this plan follows your other requests."
+# The note of a plan code picked from the shortlist when the planner gave no answer and the
+# request has no wish.
+FALLBACK_NOTE_ZH = "这份方案是按你的要求从菜谱库里直接选出的。"
+FALLBACK_NOTE_EN = "This plan was picked from your library to fit your request."
+# No plan because every attempt came back with no dishes (nothing was blocked by a rule).
+EMPTY_PLAN_NOTE_ZH = "这次没能为这个要求配出菜，所以没有出方案。可以再发一次请求重试。"
+EMPTY_PLAN_NOTE_EN = (
+    "I could not put any dishes together for this request, so no plan is shown. "
+    "Send the request again to try once more."
+)
 
 
 # What a message asks for (plan 3b-1 spec 5.1). A new intent is added here and in the route
@@ -930,7 +949,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def retry_message(state: ChatState, session, ctx) -> str:
         """The violations of the previous attempt, then a short summary of it."""
         ids = state["proposal"]["recipe_ids"]
-        header = f"Your proposal {ids} failed these checks. Propose a new plan that fixes each one:"
+        if state["proposal"].get("fallback"):
+            # The planner gave no answer; code picked these dishes (spec 5.6).
+            header = (
+                f"You gave no final answer, so code picked {ids} from the shortlist, and that "
+                "failed these checks. Answer with a plan that fixes each one:"
+            )
+        else:
+            header = (
+                f"Your proposal {ids} failed these checks. Propose a new plan that fixes each one:"
+            )
         return retry_text(state, session, ctx, header, ids, [])
 
     def retry_text(
@@ -1034,15 +1062,37 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             {"messages": messages, "run_id": state["run_id"]},
             context=planner_context(state, spec, vectors),
         )
-        # A run cut off by the call limits or the token budget has no proposal; validation
-        # then fails it.
-        proposal = out.get("structured_response") or PlanProposal(recipe_ids=[], note="")
         notes = _notes_from_searches(notes, out["messages"])
+        proposal = out.get("structured_response")
+        if proposal is not None:
+            dumped = proposal.model_dump()
+        else:
+            # A run cut off by the call limits or the token budget has no answer: code picks
+            # a plan from the shortlist instead, checked like any attempt (spec 5.6).
+            dumped = fallback_proposal(state, spec, vectors)
         return {
             **update,
-            "proposal": proposal.model_dump(),
+            "proposal": dumped,
             "search_notes": _merge_notes(notes, [], False),
         }
+
+    def fallback_proposal(state: ChatState, spec: PlanSpec, vectors: dict) -> dict:
+        """The proposal of an attempt with no answer: the shortlist's usable dishes that fill
+        the counts (`fallback_ids`). With a wish in the request, the planner never confirmed
+        it, so it counts as not met; otherwise the note is fixed text. `fallback` marks it,
+        so the retry and the record tell it from the planner's own answer."""
+        parsed = ParsedRequest.model_validate(state["request"])
+        with deps.session_factory() as session:
+            ctx = load_planning_context(session, meal_constraints(state))
+            found = build_shortlist_result(session, deps.client, ctx, spec, parsed, vectors)
+        wish = bool(parsed.query)
+        zh = is_zh(state.get("locale", "en"))
+        proposal = PlanProposal(
+            recipe_ids=fallback_ids(found.entries, spec),
+            note="" if wish else (FALLBACK_NOTE_ZH if zh else FALLBACK_NOTE_EN),
+            wish_met=False if wish else None,
+        )
+        return {**proposal.model_dump(), "fallback": True}
 
     def check_plan(state: ChatState) -> Command:
         spec = PlanSpec.model_validate(state["spec"])
@@ -1051,18 +1101,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             ctx = load_planning_context(session, meal_constraints(state))
             result: ValidationResult = validate_plan(session, ctx, spec, ids)
         dumped = result.model_dump(mode="json")
-        deps.recorder.add_event(
-            state["run_id"],
-            {
-                "kind": "validation",
-                "attempt": state["retries"],
-                "recipe_ids": ids,
-                "result": map_strings(dumped, deps.client.prepare_text),
-            },
-        )
+        event = {
+            "kind": "validation",
+            "attempt": state["retries"],
+            "recipe_ids": ids,
+            "result": map_strings(dumped, deps.client.prepare_text),
+        }
+        if state["proposal"].get("fallback"):
+            # Code picked these dishes; the planner gave no answer (spec 5.6).
+            event["fallback"] = True
+        deps.recorder.add_event(state["run_id"], event)
         update: dict[str, Any] = {"validation": dumped}
         if state.get("first_passed") is None:
-            update["first_passed"] = result.passed
+            # A passing code fallback is not the planner's pass (spec 5.6), so evaluation never
+            # counts an attempt with no answer as a first-pass success.
+            update["first_passed"] = result.passed and not state["proposal"].get("fallback")
         blocked = [code for code in NEVER_SHOWN if any(v.code == code for v in result.violations)]
         if blocked:
             seen = state.get("blocked_codes") or []
@@ -1073,7 +1126,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 v.detail.get("diner_key", "*") for v in result.violations if v.code == "H2"
             }
             update["blocked_h2_keys"] = sorted(set(state.get("blocked_h2_keys") or []) | keys)
-        else:
+        elif ids:
+            # An empty proposal (no answer and nothing to fall back on) is never the closest
+            # plan: an empty card would give "0 dishes" as its reason (spec 5.6).
             best = state.get("best")
             gap = _composition_gap_of(spec, dumped)
             attempt = (len(result.violations), gap)
@@ -1152,7 +1207,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 for code in state.get("blocked_codes") or []
             ]
             plan["next_actions"] = next_actions(spec, [], list(state.get("blocked_codes") or []))
-            if plan["next_actions"]:
+            if not plan["unmet"]:
+                # No attempt was blocked: every attempt was empty (no dish was put together),
+                # so there is no reason to list (spec 5.6: never "0 dishes").
+                note = EMPTY_PLAN_NOTE_ZH if is_zh(locale) else EMPTY_PLAN_NOTE_EN
+            elif plan["next_actions"]:
                 note = NO_PLAN_NOTE_ZH if is_zh(locale) else NO_PLAN_NOTE_EN
             else:
                 note = NO_PLAN_NOTE_BARE_ZH if is_zh(locale) else NO_PLAN_NOTE_BARE_EN
@@ -1168,11 +1227,23 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     locale=locale,
                 )
                 plan["locked"] = []
-            note = shown["proposal"]["note"]
+            parts = [shown["proposal"]["note"]]
             if not shown["validation"]["passed"]:
                 # The fixed closest note always leads; the model's own note may follow it.
-                closest = CLOSEST_NOTE_ZH if is_zh(locale) else CLOSEST_NOTE_EN
-                note = closest + "\n\n" + note if note else closest
+                parts.insert(0, CLOSEST_NOTE_ZH if is_zh(locale) else CLOSEST_NOTE_EN)
+            wish = state["request"].get("query")
+            if wish and shown["proposal"].get("wish_met") is False:
+                # The plan follows the other conditions; the unmet wish is always said
+                # first (spec 5.6), with the next actions that fit it.
+                template = WISH_UNMET_NOTE_ZH if is_zh(locale) else WISH_UNMET_NOTE_EN
+                parts.insert(0, template.format(wish=wish))
+                plan["unmet"] = [
+                    *plan["unmet"],
+                    *unmet_entries([{"code": WISH_UNMET, "recipe_id": None}], [], {}, locale),
+                ]
+                chosen = {*plan["next_actions"], *wish_unmet_actions(spec)}
+                plan["next_actions"] = [a for a in NEXT_ACTION_ORDER if a in chosen]
+            note = "\n\n".join(part for part in parts if part)
         # The card keeps the request it was built from, for a button on it (spec 5.5).
         plan = _reply_card(plan, state["request"])
         # The run is over: its query embeddings are no longer needed.
