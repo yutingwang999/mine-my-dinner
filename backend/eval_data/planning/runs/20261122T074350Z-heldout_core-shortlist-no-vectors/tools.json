@@ -1,0 +1,408 @@
+{
+  "tools": [
+    {
+      "name": "get_inventory",
+      "description": "List what is in stock: ingredients with amounts and expiry dates, the always-in-stock list, and the owned cookware. Optionally filter by category or sort by expiry.",
+      "args_schema": {
+        "description": "List what is in stock: ingredients with amounts and expiry dates, the always-in-stock list, and the owned cookware. Optionally filter by category or sort by expiry.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "vegetable",
+                  "fruit",
+                  "mushroom",
+                  "meat",
+                  "seafood",
+                  "egg and dairy",
+                  "soy product",
+                  "staple food",
+                  "nut",
+                  "seasoning",
+                  "other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only ingredients of this category, or omit for all.",
+            "title": "Category"
+          },
+          "sort_by_expiry": {
+            "default": false,
+            "description": "Soonest expiry first; items without a date last.",
+            "title": "Sort By Expiry",
+            "type": "boolean"
+          }
+        },
+        "title": "get_inventory",
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_recipes",
+      "description": "Search the recipe library. Dishes the selected diners cannot eat are already excluded by code; you cannot include them. tags are a preference that ranks matching dishes first, never a filter: pass tags only when the user names a characteristic. The request's time limit and recency filter always apply, and its query is used when you pass none; pass your own query to look for something else. Set max_time or exclude_recent_days only when the user asks for something stricter. dish_type limits the search to one type. Pass the ids you have already seen in exclude_ids to fetch the next batch. Returns up to 20 hits; each hit carries missing (required ingredients not in stock), missing_cookware (cookware the household does not own), uses_expiring (ingredients close to expiry it uses), and dislikes (soft dislikes it hits, by diner code). Hits with fewer missing items rank higher after relevance. In fridge-only mode only dishes with nothing missing are returned. Dishes using the ingredients the request names rank higher; when the request says every dish must use an ingredient, only dishes using it are returned. Also returns left_out_unknown_allergens (titles of dishes left out because an ingredient could not be checked), semantic_paused (true when meaning-based search was unavailable), unresolved_must_use (must_use names the dictionary does not know), and over_time_limit: dishes your query or the request's query names by their whole title that the request's time limit leaves out (id, title, time_min). They exist in the library but cannot be used under the time limit; never call them missing from the library.",
+      "args_schema": {
+        "description": "Search the recipe library. Dishes the selected diners cannot eat are already excluded by code; you cannot include them. tags are a preference that ranks matching dishes first, never a filter: pass tags only when the user names a characteristic. The request's time limit and recency filter always apply, and its query is used when you pass none; pass your own query to look for something else. Set max_time or exclude_recent_days only when the user asks for something stricter. dish_type limits the search to one type. Pass the ids you have already seen in exclude_ids to fetch the next batch. Returns up to 20 hits; each hit carries missing (required ingredients not in stock), missing_cookware (cookware the household does not own), uses_expiring (ingredients close to expiry it uses), and dislikes (soft dislikes it hits, by diner code). Hits with fewer missing items rank higher after relevance. In fridge-only mode only dishes with nothing missing are returned. Dishes using the ingredients the request names rank higher; when the request says every dish must use an ingredient, only dishes using it are returned. Also returns left_out_unknown_allergens (titles of dishes left out because an ingredient could not be checked), semantic_paused (true when meaning-based search was unavailable), unresolved_must_use (must_use names the dictionary does not know), and over_time_limit: dishes your query or the request's query names by their whole title that the request's time limit leaves out (id, title, time_min). They exist in the library but cannot be used under the time limit; never call them missing from the library.",
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Free-text query matched by meaning.",
+            "title": "Query"
+          },
+          "max_time": {
+            "anyOf": [
+              {
+                "maximum": 1440,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum cooking minutes; recipes with no time stay.",
+            "title": "Max Time"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Preferred characteristics. Pass only when the user names one.",
+            "title": "Tags"
+          },
+          "must_use": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Ingredient names the recipes must use.",
+            "title": "Must Use"
+          },
+          "exclude_recent_days": {
+            "anyOf": [
+              {
+                "maximum": 60,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Skip dishes cooked in the last N days. Set only when the user asks.",
+            "title": "Exclude Recent Days"
+          },
+          "dish_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meat dish",
+                  "vegetable dish",
+                  "soup",
+                  "staple food",
+                  "snack",
+                  "dessert"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only dishes of this type, or omit for every type.",
+            "title": "Dish Type"
+          },
+          "exclude_ids": {
+            "description": "Recipe ids already seen, to fetch the next batch. At most 50.",
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 50,
+            "title": "Exclude Ids",
+            "type": "array"
+          }
+        },
+        "title": "search_recipes",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_recipe",
+      "description": "Read one recipe: lines, cookware, tags, and a short steps summary. Returns {\"error\": \"not_found\"} for an unknown id.",
+      "args_schema": {
+        "description": "Read one recipe: lines, cookware, tags, and a short steps summary. Returns {\"error\": \"not_found\"} for an unknown id.",
+        "properties": {
+          "recipe_id": {
+            "description": "Recipe id from a search result.",
+            "minimum": 1,
+            "title": "Recipe Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recipe_id"
+        ],
+        "title": "get_recipe",
+        "type": "object"
+      }
+    },
+    {
+      "name": "compute_missing",
+      "description": "For each existing recipe id, list the required ingredients that are not in stock. Optional ingredients are ignored. Ids that do not exist are listed in unknown_recipe_ids.",
+      "args_schema": {
+        "description": "For each existing recipe id, list the required ingredients that are not in stock. Optional ingredients are ignored. Ids that do not exist are listed in unknown_recipe_ids.",
+        "properties": {
+          "recipe_ids": {
+            "description": "Recipe ids to check, 1 to 20.",
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Recipe Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recipe_ids"
+        ],
+        "title": "compute_missing",
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_cookware",
+      "description": "For each existing recipe id, list the cookware the household does not own. Ids that do not exist are listed in unknown_recipe_ids.",
+      "args_schema": {
+        "description": "For each existing recipe id, list the cookware the household does not own. Ids that do not exist are listed in unknown_recipe_ids.",
+        "properties": {
+          "recipe_ids": {
+            "description": "Recipe ids to check, 1 to 20.",
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Recipe Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recipe_ids"
+        ],
+        "title": "check_cookware",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_preferences",
+      "description": "The dietary limits of the selected diners for this meal, under anonymous codes such as Diner 1. Dishes they cannot eat are already excluded by code.",
+      "args_schema": {
+        "description": "The dietary limits of the selected diners for this meal, under anonymous codes such as Diner 1. Dishes they cannot eat are already excluded by code.",
+        "properties": {},
+        "title": "get_preferences",
+        "type": "object"
+      }
+    }
+  ],
+  "final_answer": {
+    "name": "PlanProposal",
+    "schema": {
+      "description": "The planner's final answer: one meal from the user's recipe library.",
+      "properties": {
+        "recipe_ids": {
+          "description": "Ids of the chosen recipes, from tool results only.",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Recipe Ids",
+          "type": "array"
+        },
+        "note": {
+          "description": "One or two sentences to the user, in the reply locale.",
+          "title": "Note",
+          "type": "string"
+        },
+        "wish_met": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the chosen dishes meet the request's taste wish (the line 'The user feels like: ...'). None when the request has no such line.",
+          "title": "Wish Met"
+        },
+        "wish_unmet_reason": {
+          "default": "",
+          "description": "When wish_met is false: a short reason why no dish fits the wish.",
+          "title": "Wish Unmet Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recipe_ids",
+        "note"
+      ],
+      "title": "PlanProposal",
+      "type": "object"
+    }
+  },
+  "revise_final_answer": {
+    "name": "RevisionProposal",
+    "schema": {
+      "$defs": {
+        "RemovedDish": {
+          "description": "One dish of the current plan that the revision takes out.",
+          "properties": {
+            "id": {
+              "description": "The id of the dish in the current plan.",
+              "title": "Id",
+              "type": "integer"
+            },
+            "quote": {
+              "default": "",
+              "description": "Only when the target is \"named\": the user's exact words from the latest message that point at THIS dish, copied character for character (for example the words \"茄子这道\" or \"that soup\"). It must appear in the message and match the dish: part of its title, one of its ingredients, or its category word such as soup. Leave it empty for any other target, and for a dish that is removed only because it has an open conflict.",
+              "title": "Quote",
+              "type": "string"
+            },
+            "mode": {
+              "default": "replace",
+              "description": "What the user wants for this dish. \"drop\": the words only say not to have it (\"茄子这道不要\", \"去掉茄子\", \"drop the soup\"); the plan gets smaller and no dish takes its place. \"replace\": the words want another dish in its place (\"换 / 换成 / 换一个 / 来个 / 再要一道\", \"swap it for something else\"); add one dish of the same dish type for it, unless the user names the replacement (replace_with). A dish removed because it breaks a wish for this meal only (\"今天不想吃肉\") is replaced, never dropped.",
+              "enum": [
+                "drop",
+                "replace"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "replace_with": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Only for mode \"replace\", when the user names the dish that takes this one's place (\"把青椒肉丝换成蒜蓉西兰花\"): the recipe id of that dish. It must also be in add, and replace_with_quote must hold the user's words that name it. The named dish is used even when it is another dish type. Leave it null otherwise.",
+              "title": "Replace With"
+            },
+            "replace_with_quote": {
+              "default": "",
+              "description": "Only with replace_with: the user's exact words from the latest message that name the replacement dish, copied character for character. It must match that dish (part of its title or one of its ingredients). Empty otherwise.",
+              "title": "Replace With Quote",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "title": "RemovedDish",
+          "type": "object"
+        }
+      },
+      "description": "What the revision changes in the current plan, and why the message allows it.",
+      "properties": {
+        "target": {
+          "description": "Which dishes the latest message targets. \"named\": it points at specific dishes (\"茄子这道不要\", \"drop the soup\"); give a quote for each removed dish. \"scope\": it states a scope of dishes, such as \"replace everything\" or \"everything except the corn one\"; give scope_quote and list the dishes it leaves out in excepted. \"general\": it is a wish that points at no particular dish (\"something spicier\", \"not so many egg dishes\"); a general ingredient or taste word that does not point at one dish is a general wish, not a named dish, and so is a wish to change without saying how (\"来点不一样的\"); it replaces dishes and never drops one, and locked dishes stay. A message that lowers the number of dishes (\"两个菜就够了\") is general too, and its removals are drops. \"add\": the message only adds dishes (\"再加一道\", \"add a green vegetable\") and removes nothing: remove must be empty and add holds the new dishes. \"unclear\": only when the message points at a dish but you cannot tell which one (\"drop the soup\" with two soups); change nothing (empty remove and add) and say in note what to ask the user.",
+          "enum": [
+            "named",
+            "scope",
+            "general",
+            "add",
+            "unclear"
+          ],
+          "title": "Target",
+          "type": "string"
+        },
+        "remove": {
+          "description": "The dishes of the current plan to take out, each by its id.",
+          "items": {
+            "$ref": "#/$defs/RemovedDish"
+          },
+          "title": "Remove",
+          "type": "array"
+        },
+        "add": {
+          "description": "The recipe ids of the dishes to add, as integers only. None of them may already be in the plan, and no id may be in both add and remove.",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Add",
+          "type": "array"
+        },
+        "scope_quote": {
+          "default": "",
+          "description": "Only for target \"scope\": the user's exact words that state the scope and its exceptions, copied from the latest message. Empty for every other target.",
+          "title": "Scope Quote",
+          "type": "string"
+        },
+        "excepted": {
+          "description": "Only for target \"scope\": the ids of the dishes the scope leaves out (\"except the corn one\"). They must stay in the plan.",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Excepted",
+          "type": "array"
+        },
+        "note": {
+          "description": "One or two sentences for the user, in the reply locale: only why the new dishes fit the wish, or, for \"unclear\", the question that asks which dish is meant, or, when nothing fits, why. Do not list what changed; code writes that. Never use internal words such as LOCKED, OPEN CONFLICT, KEPT CONFLICT or recipe ids, nor their translations.",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "note"
+      ],
+      "title": "RevisionProposal",
+      "type": "object"
+    }
+  },
+  "tools_version": "ec260ff5e2a8",
+  "revise_tools_version": "839108f9ba20"
+}
