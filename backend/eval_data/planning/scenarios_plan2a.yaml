@@ -1,4 +1,6 @@
 # Plan 2a scenarios. Run with library_extended.yaml.
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   # ---- Plan 2a additions ----
   - name: empty_fridge_fridge_only

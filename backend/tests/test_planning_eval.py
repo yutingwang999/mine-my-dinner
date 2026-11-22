@@ -79,6 +79,12 @@ def test_summarize_rates_and_averages():
         "max_turn_model_calls": 0,
         "route_as_expected": "0/0",
         "route_first_as_expected": "0/0",
+        "as_expected_by_role": {"unset": "2/2"},
+        "zero_dishes_shown": 0,
+        "wish_unmet_not_said": 0,
+        "buttons": "0/0",
+        "fallbacks": 0,
+        "fallback_scenarios": 0,
     }
 
 
@@ -648,14 +654,21 @@ def test_run_folder_layout_and_summary(tmp_path):
     assert "prices_updated" in cond["models"]
     assert data["timing"]["total_seconds"] == 300
     metrics = data["metrics"]
-    assert set(metrics) == {"basis", "checks", "groups"} and metrics["checks"] == "1/1"
+    assert set(metrics) == {"basis", "checks", "groups", "roles"} and metrics["checks"] == "1/1"
+    assert metrics["roles"] == ["unset"]
     for word in ("model_time_ms", "wall_ms", "per_call"):
         assert word in metrics["basis"]
     assert set(metrics["groups"]) == {"all", "expect_plan", "expect_stop"}
     m = metrics["groups"]["all"]
     assert set(m) == {
-        "scenarios", "outcomes", "calls", "tokens", "cost", "latency", "notes", "revisions"
+        "scenarios", "outcomes", "calls", "tokens", "cost", "latency", "notes", "revisions",
+        "replies",
     }
+    assert m["replies"] == {
+        "zero_dishes_shown": 0, "wish_unmet_not_said": 0, "buttons": "0/0", "fallbacks": 0,
+        "fallback_scenarios": 0,
+    }
+    assert m["outcomes"]["as_expected_by_role"] == {"unset": "1/2"}
     assert m["scenarios"] == 2 and m["outcomes"]["as_expected"] == "1/2"
     assert m["calls"]["embedding_calls"] == {"library": 3, "scenarios": 2, "total": 5}
     assert m["calls"]["max_model_calls"] == 5 and m["calls"]["model_calls"] == 8
@@ -897,12 +910,11 @@ def test_a_follow_up_message_runs_on_the_same_thread(tmp_path, eval_db):
     drops the split, and the second plan is the one judged."""
     model = TitleModel(eval_db, "清炒小白菜")
     model.structured["ParsedRequest"] = [
-        {"meat_dishes": 1, "vegetable_dishes": 1, "mode": "fridge_only"},
-        {"dishes": 1, "mode": "fridge_only"},
+        {"dishes": 1, "meat_dishes": 1, "meat_bound": "exact", "mode": "fridge_only"},
     ]
     scenario = _scenario(
         "button",
-        request="一荤一素，只用冰箱里的",
+        request="一个荤菜，只用冰箱里的",
         follow_up="荤素都行",
         expect_first_reasons=["not_enough_in_library"],
         expect_spec={"meat_dishes": None, "vegetable_dishes": None, "dishes": 1},
@@ -914,15 +926,16 @@ def test_a_follow_up_message_runs_on_the_same_thread(tmp_path, eval_db):
     )
     assert outcome.as_expected, outcome.failures
     assert outcome.final_passed
-    # Route and parse for the first message; parse and planner for the second: the button's
-    # fixed message skips the route call (it is a plan by design).
-    assert outcome.model_calls == 4
-    # The second parse read the whole conversation, ending with the button's message.
+    # Route and parse for the first message; the planner alone for the second: the button
+    # changes the card's request in code, with no route and no parse call (plan 3b-1b spec
+    # 5.5; it was 4 calls while the button's message was still parsed).
+    assert outcome.model_calls == 3
     parse_calls = [m for m in model.sent if "extract the details" in str(m[0].content)]
-    texts = [str(m.content) for m in parse_calls[-1][1:]]
-    assert texts[0] == "一荤一素，只用冰箱里的" and texts[-1] == "荤素都行"
+    assert len(parse_calls) == 1
     # Both turns' runs are saved in order; the single-run field is the judged (last) one.
     first_run, second_run = outcome.record["planning_runs"]
+    assert second_run["request"]["button"] == "relax_split"
+    assert second_run["request"]["spec"]["dishes"] == 1
     assert first_run["id"] < second_run["id"]
     assert outcome.record["planning_run"] == second_run
     assert outcome.planning_run_id == second_run["id"]
@@ -2135,6 +2148,53 @@ def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
     _assert_clean(eval_db)
 
 
+def test_a_fixed_first_plan_rewrites_the_reply_the_route_reads(tmp_path, eval_db):
+    """Development run 2, item 5: first_plan replaced the dishes but the first reply still
+    named the planner's own dishes, so the follow-up's route read a plan the scenario never
+    set. The reply now names the fixed plan's dishes, as a real reply names its card's."""
+    from minemydinner.agent.request import load_prompt
+    from minemydinner.evaluation.revise_eval import FIRST_PLAN_REPLY
+
+    model = ScriptModel(
+        eval_db,
+        [
+            lambda ids: final_proposal(
+                [ids[t] for t in ("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
+                note="先炒青椒肉丝，再做清炒小白菜。",
+            ),
+            _revision("named", remove=[("红烧茄子", "茄子这道")], add=["清炒小白菜"]),
+        ],
+        intents=[{"intent": "plan"}, {"intent": "revise"}],
+        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+    )
+    scenario = _revise_scenario(
+        "reply", rules=[], first_plan=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
+        expect_removed=["红烧茄子"],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    route = load_prompt("route")
+    route_calls = [s for s in model.sent if s and s[0].type == "system" and s[0].content == route]
+    follow_up_route = route_calls[-1]
+    [reply] = [m for m in follow_up_route if m.type == "ai"]
+    assert reply.content == FIRST_PLAN_REPLY["zh"].format(dishes="宫保鸡丁、番茄炒蛋、红烧茄子")
+    assert "青椒肉丝" not in reply.content
+    # The card of that reply is still found by its id (the message was replaced, not added).
+    assert follow_up_route[-1].content == "茄子这道不要，换一个别的"
+    _assert_clean(eval_db)
+
+
+def test_first_plan_reply_sentence_in_both_languages():
+    from minemydinner.evaluation.revise_eval import first_plan_reply
+
+    assert first_plan_reply(["宫保鸡丁", "番茄炒蛋"], "zh") == "这顿做：宫保鸡丁、番茄炒蛋。"
+    assert first_plan_reply(["Kung pao chicken", "Tomato eggs"], "en") == (
+        "This meal: Kung pao chicken, Tomato eggs."
+    )
+
+
 def test_the_choice_card_is_answered_or_stops_the_turn(tmp_path, eval_db):
     model = ScriptModel(
         eval_db,
@@ -2327,3 +2387,476 @@ def test_a_follow_up_that_cannot_be_set_up_is_out_of_the_rates(tmp_path, eval_db
     s = summarize([outcome, RunOutcome("p", True, True, 0, Decimal("0"), 0, 3)])
     assert s["as_expected"] == "1/2" and s["final_pass_rate"] == 1.0 and s["revisions"] == 0
     _assert_clean(eval_db)
+
+
+
+# ---- plan 3b-1b: buttons, unmet wishes, no question, "0 dishes", roles (Task 9) ----
+
+from minemydinner.agent.graph import WISH_UNMET_NOTE_EN, WISH_UNMET_NOTE_ZH  # noqa: E402
+from minemydinner.evaluation.planning import SCENARIO_ROLES  # noqa: E402
+from minemydinner.evaluation.revise_eval import (  # noqa: E402
+    fallback_count,
+    wish_unmet_said,
+    zero_dish_texts,
+)
+
+
+def test_the_loader_reads_the_3b1b_keys(tmp_path):
+    [s] = _load_one(
+        tmp_path,
+        follow_up="x",
+        button_after="switch_to_shopping",
+        expect_wish_unmet=True,
+        expect_no_question=True,
+        expect_follow_up_diner_card=True,
+        expect_request_kept=["query", "meal_avoid"],
+    )
+    assert s.button_after == "switch_to_shopping" and s.expect_wish_unmet is True
+    assert s.expect_no_question is True and s.expect_follow_up_diner_card is True
+    assert s.expect_request_kept == ["query", "meal_avoid"]
+    # A button may follow the first message itself (an early stop), with no follow-up.
+    [s] = _load_one(tmp_path, button_after="relax_split", expect_no_question=False)
+    assert s.button_after == "relax_split" and s.role is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"follow_up": "x", "button_after": "skip_meal"},
+        {"follow_up": "x", "expect_wish_unmet": "yes"},
+        {"follow_up": "x", "expect_no_question": 1},
+        {"follow_up": "x", "expect_follow_up_diner_card": "true"},
+        # The diner card of the follow-up needs a follow-up.
+        {"expect_follow_up_diner_card": True},
+        {"follow_up": "x", "expect_request_kept": "query"},
+        {"follow_up": "x", "expect_request_kept": ["no_such_field"]},
+        # The role is the file's, never a scenario's.
+        {"role": "development"},
+    ],
+)
+def test_the_loader_refuses_bad_3b1b_values(tmp_path, changes):
+    with pytest.raises(ValueError):
+        _load_one(tmp_path, **changes)
+
+
+def test_the_loader_reads_the_file_role(tmp_path):
+    path = tmp_path / "s.yaml"
+    for role in SCENARIO_ROLES:
+        path.write_text(
+            yaml.safe_dump({"role": role, "scenarios": [REVISE_BASE]}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        [s] = load_scenarios(path)
+        assert s.role == role
+    path.write_text(
+        yaml.safe_dump({"role": "secret", "scenarios": [REVISE_BASE]}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError):
+        load_scenarios(path)
+
+
+def test_every_scenario_file_states_its_role():
+    """Every set's role, as the scenario-set table of docs/planning-evaluation-history.md
+    gives it. (scenarios_revise_heldout2.yaml is left out on purpose: its role line is added
+    by the controller.)"""
+    roles = {
+        "scenarios_baseline.yaml": "regression",
+        "scenarios_plan2a.yaml": "regression",
+        "scenarios_counts.yaml": "regression",
+        "scenarios_diners.yaml": "regression",
+        "scenarios_heldout.yaml": "regression",
+        "scenarios_heldout_core.yaml": "regression",
+        "scenarios_revise.yaml": "development",
+        "scenarios_revise_heldout.yaml": "regression",
+    }
+    wrong = []
+    for name, role in roles.items():
+        found = {s.role for s in load_scenarios(EVAL_DIR / name)}
+        if found != {role}:
+            wrong.append(f"{name}: {sorted(map(str, found))}, expected {role}")
+    assert not wrong, wrong
+
+
+def test_zero_dish_texts_find_an_empty_plan_only():
+    texts = [
+        "方案有 0 道菜，要求是 3 道菜",
+        "The plan has 0 dishes; 3 dishes were asked for",
+        "方案有0道菜",
+        "The plan has 0 dish",
+        # Not an empty plan: another category at 0, or a larger number.
+        "方案有 3 道菜，0 道汤，要求是 3 道菜，1 道汤",
+        "方案有 10 道菜",
+        "The plan has 2 dishes, 0 meat dishes",
+        "The plan has 10 dishes",
+        "",
+    ]
+    assert zero_dish_texts(texts) == texts[:4]
+
+
+def test_wish_unmet_said_reads_code_written_signs_only():
+    wish_card = {"unmet": [{"code": "wish_unmet", "text": "x"}], "recipes": [{"id": 1}]}
+    assert wish_unmet_said(wish_card, "", "plan")
+    assert wish_unmet_said(wish_card, "", "revision")
+    for template in (WISH_UNMET_NOTE_ZH, WISH_UNMET_NOTE_EN):
+        assert wish_unmet_said({"unmet": []}, template.format(wish="很辣的") + "\n\n好", "plan")
+    # A failed revision that kept the plan and lists what stopped it.
+    failed = {"plan_kept": True, "unmet": [{"code": "R8", "text": "x"}]}
+    assert wish_unmet_said(failed, "没能改好。", "revision")
+    # Not said: a passed card with a model note only, a kept card with nothing listed, a
+    # question (no card), and the kept-card sign on a new plan.
+    assert not wish_unmet_said({"unmet": []}, "换成了辣的，没有更辣的了。", "revision")
+    assert not wish_unmet_said({"plan_kept": True, "unmet": []}, "你说的是哪道？", "revision")
+    assert not wish_unmet_said(None, "这样就一道菜都不剩了。要重新规划一顿吗？", "revision")
+    assert not wish_unmet_said(failed, "", "plan")
+
+
+def test_fallback_count_counts_code_picked_attempts():
+    runs = [
+        [{"kind": "validation", "fallback": True}, {"kind": "validation"}],
+        [{"kind": "model_call"}, {"kind": "validation", "fallback": True}],
+        [],
+    ]
+    assert fallback_count(runs) == 2
+    assert fallback_count([]) == 0
+
+
+def test_the_3b1b_keys_judge_the_turn():
+    met = _facts(
+        follow_up_card=True,
+        wish_unmet_said=True,
+        offered=("import_recipes", "switch_to_shopping"),
+        button="switch_to_shopping",
+        request={"query": "海鲜", "meal_avoid": [], "mode": "shopping"},
+    )
+    good = {
+        "expect_no_question": True,
+        "expect_wish_unmet": True,
+        "expect_follow_up_diner_card": True,
+        "button_after": "switch_to_shopping",
+        "expect_request_kept": ["query", "mode"],
+    }
+    assert _judge(met, **good) == []
+    cases = [
+        ({"expect_no_question": False}, "question"),
+        ({"expect_wish_unmet": False}, "wish"),
+        ({"expect_follow_up_diner_card": False}, "diner card"),
+        ({"button_after": "fewer_dishes"}, "did not offer"),
+        ({"expect_request_kept": ["meal_avoid"]}, "meal_avoid"),
+    ]
+    for keys, word in cases:
+        failures = _judge(met, **keys)
+        assert len(failures) == 1 and word in failures[0], (keys, failures)
+    # A question or a choice card on the judged turn breaks expect_no_question.
+    for facts in (_facts(questions=1), _facts(choice_card=True)):
+        assert _judge(facts, expect_no_question=True), facts
+    # A button turn whose request was not built in code (no request["button"]).
+    failures = _judge(_facts(offered=("fewer_dishes",)), button_after="fewer_dishes")
+    assert len(failures) == 1 and "in code" in failures[0]
+
+
+def test_summarize_reports_roles_buttons_unmet_wishes_and_zero_dishes():
+    def run(name, ok=True, **changes):
+        return RunOutcome(name, True, True, 0, Decimal("0"), 0, 3, as_expected=ok, **changes)
+
+    s = summarize(
+        [
+            run("d1", role="development"),
+            run("d2", ok=False, role="development", zero_dishes_shown=True),
+            run("g1", role="regression", button="relax_split"),
+            run("h1", role="held-out", button="switch_to_shopping", fallbacks=2),
+            run("h2", ok=False, role="held-out", wish_unmet_missed=True, button="fewer_dishes"),
+            run("h3", ok=False, role="held-out", deferred_to="3b-2", fallbacks=1),
+            run("n"),
+        ]
+    )
+    # Each role's own rate; the regression set never counts toward the held-out one, and a
+    # deferred scenario is reported apart.
+    assert s["as_expected_by_role"] == {
+        "development": "1/2", "regression": "1/1", "held-out": "1/2", "unset": "1/1"
+    }
+    assert s["deferred"] == "0/1"
+    assert s["zero_dishes_shown"] == 1 and s["wish_unmet_not_said"] == 1
+    assert s["buttons"] == "2/3"
+    assert s["fallbacks"] == 3 and s["fallback_scenarios"] == 2
+
+
+def test_diner_checks_keep_the_meal_avoidance(session, monkeypatch):
+    """Hand-off from Task 5: the evaluation rebuilds the meal's constraints with its one-meal
+    avoidance, so the replayed context keeps the user's wish."""
+    from minemydinner.evaluation import planning
+    from minemydinner.planning.context import MealConstraints
+
+    seen: list[MealConstraints] = []
+
+    class _Ctx:
+        rules = ()
+
+    def fake_context(_session, constraints):
+        seen.append(constraints)
+        return _Ctx()
+
+    monkeypatch.setattr(planning, "load_planning_context", fake_context)
+    state = {
+        "constraints": {
+            "diner_ids": [1], "guest_rules": [], "unconfirmed_diners": 0, "meal_avoid": ["肉"],
+        }
+    }
+    planning._diner_failures(session, _scenario(), state, [], [])
+    assert [c.meal_avoid for c in seen] == [("肉",)]
+
+
+def test_label_check_reads_the_card_as_the_client_gets_it(session):
+    """The stored card keeps its request, whose friend_rules code is a label; the client never
+    receives it, so the label check reads the client view of the card (`client_card`)."""
+    from minemydinner.evaluation import planning
+
+    plan = {
+        "recipes": [],
+        "request": {"friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}]},
+        "plan_kept": True,
+    }
+    failures = planning._diner_failures(session, _scenario(), {"current_plan": plan}, [], [])
+    assert not any(f.startswith("label shown") for f in failures)
+    plan["note"] = "Diner 2 会喜欢"
+    failures = planning._diner_failures(session, _scenario(), {"current_plan": plan}, [], [])
+    assert any(f.startswith("label shown") for f in failures)
+
+
+def test_a_button_after_an_early_stop_is_pressed_and_judged(tmp_path, eval_db):
+    """button_after with no follow-up: the first message stops early, the runner presses the
+    card's button with its fixed message, and the button turn is the judged one."""
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [
+        {"dishes": 1, "meat_dishes": 1, "meat_bound": "exact", "mode": "fridge_only"},
+    ]
+    scenario = _scenario(
+        "button",
+        request="一个荤菜，只用冰箱里的",
+        button_after="relax_split",
+        expect_no_question=True,
+        expect_request_kept=["mode"],
+        expect_spec={"meat_dishes": None, "vegetable_dishes": None, "dishes": 1},
+        expect_counts={"dishes": 1},
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    assert outcome.button == "relax_split" and outcome.final_passed
+    # The button turn alone: the planner call (no route, no parse).
+    assert outcome.model_calls == 3 and outcome.turn_model_calls == 1
+    first_run, second_run = outcome.record["planning_runs"]
+    assert second_run["request"]["button"] == "relax_split"
+    assert outcome.planning_run_id == second_run["id"]
+    _assert_clean(eval_db)
+
+
+def test_a_button_the_card_does_not_offer_fails_the_scenario(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [
+        {"dishes": 1, "meat_dishes": 1, "meat_bound": "exact", "mode": "fridge_only"},
+    ]
+    scenario = _scenario(
+        "no_button", request="一个荤菜，只用冰箱里的", expect_plan=False,
+        button_after="drop_time_limit",
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [scenario], InMemorySaver()
+    )
+    assert not outcome.as_expected
+    assert any("did not offer" in f and "drop_time_limit" in f for f in outcome.failures)
+    # The button was not pressed: one run only.
+    assert len(outcome.record["planning_runs"]) == 1
+    _assert_clean(eval_db)
+
+
+def test_an_answered_question_breaks_expect_no_question(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{}, {"dishes": 1, "mode": "shopping"}, {},
+                                         {"dishes": 1, "mode": "shopping"}]
+    asked = _scenario(
+        "asked", request="今晚我一个人吃。", request_style="ask_first",
+        answers=["一个，可以买菜"], expect_no_question=True,
+    )
+    allowed = _scenario(
+        "allowed", request="今晚我一个人吃。", request_style="ask_first",
+        answers=["一个，可以买菜"], expect_no_question=False,
+    )
+    first, second = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [asked, allowed], InMemorySaver()
+    )
+    assert not first.as_expected and any("question" in f for f in first.failures)
+    assert second.as_expected, second.failures
+    _assert_clean(eval_db)
+
+
+def test_zero_dishes_in_a_reply_fails_any_scenario(tmp_path, eval_db):
+    model = NotedTitleModel(eval_db, "清炒小白菜", "这次一共 0 道菜。")
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [_scenario()], InMemorySaver()
+    )
+    assert outcome.zero_dishes_shown and not outcome.as_expected
+    assert any("0 dishes" in f for f in outcome.failures)
+    _assert_clean(eval_db)
+
+
+def test_the_follow_up_diner_card_is_judged_on_the_follow_up(tmp_path, eval_db):
+    model = TitleModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [
+        {"dishes": 1, "mode": "shopping"},
+        {"dishes": 1, "mode": "shopping", "self_rules": {"allergens": ["peanut"]}},
+        {"dishes": 1, "mode": "shopping"},
+        {"dishes": 1, "mode": "shopping"},
+    ]
+    shown = _scenario(
+        "shown", follow_up="我对花生过敏，一直都是", expect_follow_up_diner_card=True
+    )
+    missing = _scenario("missing", follow_up="清淡一点", expect_follow_up_diner_card=True)
+    first, second = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [shown, missing], InMemorySaver()
+    )
+    assert first.as_expected, (first.failures, first.note)
+    assert first.cards_shown == 1
+    assert not second.as_expected
+    assert any("diner card on the follow-up" in f for f in second.failures)
+    _assert_clean(eval_db)
+
+
+def test_an_unmet_wish_on_a_new_plan_is_said(tmp_path, eval_db):
+    class WishModel(TitleModel):
+        def invoke(self, messages, config=None, **kwargs):
+            with self.factory() as session:
+                recipe_id = session.scalar(select(Recipe.id).where(Recipe.title == self.title))
+            self.replies = [
+                tool_call(
+                    "PlanProposal",
+                    {"recipe_ids": [recipe_id], "note": "", "wish_met": False,
+                     "wish_unmet_reason": "没有辣菜"},
+                )
+            ]
+            return ScriptedChatModel.invoke(self, messages, config, **kwargs)
+
+    model = WishModel(eval_db, "清炒小白菜")
+    model.structured["ParsedRequest"] = [{"dishes": 1, "mode": "shopping", "query": "很辣的"}]
+    said = _scenario("said", request="今晚一个菜，要很辣的，可以买菜。", expect_wish_unmet=True)
+    wrong = _scenario("wrong", request="今晚一个菜，要很辣的，可以买菜。", expect_wish_unmet=False)
+    first, second = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), LIBRARY, [said, wrong], InMemorySaver()
+    )
+    assert first.as_expected, (first.failures, first.note)
+    assert not first.wish_unmet_missed
+    assert not second.as_expected and any("wish" in f for f in second.failures)
+    _assert_clean(eval_db)
+
+
+# ---- Task 9 fix round 1 ----
+
+
+def test_a_blocked_button_says_the_turn_before_it_stopped():
+    failures = _judge(
+        _facts(button_blocked="stopped at a question after the follow-up: question"),
+        button_after="switch_to_shopping",
+    )
+    assert len(failures) == 1
+    assert "was not pressed" in failures[0] and "stopped at a question" in failures[0]
+    assert "did not offer" not in failures[0]
+
+
+def test_a_follow_up_revision_before_a_button_counts_as_a_revise_turn():
+    s = summarize(
+        [
+            _revise_outcome("r1", turn_model_calls=2),
+            _revise_outcome("b1", turn_model_calls=3, button="switch_to_shopping",
+                            earlier_revise_calls=9),
+            # A deferred scenario stays out, as for the judged revisions.
+            _revise_outcome("d", turn_model_calls=4, deferred_to="3b-2",
+                            earlier_revise_calls=20),
+        ]
+    )
+    assert s["revisions"] == 2
+    assert s["avg_turn_model_calls"] == pytest.approx(14 / 3)
+    assert s["max_turn_model_calls"] == 9
+
+
+class FridgeAddModel(ScriptedChatModel):
+    """The planner proposes 番茄炒蛋 and 清炒小白菜; the reviser adds nothing in fridge-only
+    mode (nothing more can be made) and adds 蒜蓉西兰花 once shopping is allowed."""
+
+    def __init__(self, factory, intents, parses):
+        super().__init__(
+            replies=[final_proposal([1])],
+            structured={"Intent": list(intents), "ParsedRequest": list(parses)},
+        )
+        self.factory = factory
+
+    def invoke(self, messages, config=None, **kwargs):
+        with self.factory() as session:
+            ids = dict(session.execute(select(Recipe.title, Recipe.id)).all())
+        text_sent = " ".join(str(m.content) for m in messages)
+        if messages and "RevisionProposal" in str(messages[0].content):
+            shopping = "Mode: shopping" in text_sent
+            self.replies = [_revision("add", add=["蒜蓉西兰花"] if shopping else [],
+                                      note="冰箱里没有能再做的菜了。")(ids)]
+        else:
+            self.replies = [_propose("番茄炒蛋", "清炒小白菜")(ids)]
+        return super().invoke(messages, config, **kwargs)
+
+
+def test_a_button_after_a_failed_revision_revises_the_kept_plan(tmp_path, eval_db):
+    """A fridge-only add that finds nothing to make fails and keeps the plan; the runner
+    presses "allow shopping", which revises the kept plan again with the card's request."""
+    model = FridgeAddModel(
+        eval_db,
+        intents=[{"intent": "plan"}, {"intent": "revise"}],
+        parses=[{"dishes": 2, "mode": "fridge_only"}, {"dishes": 3, "counts_stated_now": True}],
+    )
+    scenario = _revise_scenario(
+        "after_failed",
+        request="今晚两个菜，只用冰箱里的。",
+        rules=[],
+        inventory={"番茄": 3, "鸡蛋": 3, "小白菜": "plenty"},
+        follow_up="再加一道",
+        button_after="switch_to_shopping",
+        expect_no_question=True,
+        expect_spec={"mode": "shopping"},
+        expect_max_changed=0,
+        expect_titles_exact=["番茄炒蛋", "清炒小白菜", "蒜蓉西兰花"],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    assert outcome.turn == "revision" and outcome.button == "switch_to_shopping"
+    first_run, follow_run, button_run = outcome.record["planning_runs"]
+    assert follow_run["final_passed"] is False and follow_run["request"]["revision"]
+    assert button_run["request"]["button"] == "switch_to_shopping"
+    assert button_run["request"]["revision"] is not None
+    # The button turn: one revise call; the failed follow-up's revise turn: route, parse and
+    # one attempt, counted apart (an empty add that fails only the counts is "nothing fits",
+    # not retried: development run 1 of plan 3b-1b).
+    assert outcome.turn_model_calls == 1
+    assert outcome.earlier_revise_calls == 2 + 1
+    _assert_clean(eval_db)
+
+
+def test_runner_presses_the_newest_card_after_a_reply_without_one():
+    """Final review I-1: the runner's button card follows the chat (the newest card stays
+    actionable after a reply without a card); wish_unmet_said still reads the newest reply's
+    own card, none for the empty-plan question."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from minemydinner.evaluation.planning import _last_card, _last_reply_card
+
+    kept = {"plan_kept": True, "next_actions": ["switch_to_shopping"]}
+    values = {
+        "messages": [
+            HumanMessage("想吃点海鲜"),
+            AIMessage("没能改好。", id="a"),
+            HumanMessage("全都不要了"),
+            AIMessage("这样就一道菜都不剩了。要重新规划一顿吗？", id="b"),
+        ],
+        "reply_plans": {"a": kept},
+    }
+    assert _last_card(values) is kept
+    assert _last_reply_card(values) is None
+    assert _last_card({"messages": [AIMessage("hi", id="c")], "reply_plans": {}}) is None

@@ -3,7 +3,7 @@ database. The revise step asks the model for a `RevisionProposal`; the code here
 it respects the locks, the quotes, the change-size limit, and the plan's counts."""
 
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -31,12 +31,41 @@ class RemovedDish(BaseModel):
             "it has an open conflict."
         ),
     )
+    mode: Literal["drop", "replace"] = Field(
+        default="replace",
+        description=(
+            "What the user wants for this dish. \"drop\": the words only say not to have it "
+            "(\"茄子这道不要\", \"去掉茄子\", \"drop the soup\"); the plan gets smaller and no "
+            "dish takes its place. \"replace\": the words want another dish in its place "
+            "(\"换 / 换成 / 换一个 / 来个 / 再要一道\", \"swap it for something else\"); add one "
+            "dish of the same dish type for it, unless the user names the replacement "
+            "(replace_with). A dish removed because it breaks a wish for this meal only "
+            "(\"今天不想吃肉\") is replaced, never dropped."
+        ),
+    )
+    replace_with: int | None = Field(
+        default=None,
+        description=(
+            "Only for mode \"replace\", when the user names the dish that takes this one's place "
+            "(\"把青椒肉丝换成蒜蓉西兰花\"): the recipe id of that dish. It must also be in add, "
+            "and replace_with_quote must hold the user's words that name it. The named dish is "
+            "used even when it is another dish type. Leave it null otherwise."
+        ),
+    )
+    replace_with_quote: str = Field(
+        default="",
+        description=(
+            "Only with replace_with: the user's exact words from the latest message that name "
+            "the replacement dish, copied character for character. It must match that dish "
+            "(part of its title or one of its ingredients). Empty otherwise."
+        ),
+    )
 
 
 class RevisionProposal(BaseModel):
     """What the revision changes in the current plan, and why the message allows it."""
 
-    target: Literal["named", "scope", "general", "unclear"] = Field(
+    target: Literal["named", "scope", "general", "add", "unclear"] = Field(
         description=(
             "Which dishes the latest message targets. \"named\": it points at specific dishes "
             "(\"茄子这道不要\", \"drop the soup\"); give a quote for each removed dish. "
@@ -45,7 +74,11 @@ class RevisionProposal(BaseModel):
             "leaves out in excepted. \"general\": it is a wish that points at no particular "
             "dish (\"something spicier\", \"not so many egg dishes\"); a general ingredient or "
             "taste word that does not point at one dish is a general wish, not a named dish, "
-            "and so is a wish to change without saying how (\"换个思路\"); locked dishes stay. "
+            "and so is a wish to change without saying how (\"来点不一样的\"); it replaces "
+            "dishes and never drops one, and locked dishes stay. A message that lowers the "
+            "number of dishes (\"两个菜就够了\") is general too, and its removals are drops. "
+            "\"add\": the message only adds dishes (\"再加一道\", \"add a green vegetable\") and "
+            "removes nothing: remove must be empty and add holds the new dishes. "
             "\"unclear\": only when the message points at a dish but you cannot tell which one "
             "(\"drop the soup\" with two soups); change nothing (empty remove and add) and say "
             "in note what to ask the user."
@@ -78,8 +111,11 @@ class RevisionProposal(BaseModel):
     )
     note: str = Field(
         description=(
-            "One or two sentences for the user, in the user's language, on what you changed "
-            "and why, or, for \"unclear\", the question that asks which dish is meant."
+            "One or two sentences for the user, in the reply locale: only why the new dishes "
+            "fit the wish, or, for \"unclear\", the question that asks which dish is meant, "
+            "or, when nothing fits, why. Do not list what changed; code writes "
+            "that. Never use internal words such as LOCKED, OPEN CONFLICT, KEPT CONFLICT or "
+            "recipe ids, nor their translations."
         )
     )
 
@@ -95,7 +131,7 @@ def asks_back(proposal: RevisionProposal | dict) -> bool:
 class RevisionProblem(BaseModel):
     """A way the proposal breaks the rules; `text` is English and goes into the retry message."""
 
-    code: Literal["R1", "R2", "R3", "R4", "R5", "R6"]
+    code: Literal["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"]
     recipe_id: int | None = None
     text: str
 
@@ -107,6 +143,7 @@ class DishFacts:
     title: str
     ingredient_names: list[str]
     category_words: list[str]
+    dish_type: str = ""
 
 
 def max_general_changes(unlocked: int) -> int:
@@ -120,12 +157,14 @@ def quote_matches(
     quote: str, title: str, ingredient_names: Iterable[str], category_words: Iterable[str]
 ) -> bool:
     """True when the quote contains two characters in a row of the title, an ingredient name,
-    or a category word."""
+    or a category word, or is one character equal to the title's last character ("面")."""
     text = quote.casefold()
     if not text.strip():
         return False
     name = title.casefold()
     if any(name[i : i + 2] in text for i in range(len(name) - 1)):
+        return True
+    if len(text.strip()) == 1 and text.strip() == name[-1:]:
         return True
     words = [*ingredient_names, *category_words]
     return any(word.strip() and word.casefold() in text for word in words)
@@ -146,10 +185,18 @@ def check_revision(
     dish_facts: dict[int, DishFacts],
     *,
     spec: PlanSpec | None = None,
+    avoid_ids: Collection[int] = (),
+    counts_stated: bool = False,
 ) -> list[RevisionProblem]:
-    """The rules of spec 5.2. A dish with an open conflict is never locked, needs no quote to
-    leave, and is outside the general wish's limit. `spec` is the revision's target spec
-    (`revision_spec`): the removals a lower total needs are outside the limit too."""
+    """The rules of spec 5.2 and 5.4. A dish with an open conflict is never locked, needs no
+    quote to leave, and is outside the general wish's limit. `spec` is the revision's target
+    spec (`revision_spec`): the removals a lower total needs are outside the limit too.
+    `avoid_ids` are the plan's dishes that break this meal's avoidance: they count as named
+    (no quote, locked allowed, outside the limit) and may be replaced by another dish type.
+    `counts_stated` (the parse says the message states a count change) allows extra added
+    dishes, other-type replacements and a missing replacement; the caller must pass facts for
+    the added ids too (unknown-type dishes match any removal). `spec` only feeds R4's count-cut
+    exemption."""
     problems: list[RevisionProblem] = []
 
     def add(code: str, recipe_id: int | None, text: str) -> None:
@@ -157,8 +204,10 @@ def check_revision(
 
     in_plan = [r["id"] for r in plan["recipes"]]
     titles = {r["id"]: r["title"] for r in plan["recipes"]}
-    conflicted = _open_conflict_ids(plan)
+    avoided = set(avoid_ids)
+    conflicted = _open_conflict_ids(plan) | avoided
     locked = locked_ids(plan) - conflicted
+    types = {r["id"]: r["dish_type"] for r in plan["recipes"]}
     removed = [r for r in proposal.remove if r.id in titles]
 
     if proposal.target == "unclear" and (proposal.remove or proposal.add):
@@ -172,6 +221,37 @@ def check_revision(
     for recipe_id in proposal.add:
         if recipe_id in titles:
             add("R6", recipe_id, f"Dish {recipe_id} is already in the plan, so it cannot be added.")
+
+    if proposal.target == "add" and proposal.remove:
+        add("R8", None, "The message only adds dishes, so remove must be empty.")
+    if proposal.target == "add" and not proposal.add:
+        add("R8", None, "The message adds dishes, but nothing was added.")
+    for item in removed:
+        if item.replace_with is None:
+            continue
+        if item.mode != "replace":
+            add("R6", item.id, "replace_with is only for a removal with mode \"replace\".")
+        elif item.replace_with not in proposal.add:
+            add("R6", item.id, f"Dish {item.replace_with} is the named replacement, so it must be in add.")
+        elif not item.replace_with_quote.strip():
+            add("R2", item.replace_with, "The named replacement needs a quote of the words that name it.")
+        elif item.replace_with_quote not in message:
+            add(
+                "R1",
+                item.replace_with,
+                f"The quote \"{item.replace_with_quote}\" does not appear in the message.",
+            )
+        else:
+            facts = dish_facts.get(item.replace_with) or DishFacts("", [], [])
+            if not quote_matches(
+                item.replace_with_quote, facts.title, facts.ingredient_names, facts.category_words
+            ):
+                add(
+                    "R2",
+                    item.replace_with,
+                    f"The quote \"{item.replace_with_quote}\" does not name the replacement "
+                    f"dish {item.replace_with}.",
+                )
 
     if proposal.target == "named":
         for item in removed:
@@ -232,7 +312,88 @@ def check_revision(
                 f"dishes with an open conflict are not counted; this removes {counted} other "
                 "dishes.",
             )
+    if proposal.target != "unclear":
+        _check_pairing(proposal, removed, types, dish_facts, avoided, counts_stated, add)
+    if proposal.remove and not revised_ids(plan, proposal):
+        add("R9", None, "This change would leave the plan with no dish.")
     return problems
+
+
+def _check_pairing(proposal, removed, types, dish_facts, avoided, counts_stated, add) -> None:
+    """The size rules (R7). A general wish never drops (R7), unless the message states a
+    count change ("两个菜就够了" points at no dish, and its removals are drops). Every
+    replace-removal needs one added dish: matched by dish type; a dish named by `replace_with` and a replacement of an
+    avoided dish may be another type; so may any replacement when the message states a count
+    (`counts_stated`). An added dish whose type is unknown here (no facts yet) matches any
+    removal, so this never misfires before the caller supplies facts for the added ids. A
+    replace-removal left without an added dish is a missing replacement, and an added dish left
+    over is an extra; both are allowed only when counts are stated (extras also under target
+    add)."""
+    if proposal.target == "general" and not counts_stated:
+        for item in removed:
+            if item.mode == "drop":
+                add(
+                    "R7",
+                    item.id,
+                    f"A general wish never drops a dish: replace dish {item.id} with one of the "
+                    "same dish type.",
+                )
+    added = [i for i in dict.fromkeys(proposal.add) if i not in types]
+    kind = {i: (dish_facts[i].dish_type if i in dish_facts else "") for i in added}
+    pending = [r for r in removed if r.mode == "replace"]
+
+    def take(item, adds) -> bool:
+        pending.remove(item)
+        added.remove(adds)
+        return True
+
+    for item in list(pending):
+        if item.replace_with in added:
+            take(item, item.replace_with)
+    ordered = sorted(pending, key=lambda r: r.id in avoided)
+    for item in ordered:
+        same = next((i for i in added if kind[i] == types[item.id]), None)
+        if same is not None:
+            take(item, same)
+    for item in [r for r in ordered if r in pending]:
+        unknown = next((i for i in added if not kind[i]), None)
+        if unknown is not None:
+            take(item, unknown)
+    for item in [r for r in ordered if r in pending and r.id in avoided]:
+        if added:
+            take(item, added[0])
+    for item in [r for r in ordered if r in pending]:
+        if added:
+            other = added[0]
+            take(item, other)
+            if not counts_stated:
+                add(
+                    "R7",
+                    item.id,
+                    f"Dish {item.id} is a {types[item.id]}, so its replacement must be a "
+                    f"{types[item.id]} too, unless the user names the replacement dish or the "
+                    "message changes a count.",
+                )
+        elif not counts_stated:
+            add("R7", item.id, f"Dish {item.id} is replaced but no dish is added in its place.")
+    if added and proposal.target != "add" and not counts_stated:
+        add(
+            "R7",
+            added[0],
+            f"Dish {added[0]} replaces no removed dish; add extra dishes only when the message "
+            "asks for more dishes.",
+        )
+
+
+def attempt_counts(
+    plan: dict, proposal: RevisionProposal, dish_types: dict[int, str]
+) -> dict[str, int]:
+    """The category counts of the revised plan: `count_categories` over the dish types of
+    `revised_ids` (a dish's type from `dish_types`, else from the plan)."""
+    own = {r["id"]: r["dish_type"] for r in plan["recipes"]}
+    return count_categories(
+        dish_types.get(i) or own.get(i, "") for i in revised_ids(plan, proposal)
+    )
 
 
 _REPLACED_FIELDS = ("mode", "time_limit_min", "must_use", "prefer_use", "all_use")
@@ -265,6 +426,12 @@ def _changed_counts(request: dict, previous: dict | None) -> set[str]:
         for n in COUNT_FIELDS
         if (_stated(request, previous, n) if n in SPLIT_CATEGORIES else request.get(n) is not None)
     }
+
+
+def counts_changed(request: dict, previous: dict | None) -> bool:
+    """True when the newest message states a count change (the `counts_stated` of
+    `check_revision`)."""
+    return bool(_changed_counts(request, previous))
 
 
 def revision_spec(plan: dict, previous_request: dict | None, request: dict) -> PlanSpec:
@@ -309,6 +476,75 @@ def revision_spec(plan: dict, previous_request: dict | None, request: dict) -> P
         if _stated(request, previous_request, name):
             updates[name] = request[name]
     return PlanSpec.model_validate({**spec.model_dump(), **updates})
+
+
+# The conditions of a request a revise turn's parse may leave unstated: a null or an empty list
+# is no statement, so the plan's request fills it (development run 3 of plan 3b-1b).
+_CARRIED_CONDITIONS = (
+    "mode",
+    "time_limit_min",
+    "query",
+    "must_use",
+    "prefer_use",
+    "all_use",
+    "exclude_recent_days",
+    "meal_avoid",
+)
+_COUNT_GROUP = (*COUNT_FIELDS, "meat_bound", "vegetable_bound", "range_fields")
+
+
+def _unset(value) -> bool:
+    return value is None or value == []
+
+
+def carry_unstated(parsed: dict, plan_request: dict | None) -> dict:
+    """A revise turn's parse with its unstated fields filled from the request the current plan
+    was built from, so a null never reads as a value: not as "only me" in the diner-card check
+    and not as a default in a new plan the turn falls back to (a change in who eats).
+
+    - The conditions (`_CARRIED_CONDITIONS`) are filled one by one.
+    - The counts are filled as a group, only when the parse states none and the message
+      states no count (`counts_stated_now` not true), so an old split never joins a new total.
+    - Who eats (`headcount`, `others_mentioned`) is filled only when the parse says nothing
+      about people: no headcount, nobody else mentioned, no guest and no friend rule. A stated
+      headcount (also 1) stays, so "就我自己吃" still shows the card.
+    - Guests, friend rules and the user's own rules are never filled: the settled diner set
+      holds them, and a stated one is a change in who eats.
+
+    The revision itself compares with the same request (`revision_spec`), where a value equal
+    to it is no change, so filling changes nothing there."""
+    if not plan_request:
+        return parsed
+    filled = dict(parsed)
+    for name in _CARRIED_CONDITIONS:
+        if _unset(filled.get(name)) and not _unset(plan_request.get(name)):
+            filled[name] = plan_request[name]
+    if filled.get("counts_stated_now") is not True and all(
+        _unset(filled.get(name)) for name in _COUNT_GROUP
+    ):
+        for name in _COUNT_GROUP:
+            if not _unset(plan_request.get(name)):
+                filled[name] = plan_request[name]
+    mentions_people = (
+        filled.get("headcount") is not None
+        or filled.get("others_mentioned")
+        or filled.get("guests")
+        or filled.get("friend_rules")
+    )
+    if not mentions_people:
+        filled["headcount"] = plan_request.get("headcount")
+        filled["others_mentioned"] = bool(plan_request.get("others_mentioned"))
+    return filled
+
+
+def revision_meal_avoid(plan: dict, previous_request: dict | None, request: dict) -> list[str]:
+    """This meal's one-meal avoidance for a revision (plan 3b-1b spec 5.4), like the other
+    conditions of `revision_spec`: the request's when it states one that differs from the
+    previous request, else the plan's own (a card saved before the field has none). An empty
+    list never clears it."""
+    if _stated(request, previous_request, "meal_avoid"):
+        return list(request["meal_avoid"])
+    return list(plan.get("meal_avoid") or [])
 
 
 def revised_ids(plan: dict, proposal: RevisionProposal) -> list[int]:

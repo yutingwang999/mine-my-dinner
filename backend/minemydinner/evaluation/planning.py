@@ -42,7 +42,13 @@ from minemydinner.agent.labels import (
     restore_labels,
 )
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.agent.request import REQUEST_STYLES, ParsedRequest, set_request_style
+from minemydinner.agent.plan_card import client_card, meal_constraints
+from minemydinner.agent.request import (
+    ACTION_MESSAGES,
+    REQUEST_STYLES,
+    ParsedRequest,
+    set_request_style,
+)
 from minemydinner.dictionary.service import resolve_allergens
 from minemydinner.extraction.normalize import all_terms, find_term_owner
 from minemydinner.llm.client import LLMClient
@@ -72,8 +78,10 @@ from minemydinner.evaluation.revise_eval import (
     TurnFacts,
     apply_edits,
     asked_back,
+    asked_empty,
     bring_back,
     check_revise_keys,
+    fallback_count,
     follow_up_failures,
     hide_dishes,
     locked_of,
@@ -82,10 +90,12 @@ from minemydinner.evaluation.revise_eval import (
     replace_first_plan,
     route_of,
     title_problems,
+    wish_unmet_said,
+    zero_dish_texts,
 )
 from minemydinner.recipes.embedding import try_embed_recipe
 from minemydinner.planning.composition import count_categories
-from minemydinner.planning.context import MealConstraints, RuleRef, load_planning_context
+from minemydinner.planning.context import MealConstraints, load_planning_context
 from minemydinner.planning.shortlist import (
     SHORTLIST_SAME_MAIN,
     build_shortlist_result,
@@ -184,6 +194,22 @@ class RunOutcome:
     # Whether the judged turn is a follow-up (route accuracy is reported apart for follow-ups
     # and first messages).
     follow_up: bool = False
+    # ---- plan 3b-1b ----
+    # The scenario file's role (development | regression | held-out); None when unstated.
+    role: str | None = None
+    # The next-action button the scenario presses (button_after), else None.
+    button: str | None = None
+    # A reply or unmet text said the plan has 0 dishes (spec 5.6: never shown).
+    zero_dishes_shown: bool = False
+    # The scenario expects an unmet wish to be said (expect_wish_unmet: true) and it was not.
+    wish_unmet_missed: bool = False
+    # Attempts whose dishes code picked because the planner gave no answer, over every run
+    # of the scenario.
+    fallbacks: int = 0
+    # With button_after after a follow-up that ran the revise step: that revise turn's
+    # planning_eval model calls (turn_model_calls holds the button turn's). Counted in the
+    # calls per revise turn; None otherwise.
+    earlier_revise_calls: int | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +309,24 @@ class Scenario:
     library_exclude: list[str] = field(default_factory=list)
     # The expected result needs a later plan: run and reported, kept out of the rates.
     deferred_to: str | None = None
+    # ---- plan 3b-1b (the keys are defined in the header of scenarios_revise.yaml) ----
+    # After the last message (the follow-up, else the first message), press this
+    # next-action button of the newest card with its fixed message; the button turn is then
+    # the judged turn. The scenario fails when the card does not offer it.
+    button_after: str | None = None
+    # The judged turn tells the user, in code-written form, that the wish was not met
+    # (revise_eval.wish_unmet_said).
+    expect_wish_unmet: bool | None = None
+    # The judged turn asks no question (ask-first, count, which-dish, empty-plan) and shows
+    # no choice card (true), or asks one (false).
+    expect_no_question: bool | None = None
+    # A diner card appears on the follow-up turn itself.
+    expect_follow_up_diner_card: bool | None = None
+    # Request fields that must be non-empty in the judged turn's request (its run's parsed
+    # request), such as an earlier wish kept after a button.
+    expect_request_kept: list[str] = field(default_factory=list)
+    # The file's role, from its top-level `role:` key (never set per scenario).
+    role: str | None = None
 
 
 def _ratio(part: float, whole: int) -> float:
@@ -304,6 +348,15 @@ def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
     revisions = [r for r in rated if r.turn == "revision"]
     routed = [r for r in rated if r.route_as_expected is not None and r.follow_up]
     routed_first = [r for r in rated if r.route_as_expected is not None and not r.follow_up]
+    buttons = [r for r in rated if r.button]
+    # Calls of every revise turn: the judged revisions, and a follow-up revision a button
+    # followed (plan 3b-1b; section 6 caps every revise turn).
+    revise_calls = [r.turn_model_calls for r in revisions] + [
+        r.earlier_revise_calls for r in rated if r.earlier_revise_calls is not None
+    ]
+    by_role: dict[str, list[RunOutcome]] = {}
+    for r in rated:
+        by_role.setdefault(r.role or "unset", []).append(r)
     count = len(runs)
     input_total = sum(r.input_tokens for r in runs)
     return {
@@ -323,15 +376,25 @@ def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
         "revision_pass_rate": _ratio(sum(r.final_passed for r in revisions), len(revisions)),
         "locked_removed": sum(r.locked_removed for r in revisions),
         "avg_changed": _ratio(sum(r.changed for r in revisions), len(revisions)),
-        "avg_turn_model_calls": _ratio(
-            sum(r.turn_model_calls for r in revisions), len(revisions)
-        ),
-        "max_turn_model_calls": max((r.turn_model_calls for r in revisions), default=0),
+        "avg_turn_model_calls": _ratio(sum(revise_calls), len(revise_calls)),
+        "max_turn_model_calls": max(revise_calls, default=0),
         # Over follow-ups (the brief's route accuracy) and over first messages, apart.
         "route_as_expected": f"{sum(bool(r.route_as_expected) for r in routed)}/{len(routed)}",
         "route_first_as_expected": (
             f"{sum(bool(r.route_as_expected) for r in routed_first)}/{len(routed_first)}"
         ),
+        # Plan 3b-1b: each role's rate apart (a regression set never counts toward the
+        # held-out rate; deferred scenarios are in `deferred`), and the checks every scenario
+        # gets, over all runs.
+        "as_expected_by_role": {
+            role: f"{sum(r.as_expected for r in items)}/{len(items)}"
+            for role, items in by_role.items()
+        },
+        "zero_dishes_shown": sum(r.zero_dishes_shown for r in runs),
+        "wish_unmet_not_said": sum(r.wish_unmet_missed for r in runs),
+        "buttons": f"{sum(r.as_expected for r in buttons)}/{len(buttons)}",
+        "fallbacks": sum(r.fallbacks for r in runs),
+        "fallback_scenarios": sum(r.fallbacks > 0 for r in runs),
     }
 
 
@@ -859,7 +922,7 @@ def clear_app_tables(factory: sessionmaker[Session]) -> None:
 # ---- inputs ----
 
 
-def _read_yaml(path: Path, key: str) -> list[dict[str, Any]]:
+def _read_document(path: Path, key: str) -> dict[str, Any]:
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
@@ -867,7 +930,16 @@ def _read_yaml(path: Path, key: str) -> list[dict[str, Any]]:
     items = document.get(key) if isinstance(document, dict) else None
     if not isinstance(items, list) or not items:
         raise InputError(f"{path} needs a non-empty '{key}' list")
-    return items
+    return document
+
+
+def _read_yaml(path: Path, key: str) -> list[dict[str, Any]]:
+    return _read_document(path, key)[key]
+
+
+# A scenario file's role (docs/planning-evaluation-history.md, "Scenario sets"), stated as a
+# top-level `role:` key next to `scenarios:`. A file without one loads with role None.
+SCENARIO_ROLES = ("development", "regression", "held-out")
 
 
 def read_library(path: Path) -> list[dict[str, Any]]:
@@ -877,10 +949,17 @@ def read_library(path: Path) -> list[dict[str, Any]]:
 def load_scenarios(path: Path, library_titles: Collection[str] | None = None) -> list[Scenario]:
     """Read and check the scenarios. With `library_titles`, every title a follow-up key names
     must be a library dish (`check_titles`)."""
+    document = _read_document(path, "scenarios")
+    role = document.get("role")
+    if role is not None and role not in SCENARIO_ROLES:
+        raise ValueError(f"{path.name}: role must be one of {list(SCENARIO_ROLES)}")
     scenarios = []
-    for item in _read_yaml(path, "scenarios"):
+    for item in document["scenarios"]:
+        if isinstance(item, dict) and "role" in item:
+            name = item.get("name", "?")
+            raise ValueError(f"Bad scenario {name}: role is set for the whole file")
         try:
-            scenario = Scenario(**item)
+            scenario = Scenario(**item, role=role)
         except TypeError as error:
             raise ValueError(f"Bad scenario {item.get('name', '?')}: {error}") from error
         if scenario.locale not in ("zh", "en"):
@@ -1169,11 +1248,13 @@ def _drive(
     answers: list[str],
     cards: list[dict[str, Any]],
     choices: list[dict[str, Any]] | None = None,
+    questions: list[Any] | None = None,
 ) -> str:
     """Send one user message and answer what the graph asks, the way the chat API resumes:
     the diner card from `diners_answer` (every card shown is added to `cards`), the choice
     card from `choice_answer` (every one shown is added to `choices`), and other questions
-    with the next of `answers` (consumed). Returns "" when the turn ended, CHOICE_STOP when
+    with the next of `answers` (consumed; every question asked, answered or not, is added to
+    `questions`). Returns "" when the turn ended, CHOICE_STOP when
     it stopped at a choice card the scenario does not answer, or a note when it stopped at a
     question the scenario does not answer."""
     graph.invoke({"messages": [HumanMessage(text)], "locale": scenario.locale}, config)
@@ -1196,10 +1277,12 @@ def _drive(
             if scenario.choice_answer is None:
                 return CHOICE_STOP
             resume = scenario.choice_answer
-        elif kind == "question" and answers:
-            resume = answers.pop(0)
         else:
-            return f"stopped at a question: {kind}"
+            if kind == "question" and questions is not None:
+                questions.append(value)
+            if kind != "question" or not answers:
+                return f"stopped at a question: {kind}"
+            resume = answers.pop(0)
         # By interrupt id, as the chat API does.
         graph.invoke(Command(resume={pending[0].id: resume}), config)
     return "stopped: too many questions in one turn"
@@ -1229,13 +1312,9 @@ def _diner_failures(
 ) -> list[str]:
     """The diner expectations and the two privacy checks, read after the scenario ran."""
     rules: list[dict[str, Any]] = []
-    data = state.get("constraints")
-    if data:
-        constraints = MealConstraints(
-            diner_ids=tuple(data["diner_ids"]),
-            guest_rules=tuple(RuleRef(**rule) for rule in data.get("guest_rules") or []),
-            unconfirmed_diners=data["unconfirmed_diners"],
-        )
+    if state.get("constraints"):
+        # As the graph builds them, the meal's one-meal avoidance included (plan 3b-1b).
+        constraints = meal_constraints(state)
         rules = [asdict(rule) for rule in load_planning_context(session, constraints).rules]
     diner_names = {
         f"diner:{diner.id}": "me" if diner.is_self else diner.display_name
@@ -1256,7 +1335,8 @@ def _diner_failures(
         if isinstance(m, AIMessage) and isinstance(m.content, str)
     ]
     shown += [text for card in cards for text in _strings(card)]
-    shown += list(_strings(state.get("current_plan")))
+    # The plan card as the client gets it: its stored request keeps label codes (plan 3b-1b).
+    shown += list(_strings(client_card(state.get("current_plan"))))
     return [
         *card_failures(scenario.expect_card, cards, ingredient_names),
         *rule_failures(
@@ -1284,6 +1364,38 @@ def _shown_plan(values: dict[str, Any]) -> dict[str, Any] | None:
     return values["reply_plans"][reply_id]
 
 
+def _last_card(values: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest card of the thread, also after later replies without a card (the empty-plan
+    question, an "other" reply): its buttons are the ones the chat keeps actionable (plan
+    3b-1b). None when no reply has a card."""
+    try:
+        return values["reply_plans"][newest_reply_id(values)]
+    except EditError:
+        return None
+
+
+def _last_reply_card(values: dict[str, Any]) -> dict[str, Any] | None:
+    """The card of the newest assistant reply, None when that reply has none (the empty-plan
+    question, an "other" reply)."""
+    for message in reversed(values.get("messages") or []):
+        if isinstance(message, AIMessage):
+            return (values.get("reply_plans") or {}).get(message.id or "")
+    return None
+
+
+def _shown_texts(values: dict[str, Any]) -> list[str]:
+    """Every reply's text and every card's unmet text of the thread, for the "0 dishes"
+    check."""
+    texts = [
+        str(m.content) for m in values.get("messages") or [] if isinstance(m, AIMessage)
+    ]
+    cards = [*(values.get("reply_plans") or {}).values(), values.get("current_plan") or {}]
+    texts += [
+        str(entry.get("text") or "") for card in cards for entry in card.get("unmet") or []
+    ]
+    return texts
+
+
 def run_scenario(
     graph,
     factory: sessionmaker[Session],
@@ -1309,54 +1421,96 @@ def run_scenario(
     note = ""
     first_plan = None
     cards: list[dict[str, Any]] = []
-    # The choice cards of the judged turn.
+    # The choice cards and the questions of the judged turn.
     choices: list[dict[str, Any]] = []
+    questions: list[Any] = []
     answers = list(scenario.answers)
-    # Set once the follow-up is sent: the plan before it, its version count, and the last
-    # planning run before it (the follow-up's runs come after).
+    # Set once the judged follow-up (a follow-up message, or a button) is sent: the plan
+    # before it, its version count, and the last planning run before it (its runs come after).
     follow_up_sent = False
     before: dict[str, Any] | None = None
     versions_before = 0
     run_mark = 0
-    # The last llm_calls row before the follow-up: the follow-up turn's calls come after.
+    # The last llm_calls row before the judged follow-up: its calls come after.
     call_mark = watermark
     asked = False
     setup_failed = False
     hidden = None
+    # Plan 3b-1b: whether a diner card appeared on the follow-up message's turn, and the
+    # next actions of the card a button_after scenario presses its button on.
+    follow_up_card = False
+    offered: tuple[str, ...] = ()
+    pressed = False
+    # The (run, call) marks before the follow-up message, kept when a button follows it, so
+    # the follow-up's own revise turn still counts toward the calls per revise turn.
+    earlier_marks: tuple[int, int] | None = None
+    # The turn each message's choices and questions are collected for: the last one sent.
+    last_first = not scenario.follow_up and not scenario.button_after
+    last_follow_up = not scenario.button_after
+
+    def mark_turn() -> None:
+        nonlocal before, versions_before, run_mark, call_mark, follow_up_sent
+        values = graph.get_state(config).values
+        before = values.get("current_plan")
+        versions_before = len(values.get("plan_versions") or [])
+        with factory() as session:
+            run_mark = session.scalar(
+                select(func.coalesce(func.max(PlanningRun.id), 0)).where(
+                    PlanningRun.thread_id == thread_id
+                )
+            )
+            call_mark = session.scalar(select(func.coalesce(func.max(LlmCall.id), 0)))
+        follow_up_sent = True
+
     try:
         if scenario.library_exclude:
             hidden = hide_dishes(factory, scenario.library_exclude)
         note = _drive(
             graph, factory, config, scenario, scenario.request, answers, cards,
-            None if scenario.follow_up else choices,
+            choices if last_first else None, questions if last_first else None,
         )
         asked = note == QUESTION_STOP
         if not note and scenario.follow_up:
             # expect_first_reasons judges the model's own first plan, before first_plan
-            # replaces its dishes.
+            # replaces its dishes. first_plan also replaces the first reply's text with a
+            # sentence naming the fixed dishes, so the follow-up's route and parse read the
+            # plan the scenario set (development run 2 of plan 3b-1b).
             first_plan = graph.get_state(config).values.get("current_plan")
             if scenario.first_plan:
                 replace_first_plan(graph, factory, config, scenario.first_plan, scenario.locale)
             run_between_turns(factory, scenario.between_turns)
             apply_edits(graph, factory, config, scenario.edits_between_turns, scenario.locale)
-            values = graph.get_state(config).values
-            before = values.get("current_plan")
-            versions_before = len(values.get("plan_versions") or [])
-            with factory() as session:
-                run_mark = session.scalar(
-                    select(func.coalesce(func.max(PlanningRun.id), 0)).where(
-                        PlanningRun.thread_id == thread_id
-                    )
-                )
-                call_mark = session.scalar(select(func.coalesce(func.max(LlmCall.id), 0)))
-            follow_up_sent = True
+            mark_turn()
+            cards_before = len(cards)
             note = _drive(
-                graph, factory, config, scenario, scenario.follow_up, answers, cards, choices
+                graph, factory, config, scenario, scenario.follow_up, answers, cards,
+                choices if last_follow_up else None, questions if last_follow_up else None,
             )
+            follow_up_card = len(cards) > cards_before
             asked = note == QUESTION_STOP
             if note:
                 note = note.replace("at a question", "at a question after the follow-up")
                 note = note.replace("at the choice card", "at the choice card after the follow-up")
+        if not note and scenario.button_after:
+            # Plan 3b-1b: press the newest card's button with its fixed message, as the chat
+            # does; the button turn is the judged turn. A button the card does not offer is
+            # not pressed, and the scenario fails (follow_up_failures).
+            offered = tuple((_last_card(graph.get_state(config).values) or {}).get(
+                "next_actions"
+            ) or ())
+            if scenario.button_after in offered:
+                if follow_up_sent:
+                    earlier_marks = (run_mark, call_mark)
+                mark_turn()
+                pressed = True
+                message = ACTION_MESSAGES[scenario.locale][scenario.button_after]
+                note = _drive(
+                    graph, factory, config, scenario, message, answers, cards, choices, questions
+                )
+                asked = note == QUESTION_STOP
+                if note:
+                    note = note.replace("at a question", "at a question after the button")
+                    note = note.replace("at the choice card", "at the choice card after the button")
     except FollowUpSetupError as error:
         # The follow-up was never sent: no turn to rate (turn "none"), never as expected.
         note = f"failed: {error}"
@@ -1368,6 +1522,9 @@ def run_scenario(
         if hidden is not None:
             bring_back(factory, hidden)
     choice_stop = note.startswith(CHOICE_STOP)
+    # The button was never offered a chance: the turn before it stopped (a question with no
+    # answer, an unanswered choice card, a failure).
+    button_blocked = note if scenario.button_after and not pressed and note else None
     state = graph.get_state(config).values
     # Only the judged turn's own run is failed: a follow-up that stopped before its run
     # leaves the first turn's record as it was.
@@ -1397,6 +1554,14 @@ def run_scenario(
             "llm_calls": [_call_row(r) for r in all_rows],
         }
         diner_checks = _diner_failures(session, scenario, state, cards, [r.events for r in runs])
+    # The follow-up message's own turn when a button followed it: its model calls, when it
+    # was a revision (a revise turn the button turn's count leaves out).
+    earlier_revise_calls = None
+    if earlier_marks is not None:
+        low_run, low_call = earlier_marks
+        earlier_runs = [r for r in runs if low_run < r.id <= run_mark]
+        if earlier_runs and (earlier_runs[-1].request or {}).get("revision") is not None:
+            earlier_revise_calls = sum(low_call < r.id <= call_mark for r in rows)
     if setup_failed:
         # The judged turn never ran; the first turn's run is not judged in its place.
         turn = "none"
@@ -1408,23 +1573,6 @@ def run_scenario(
     else:
         turn = "plan"
     route = route_of(turn_events, state) if follow_up_sent or not scenario.follow_up else None
-    if follow_up_sent:
-        versions_now = len(state.get("plan_versions") or [])
-        facts = TurnFacts(
-            turn=turn,
-            route=route,
-            choice_card=bool(choices),
-            question=versions_now == versions_before
-            and (asked or (turn == "revision" and asked_back(state))),
-            before=plan_dishes(before),
-            after=plan_dishes(state.get("current_plan")),
-            locked_before=locked_of(before),
-        )
-    else:
-        facts = TurnFacts(turn=turn, route=route, choice_card=bool(choices), question=asked)
-    plan = _shown_plan(state)
-    passed = bool(run and run.final_passed)
-    first_passed = bool(run and run.first_passed)
     reply = next(
         (
             str(m.content)
@@ -1433,6 +1581,36 @@ def run_scenario(
         ),
         "",
     )
+    # The revise step asked back (which dish?) or asked whether to plan a new meal.
+    revise_asked = turn == "revision" and (asked_back(state) or asked_empty(state))
+    run_request = (run.request or {}) if run is not None else {}
+    shared = {
+        "turn": turn,
+        "route": route,
+        "choice_card": bool(choices),
+        "questions": len(questions) + int(revise_asked),
+        "follow_up_card": follow_up_card,
+        "wish_unmet_said": wish_unmet_said(_last_reply_card(state), reply, turn),
+        "offered": offered,
+        "button_blocked": button_blocked,
+        "button": run_request.get("button"),
+        "request": run_request.get("parsed"),
+    }
+    if follow_up_sent:
+        versions_now = len(state.get("plan_versions") or [])
+        facts = TurnFacts(
+            **shared,
+            question=versions_now == versions_before and (asked or revise_asked),
+            before=plan_dishes(before),
+            after=plan_dishes(state.get("current_plan")),
+            locked_before=locked_of(before),
+        )
+    else:
+        facts = TurnFacts(**shared, question=asked)
+    plan = _shown_plan(state)
+    passed = bool(run and run.final_passed)
+    first_passed = bool(run and run.first_passed)
+    zero_dishes = zero_dish_texts(_shown_texts(state))
     failures = expectation_failures(
         scenario,
         plan,
@@ -1448,6 +1626,10 @@ def run_scenario(
         check_plan_flag=not (turn == "none" and (not note or choice_stop)),
     )
     failures += diner_checks
+    if zero_dishes:
+        # Spec 5.6: "0 dishes" is never shown as the reason for a missing answer; checked on
+        # every scenario, every turn.
+        failures.append(f"a reply or unmet text says the plan has 0 dishes: {zero_dishes}")
     if setup_failed:
         failures.append(f"follow-up not sent: {note}")
     titles = [r["title"] for r in (plan or {}).get("recipes", [])]
@@ -1500,6 +1682,12 @@ def run_scenario(
         deferred_to=scenario.deferred_to,
         turn_model_calls=len(turn_rows),
         follow_up=bool(scenario.follow_up),
+        role=scenario.role,
+        button=scenario.button_after,
+        zero_dishes_shown=bool(zero_dishes),
+        wish_unmet_missed=scenario.expect_wish_unmet is True and not facts.wish_unmet_said,
+        fallbacks=fallback_count(r.events for r in runs),
+        earlier_revise_calls=earlier_revise_calls,
     )
 
 
@@ -1628,7 +1816,15 @@ def print_outcome(outcome: RunOutcome) -> None:
             f"changed: {outcome.changed}; locked removed: {outcome.locked_removed}; "
             f"turn model calls: {outcome.turn_model_calls}"
             + (f"; deferred to {outcome.deferred_to}" if outcome.deferred_to else "")
+            + (f"; button {outcome.button}" if outcome.button else "")
+            + (
+                f"; follow-up revise turn model calls: {outcome.earlier_revise_calls}"
+                if outcome.earlier_revise_calls is not None
+                else ""
+            )
         )
+    if outcome.fallbacks:
+        print(f"  planner gave no answer, code picked the dishes: {outcome.fallbacks} attempts")
     if outcome.reasons or outcome.next_actions:
         print(f"  reasons: {outcome.reasons}; next actions: {outcome.next_actions}")
     for failure in outcome.failures:
@@ -1668,6 +1864,19 @@ def print_summary(outcomes: list[RunOutcome]) -> None:
         print(f"  route as expected (first messages):  {s['route_first_as_expected']}")
     if s["deferred"] != "0/0":
         print(f"  deferred (not rated):    {s['deferred']} as expected")
+    # Plan 3b-1b: each role's rate apart, and the checks every scenario gets.
+    roles = s["as_expected_by_role"]
+    for role in (*SCENARIO_ROLES, "unset"):
+        if role in roles:
+            print(f"  as expected ({role} set): {roles[role]}  (deferred apart)")
+    print(f"  \"0 dishes\" shown:        {s['zero_dishes_shown']}  (target 0)")
+    print(f"  unmet wish not said:     {s['wish_unmet_not_said']}  (target 0)")
+    if s["buttons"] != "0/0":
+        print(f"  after a button:          {s['buttons']} as expected")
+    print(
+        f"  planner fallbacks:       {s['fallbacks']} attempts in "
+        f"{s['fallback_scenarios']} scenarios"
+    )
     print(
         "  (latency is summed over each scenario's model calls; a failed run counts as not passed)"
     )
@@ -1853,10 +2062,19 @@ METRICS_BASIS = (
     "set; compare same-named scenarios across different sets. Outcomes (first and final pass "
     "rate, retries) are over new plans only; revisions (the judged turn ran the revise step) "
     "have their own pass rate, locked dishes removed (target 0), dishes changed and model "
-    "calls per revise turn (turn_model_calls: that turn's calls only). Route accuracy is "
+    "calls per revise turn (turn_model_calls: that turn's calls only; with a button after a "
+    "follow-up revision, that revision's calls, earlier_revise_calls, count as a revise turn "
+    "too). Route accuracy is "
     "reported for follow-ups (route_as_expected) and first messages apart. Deferred "
     "scenarios (deferred_to) are left out of every rate and as_expected, and counted in "
-    "`deferred`; their cost, calls, tokens and latency count."
+    "`deferred`; their cost, calls, tokens and latency count. as_expected_by_role: the "
+    "same as_expected per scenario-file role (development, regression, held-out), so a "
+    "regression set never counts toward the held-out rate. replies (over every scenario, "
+    "deferred included): zero_dishes_shown (a reply or unmet text says the plan has 0 "
+    "dishes; target 0), wish_unmet_not_said (expect_wish_unmet true but no code-written "
+    "sign; target 0), buttons (as expected after a next-action button, deferred left "
+    "out), fallbacks (attempts whose dishes code picked because the planner gave no "
+    "answer) and fallback_scenarios."
 )
 
 
@@ -1902,6 +2120,7 @@ def group_metrics(
             "as_expected": s["as_expected"],
             "avg_retries": s["avg_retries"],
             "deferred": s["deferred"],
+            "as_expected_by_role": s["as_expected_by_role"],
         },
         "calls": {
             "model_calls": sum(o.model_calls for o in runs),
@@ -1944,6 +2163,13 @@ def group_metrics(
             "route_as_expected": s["route_as_expected"],
             "route_first_as_expected": s["route_first_as_expected"],
         },
+        "replies": {
+            "zero_dishes_shown": s["zero_dishes_shown"],
+            "wish_unmet_not_said": s["wish_unmet_not_said"],
+            "buttons": s["buttons"],
+            "fallbacks": s["fallbacks"],
+            "fallback_scenarios": s["fallback_scenarios"],
+        },
         "notes": {
             "checked": len(checked),
             "flags": {f: sum(f in o.note_flags for o in checked) for f in NOTE_FLAGS},
@@ -1979,6 +2205,8 @@ def build_summary(
         "metrics": {
             "basis": METRICS_BASIS,
             "checks": s["checks"],
+            # The scenario file's role (plan 3b-1b); "unset" for a file that states none.
+            "roles": sorted({o.role or "unset" for o in runs}),
             "groups": {
                 "all": group_metrics(runs, library_embedding_calls),
                 "expect_plan": group_metrics([o for o in runs if o.expected_plan]),

@@ -13,6 +13,7 @@ from minemydinner.planning.shortlist import (
     ShortlistEntry,
     build_shortlist,
     build_shortlist_result,
+    fallback_ids,
     needed_by_dish_type,
 )
 from minemydinner.planning.validate import PlanSpec
@@ -525,3 +526,43 @@ def test_type_with_no_recipes_is_complete(session, seeded):
     make_many(session, 1, "vegetable dish", "素")
     result = complete_types(session, spec(dishes=2, soups=1))
     assert "soup" in result and "meat dish" in result
+
+
+def _entry(id_: int, dish_type: str, missing=(), cookware=()) -> ShortlistEntry:
+    return ShortlistEntry(
+        id=id_, title=f"dish {id_}", dish_type=dish_type, time_min=None, time_source=None,
+        servings=None, missing=list(missing), missing_cookware=list(cookware),
+        uses_expiring=[], dislikes=[],
+    )
+
+
+FALLBACK_ENTRIES = {
+    "meat dish": [_entry(1, "meat dish"), _entry(2, "meat dish"), _entry(3, "meat dish")],
+    "vegetable dish": [
+        _entry(11, "vegetable dish", missing=["茄子"]),
+        _entry(12, "vegetable dish", cookware=["烤箱"]),
+        _entry(13, "vegetable dish"),
+        _entry(14, "vegetable dish"),
+    ],
+    "soup": [_entry(21, "soup"), _entry(22, "soup")],
+}
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        # Any mix: by turns, meat first, in shortlist order.
+        ({"dishes": 3}, [1, 13, 2]),
+        # Shopping mode may use a dish with missing items, never one lacking cookware.
+        ({"mode": "shopping", "dishes": 2}, [1, 11]),
+        # The minimums first, then the maximums bound the rest.
+        ({"dishes": 3, "vegetable_dishes": 2, "vegetable_bound": "at_least"}, [13, 14, 1]),
+        ({"dishes": 2, "meat_dishes": 0}, [13, 14]),
+        ({"dishes": 1, "soups": 1}, [1, 21]),
+        # Too few usable dishes: left short, for validation to report.
+        ({"dishes": 4, "meat_dishes": 0}, [13, 14]),
+    ],
+)
+def test_fallback_ids_fill_the_counts_in_shortlist_order(values, expected):
+    plan_spec = spec(**{"mode": "fridge_only", **values})
+    assert fallback_ids(FALLBACK_ENTRIES, plan_spec) == expected

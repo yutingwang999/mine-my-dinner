@@ -436,6 +436,64 @@ def test_search_tool_time_limit_drops_slower_recipes(session_factory, session, s
     assert quick.id in hits and slow.id not in hits
 
 
+def _search(session_factory, args, diner_ids=(), **request):
+    deps = PlannerDeps(
+        session_factory=session_factory,
+        client=FakeEmbedClient(),
+        constraints=MealConstraints(diner_ids=tuple(diner_ids)),
+        mode="shopping",
+        **request,
+    )
+    call = {
+        "name": "search_recipes",
+        "args": {**args, "runtime": _runtime(deps)},
+        "id": "c",
+        "type": "tool_call",
+    }
+    return json.loads(ALL_TOOLS["search_recipes"].invoke(call).content)
+
+
+def test_search_tool_lists_a_named_dish_over_the_time_limit(session_factory, session, seeded):
+    """Development run 1 (design 5.2, 2026-11-22): a dish the query names by its whole title
+    that the request's time limit leaves out is listed apart, never hidden and never a hit."""
+    slow = make_recipe(
+        session, "酱焖羊蝎子", "meat dish", [L("小白菜")], time_min=75, time_source="stated"
+    )
+    named = {"query": "把肉丝换成 酱焖羊蝎子"}
+    result = _search(session_factory, named, time_limit_min=30)
+    assert slow.id not in [h["id"] for h in result["hits"]]
+    assert result["over_time_limit"] == [{"id": slow.id, "title": "酱焖羊蝎子", "time_min": 75}]
+    # The request's query counts when the model passes none.
+    result = _search(session_factory, {}, time_limit_min=30, query="今天想吃酱焖羊蝎子")
+    assert [d["id"] for d in result["over_time_limit"]] == [slow.id]
+    # The model searched other words, but the user's request named the dish: still listed.
+    result = _search(
+        session_factory, {"query": "炖菜"}, time_limit_min=30, query="肉丝换成酱焖羊蝎子"
+    )
+    assert [d["id"] for d in result["over_time_limit"]] == [slow.id]
+    # A query that names only part of the title, or no time limit: nothing is listed.
+    assert _search(session_factory, {"query": "羊蝎子"}, time_limit_min=30)["over_time_limit"] == []
+    result = _search(session_factory, named)
+    assert result["over_time_limit"] == [] and slow.id in [h["id"] for h in result["hits"]]
+
+
+def test_search_tool_over_time_limit_keeps_the_other_rules(session_factory, session, seeded):
+    me = self_diner(session)
+    rule(session, me.id, "allergy", allergen="egg")
+    make_recipe(
+        session, "慢炖蛋饺汤", "soup", [L("鸡蛋")], time_min=90, time_source="stated"
+    )
+    estimated = make_recipe(
+        session, "慢炖萝卜汤", "soup", [L("小白菜")], time_min=90, time_source="estimated"
+    )
+    result = _search(
+        session_factory, {"query": "慢炖蛋饺汤 慢炖萝卜汤"}, [me.id], time_limit_min=30
+    )
+    # The egg dish breaks a diner's allergy; the estimated time never blocks the limit.
+    assert result["over_time_limit"] == []
+    assert estimated.id in [h["id"] for h in result["hits"]]
+
+
 @pytest.mark.parametrize(
     "mode,expected", [("fridge_only", ["far"]), ("shopping", ["near", "far"])]
 )

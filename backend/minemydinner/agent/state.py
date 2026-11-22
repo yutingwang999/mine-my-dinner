@@ -23,6 +23,12 @@ class ChatState(TypedDict):
     # never by a turn that leaves the plan as it was. A revision compares the new request with
     # this one; a thread saved before it existed falls back to `previous_request`.
     plan_request: dict | None
+    # The next-action button of this turn when code changed the request of the card that
+    # offered it (plan 3b-1b spec 5.5): no parse ran, and the run's record notes it. Reset by
+    # every new message. A reply card in `reply_plans` keeps the request it was built from
+    # (`request`) and, on a revision that left the plan as it was, `plan_kept` and that turn's
+    # words (`wish_words`).
+    button: str | None
     defaults_used: list[str]
     # PlanSpec as a dict, and the meal constraints: diner_ids, guest_rules (RuleRef dicts),
     # unconfirmed_diners, headcount.
@@ -44,6 +50,9 @@ class ChatState(TypedDict):
     best: dict | None
     # H2 and H5, in that order, when any attempt of the run had them.
     blocked_codes: list[str]
+    # The diner keys of the run's H2 findings ("meal" for this meal's one-meal avoidance), so a
+    # block caused only by the meal's wish is worded as the meal's (plan 3b-1b spec 5.4).
+    blocked_h2_keys: list[str]
     # The feasibility shortfalls (dicts); non-empty means the planner is skipped.
     shortfalls: list[dict]
     # From the shortlist and the planner's searches: left_out_unknown_allergens and
@@ -56,9 +65,10 @@ class ChatState(TypedDict):
     shortlist_ids: list[int]
     retries: int
     # The revision in progress (plan 3b-1): `from_version` (the plan_versions index of the plan
-    # it changes), `message` (the user's words it is checked against), and the last attempt's
-    # `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then holds the
-    # RevisionProposal dump, or None when an attempt gave no answer.
+    # it changes), `message` (this turn's words), `earlier` (on a button revision, the words
+    # of the turn whose card offered the button; quotes are checked against both), and the
+    # last attempt's `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then
+    # holds the RevisionProposal dump, or None when an attempt gave no answer.
     revision: dict | None
     current_plan: dict | None
     plan_versions: list[dict]

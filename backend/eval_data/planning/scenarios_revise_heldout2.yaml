@@ -1,0 +1,315 @@
+# Plan 3b-1b held-out revision set. Run with library_revise2.yaml.
+#
+# Held-out set written by the user on 2026-11-21. Not used for tuning in plan 3b-1b; do not edit.
+# The follow-up sentences and the expected results are the user's. The first requests, the
+# first plans, the stock and the rules that set each sentence up were filled in by Claude from
+# the user's notes, and the user confirmed four readings (2026-11-21): an explicitly named
+# replacement may change the dish type; "不要甜品了" keeps the other three dishes; the any-mix
+# button scenario starts from four dishes; for "四个菜全要辣的" either leaving the plan or a
+# partial change is right, as long as the reply says the wish cannot be met in full.
+#
+# Keys are the runner's (plan 3b-1 Task 7, plan 3b-1b Task 9). The user's notes for keys that
+# plan 3b-1b Task 9 added (button_after, expect_no_question, expect_wish_unmet,
+# expect_follow_up_diner_card) were turned into keys by the controller after Task 9
+# (2026-11-22) and shown to the user. No subagent opens this file.
+role: held-out
+scenarios:
+  # ---- bare drops: the plan gets smaller ----
+  - name: drop_both_eggplant_dishes
+    request: 两个人吃晚饭，四个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [红烧茄子, 鱼香茄子, 青椒肉丝, 红烧排骨]
+    follow_up: 去掉茄子的两道吧
+    expect_route: revise
+    expect_removed: [红烧茄子, 鱼香茄子]
+    expect_titles_exact: [青椒肉丝, 红烧排骨]
+    expect_counts: {dishes: 2}
+    expect_locale_reply: zh
+    expect: The plan had two eggplant dishes; both are removed with no replacement.
+
+  - name: no_more_dessert
+    request: 两个人吃晚饭，两个荤菜一个素菜，再来个甜品，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 红烧排骨, 清炒小白菜, 焦糖烤布丁]
+    follow_up: 不要甜品了
+    expect_route: revise
+    expect_removed: [焦糖烤布丁]
+    expect_titles_exact: [青椒肉丝, 红烧排骨, 清炒小白菜]
+    expect_counts: {dishes: 3, desserts: 0}
+    expect_locale_reply: zh
+    expect: 2 meat, 1 vegetable and a dessert; the dessert goes and the other three stay.
+
+  - name: drop_the_staple
+    request: 两个人吃晚饭，两个素菜一个面，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [蒜蓉西兰花, 清炒小白菜, 清汤面]
+    follow_up: 主食去掉吧
+    expect_route: revise
+    expect_removed: [清汤面]
+    expect_titles_exact: [蒜蓉西兰花, 清炒小白菜]
+    expect_counts: {dishes: 2, staples: 0}
+    expect_locale_reply: zh
+    expect: Two vegetable dishes and noodles; the staple goes, two vegetable dishes remain.
+
+  # ---- replacements ----
+  - name: swap_yuxiang_for_another
+    request: 两个人吃晚饭，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [鱼香肉丝, 清炒小白菜, 蒜蓉西兰花]
+    follow_up: 鱼香肉丝换一个
+    expect_route: revise
+    expect_removed: [鱼香肉丝]
+    expect_max_changed: 1
+    expect_titles_include: [清炒小白菜, 蒜蓉西兰花]
+    expect_counts: {dishes: 3}
+    expect_locale_reply: zh
+    expect: The yuxiang pork is replaced by another dish; the rest stays.
+
+  - name: swap_yuxiang_for_a_named_dish
+    request: 两个人吃晚饭，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [鱼香肉丝, 清炒小白菜, 蒜蓉西兰花]
+    follow_up: 用西红柿炒鸡蛋换掉鱼香肉丝
+    expect_route: revise
+    expect_removed: [鱼香肉丝]
+    expect_max_changed: 1
+    expect_titles_include: [番茄炒蛋, 清炒小白菜, 蒜蓉西兰花]
+    expect_counts: {dishes: 3}
+    expect_locale_reply: zh
+    expect: The named replacement is used though it is a vegetable dish (the user's reading, 2026-11-21).
+    # This sentence reached the 3b-1b design, plan and code by mistake before any run (removed
+    # again in Task 3). The user decided (2026-11-22) to run it but report it apart, not in the
+    # held-out threshold.
+    deferred_to: not counted (sentence seen while building plan 3b-1b)
+
+  - name: no_porridge
+    request: 两个人吃晚饭，两个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 白粥]
+    follow_up: 不想吃粥
+    expect_route: revise
+    expect_removed: [白粥]
+    expect_titles_none: [小米粥]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 清炒小白菜]
+    expect_counts: {dishes: 2, staples: 1}
+    expect_locale_reply: zh
+    expect: The porridge becomes another staple that is not porridge.
+
+  - name: switch_to_fried_rice
+    request: 两个人吃晚饭，两个菜一个面，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 清汤面]
+    follow_up: 要不换成炒饭吧
+    expect_route: revise
+    expect_removed: [清汤面]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 蛋炒饭]
+    expect_counts: {dishes: 2, staples: 1}
+    expect_locale_reply: zh
+    expect: The noodles become fried rice.
+
+  # ---- one-meal avoidances: replaced, the size stays ----
+  - name: not_much_into_corn
+    request: 两个人吃晚饭，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [辣椒炒肉, 玉米烙]
+    follow_up: 不太想吃玉米
+    expect_route: revise
+    expect_choice_card: false
+    expect_removed: [玉米烙]
+    expect_titles_none: [松仁玉米]
+    expect_titles_include: [辣椒炒肉]
+    expect_counts: {dishes: 2}
+    expect_locale_reply: zh
+    expect: The corn dish is replaced by a dish without corn; the pepper pork stays.
+
+  - name: no_rice_today_english
+    request: Dinner for two, two dishes and a staple, shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 蛋炒饭]
+    follow_up: I don't want to eat rice today
+    expect_route: revise
+    expect_card: false
+    expect_removed: [蛋炒饭]
+    expect_titles_none: [白米饭, 白粥]
+    expect_titles_include: [青椒肉丝, 清炒小白菜]
+    expect_counts: {dishes: 2, staples: 1}
+    expect_locale_reply: en
+    expect: A wish for this meal, not a lasting rule (no diner card); the fried rice becomes a staple without rice.
+
+  - name: too_many_sandwiches_recently_english
+    request: Lunch for one, one dish and a staple, shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [清炒小白菜, 火腿三明治]
+    follow_up: eat too many sandwiches recently
+    expect_route: revise
+    expect_card: false
+    expect_removed: [火腿三明治]
+    expect_titles_include: [清炒小白菜]
+    expect_counts: {dishes: 1, staples: 1}
+    expect_locale_reply: en
+    expect: A remark about this meal (no diner card, the design's reading confirmed by the user); the sandwich becomes another staple.
+
+  # ---- a lasting rule: the diner card again ----
+  - name: guest_allergic_to_shrimp
+    request: 我和小王两个人吃晚饭，两菜一汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [油焖大虾, 清炒小白菜, 番茄蛋花汤]
+    follow_up: 小王对虾过敏
+    expect_card: true
+    expect_titles_none: [油焖大虾]
+    expect_counts: {dishes: 2, soups: 1}
+    expect_locale_reply: zh
+    expect: The diner card was confirmed on the first turn; the follow-up states a lasting rule for 小王, so the card shows again, then the meal is planned without shrimp (until 3b-2 a diner change plans from scratch).
+    expect_follow_up_diner_card: true
+
+  # ---- general wishes and add-only ----
+  - name: lighter_please
+    request: 两个人吃晚饭，两个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [辣椒炒鸡蛋, 酱爆鸡丁, 丝瓜汤]
+    follow_up: 能再做些更清淡的菜么
+    expect_route: revise
+    expect_removed: [辣椒炒鸡蛋]
+    expect_counts: {dishes: 2, soups: 1}
+    expect_locale_reply: zh
+    expect: The chili egg dish is replaced by a lighter dish.
+
+  - name: a_bit_little_add_one
+    request: 两个人吃晚饭，两个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [辣椒炒鸡蛋, 酱爆鸡丁, 丝瓜汤]
+    follow_up: 有点少，再加一道
+    expect_route: revise
+    expect_max_changed: 0
+    expect_titles_include: [辣椒炒鸡蛋, 酱爆鸡丁, 丝瓜汤]
+    expect_counts: {dishes: 3, soups: 1}
+    expect_locale_reply: zh
+    expect: Nothing changes and one dish is added.
+
+  - name: add_one_sandwich_english
+    request: Dinner for two, two dishes, shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜]
+    follow_up: Add one sandwich
+    expect_route: revise
+    expect_max_changed: 0
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 火腿三明治]
+    expect_locale_reply: en
+    expect: The two dishes stay and a sandwich is added.
+
+  # ---- next-action buttons after a failed revision ----
+  - name: allow_shopping_button_after_add_one
+    request: 两个人吃晚饭，四个菜，只用冰箱里有的。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: 3, 小白菜: 1, 西兰花: 1, 菠菜: 1}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花, 清炒菠菜]
+    follow_up: 再加一道
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花, 清炒菠菜]
+    expect_counts: {dishes: 5}
+    expect_locale_reply: zh
+    expect: The fridge allows no fifth dish, so the revision cannot be done; the user presses "允许购物"; the four dishes stay and one more is added.
+    button_after: switch_to_shopping
+    expect_no_question: true
+
+  - name: any_mix_button_after_one_more_meat
+    request: 两个人吃晚饭，四个菜，只用冰箱里有的。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: 3, 小白菜: 1, 西兰花: 1, 菠菜: 1, 黄瓜: 2}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花, 清炒菠菜]
+    follow_up: 再加一个肉菜
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花, 清炒菠菜]
+    expect_counts: {dishes: 5, meat_dishes: 1, vegetable_dishes: 4}
+    expect_locale_reply: zh
+    expect: No second meat dish can be made from the fridge; the user presses "荤素都行"; the four dishes stay and a vegetable dish is added.
+    button_after: relax_split
+    expect_no_question: true
+
+  # ---- wishes that cannot be met ----
+  - name: all_four_spicy
+    request: 两个人吃晚饭，四个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    library_exclude: [辣子鸡, 水煮鱼片, 麻婆豆腐]
+    first_plan: [番茄炒蛋, 红烧排骨, 清炒小白菜, 青椒肉丝]
+    follow_up: 四个菜全要辣的
+    expect_route: revise
+    expect_counts: {dishes: 4}
+    expect_locale_reply: zh
+    expect: The library has fewer than four spicy dishes, so the wish cannot be met in full. Leaving the plan or a partial change are both right; the reply must say it cannot all be spicy.
+    expect_wish_unmet: true
+
+  - name: add_seafood_all_allergic
+    request: 两个人吃晚饭，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    rules:
+      - {type: allergy, allergen: fish}
+      - {type: allergy, allergen: crustaceans}
+      - {type: allergy, allergen: shellfish}
+    first_plan: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花]
+    follow_up: 再加个海鲜吧
+    expect_route: revise
+    expect_unchanged: true
+    expect_titles_none: [清蒸鲈鱼, 红烧带鱼, 水煮鱼片, 油焖大虾]
+    expect_locale_reply: zh
+    expect: The user is allergic to every seafood in the library, so no seafood dish can be added; the plan stays and the reply says why.
+    expect_wish_unmet: true
+
+  # ---- new plans ----
+  - name: not_great_another_set
+    request: 两个人吃晚饭，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花]
+    follow_up: 都不太行，换一套吧
+    expect_route: plan
+    expect_counts: {dishes: 3}
+    expect_locale_reply: zh
+    expect: Plans a new meal from the request.
+
+  - name: another_version_same_counts
+    request: 四个人吃晚饭，四个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    first_plan: [青椒肉丝, 红烧排骨, 清炒小白菜, 蒜蓉西兰花, 番茄蛋花汤]
+    follow_up: 重新出一版吧，还是这些数量
+    expect_route: plan
+    expect_counts: {dishes: 4, soups: 1}
+    expect_locale_reply: zh
+    expect: Plans a new meal with the same counts (4 dishes and a soup).

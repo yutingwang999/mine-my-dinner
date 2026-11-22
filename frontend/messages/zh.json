@@ -657,6 +657,9 @@
       "deletedRecipes": "{titles} 已不在菜谱库中，已从方案中去掉。",
       "kept": "已确认保留：{who} {rule}",
       "keptUnknown": "已确认保留：{lines} 过敏原未知",
+      "mealWish": "这顿不要{name}",
+      "keptMealWish": "已确认保留：这顿不要{name}",
+      "reasonMealWish": "{wish}，这道菜含{lines}",
       "showMore": "显示更多"
     }
   }

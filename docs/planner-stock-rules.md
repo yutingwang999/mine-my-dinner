@@ -2,6 +2,8 @@
 
 This explains how the planner decides whether an ingredient is "at home", where that decision is used during one planning run, and the few places that look at stock differently. It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/stock.py`, `feasibility.py`, `validate.py`). The candidate list built on top of it is described in `docs/planner-shortlist-and-ranking.md`, and the feasibility check that uses it before planning in `docs/planner-feasibility-check.md`.
 
+What each model (route, parse, planner, revise) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
+
 The rule is written once (`_held` and `is_available` in `stock.py`) and reached through `compute_missing`, which lists what each recipe is missing. Every step that asks "is this dish missing something?" goes through it, so a dish is judged the same way in the feasibility check, the candidate list, the planner's tools, validation, and the plan card.
 
 ## 1. How stock is recorded
@@ -67,6 +69,7 @@ In the order of one planning run:
 | Search | Each hit carries the names it is missing | `search.py` |
 | Candidate list | Fridge-only: only makeable recipes are kept, a filter (the planner's own searches apply it too). Shopping: fewer missing ranks higher. The "enough makeable dishes" safeguard after the spread | `shortlist.py` and `tools.py`, through search |
 | Planner tools | Search hits carry missing items; the `compute_missing` tool lists them on request | `tools.py` |
+| Code fallback (plan 3b-1b: the planner gave no answer) | Fridge-only: only candidate-list entries with nothing missing are picked; shopping: missing items are allowed (`docs/planner-shortlist-and-ranking.md`, Section 6) | `shortlist.py` `fallback_ids` |
 | Validation H1 (fridge-only) | A dish in the plan that is missing something breaks H1. A revision run has no feasibility check; in a revision, H1 caused only by a locked dish (added by hand) is a warning, not a failure (plan 3b-1) | `validate.py`, `revise_step.py` `split_violations` |
 | Plan card | "Missing: …" under each dish | `graph.py` |
 

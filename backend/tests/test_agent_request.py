@@ -38,7 +38,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -380,40 +380,156 @@ def test_both_sides_at_most_zero_is_a_contradiction():
     assert request_problem(request) == "split_conflicts_total"
 
 
-def test_planner_v3_is_unchanged_and_v4_differs_only_in_the_note_rule():
+def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
     import hashlib
 
-    assert PROMPT_VERSIONS["planner"] == "planner_v4"
     v3 = (PROMPT_DIR / "planner_v3.md").read_bytes().replace(b"\r\n", b"\n")
-    # The committed planner_v3.md (a version records used) must never change.
+    # The committed planner_v3.md and planner_v4.md (versions records used) must never change.
     assert hashlib.sha256(v3).hexdigest() == (
         "123206bf2e1030911e6c7ecf80a0854d9336fc1c110e2c8715f6232b7c89fa1e"
     )
-    v4 = (PROMPT_DIR / "planner_v4.md").read_text(encoding="utf-8")
-    assert "Do not count or list" in v4 and "one sentence" in v4
+    v4 = (PROMPT_DIR / "planner_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v4).hexdigest() == (
+        "8326569c8612e1c4b8b0a32f291fb0d976f261899ff86ce0f4d895b5b69b713b"
+    )
+    assert PROMPT_VERSIONS["planner"] == "planner_v5"
+    v5 = load_prompt("planner")
+    assert v5 == (PROMPT_DIR / "planner_v5.md").read_text(encoding="utf-8")
+    # Plan 3b-1b spec 5.6: a taste wish the library cannot meet is answered, not searched on.
+    assert "is a taste wish, not a requirement" in v5 and "wish_met to false" in v5
+    assert "do not say in the note that the wish was not met" in v5
+    assert "Do not count or list" in v5 and "one sentence" in v5
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v3+parse_v6+planner_v4+revise_v2"
-    assert PROMPT_VERSIONS["parse"] == "parse_v6"
-    assert load_prompt("parse") == (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8")
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSIONS["parse"] == "parse_v8"
+    assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
 
-def test_revise_v1_is_frozen_and_revise_v2_is_current():
+def test_revise_v1_v2_v3_are_frozen_and_revise_v4_is_current():
     import hashlib
 
     v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
-    # revise_v1 was used by plan 3b-1 development runs, so it must never change.
+    # revise_v1 and revise_v2 were used by plan 3b-1 runs, so they must never change.
     assert hashlib.sha256(v1).hexdigest() == (
         "9062ccb0da4dfd894023e79f6fabe118c5484f9dcc94c32ddc6563f55fbb4fc3"
     )
-    assert PROMPT_VERSIONS["revise"] == "revise_v2"
-    v2 = load_prompt("revise")
-    assert v2 == (PROMPT_DIR / "revise_v2.md").read_text(encoding="utf-8")
-    # The fixes of the 20261120T091620Z development run (task 8b).
-    assert "meat dish for a meat dish" in v2
-    assert "integers" in v2 and "never in both add and remove" in v2
-    assert "换个思路" in v2
+    v2 = (PROMPT_DIR / "revise_v2.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v2).hexdigest() == (
+        "90696404beb4ed7bfb54c36c666160d7462477cf8e916c2c1510609d7f1b5266"
+    )
+    # revise_v3 was used by development run 1 of plan 3b-1b, so it must never change.
+    frozen = (PROMPT_DIR / "revise_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(frozen).hexdigest() == (
+        "2168b11130c1be2a936030552a7b9513548549951b1eb806c2493e1deed777d8"
+    )
+    assert PROMPT_VERSIONS["revise"] == "revise_v4"
+    v3 = load_prompt("revise")
+    assert v3 == (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    # Development run 1: a replaced dish is never dropped; a dish over the time limit is
+    # never "not in the library".
+    assert "A dish the words want replaced is never dropped" in v3
+    assert "never drop the eggplant dish" in v3
+    assert "over_time_limit" in v3 and "never say it is not in the library" in v3
+    # Plan 3b-1b: drop or replace, the add-only kind, wishes for this meal only, the note.
+    assert "mode drop" in v3 and "mode replace" in v3
+    assert "- add: the message only adds dishes" in v3
+    assert "LOCKED KEPT CONFLICT" in v3 and "replace_with" in v3
+    # Task 5: the reviser's mark of a dish that breaks this meal's one-meal avoidance.
+    from minemydinner.agent.revise_step import BREAKS_MEAL_WISH
+
+    assert v3.count(BREAKS_MEAL_WISH) == 3
+    assert "not in the library and can be imported" in v3
+    assert "\"锁定\"" in v3 and "so do not repeat that" in v3
+    # No rule about counting dishes (plan 3b-1b spec 5.7, the user's decision).
+    assert "count the dishes" not in v3
+    # Development-set sentences stay out of the prompt (plan 3b-1b brief).
+    assert "换个思路" not in v3 and "差点意思" not in v3
+
+
+def test_route_v3_is_frozen_and_route_v4_sends_a_meal_wish_to_revise():
+    import hashlib
+
+    # route_v3 was used by development run 1 of plan 3b-1b, so it must never change.
+    v3 = (PROMPT_DIR / "route_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v3).hexdigest() == (
+        "154a7b399f6d8a509fbdd88921f071c83e7210ff27c22e73331cd221ae764438"
+    )
+    v4 = (PROMPT_DIR / "route_v4.md").read_text(encoding="utf-8")
+    old = v3.decode("utf-8").splitlines()
+    new = v4.splitlines()
+    # One rule added, nothing else changed.
+    added = [line for line in new if line not in old]
+    assert len(added) == 1 and added[0].startswith("- A wish about this meal's taste")
+    assert [line for line in new if line in old] == old
+    assert "clearly asks for a different meal or a fresh start" in added[0]
+
+
+def test_route_v4_is_frozen_and_route_v5_narrows_its_rule():
+    import hashlib
+
+    # route_v4 was used by development run 2 of plan 3b-1b, so it must never change.
+    v4 = (PROMPT_DIR / "route_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v4).hexdigest() == (
+        "1ee449adb21d6c81ff457abc73bce2a8a6ea160c2a417f6abdfbc2157acaf6a9"
+    )
+    v5 = (PROMPT_DIR / "route_v5.md").read_text(encoding="utf-8")
+    old = v4.decode("utf-8").splitlines()
+    new = v5.splitlines()
+    # route_v4's own rule is replaced (narrowed), two rules are added; nothing else changed.
+    assert [line for line in old if line not in new] == [
+        line for line in old if line.startswith("- A wish about this meal's taste")
+    ]
+    added = [line for line in new if line not in old]
+    assert len(added) == 3
+    narrowed, reconsider, rule = added
+    # Development run 2 (items 3, 4, 6): the rule needs a taste, an ingredient or a food;
+    # a change word makes a named food a revision; a bare dish stays "unsure".
+    assert "names a taste, an ingredient, or a kind of food" in narrowed
+    assert "换换口味" in narrowed and "改成" in narrowed
+    assert "clearly asks for a different meal or a fresh start" in narrowed
+    assert "only says to reconsider or change" in reconsider and '"unsure"' in reconsider
+    # Item 5: a rule about what someone eats, stated after a plan, is never "other".
+    assert "never \"other\"" in rule and "lasting or for this meal only" in rule
+    # The rules come before "other", and the rest keeps route_v4's order.
+    assert new.index(rule) < next(i for i, l in enumerate(new) if l.startswith('- "other"'))
+    assert [line for line in new if line in old] == [line for line in old if line in new]
+    # Development-set sentences stay out of the prompt (plan 3b-1b brief).
+    for sentence in ("琢磨", "折腾", "鱼或者虾", "海鲜", "虾", "清淡点"):
+        assert sentence not in "\n".join(added)
+
+
+def test_route_v5_is_frozen_and_route_v6_names_dishes_pointed_at():
+    import hashlib
+
+    # route_v5 was used by development run 3 of plan 3b-1b, so it must never change.
+    v5 = (PROMPT_DIR / "route_v5.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v5).hexdigest() == (
+        "5c94492f9faf6251295371aaaa7ea3b421b18b67cd3bff7bc182d57f1f170e29"
+    )
+    assert PROMPT_VERSIONS["route"] == "route_v6"
+    v6 = load_prompt("route")
+    assert v6 == (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
+    old = v5.decode("utf-8").splitlines()
+    new = v6.splitlines()
+    # One rule added, right after the "only says to reconsider" rule; nothing else changed.
+    added = [line for line in new if line not in old]
+    assert len(added) == 1
+    (rule,) = added
+    assert [line for line in new if line in old] == old
+    reconsider = next(line for line in old if "only says to reconsider or change" in line)
+    assert new.index(rule) == new.index(reconsider) + 1
+    # Development run 3: words that point at the plan's dishes, with a word that removes or
+    # swaps them, name those dishes ("revise"), also when every dish goes; a message that only
+    # says to reconsider, with no such word on dishes, stays "unsure".
+    assert '"这两道"' in rule and '"全都"' in rule and '"剩下的"' in rule
+    assert '"both of them"' in rule
+    assert "removes or swaps" in rule and '"revise"' in rule and '"unsure"' in rule
+    assert '"全都不要了"' in rule
+    # Development-set sentences stay out of the prompt (plan 3b-1b brief).
+    for sentence in ("拿掉", "琢磨", "折腾", "这桌菜", "海鲜", "清淡", "再加一道", "全要辣的"):
+        assert sentence not in rule
 
 
 def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():
@@ -440,7 +556,7 @@ def test_parse_v5_is_frozen_and_parse_v6_only_adds_lines():
         "8798894242eceaa040e5a8ff948767707d3c1f47741172eb8bc8ce30554cab82"
     )
     old = v5.decode("utf-8").splitlines()
-    new = load_prompt("parse").splitlines()
+    new = (PROMPT_DIR / "parse_v6.md").read_text(encoding="utf-8").splitlines()
     # Every parse_v5 line stays, unchanged and in order: parse_v6 only adds lines.
     rest = iter(new)
     assert all(any(line == other for other in rest) for line in old)
@@ -451,13 +567,79 @@ def test_parse_v5_is_frozen_and_parse_v6_only_adds_lines():
         assert example in added
 
 
+def test_parse_v6_is_frozen_and_parse_v7_only_adds_lines():
+    import hashlib
+
+    v6 = (PROMPT_DIR / "parse_v6.md").read_bytes().replace(b"\r\n", b"\n")
+    # parse_v6 was used by plan 3b-1 and 3b-1b runs, so it must never change.
+    assert hashlib.sha256(v6).hexdigest() == (
+        "a78a47933737b77133940290acc1c4b55e0ca5212bb44685e9f2958c2061dd00"
+    )
+    old = v6.decode("utf-8").splitlines()
+    new = (PROMPT_DIR / "parse_v7.md").read_text(encoding="utf-8").splitlines()
+    # Every parse_v6 line stays, unchanged and in order: parse_v7 only adds lines.
+    rest = iter(new)
+    assert all(any(line == other for other in rest) for line in old)
+    added = "\n".join(line for line in new if line not in old)
+    assert "meal_avoid" in added
+    # Plan 3b-1b spec 5.4: one-meal wishes, taste words and remarks, and lasting rules.
+    for example in (
+        "今天不想吃肉",
+        "不想吃土豆",
+        "这顿不要辣的",
+        "西红柿太多了",
+        "我不吃肉",
+        "我对花生过敏",
+    ):
+        assert example in added
+    # Spec 5.1's boundary: "不想吃X" is a one-meal wish even without a time word; it holds
+    # for this meal only (spec 5.4).
+    assert "with or without a word about this meal" in added
+    assert "until the user starts another meal" in added
+    # Kept out on purpose: close to held-out sentences.
+    assert "我对虾过敏" not in added
+
+
+def test_parse_v7_is_frozen_and_parse_v8_only_adds_the_amount_rule():
+    import hashlib
+
+    v7 = (PROMPT_DIR / "parse_v7.md").read_bytes().replace(b"\r\n", b"\n")
+    # parse_v7 was used by development runs 1 and 2 of plan 3b-1b, so it must never change.
+    assert hashlib.sha256(v7).hexdigest() == (
+        "364f75bf5f12212497ea77124b3cc14d614e01e237f18f1214e6dd0765db774f"
+    )
+    assert PROMPT_VERSIONS["parse"] == "parse_v8"
+    old = v7.decode("utf-8").splitlines()
+    new = load_prompt("parse").splitlines()
+    # Every parse_v7 line stays, unchanged and in order: parse_v8 adds one rule and one
+    # example.
+    rest = iter(new)
+    assert all(any(line == other for other in rest) for line in old)
+    added = [line for line in new if line not in old]
+    assert len(added) == 2
+    rule, example = added
+    # Development run 2 (items 1, 2; design 5.1): words about an amount are a remark about
+    # the plan, never a one-meal avoidance; only leaving X out with no amount word is.
+    assert rule.startswith("- Words about the amount of an ingredient or a kind of dish")
+    assert "meal_avoid stays empty" in rule and "goes to meal_avoid" in rule
+    for form in ("不要这么多 X", "X 太多了", "少放点 X", "fewer X dishes", "这顿别放 X"):
+        assert form in rule
+    # The rule sits with the other meal_avoid rules, before the examples.
+    assert new.index(rule) == new.index(old[51]) + 1
+    assert "豆腐用得太多了，少来点" in example and "meal_avoid empty" in example
+    assert example == new[-1]
+    # Kept out on purpose: the development set's own sentence.
+    assert "鸡蛋" not in "\n".join(added)
+
+
 def test_parse_v5_is_no_longer_than_parse_v3():
     v3 = (PROMPT_DIR / "parse_v3.md").read_text(encoding="utf-8").splitlines()
     v5 = (PROMPT_DIR / "parse_v5.md").read_text(encoding="utf-8").splitlines()
     assert len(v5) <= len(v3) == 79
     current = load_prompt("parse")
-    # The current prompt may grow only a little past parse_v5.
-    assert len(current.splitlines()) <= 90
+    # The current prompt may grow only a little past parse_v5 (parse_v7 adds the one-meal
+    # versus lasting rule; parse_v8 the amount rule and its example).
+    assert len(current.splitlines()) <= 102
     # A named removal is not a count change (spec 5.2).
     assert "汤就不要了" not in current and "那道汤不要了" in current
     for field in ("guests", "friend_rules", "self_rules", "diet_words"):
@@ -518,6 +700,20 @@ def test_parsed_request_old_shape_still_loads():
     assert request.guests == [] and request.friend_rules == []
     assert request.self_rules is None
     assert request.headcount == 2 and request.mode == "fridge_only"
+
+
+def test_old_request_without_meal_avoid_loads():
+    old = {"dishes": 2, "soups": 1, "mode": "shopping", "query": None, "must_use": []}
+    request = ParsedRequest.model_validate(old)
+    assert request.meal_avoid == []
+    assert ParsedRequest(meal_avoid=["肉"]).meal_avoid == ["肉"]
+    with pytest.raises(ValidationError):
+        ParsedRequest(meal_avoid=["肉"] * 11)
+    schema = ParsedRequest.model_json_schema()["properties"]["meal_avoid"]
+    assert "this meal only" in schema["description"]
+    # A one-meal avoidance never changes the spec or the people of a new plan: graph code
+    # adds it to the meal's constraints as the meal's own rule.
+    assert apply_defaults(ParsedRequest(meal_avoid=["肉"])) == apply_defaults(ParsedRequest())
 
 
 def _chat_strings(locale: str) -> dict:

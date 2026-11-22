@@ -29,7 +29,7 @@ from minemydinner.agent.edits import (
     search_markers,
 )
 from minemydinner.agent.labels import LabelTable, labels_scope, load_label_context
-from minemydinner.agent.plan_card import meal_constraints
+from minemydinner.agent.plan_card import client_card, meal_constraints
 from minemydinner.api.chat import RuntimeDep, _snapshot, edit_refusal
 from minemydinner.api.deps import ApiError
 from minemydinner.api.recipe_match import recipe_text_match, title_contains
@@ -126,7 +126,7 @@ def _edit(
             raise ApiError(409, "needs_confirmation", extra={"conflicts": conflicts})
         # Written as present_plan's output: the thread's next step stays the end.
         runtime.graph.update_state(config, update, as_node="present_plan")
-    return {"plan": outcome.plan}
+    return {"plan": client_card(outcome.plan)}
 
 
 @router.post("/threads/{thread_id}/plan/search")

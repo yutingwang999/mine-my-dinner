@@ -355,21 +355,26 @@ User message → route_intent
 ```
 parse_request ─key information missing→ [interrupt to ask, such as "How many people are eating?"]
   ─several diners→ [interrupt to select diners, see 7.6]
-  → load_context (inventory snapshot, this meal's diner constraints, ratings, relevant notes)
+  → load_context (inventory snapshot, this meal's diner constraints, ratings, relevant notes; a one-meal avoidance such as "今天不想吃肉" is this meal's own hard rule, never a person's, and brings no diner card)
   → planner (LLM) ⇄ tools (may load_skill)
   → validate_plan (code check) ─fails→ return to planner with specific errors (at most N times)
   → present_plan → END
-Next turn, "swap the second dish / make it spicier" → route_intent: revise → parse_request (the whole conversation, plus an app-written line describing the current plan; the result is the full request with the message's changes on top)
-  → revise_plan (LLM: the current plan with its locked dishes + the message + the request; the planner's shortlist and search tools) → a change list: dishes to remove, each named one with its quote from the message, and dishes to add
-  → revision checks (code: a locked dish leaves only when the message names it, quotes match their dishes, change size, the plan's counts unless the message states new ones; *T1.5 part 3b-1b changes this so that a named dish removed without a number leaves the plan smaller, and only "换 / 换成 / 换一个" replaces it*) → validate_plan ─either fails→ return to revise_plan with the reason (at most N times)
+  ─an attempt ends with no answer (call limit)→ code picks the dishes from the shortlist, in its order, and checks them like any attempt
+  ─no dish fits the taste wish ("想吃点海鲜")→ a plan for the other conditions; the reply says first that the wish was not met, with next actions that fit (import recipes; allow shopping when fridge-only)
+  ─every attempt came back with no dish→ no plan; the reply says no dishes could be put together (never "0 dishes" as the reason)
+Next turn, "swap the second dish / make it spicier" → route_intent: revise → parse_request (the whole conversation, plus an app-written line describing the current plan; the result is the full request with the message's changes on top; a field the message leaves unstated is filled from the request behind the current plan before the diner-card check, so a missing headcount never reads as "only me")
+  → revise_plan (LLM: the current plan with its locked dishes + the message + the request; the planner's shortlist and search tools) → a change list: dishes to remove, each a drop or a replacement and each named one with its quote from the message, and dishes to add
+  → revision checks (code: a locked dish leaves only when the message names it, quotes match their dishes, change size, a replacement is the same dish type, except when the user names the replacement dish, a one-meal avoidance covers the replaced dish, or the message states a count; without a stated count the plan's counts follow the change list: "茄子这道不要" drops the dish and the plan gets smaller, "换一个" replaces it, "再加一道" only adds; a stated count wins) → validate_plan ─either fails→ return to revise_plan with the reason (at most N times)
   → present_plan (a new model version; what changed is written by code, followed by the model's note)
-  ─every attempt fails, or the revise step reports that nothing fits→ the plan stays as it was; the reply says why and offers next actions
+  ─every attempt fails, or the revise step reports that nothing fits→ the plan stays as it was; the reply says why and offers next actions (a named dish that exists but is over the time limit: the reply says so and offers to drop the time limit)
   ─the revise step cannot tell which dish is meant→ ask which one (the plan stays as it was)
-  After a plan, a message the route cannot place between revising and a new meal (unsure) → [interrupt: choice card "在这份方案上改 / 重新规划一顿"] → continues as revise or plan. Without a plan in the conversation, revise and unsure are treated as plan.
+  ─the change would leave no dish ("全都不要了")→ the plan stays as it was; a plain-text question asks whether to plan a new meal
+A one-meal avoidance on a revise turn ("今天不想吃肉") covers every dish of the plan with that ingredient, locked dishes included: each is replaced, possibly by another dish type, and the plan keeps its size. The avoidance stays with the plan for later revisions; a lasting rule ("我不吃肉") still goes to the diner card. Words about an amount ("不要这么多鸡蛋的") are a general wish, not an avoidance.
+  After a plan, a message the route cannot place between revising and a new meal (unsure; also a message that only asks to reconsider and names no taste, ingredient, dish or count, while pointing words with a remove or swap verb, such as "这两道不要了", are revise) → [interrupt: choice card "在这份方案上改 / 重新规划一顿"] → continues as revise or plan. Without a plan in the conversation, revise and unsure are treated as plan.
 "Xiao Li is coming too / Xiao Wang isn't coming" → update diners → validate_plan → replace only dishes that break the rules → present_plan *(T1.5 part 3b-2; until then a change in who eats, found by the parse on a revise turn too, shows the diner card and the meal is planned from scratch as a new request, without the hand edits.)*
 "This one is good" → save the plan → if ingredients are missing: make_shopping_list → [interrupt to confirm] → save the list
 "Plan again" (after resolving unknown allergens, 5.5) → reuse the previous parsed request (no route or parse call) → load_context → planner → … → present_plan
-A fixed next-action button message ("允许购物", "少做几道菜", and the others, both languages) → no route call → parse_request → planned from scratch as a new request, without the hand edits (these messages relax a condition, and a revision cannot clear a time limit or a named ingredient)
+A fixed next-action button message ("允许购物", "少做几道菜", and the others, both languages) → no route or parse call: code changes one field of the request of the card that offered the button (T1.5 part 3b-1b) → on a failed revision's card (the plan was kept): revise_plan again on the current plan, hand edits and locks kept; on any other card (no plan, early stop, a failed new plan): planned from scratch with the changed request. A card saved before part 3b-1b keeps the old path: parse_request → planned from scratch
 ```
 
 **Subgraph B: recipe import**
@@ -423,7 +428,7 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 | ID | Rule |
 |---|---|
 | H1 | Fridge-only mode: each dish's main and secondary ingredients (except `optional`) must be in inventory and not at level "none", with matches following the ingredient hierarchy in 5.3. Seasonings are checked for availability only. Items in `always_in_stock` are assumed available. Unrecognized ingredients count as "not in inventory" (see 5.5) |
-| H2 | No allergens or restricted ingredients of this meal's diners. Allergy rules on a listed allergen are checked through the dictionary's `allergens[]`; rules on a specific ingredient and dietary restrictions are checked through `ingredient_id`, normalized names, and aliases. All checks include the ingredient hierarchy in 5.3. Variants are checked too. Unrecognized ingredients follow 5.5 |
+| H2 | No allergens or restricted ingredients of this meal's diners, and none of this meal's one-meal avoidances ("今天不想吃肉", for this meal only and never a person's rule; a group word such as "肉" covers its whole dictionary category). Allergy rules on a listed allergen are checked through the dictionary's `allergens[]`; rules on a specific ingredient and dietary restrictions are checked through `ingredient_id`, normalized names, and aliases. All checks include the ingredient hierarchy in 5.3. Variants are checked too. Unrecognized ingredients follow 5.5 |
 | H3 | The user has all required cookware. Supplies such as plastic wrap or foil are not checked |
 | H4 | The composition matches the requested number of dishes and soups (`meat dish` and `vegetable dish` count as dishes, and `soup` as soups) |
 | H5 | No duplicates; each `recipe_id` must exist in the user's recipe library |
@@ -453,11 +458,11 @@ Web search to verify whether a substitution is common is not in Phase 1 and may 
 
 Import confirmation shows the duration and its source. A changed duration becomes `user` by default, and the user can mark it `stated` when the source gives it, which also corrects an extraction that mislabeled a stated time. `estimated` is offered only while the model's own number is unchanged. A later "cooked this meal" feature could let the user record actual time.
 
-**Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written to the conversation state (`current_plan`) so later turns can read it. A new message now revises the edited plan (T1.5 part 3b-1, see 7.3): a dish added by hand, and a dish whose conflict the user confirmed or kept, is locked and leaves only when the message names it, and its override stays with it while it is in the plan; the plan's dish count and categories, hand changes included, stay unless the message states a count. A revision is a new model version, and later edits start a new manual version on top of it. "Plan again", a fixed next-action button message, and a change in who eats still plan from scratch, without the edits. Edits live in the conversation state until the plan is saved (T1.5 part 3c); "restore the model's plan" brings back the model's last version (a revision included, with that version's locks and overrides) and checks it again against today's data. The user can also add, remove, and change items when confirming the shopping list.
+**Manual plan edits:** the user can remove a dish from the plan card, or browse the recipe library and add one. After each edit, code reruns `validate_plan` and recomputes missing ingredients without calling a model, and the result is written to the conversation state (`current_plan`) so later turns can read it. A new message now revises the edited plan (T1.5 part 3b-1, see 7.3): a dish added by hand, and a dish whose conflict the user confirmed or kept, is locked and leaves only when the message names it, and its override stays with it while it is in the plan; the plan's dish count and categories, hand changes included, are the revision's starting point, and only the message's drops, replacements, and additions or a stated count change them (part 3b-1b). A revision is a new model version, and later edits start a new manual version on top of it. A next-action button on a failed revision's card revises the edited plan again; "plan again", a button on any other card, and a change in who eats still plan from scratch, without the edits. Edits live in the conversation state until the plan is saved (T1.5 part 3c); "restore the model's plan" brings back the model's last version (a revision included, with that version's locks and overrides) and checks it again against today's data. The user can also add, remove, and change items when confirming the shopping list.
 
 | Rule | When the user adds a dish that breaks it |
 |---|---|
-| H2 | Show which diner and which allergen or restriction is affected. The dish is added only after the user confirms again. A dish with an ingredient of unknown allergens (see 5.5) is handled the same way when any diner has an allergy: the prompt names the ingredient and offers to resolve its allergens |
+| H2 | Show which diner and which allergen or restriction is affected, or, for a one-meal avoidance, that it breaks this meal's wish (no person is named). The dish is added only after the user confirms again. A dish with an ingredient of unknown allergens (see 5.5) is handled the same way when any diner has an allergy: the prompt names the ingredient and offers to resolve its allergens |
 | H1, H3 | Allowed with a warning. Missing ingredients go on the shopping list |
 | H4 | Allowed. The edited plan is what counts |
 | H5 | Not allowed |
@@ -466,7 +471,7 @@ Import confirmation shows the duration and its source. A changed duration become
 
 **Planning metrics:** computed only on plans as the model produced them, before manual edits:
 
-- Constraint satisfaction rate = the share of plans that pass all hard constraints on the first attempt;
+- Constraint satisfaction rate = the share of plans that pass all hard constraints on the first attempt (dishes code picked because the planner gave no answer never count as a first-attempt pass);
 - Final pass rate = the share of plans that pass within N retries;
 - Average number of retries.
 

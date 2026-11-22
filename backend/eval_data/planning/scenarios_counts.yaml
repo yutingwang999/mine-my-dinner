@@ -8,6 +8,8 @@
 #   egg dishes (12 eggs, 3 each, so no S1 warning).
 # - fridge_1_meat_4_veg: meat 青椒肉丝; vegetable the four egg dishes.
 # - fridge_greens_only: vegetable 蒜蓉西兰花, 清炒小白菜; no meat dish, no egg.
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   - name: eight_dishes_at_least_two_meat_fridge
     request: 8个菜，至少2个荤菜，只用冰箱里现有的食材。

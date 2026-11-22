@@ -4,6 +4,8 @@ Before the planner calls a model, code asks one question: **can this request be 
 
 It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/feasibility.py`, wired in `backend/minemydinner/agent/graph.py`). The design is in `docs/superpowers/specs/2026-11-14-phase-1-plan-2a-planner-efficiency-design.md`, Sections 5.2 and 5.3. Related: `docs/planner-stock-rules.md` (what "makeable" and "in stock" mean) and `docs/planner-shortlist-and-ranking.md` (the candidate list built when planning goes ahead).
 
+What each model (route, parse, planner, revise) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
+
 ## 1. When it runs
 
 - After the request is parsed and its defaults applied, **before the first planner model call**.
@@ -28,7 +30,7 @@ Six reasons, checked in this order. All reasons that hold are reported, not only
 
 How each is decided:
 
-- **"Safe"** means what search allows: the allergy and dietary exclusions of every diner of the meal apply (the user, selected friends, guests, and meal-only rules from the diner card), and dishes left out for unknown allergens do not count.
+- **"Safe"** means what search allows: the allergy and dietary exclusions of every diner of the meal apply (the user, selected friends, guests, and meal-only rules from the diner card; since plan 3b-1b also this meal's one-meal avoidance, `meal_avoid`, as the meal's own rule), and dishes left out for unknown allergens do not count.
 - **"Makeable"** follows the stock rules in `docs/planner-stock-rules.md`, exactly as validation (H1) and the plan card judge it.
 - **The whole library is checked**, not the candidate list.
 - **The time limit in fridge-only mode** is judged on the makeable recipes, because only those reach the candidate list and the planner's searches. If every makeable soup is over the limit, the check stops with the time limit even when a quicker soup exists that would need shopping. When nothing of a type is makeable (already "not enough from the fridge"), the time limit is judged on every safe recipe, so the user also learns whether shopping alone would meet it.
@@ -68,13 +70,14 @@ The planning record gets a `feasibility` event listing the reasons (names replac
 | Named ingredient, H7 | The named ingredients are optional, Fewer dishes, Allow shopping (fridge-only), Update inventory (fridge-only), Import recipes |
 | Every attempt broke an allergy or diet rule (H2) | Fewer dishes, Allow shopping (fridge-only) |
 | Only an invented or repeated recipe id (H5) | none; the note then promises no changes |
+| A plan is shown, but no dish fits the taste wish (plan 3b-1b; not a stop) | Import recipes, Allow shopping (fridge-only), merged with the plan's own |
 
 Two buttons appear only when they can help:
 
 - **Fewer dishes** only when the meal has more than one dish in total.
 - **Any mix of meat and vegetable dishes** only when the user named a meat or vegetable count and a meat or vegetable side, named or implied, is short. A short dish total alone does not offer it, because dropping the split would not add a dish.
 
-"Allow shopping", "Fewer dishes", "Drop the time limit", "Any mix of meat and vegetable dishes", and "The named ingredients are optional" send a short fixed message; since plan 3b-1 these messages skip the route and are parsed as a new plan. "Update inventory", "Register cookware", and "Import recipes" are links to the inventory and import pages.
+"Allow shopping", "Fewer dishes", "Drop the time limit", "Any mix of meat and vegetable dishes", and "The named ingredients are optional" send a short fixed message. Since plan 3b-1b code changes the request of the card that offered the button, with no route or parse call (`agent/actions.py`; `docs/planner-request-and-counts.md`, Section 8): on a stop card the meal is planned again from scratch with that request, and on a failed revision's card the current plan is revised again. A card saved before plan 3b-1b still has its message parsed as a new plan. "Update inventory", "Register cookware", and "Import recipes" are links to the inventory and import pages.
 
 ## 5. How it relates to validation
 
@@ -86,6 +89,13 @@ Two buttons appear only when they can help:
 | On failure | Stops planning early, with reasons | Retries with the violations, up to twice, then shows the closest safe attempt or no plan |
 
 The feasibility check saves model calls on requests that cannot succeed; it never replaces validation. A plan that passes the feasibility check is still validated in full.
+
+What happens after the check lets a request through (plan 3b-1b, `agent/graph.py`):
+
+- **Hard requirements still stop.** Counts, dietary rules (one-meal avoidances included), stock, cookware, and a time limit are checked here and by validation as before; a request that cannot meet them stops with reasons. When every attempt broke only the one-meal avoidance, the reason names the meal's wish ("No plan fits leaving out 肉 at this meal"), never a diner's rule.
+- **A taste wish is not a hard requirement.** The library has no taste tags, so only the planner can judge whether a dish fits "The user feels like: ...". When none does, it answers with the best plan for the other conditions and `wish_met` false; the plan is shown, the reply first says the wish was not met, and the card adds the next steps of Section 4. This check never stops on a wish.
+- **No answer from the planner** (call limit or token budget): code picks dishes from the candidate list (`docs/planner-shortlist-and-ranking.md`, Section 6) and validates them like any attempt; with a wish in the request this counts as the wish not met.
+- **An empty plan is never the reason shown.** An attempt with no dishes is never kept as the closest plan; when every attempt was empty, no plan is shown and the fixed note says no dishes could be put together and suggests sending the request again, instead of "0 dishes".
 
 ## 6. Examples
 

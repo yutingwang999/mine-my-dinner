@@ -6,11 +6,44 @@
 # are used while building. It shares no request with the held-out set
 # (scenarios_revise_heldout.yaml), which is never tuned against.
 #
-# Most scenarios fix the first plan (first_plan) so the follow-up starts from known dishes;
+# Most scenarios fix the first plan (first_plan) so the follow-up starts from known dishes
+# (the first reply's text is replaced too, so the route reads those dishes; see the header
+# of scenarios_revise_heldout.yaml);
 # some add or remove dishes by hand first (edits_between_turns): a dish added by hand is
 # locked. Every revision is also checked for locked dishes removed without being named.
 # The keys are defined in the header of scenarios_revise_heldout.yaml and in Scenario
 # (minemydinner/evaluation/planning.py).
+#
+# Plan 3b-1b development scenarios are at the end (new sentences, none from a held-out set,
+# the regression set, or a prompt's examples). The keys plan 3b-1b adds:
+# - role: development | regression | held-out - the whole file's role, a top-level key next
+#   to `scenarios:` (never per scenario). `summarize` reports each role's rate apart, so a
+#   regression set never counts toward the held-out rate.
+# - button_after: <action> - after the last message (the follow-up, else the first message),
+#   the runner presses that next-action button of the newest card by sending its fixed
+#   message (ACTION_MESSAGES). The button turn is then the judged turn: every other
+#   expectation, the route, the questions and the plan before and after it, is about that
+#   turn. The scenario fails when the card does not offer the button, or when the button
+#   turn's request was not built in code (no request["button"] on its run).
+# - expect_no_question: bool - true: the judged turn asks nothing (no ask-first or count
+#   question, answered or not; no which-dish question; no empty-plan question) and shows no
+#   choice card. false: it asks something.
+# - expect_wish_unmet: bool - true: the judged turn tells the user in code-written form that
+#   the wish was not met: a wish_unmet entry in its card's unmet, the new-plan wish-unmet
+#   sentence in its reply, or a revision whose card kept the plan (plan_kept) with at least
+#   one unmet entry - a failed revision (every attempt failed a check) or a nothing-fits
+#   revision: its reply says the change could not be made and the card says why, so it
+#   counts even when no entry names the wish itself. A kept card with no unmet entry (a
+#   which-dish question) does not count, nor does a passed revision that says so only in
+#   the model's own note.
+# - expect_follow_up_diner_card: bool - a diner card appears on the follow-up turn itself
+#   (needs follow_up).
+# - expect_request_kept: [fields] - request fields (ParsedRequest names) that must be
+#   non-empty in the judged turn's request, such as an earlier wish kept after a button.
+# - Every scenario is also checked for a reply or unmet text saying the plan has "0 道菜" /
+#   "0 dishes" (spec 5.6: never shown).
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: development
 scenarios:
   # ---- "茄子这道不要，换一个别的": a named dish swapped, the rest kept ----
   - name: named_swap_eggplant
@@ -238,7 +271,8 @@ scenarios:
     inventory: {}
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
     first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
-    follow_up: 要不换个思路？
+    # Plan 3b-1b: a sentence no prompt uses ("要不换个思路？" became a revise_v2 example).
+    follow_up: 这桌菜我想再琢磨一下
     choice_answer: plan
     expect_route: unsure
     expect_choice_card: true
@@ -252,7 +286,8 @@ scenarios:
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
     first_plan: [青椒肉丝, 蒜蓉西兰花, 红烧茄子]
     edits_between_turns: [{add: 松仁玉米}]
-    follow_up: 要不换个思路？
+    # Plan 3b-1b: a sentence no prompt uses ("要不换个思路？" became a revise_v2 example).
+    follow_up: 要不咱再折腾折腾？
     choice_answer: revise
     expect_route: unsure
     expect_choice_card: true
@@ -299,3 +334,305 @@ scenarios:
     expect_locale_reply: en
     max_model_calls: 6
     expect: The English twin; a first message is a new plan and the reply stays in English.
+
+  # ======== Plan 3b-1b development scenarios (spec 5.1-5.7) ========
+
+  # ---- 5.1: a bare removal drops the dish and the plan gets smaller ----
+  - name: bare_drop_broccoli
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 红烧茄子, 蒜蓉西兰花]
+    follow_up: 西兰花那盘去掉就行
+    expect_route: revise
+    expect_removed: [蒜蓉西兰花]
+    expect_titles_exact: [青椒肉丝, 红烧茄子]
+    expect_counts: {dishes: 2}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: Only says not to have it, so the broccoli is dropped and two dishes stay; nothing comes in its place.
+  - name: drop_the_only_soup
+    request: 今晚三个人，两个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 冬瓜排骨汤]
+    follow_up: 这次汤就别做了
+    expect_route: revise
+    expect_removed: [冬瓜排骨汤]
+    expect_titles_exact: [青椒肉丝, 蒜蓉西兰花]
+    expect_counts: {dishes: 2, soups: 0}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: The plan has one soup, so "汤" names it; it is dropped and the plan has no soup.
+
+  # ---- 5.1 / 5.2: words that want another dish replace it with one of the same type ----
+  - name: replace_eggplant_same_type
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 红烧茄子, 蒜蓉西兰花]
+    follow_up: 茄子那道撤下来，换个别的上
+    expect_route: revise
+    expect_removed: [红烧茄子]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花]
+    expect_counts: {dishes: 3, meat_dishes: 1, vegetable_dishes: 2}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: The eggplant dish goes and another vegetable dish takes its place; three dishes, one meat and two vegetable.
+
+  # ---- 5.1: a message that only adds changes nothing else ----
+  - name: add_only_one_vegetable
+    request: 今晚就我自己，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 红烧茄子]
+    follow_up: 再补一个素的
+    expect_route: revise
+    expect_max_changed: 0
+    expect_titles_include: [青椒肉丝, 红烧茄子]
+    expect_counts: {dishes: 3, meat_dishes: 1, vegetable_dishes: 2}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: One vegetable dish is added; both dishes stay.
+
+  # ---- 5.4: a one-meal avoidance stays a wish for this meal (no diner card) ----
+  - name: meal_avoid_meat_zh
+    request: 今晚四个人，两荤一素一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 宫保鸡丁, 蒜蓉西兰花, 紫菜豆腐汤]
+    edits_between_turns: [{add: 香煎鸡腿}]
+    follow_up: 今晚先不碰肉了
+    # The hand-added chicken leg is locked, but the avoidance names it (spec 5.4), so it may
+    # go; the replacements may be of another type, and the total of five stays. The first
+    # message (four people) shows the diner card; the follow-up must not.
+    expect_route: revise
+    expect_follow_up_diner_card: false
+    expect_removed: [青椒肉丝, 宫保鸡丁, 香煎鸡腿]
+    expect_titles_include: [蒜蓉西兰花, 紫菜豆腐汤]
+    expect_counts: {meat_dishes: 0}
+    # Five dishes in all, whichever types replace the meat dishes.
+    expect_any_of:
+      - {expect_counts: {dishes: 4, soups: 1}}
+      - {expect_counts: {dishes: 3, soups: 2}}
+      - {expect_counts: {dishes: 2, soups: 3}}
+      - {expect_counts: {dishes: 1, soups: 4}}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: Every meat dish, the one added by hand included, is replaced by a dish without meat; the plan keeps five dishes and no diner card shows.
+  - name: meal_avoid_pork_en
+    request: Dinner for the two of us tonight, three dishes. Shopping is fine.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 清蒸鲈鱼, 蒜蓉西兰花]
+    follow_up: I don't feel like pork tonight.
+    # "the two of us" shows the diner card on the first message; the follow-up must not.
+    expect_route: revise
+    expect_follow_up_diner_card: false
+    expect_removed: [青椒肉丝]
+    expect_max_changed: 1
+    expect_titles_include: [清蒸鲈鱼, 蒜蓉西兰花]
+    expect_titles_none: [鱼香肉丝, 辣椒炒肉, 红烧排骨, 家常烧肉, 麻婆豆腐, 冬瓜排骨汤]
+    expect_any_of:
+      - {expect_counts: {dishes: 3, soups: 0}}
+      - {expect_counts: {dishes: 2, soups: 1}}
+    expect_locale_reply: en
+    expect_no_question: true
+    max_model_calls: 12
+    expect: Tonight only, so no diner card; the pork dish is replaced by a dish without pork and the plan keeps three dishes.
+
+  # ---- 5.4 (unchanged): a lasting rule while revising brings the diner card back ----
+  - name: lasting_rule_for_a_friend_while_revising
+    request: 今晚我和阿梅两个人吃，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends: [{name: 阿梅, rules: []}]
+    first_plan: [葱爆羊肉, 青椒肉丝, 蒜蓉西兰花]
+    follow_up: 阿梅一直不吃羊肉，以后也记着
+    # The runner accepts the card with the proposed rule for this meal; the turn plans anew.
+    expect_follow_up_diner_card: true
+    expect_rules_applied: [{who: 阿梅, ingredient: 羊肉}]
+    expect_titles_none: [葱爆羊肉]
+    expect_counts: {dishes: 3}
+    max_model_calls: 14
+    expect: A lasting rule for a named friend shows the diner card on that turn; the new plan has no lamb dish.
+
+  # ---- 5.3: a one-character staple quote ----
+  - name: staple_quote_noodles
+    request: 今晚两个人，两个菜外加一份主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 番茄鸡蛋面]
+    follow_up: 面换一个别的主食
+    expect_route: revise
+    expect_removed: [番茄鸡蛋面]
+    expect_max_changed: 1
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花]
+    expect_titles_any: [蛋炒饭, 白米饭, 清汤面]
+    expect_counts: {dishes: 2, staples: 1}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: The one-character quote 面 names the noodle dish (a staple category word); it is replaced by another staple.
+
+  # ---- 5.2: an asked-for dish that is not in the library ----
+  - name: replacement_not_in_library
+    request: 今晚两个人，三个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 红烧茄子, 蒜蓉西兰花]
+    follow_up: 把红烧茄子换成地三鲜
+    expect_route: revise
+    expect_plan: false
+    expect_unchanged: true
+    expect_next_actions: [import_recipes]
+    expect_wish_unmet: true
+    expect_no_question: true
+    max_model_calls: 12
+    expect: There is no 地三鲜 in the library, so nothing fits; the plan stays and the reply offers to import recipes.
+
+  # ---- 5.1: a change that would leave no dish asks instead ----
+  - name: drop_every_dish_asks
+    request: 今晚就我自己，两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花]
+    follow_up: 这两道都拿掉
+    expect_route: revise
+    expect_plan: false
+    expect_choice_card: false
+    expect_question: true
+    expect_no_question: false
+    expect_unchanged: true
+    max_model_calls: 12
+    expect: Dropping both would leave no dish, so nothing changes and the reply asks whether to plan a new meal.
+
+  # ---- 5.5: buttons after a failed revision revise again with the card's request ----
+  - name: button_shopping_after_seafood_wish
+    request: 今晚就我一个，冰箱里有啥做啥，两个菜。
+    locale: zh
+    inventory: {番茄: 3, 鸡蛋: 6, 青椒: 2, 猪肉: plenty}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 番茄炒蛋]
+    follow_up: 来个鱼或者虾换换口味
+    button_after: switch_to_shopping
+    # Judged after the button: the seafood wish is kept and met by shopping.
+    expect_spec: {mode: shopping}
+    expect_request_kept: [query]
+    expect_titles_include: [番茄炒蛋]
+    expect_titles_any: [清蒸鲈鱼, 红烧带鱼, 水煮鱼片, 油焖大虾]
+    # "来个" may read as a swap (the meat dish becomes seafood, same type) or as an addition.
+    expect_any_of:
+      - {expect_removed: [青椒肉丝], expect_counts: {dishes: 2}}
+      - {expect_max_changed: 0, expect_counts: {dishes: 3}}
+    expect_no_question: true
+    expect_wish_unmet: false
+    max_model_calls: 18
+    expect: No fish or shrimp at home, so the revision fails and offers shopping; the button keeps the wish, and a seafood dish to buy for replaces the meat dish or joins the plan.
+  - name: button_fewer_after_failed_add
+    request: 今晚一个人，用家里现有的做两个菜。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: 2, 西兰花: 1, 蒜: plenty, 小白菜: plenty}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花]
+    follow_up: 冰箱里的东西再多做两个菜
+    # Makeable: 青椒肉丝, 蒜蓉西兰花, 清炒小白菜. Four cannot be made; one fewer is three.
+    button_after: fewer_dishes
+    expect_spec: {mode: fridge_only, dishes: 3}
+    expect_titles_exact: [青椒肉丝, 蒜蓉西兰花, 清炒小白菜]
+    expect_no_question: true
+    max_model_calls: 18
+    expect: Two more cannot be made from the stock; "one fewer" asks for three, so the bok choy is added and the two dishes stay.
+  - name: button_relax_split_after_failed_add
+    request: 今晚一荤一素，就用家里有的，不出去买。
+    locale: zh
+    inventory: {猪肉: plenty, 青椒: 2, 西兰花: 1, 蒜: plenty, 小白菜: plenty}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花]
+    follow_up: 能不能多一道有肉的？
+    # No second meat dish can be made; any mix of three can.
+    button_after: relax_split
+    expect_spec: {mode: fridge_only, dishes: 3, meat_dishes: null, vegetable_dishes: null}
+    expect_titles_exact: [青椒肉丝, 蒜蓉西兰花, 清炒小白菜]
+    expect_no_question: true
+    max_model_calls: 18
+    expect: A second meat dish cannot be made at home; with any mix allowed, the third dish is the bok choy and the two dishes stay.
+  - name: button_no_time_limit_after_named_swap
+    request: 半小时之内能吃上，两个人两个菜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花]
+    follow_up: 肉丝换成红烧排骨
+    # 红烧排骨 takes 60 minutes (stated), over the half-hour limit. The search lists it under
+    # over_time_limit (design 5.2, 2026-11-22), so the revision answers nothing fits and the
+    # card offers drop_time_limit (never "not in the library"); after the button the ribs
+    # come in.
+    button_after: drop_time_limit
+    expect_spec: {time_limit_min: null}
+    expect_removed: [青椒肉丝]
+    expect_titles_exact: [红烧排骨, 蒜蓉西兰花]
+    expect_no_question: true
+    max_model_calls: 18
+    expect: The named dish takes longer than the half-hour limit, so nothing fits and the card offers no time limit, saying how long the dish takes; after the button the ribs come in.
+
+  # ---- 5.5: buttons after an early stop plan anew with the card's request ----
+  - name: button_relax_named_after_early_stop
+    request: 今晚两个菜，一定要用上南瓜，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    button_after: relax_named
+    expect_spec: {must_use: [], prefer_use: [南瓜]}
+    expect_counts: {dishes: 2}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: No dish uses pumpkin, so the first message stops early; with the named ingredient optional the meal is planned with two dishes and no question.
+  - name: button_shopping_after_empty_fridge
+    request: 就用冰箱里的东西，今晚做两个菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    button_after: switch_to_shopping
+    expect_spec: {mode: shopping}
+    expect_counts: {dishes: 2}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: The fridge is empty, so the first message stops early; after allowing shopping two dishes are planned and nothing is asked again.
+  - name: button_no_time_limit_after_early_stop
+    # Every dessert in the library has a stated time of 40 minutes or more; an estimated time
+    # never blocks a limit, so a type with stated times only makes the early stop real.
+    request: 二十分钟以内做一份甜点，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
+    button_after: drop_time_limit
+    expect_spec: {time_limit_min: null}
+    expect_counts: {desserts: 1}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: No dessert takes twenty minutes or less, so the first message stops early; with no time limit one dessert is planned.
+
+  # ---- 5.6: a new plan whose taste wish the library cannot meet ----
+  - name: new_plan_unmeetable_wish
+    request: 今晚两个人，两个菜，想吃点泰式风味的，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    expect_route: plan
+    expect_counts: {dishes: 2}
+    expect_wish_unmet: true
+    expect_next_actions: [import_recipes]
+    expect_locale_reply: zh
+    max_model_calls: 8
+    expect: Nothing in the library is Thai, so the meal is planned from the other conditions and the reply says the wish was not met, offering to import recipes.

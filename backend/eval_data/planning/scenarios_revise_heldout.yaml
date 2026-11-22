@@ -1,13 +1,19 @@
-# Plan 3b-1 held-out revision set. Run with library_revise.yaml.
+# Plan 3b-1 revision set, a REGRESSION set since plan 3b-1b. Run with library_revise.yaml.
 #
-# Held-out set written by the user on 2026-11-20. Not used for tuning in plan 3b-1; do not edit.
+# Written by the user on 2026-11-20 as plan 3b-1's held-out set. Its results were read in
+# plan 3b-1's round 9, so from plan 3b-1b on it is a regression set: run every round, every
+# miss explained, not counted in the held-out threshold. Expectations change only with the
+# user's approval (plan 3b-1b Task 1 found none that its design changes, 2026-11-21).
 # The follow-up sentences and the expected results are the user's. The first requests, the
 # first plans and the stock that set each sentence up were filled in from the user's notes.
 #
 # Keys added for follow-up scenarios (implemented by the runner in plan 3b-1 Task 7):
 # - first_plan: [titles] - after the first message's turn, the runner replaces the newest
 #   reply's dishes with these library titles as a model version (not edited, no locks), so
-#   the follow-up starts from a known plan.
+#   the follow-up starts from a known plan. Since development run 2 of plan 3b-1b it also
+#   replaces that reply's text (the planner's note about its own dishes) with a sentence
+#   naming these dishes ("这顿做：A、B、C。", "This meal: A, B, C."), so the follow-up's route
+#   and parse read the plan the scenario set, as a real reply names its card's dishes.
 # - edits_between_turns: [{add: title} | {remove: title} | {keep: title}] - 3a edits applied
 #   in order after `between_turns`, through `apply_edit` and `update_state` as the API does
 #   (an add that needs confirmation is confirmed).
@@ -34,6 +40,8 @@
 # - Locked dishes are checked for every scenario without a key: a dish locked before the
 #   follow-up and absent after it, not listed in expect_removed, counts as a wrongly removed
 #   locked dish.
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   - name: drop_the_corn_dish_keep_the_rest
     request: 两个人吃晚饭，三个菜一个汤，缺的可以去买。

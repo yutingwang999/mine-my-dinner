@@ -33,7 +33,7 @@ from minemydinner.planning.composition import (
     outside,
     side_ranges,
 )
-from minemydinner.planning.context import PlanningContext
+from minemydinner.planning.context import MEAL_KEY, PlanningContext
 from minemydinner.planning.dietary import RuleConflict
 from minemydinner.planning.search import BlockedHit
 from minemydinner.planning.validate import (
@@ -71,7 +71,8 @@ class EditError(Exception):
 
 class Conflict(BaseModel):
     """One H2 conflict of a dish, for the user to confirm. Diners are named by display name
-    (the user: `is_self` with no name; a guest: the guest's name), never by a label."""
+    (the user: `is_self` with no name; a guest: the guest's name), never by a label. This
+    meal's own wish (`diner_key` "meal", a one-meal avoidance) has no name and is no one."""
 
     recipe_id: int
     diner_key: str
@@ -236,7 +237,13 @@ def _conflicts(
                 kind = "ingredient"
             else:
                 kind = "text"
-            name, is_self = names.get(detail["diner_key"], (None, False))
+            # This meal's own wish (diner key MEAL_KEY, plan 3b-1b spec 5.4) is no person: no
+            # name and never the user; the card shows it as the meal's wish.
+            name, is_self = (
+                (None, False)
+                if detail["diner_key"] == MEAL_KEY
+                else names.get(detail["diner_key"], (None, False))
+            )
             conflict = Conflict(
                 recipe_id=finding.recipe_id,
                 diner_key=detail["diner_key"],
@@ -304,7 +311,8 @@ def _count_notes(values: dict, spec: PlanSpec, recipes: list[dict]) -> list[dict
     present = count_categories(r["dish_type"] for r in recipes)
     ranges = side_ranges(spec)
     defaults = set(values.get("defaults_used") or [])
-    request = values.get("request")
+    # The request the plan was built from; a later unclear turn may have parsed another.
+    request = values.get("plan_request") or values.get("request")
     notes = []
     for field in COUNT_NOTE_FIELDS:
         stated = getattr(spec, field)
@@ -481,6 +489,11 @@ def _restored_card(
         count_notes=[],
         notes=notes,
     )
+    # The request the version was built from (and `plan_kept`), so a next-action button on the
+    # restored card changes that request in code (plan 3b-1b spec 5.5).
+    for key in ("request", "plan_kept"):
+        if key in model:
+            card[key] = model[key]
     return card
 
 

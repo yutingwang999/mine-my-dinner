@@ -17,10 +17,10 @@ from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 # One version per prompt, so route, parse, planner, and revise change independently. A version
 # any record has used is never edited; a change makes the next version of that prompt.
 PROMPT_VERSIONS = {
-    "route": "route_v3",
-    "parse": "parse_v6",
-    "planner": "planner_v4",
-    "revise": "revise_v2",
+    "route": "route_v6",
+    "parse": "parse_v8",
+    "planner": "planner_v5",
+    "revise": "revise_v4",
 }
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
@@ -30,9 +30,8 @@ REPLAN_MESSAGE = {"zh": "按同样的要求重新规划", "en": "Plan again with
 
 # The fixed messages of the plan card's next-action buttons, by locale and action. They must
 # equal chat.actionMessage in the frontend message files (a test checks it). Code skips the
-# route call for them (the turn is a plan) but still parses them: the parse relaxes the request.
-# Known limitation: pressing one on a failed-revision card plans from scratch; hand edits are
-# not carried.
+# route call for them and changes the request of the card that offered the button itself
+# (agent/actions.py, plan 3b-1b spec 5.5); only a card saved without its request is parsed.
 ACTION_MESSAGES = {
     "zh": {
         "switch_to_shopping": "允许购物",
@@ -222,6 +221,17 @@ class ParsedRequest(BaseModel):
     )
     exclude_recent_days: int | None = Field(
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
+    )
+    # Plan 3b-1b spec 5.4. Code applies it to this meal as the meal's own rule (diner key
+    # "meal"), never to a profile; requests stored before parse_v7 load it as empty.
+    meal_avoid: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "Ingredients or ingredient groups the user does not want at this meal only "
+            "(\"今天不想吃肉\" is [\"肉\"]), as said. Never taste words (\"不要辣的\" goes to "
+            "query) and never a lasting rule of a person (\"我不吃肉\" goes to self_rules)."
+        ),
     )
     # None on requests parsed before parse_v6; a revision then compares counts with the
     # previous request instead (agent/revision.py).

@@ -28,7 +28,7 @@ from minemydinner.planning.inventory import (
     meal_preferences,
     update_inventory,
 )
-from minemydinner.planning.search import recipe_detail, search_recipes
+from minemydinner.planning.search import FIRM_TIME_SOURCES, recipe_detail, search_recipes
 from minemydinner.planning.stock import compute_missing as stock_compute_missing
 from minemydinner.planning.stock import missing_cookware
 
@@ -73,6 +73,56 @@ def _longer(*days: int | None) -> int | None:
 def _names(*groups: Sequence[str] | None) -> list[str]:
     """The non-blank names of every group, once each, in order."""
     return list(dict.fromkeys(n for group in groups for n in group or () if n.strip()))
+
+
+def _squeezed(text: str) -> str:
+    """Text folded for the title rule: lower case, with no whitespace."""
+    return "".join(text.casefold().split())
+
+
+def names_title(query: str, title: str) -> bool:
+    """The query names a recipe title (design 5.2, 2026-11-22): the query, with whitespace
+    removed and case ignored, contains the whole title, likewise folded, of at least two
+    characters. "把肉丝换成红烧排骨" names 红烧排骨; "排骨" does not."""
+    folded = _squeezed(title)
+    return len(folded) >= 2 and folded in _squeezed(query)
+
+
+def over_time_limit(
+    session: Session, deps: "PlannerDeps", ctx: Any, query: str | None
+) -> list[dict]:
+    """The dishes `query` (the search's query) or the request's own query names whose stated
+    or user-given time is over the request's time limit, which the search therefore left out:
+    listed apart so the model never calls them "not in the library". The request's query is
+    checked too, so a dish the user named is listed even when the model searched other words.
+    The request's other hard rules (diners' rules, fridge-only, every dish must use) still
+    apply; such a dish is never addable under the limit."""
+    limit = deps.time_limit_min
+    queries = [q for q in (query, deps.query) if q and q.strip()]
+    if limit is None or not queries:
+        return []
+    rows = session.execute(
+        select(Recipe.id, Recipe.title).where(
+            Recipe.time_source.in_(FIRM_TIME_SOURCES), Recipe.time_min > limit
+        )
+    ).all()
+    named = [
+        recipe_id
+        for recipe_id, title in rows
+        if any(names_title(q, title) for q in queries)
+    ]
+    if not named:
+        return []
+    allowed = search_recipes(
+        session,
+        None,
+        ctx,
+        limit=None,
+        only_ids=named,
+        must_use=_names(deps.all_use) or None,
+        makeable_only=deps.mode == "fridge_only",
+    ).hits
+    return [{"id": h.id, "title": h.title, "time_min": h.time_min} for h in allowed]
 
 
 def _default(value: Any) -> Any:
@@ -219,8 +269,11 @@ def get_inventory(
         "request says every dish must use an ingredient, only dishes using it are returned. "
         "Also returns left_out_unknown_allergens (titles of "
         "dishes left out because an ingredient could not be checked), semantic_paused (true "
-        "when meaning-based search was unavailable), and unresolved_must_use (must_use names "
-        "the dictionary does not know)."
+        "when meaning-based search was unavailable), unresolved_must_use (must_use names "
+        "the dictionary does not know), and over_time_limit: dishes your query or the "
+        "request's query names by their whole title that the request's time limit leaves "
+        "out (id, title, time_min). They exist in the library but cannot be used under the time limit; never call them "
+        "missing from the library."
     ),
 )
 def search_recipes_tool(
@@ -238,13 +291,14 @@ def search_recipes_tool(
 
     def body(session: Session) -> dict:
         ctx = load_planning_context(session, deps.constraints)
+        searched = query if own_query else deps.query
         result = search_recipes(
             session,
             deps.client,
             ctx,
             # A query the model passes wins and drops what it does not reach; otherwise the
             # request's query only ranks, as in the shortlist, so it never empties a search.
-            query=query if own_query else deps.query,
+            query=searched,
             keep_unmatched=not own_query,
             max_time=_stricter(max_time, deps.time_limit_min),
             tags=tags,
@@ -262,6 +316,7 @@ def search_recipes_tool(
             "left_out_unknown_allergens": [e.title for e in result.left_out_unknown_allergens],
             "semantic_paused": result.semantic_paused,
             "unresolved_must_use": result.unresolved_must_use,
+            "over_time_limit": over_time_limit(session, deps, ctx, searched),
         }
 
     return _run(deps, body)

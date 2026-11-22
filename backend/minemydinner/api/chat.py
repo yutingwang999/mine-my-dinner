@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from minemydinner.agent.diners import CardOutOfDate, DinerAnswer
 from minemydinner.agent.edits import EditError, newest_reply_id
 from minemydinner.agent.graph import GraphDeps, build_graph
+from minemydinner.agent.plan_card import client_card
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.api.deps import ApiError, get_llm_client
 from minemydinner.db import SessionFactory
@@ -167,7 +168,7 @@ def _items(values: dict) -> list[dict[str, Any]]:
         if isinstance(message, HumanMessage) and message.content:
             items.append({"type": "user", "text": message.content})
         elif isinstance(message, AIMessage) and not message.tool_calls:
-            plan = reply_plans.get(message.id) if message.id else None
+            plan = client_card(reply_plans.get(message.id)) if message.id else None
             if message.content or plan is not None:
                 items.append(
                     {"type": "assistant", "id": message.id, "text": message.content, "plan": plan}
@@ -208,7 +209,7 @@ def _events_for_update(namespace: tuple, node: str, update: Any) -> Iterator[str
         if message.content:
             yield event("message", {"role": "assistant", "text": message.content})
         if message.id is not None and message.id in reply_plans:
-            yield event("plan", reply_plans[message.id])
+            yield event("plan", client_card(reply_plans[message.id]))
 
 
 def _fail_record(runtime: ChatRuntime, config: dict) -> None:
@@ -305,7 +306,8 @@ def read_thread(thread_id: str, runtime: RuntimeDep) -> dict[str, Any]:
     return {
         "items": _items(state.values),
         "messages": _visible_messages(state.values.get("messages") or []),
-        "current_plan": state.values.get("current_plan"),
+        # Cards reach the client without their server-only fields (the request's labels).
+        "current_plan": client_card(state.values.get("current_plan")),
         "pending": pending[0].value if pending else None,
         # Whether the newest plan card takes edits now: the edit endpoints' own rule.
         "editable": edit_refusal(state) is None,

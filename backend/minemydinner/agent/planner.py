@@ -35,6 +35,17 @@ class PlanProposal(BaseModel):
 
     recipe_ids: list[int] = Field(description="Ids of the chosen recipes, from tool results only.")
     note: str = Field(description="One or two sentences to the user, in the reply locale.")
+    wish_met: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the chosen dishes meet the request's taste wish (the line 'The user "
+            "feels like: ...'). None when the request has no such line."
+        ),
+    )
+    wish_unmet_reason: str = Field(
+        default="",
+        description="When wish_met is false: a short reason why no dish fits the wish.",
+    )
 
 
 # Covers the tools and the final-answer schema, the model-facing surface of the planner.

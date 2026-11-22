@@ -16,11 +16,22 @@ from minemydinner.agent.plan_card import meal_constraints
 from minemydinner.agent.planner import REVISE_TOOLS_VERSION
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import PROMPT_VERSION, set_request_style
-from minemydinner.agent.revise_step import count_fix_hint
+from minemydinner.agent.revise_step import (
+    EMPTY_PLAN_QUESTION_EN,
+    EMPTY_PLAN_QUESTION_ZH,
+    count_fix_hint,
+)
 from minemydinner.models import AppPreference, PlanningRun
 from minemydinner.planning.context import load_planning_context
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client, tool_call
-from tests.planningfakes import L, make_recipe, rollback_session_factory, rule, self_diner
+from tests.planningfakes import (
+    L,
+    make_recipe,
+    rollback_session_factory,
+    rule,
+    self_diner,
+    stock,
+)
 from tests.recipefakes import seeded  # noqa: F401
 
 
@@ -94,7 +105,11 @@ def hand_edit(env: Env, action) -> dict:
 
 
 def proposal(target: str, remove=(), add=(), note: str = "", **fields):
-    removed = [{"id": i, "quote": q} for i, q in remove]
+    """`remove` holds (id, quote) or (id, quote, mode) tuples, or full dicts."""
+    removed = [
+        item if isinstance(item, dict) else dict(zip(("id", "quote", "mode"), item))
+        for item in remove
+    ]
     args = {"target": target, "remove": removed, "add": list(add), "note": note, **fields}
     return tool_call("RevisionProposal", args)
 
@@ -237,8 +252,10 @@ def test_failed_revision_leaves_plan_unchanged(env):
     shown = reply_plan(out)
     assert recipe_ids(shown) == recipe_ids(before["current_plan"])
     assert shown["passed"] is False
-    assert [u["code"] for u in shown["unmet"]] == ["H4"]
-    assert "荤菜" in shown["unmet"][0]["text"]
+    # The type pairing (R7) stops it before the counts: the attempt's counts follow the
+    # change list, so H4 cannot fire.
+    assert [u["code"] for u in shown["unmet"]] == ["R7"]
+    assert "同一类" in shown["unmet"][0]["text"]
     assert "relax_split" in shown["next_actions"]
     assert out["messages"][-1].content.startswith("没能按这次的要求改好方案")
     record = last_record(env)
@@ -260,30 +277,39 @@ def test_count_fix_hint_names_the_categories_that_are_off():
         },
         "ranges": {"meat_dishes": [2, 2], "vegetable_dishes": [2, 2]},
     }
-    hint = count_fix_hint(detail)
+    replaceable = {
+        "meat_dishes": [(12, "清蒸鲈鱼"), (18, "土豆炖牛腩")],
+        "vegetable_dishes": [(3, "清炒小白菜")],
+    }
+    hint = count_fix_hint(detail, replaceable)
     assert hint.startswith("The revised plan must have 4 dishes: 2 meat dishes and 2 vegetable dishes.")
     assert "Too many: 1 meat dish, 1 snack." in hint
     assert "Too few: 1 vegetable dish, 1 soup." in hint
     assert "same dish type" in hint and "meat dish for a meat dish" in hint
+    # The dishes of the type that is over are named, the other side's are not.
+    assert hint.endswith("Replace one of these meat dishes: 清蒸鲈鱼 (id 12), 土豆炖牛腩 (id 18).")
+    assert "清炒小白菜" not in hint
     # A total that is off while the sides are free is a dish of either side.
     free = {
         "required": {"dishes": 3, "soups": 0, "staples": 0, "desserts": 0, "snacks": 0},
         "present": {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1, "soups": 0},
         "ranges": {"meat_dishes": [0, 3], "vegetable_dishes": [0, 3]},
     }
-    hint = count_fix_hint(free)
+    hint = count_fix_hint(free, {})
     assert hint.startswith("The revised plan must have 3 dishes. Too few: 1 dish (meat or vegetable).")
     assert "Too many" not in hint
     # A side given as a range keeps the total in front of it.
     ranged = {**free, "ranges": {"meat_dishes": [2, 3], "vegetable_dishes": [0, 3]}}
-    assert count_fix_hint(ranged).startswith(
+    assert count_fix_hint(ranged, {}).startswith(
         "The revised plan must have 3 dishes: at least 2 meat dishes."
     )
 
 
-def test_split_broken_by_a_general_wish_gets_the_category_hint(env):
+def test_wrong_type_is_retried_with_the_dishes_named(env):
+    """Plan 3b-1b spec 5.2: a vegetable dish swapped for a meat dish fails the type pairing
+    (R7) on the first attempt, and the retry names the meat dishes that may be replaced."""
     first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
-    egg, pork, beans = ids_of(env, "番茄炒蛋", "红烧肉", "干煸豆角")
+    eggplant, egg, pork, beans = ids_of(env, "鱼香茄子", "番茄炒蛋", "红烧肉", "干煸豆角")
     out = revise(
         env,
         "想要辣一些的",
@@ -294,11 +320,16 @@ def test_split_broken_by_a_general_wish_gets_the_category_hint(env):
         parse={"query": "辣一些的"},
     )
     assert out["current_plan"]["passed"] is True and out["retries"] == 1
+    assert recipe_ids(out["current_plan"]) == ids_of(env, "鱼香茄子", "清炒小白菜", "干煸豆角")
     retry = [m for m in reviser_requests(env)[1] if m.type == "human"][-1].content
-    assert "The plan has 3 dishes, 2 meat dishes, 1 vegetable dish" in retry
+    assert "so its replacement must be a vegetable dish too" in retry
     assert "must have 3 dishes: 1 meat dish and 2 vegetable dishes." in retry
     assert "Too many: 1 meat dish." in retry and "Too few: 1 vegetable dish." in retry
-    assert "same dish type" in retry
+    assert f"Replace one of these meat dishes: 鱼香茄子 (id {eggplant})." in retry
+    record = last_record(env)
+    validations = [e for e in record.events if e["kind"] == "validation"]
+    assert [p["code"] for p in validations[0]["problems"]] == ["R7"]
+    assert all(v["code"] != "H4" for v in validations[0]["result"]["violations"])
 
 
 def test_unclear_asks_and_changes_nothing(env):
@@ -462,6 +493,9 @@ def test_kept_dish_is_named_with_its_own_wording(env, session):
     text = out["messages"][-1].content
     assert text.startswith("把清炒小白菜换成了干煸豆角。番茄炒蛋是你确认保留的，没有改动。")
     assert "手动加的" not in text
+    # The model sees which locked dish was kept despite a conflict (plan 3b-1b spec 5.4).
+    [opening] = [m for m in reviser_requests(env)[0] if m.type == "human"]
+    assert f"{egg} 番茄炒蛋 (vegetable dish; 番茄, 鸡蛋) LOCKED KEPT CONFLICT" in opening.content
 
 
 def test_add_only_turn_names_no_untouched_dish(env):
@@ -566,3 +600,455 @@ def test_a_dish_deleted_from_the_library_leaves_the_revision_quietly(env):
     assert f"{cabbage} 清炒小白菜" not in opening.content
     # The revision keeps the plan's size without the deleted dish.
     assert last_record(env).request["spec"]["dishes"] == 2
+
+
+def test_failed_card_drops_a_deleted_dish(env):
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    ids_before = ids_of(env, "鱼香茄子", "番茄炒蛋")
+    env.session.delete(env.dishes["清炒小白菜"])
+    env.session.flush()
+    out = revise(
+        env,
+        "想要辣一些的",
+        [proposal("general", note="库里没有更辣的菜了。")],
+        parse={"query": "辣一些的"},
+    )
+    shown = reply_plan(out)
+    assert shown["passed"] is False
+    assert recipe_ids(shown) == ids_before
+    assert shown["notes"] == [{"field": "deleted_recipes", "titles": ["清炒小白菜"]}]
+
+
+# ---- plan 3b-1b: drop or replace, add-only, the attempt's counts, the empty plan ----
+
+
+def four_dish_plan(env: Env) -> dict:
+    """2 meat dishes, 1 vegetable dish and 1 soup."""
+    env.dishes["紫菜蛋花汤"] = make_recipe(
+        env.session, "紫菜蛋花汤", "soup", [L("紫菜", "main"), L("鸡蛋")]
+    )
+    return first_plan(
+        env,
+        "鱼香茄子",
+        "土豆炖牛肉",
+        "番茄炒蛋",
+        "紫菜蛋花汤",
+        parse={"dishes": 3, "soups": 1, "mode": "shopping"},
+    )
+
+
+def counts_of(plan: dict) -> tuple[int, int]:
+    """(dishes, soups) of a card's dishes."""
+    types = [r["dish_type"] for r in plan["recipes"]]
+    return len(types), types.count("soup")
+
+
+def test_bare_drop_shrinks_the_plan(env):
+    before = four_dish_plan(env)
+    [soup] = ids_of(env, "紫菜蛋花汤")
+    out = revise(env, "汤不要了", [proposal("named", remove=[(soup, "汤", "drop")])])
+    plan = out["current_plan"]
+    assert plan["passed"] is True and out["retries"] == 0
+    assert counts_of(plan) == (3, 0)
+    assert soup not in recipe_ids(plan)
+    # The new version's own spec matches its dishes, so a later hand edit checks against it.
+    assert (plan["spec"]["dishes"], plan["spec"]["soups"]) == (3, 0)
+    assert len(out["plan_versions"]) == len(before["plan_versions"]) + 1
+    assert out["messages"][-1].content.startswith("去掉了紫菜蛋花汤。")
+
+
+def test_replace_keeps_the_size(env):
+    four_dish_plan(env)
+    eggplant, pork = ids_of(env, "鱼香茄子", "红烧肉")
+    out = revise(
+        env,
+        "茄子换成别的",
+        [proposal("named", remove=[(eggplant, "茄子", "replace")], add=[pork])],
+    )
+    plan = out["current_plan"]
+    assert plan["passed"] is True
+    assert counts_of(plan) == (4, 1)
+    assert out["messages"][-1].content.startswith("把鱼香茄子换成了红烧肉。")
+
+
+def test_add_only_adds(env):
+    before = four_dish_plan(env)
+    [cabbage] = ids_of(env, "清炒小白菜")
+    out = revise(env, "加个青菜", [proposal("add", add=[cabbage])])
+    plan = out["current_plan"]
+    assert plan["passed"] is True
+    assert recipe_ids(plan) == [*recipe_ids(before["current_plan"]), cabbage]
+    assert out["messages"][-1].content == "加了清炒小白菜。"
+
+
+def test_named_replacement_of_another_type_passes_in_the_graph(env):
+    """Spec 5.2: the user names the replacement dish, so another dish type is fine. The
+    named dish's quote is matched against its own facts (hand-off from Task 2)."""
+    env.dishes["青椒肉丝"] = make_recipe(
+        env.session, "青椒肉丝", "meat dish", [L("猪肉", "main"), L("青椒")]
+    )
+    # Lines without a dictionary entry: the test dictionary has no broccoli or garlic.
+    lines = [L("西兰花", "main", linked=False), L("大蒜", linked=False)]
+    env.dishes["蒜蓉西兰花"] = make_recipe(env.session, "蒜蓉西兰花", "vegetable dish", lines)
+    first_plan(env, "青椒肉丝", "鱼香茄子", "清炒小白菜")
+    pork, broccoli = ids_of(env, "青椒肉丝", "蒜蓉西兰花")
+    removed = {
+        "id": pork,
+        "quote": "青椒肉丝",
+        "mode": "replace",
+        "replace_with": broccoli,
+        "replace_with_quote": "蒜蓉西兰花",
+    }
+    out = revise(
+        env, "把青椒肉丝换成蒜蓉西兰花", [proposal("named", remove=[removed], add=[broccoli])]
+    )
+    assert out["retries"] == 0
+    plan = out["current_plan"]
+    assert plan["passed"] is True
+    assert recipe_ids(plan) == ids_of(env, "鱼香茄子", "清炒小白菜", "蒜蓉西兰花")
+    assert out["messages"][-1].content.startswith("把青椒肉丝换成了蒜蓉西兰花。")
+
+
+def test_empty_plan_asks(env):
+    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    message = "全都不要了"
+    removed = [(i, "", "drop") for i in recipe_ids(before["current_plan"])]
+    out = revise(
+        env,
+        message,
+        [proposal("scope", remove=removed, scope_quote=message, note="好的。")],
+    )
+    assert out["retries"] == 0
+    assert len(reviser_requests(env)) == 1
+    assert out["current_plan"] == before["current_plan"]
+    assert out["plan_versions"] == before["plan_versions"]
+    reply = out["messages"][-1]
+    assert reply.content == EMPTY_PLAN_QUESTION_ZH
+    # A plain-text question: no card follows the reply.
+    assert reply.id not in out["reply_plans"]
+    assert out["spec"] == before["current_plan"]["spec"]
+    record = last_record(env)
+    assert record.final_passed is False and record.retries == 0
+    validations = [e for e in record.events if e["kind"] == "validation"]
+    assert "R9" in [p["code"] for p in validations[0]["problems"]]
+    assert EMPTY_PLAN_QUESTION_EN == "That would leave no dish. Shall I plan a new meal?"
+
+
+def test_stated_count_still_wins(env):
+    first_plan(
+        env,
+        "鱼香茄子",
+        "土豆炖牛肉",
+        "番茄炒蛋",
+        "清炒小白菜",
+        "红烧肉",
+        parse={"dishes": 5, "mode": "shopping"},
+    )
+    [cabbage] = ids_of(env, "清炒小白菜")
+    out = revise(
+        env,
+        "4个菜就够了",
+        [
+            proposal("general", note="没有要改的。"),
+            proposal("general", remove=[(cabbage, "", "drop")]),
+        ],
+        parse={"dishes": 4, "counts_stated_now": True},
+    )
+    # The empty first answer is checked against the stated 4 (H4), as in 3b-1; the drop then
+    # passes because the message lowers the count.
+    assert out["retries"] == 1
+    plan = out["current_plan"]
+    assert plan["passed"] is True and len(plan["recipes"]) == 4
+    record = last_record(env)
+    validations = [e for e in record.events if e["kind"] == "validation"]
+    assert "H4" in [v["code"] for v in validations[0]["result"]["violations"]]
+    assert record.request["spec"]["dishes"] == 4
+
+
+def test_locked_dish_changed_by_name_is_named_in_the_reply(env):
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    pepper, beans = ids_of(env, "青椒炒蛋", "干煸豆角")
+    hand_edit(env, Add(recipe_id=pepper))
+    out = revise(
+        env,
+        "青椒这道换一个",
+        [proposal("named", remove=[(pepper, "青椒这道", "replace")], add=[beans])],
+    )
+    assert out["current_plan"]["passed"] is True
+    text = out["messages"][-1].content
+    assert text.startswith("青椒炒蛋是你手动加的，按你这次的话换成了干煸豆角。")
+    assert "把青椒炒蛋换成了" not in text
+
+
+def test_fridge_only_add_with_nothing_makeable_offers_shopping(env, session):
+    """Hand-off from Task 2: a fridge-only "再加一道" that finds nothing more to make fails
+    on the counts; its card must offer to allow shopping."""
+    for name in ("番茄", "鸡蛋", "小白菜"):
+        stock(session, name, count=3)
+    first_plan(env, "番茄炒蛋", "清炒小白菜", parse={"dishes": 2, "mode": "fridge_only"})
+    out = revise(
+        env,
+        "再加一道",
+        [proposal("add", note="冰箱里没有能再做的菜了。")],
+        parse={"dishes": 3, "counts_stated_now": True},
+    )
+    shown = reply_plan(out)
+    assert shown["passed"] is False
+    assert "switch_to_shopping" in shown["next_actions"]
+    # The same when the model answers with an empty general change ("nothing fits").
+    out = revise(
+        env,
+        "再加一道",
+        [proposal("general", note="冰箱里没有能再做的菜了。")],
+        parse={"dishes": 3, "counts_stated_now": True},
+    )
+    assert "switch_to_shopping" in reply_plan(out)["next_actions"]
+
+
+def test_an_empty_change_failing_only_the_counts_is_nothing_fits(env):
+    """Development run 1: an empty change is the model's own "nothing fits" answer. When its
+    only failures are the add-only problem (R8) or the counts (H4), it is not retried; the
+    plan stays, with what stopped it, the count actions and the model's note."""
+    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    out = revise(
+        env,
+        "能不能多来一道荤的",
+        [proposal("add", note="库里没有别的荤菜能加了。")],
+        parse={"dishes": 4, "meat_dishes": 2, "counts_stated_now": True},
+    )
+    assert out["retries"] == 0
+    assert len(reviser_requests(env)) == 1
+    assert out["current_plan"] == before["current_plan"]
+    shown = reply_plan(out)
+    assert shown["passed"] is False
+    assert {u["code"] for u in shown["unmet"]} == {"R8", "H4"}
+    assert "relax_split" in shown["next_actions"]
+    assert out["messages"][-1].content.endswith("库里没有别的荤菜能加了。")
+    record = last_record(env)
+    assert record.final_passed is False and record.retries == 0
+
+
+def test_locked_changed_text_in_both_languages():
+    from minemydinner.agent.revise_step import empty_plan_question, locked_changed_text
+
+    changes = [("红烧肉", "清炒小白菜", True), ("番茄炒蛋", None, False)]
+    assert locked_changed_text(changes, "zh") == (
+        "红烧肉是你手动加的，按你这次的话换成了清炒小白菜。番茄炒蛋是你确认保留的，按你这次的话去掉了。"
+    )
+    assert locked_changed_text(changes, "en") == (
+        "红烧肉 was added by you; as your message asked, it was replaced with 清炒小白菜. "
+        "You had chosen to keep 番茄炒蛋; as your message asked, it was removed."
+    )
+    # The hook for a one-meal avoidance's reason (Task 5).
+    assert locked_changed_text(changes[:1], "zh", reason="今天不吃肉") == (
+        "红烧肉是你手动加的，因为今天不吃肉，换成了清炒小白菜。"
+    )
+    assert empty_plan_question("en") == EMPTY_PLAN_QUESTION_EN
+    assert empty_plan_question("zh") == EMPTY_PLAN_QUESTION_ZH
+
+
+def test_named_wrong_type_retry_names_no_other_dishes(env):
+    """A named change must keep its dishes, so its type-fix hint lists no other dishes to
+    replace; only a general wish gets that list."""
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    egg, pork, beans = ids_of(env, "番茄炒蛋", "红烧肉", "干煸豆角")
+    message = "番茄这道换一个"
+    out = revise(
+        env,
+        message,
+        [
+            proposal("named", remove=[(egg, "番茄这道", "replace")], add=[pork]),
+            proposal("named", remove=[(egg, "番茄这道", "replace")], add=[beans]),
+        ],
+    )
+    assert out["current_plan"]["passed"] is True and out["retries"] == 1
+    retry = [m for m in reviser_requests(env)[1] if m.type == "human"][-1].content
+    assert "To fix the dish types:" in retry and "same dish type" in retry
+    assert "Replace one of these" not in retry
+
+
+def test_unjustified_drop_of_every_dish_is_retried(env):
+    """R9 with a quote problem is not the user's wish to clear the plan: the attempt is
+    retried as usual instead of asking whether to plan a new meal."""
+    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    eggplant, egg, cabbage = recipe_ids(before["current_plan"])
+    message = "番茄这道不要了"
+    out = revise(
+        env,
+        message,
+        [
+            proposal(
+                "named",
+                remove=[
+                    (eggplant, "茄子这道", "drop"),
+                    (egg, "番茄这道", "drop"),
+                    (cabbage, "小白菜这道", "drop"),
+                ],
+            ),
+            proposal("named", remove=[(egg, "番茄这道", "drop")]),
+        ],
+    )
+    assert out["retries"] == 1
+    assert out["messages"][-1].content != EMPTY_PLAN_QUESTION_ZH
+    assert recipe_ids(out["current_plan"]) == [eggplant, cabbage]
+    validations = [e for e in last_record(env).events if e["kind"] == "validation"]
+    codes = [p["code"] for p in validations[0]["problems"]]
+    assert "R1" in codes and "R9" in codes
+
+
+# ---- plan 3b-1b Task 5: one-meal avoidances (spec 5.4) ----
+
+MEAL_AVOID_MEAT = {"meal_avoid": ["肉"], "counts_stated_now": False}
+
+
+def meat_heavy_plan(env: Env) -> dict:
+    """2 meat dishes, 1 vegetable dish and 1 soup, with no eggplant dish."""
+    env.dishes["紫菜蛋花汤"] = make_recipe(
+        env.session, "紫菜蛋花汤", "soup", [L("紫菜", "main"), L("鸡蛋")]
+    )
+    env.dishes["冬瓜汤"] = make_recipe(
+        env.session, "冬瓜汤", "soup", [L("冬瓜", "main", linked=False)]
+    )
+    return first_plan(
+        env,
+        "红烧肉",
+        "土豆炖牛肉",
+        "番茄炒蛋",
+        "紫菜蛋花汤",
+        parse={"dishes": 3, "soups": 1, "mode": "shopping"},
+    )
+
+
+def opening_of(env: Env) -> str:
+    return [m for m in reviser_requests(env)[-1] if m.type == "human"][0].content
+
+
+def test_meal_avoid_replaces_meat_dishes_keeping_the_size(env):
+    meat_heavy_plan(env)
+    pork, beef, cabbage, melon = ids_of(env, "红烧肉", "土豆炖牛肉", "清炒小白菜", "冬瓜汤")
+    out = revise(
+        env,
+        "今天不想吃肉",
+        [
+            proposal(
+                "general",
+                remove=[(pork, "", "replace"), (beef, "", "replace")],
+                add=[cabbage, melon],
+            )
+        ],
+        parse=MEAL_AVOID_MEAT,
+    )
+    plan = out["current_plan"]
+    assert plan["passed"] is True and out["retries"] == 0
+    # The size stays; the counts by type follow the replacements (spec 5.4).
+    assert counts_of(plan) == (4, 2)
+    assert not {pork, beef} & set(recipe_ids(plan))
+    assert [r["dish_type"] for r in plan["recipes"]].count("meat dish") == 0
+    # The reviser saw which dishes break this meal's wish, and the wish itself.
+    opening = opening_of(env)
+    lines = {line.split(" ")[2]: line for line in opening.splitlines() if line.startswith("- ")
+             and len(line.split(" ")) > 2}
+    assert lines["红烧肉"].endswith("BREAKS THIS MEAL'S WISH")
+    assert lines["土豆炖牛肉"].endswith("BREAKS THIS MEAL'S WISH")
+    assert "BREAKS" not in lines["番茄炒蛋"] and "BREAKS" not in lines["紫菜蛋花汤"]
+    assert "This meal only, not a diner's rule: leave out 肉" in opening
+    assert "Diner 2" not in opening
+
+
+def test_meal_avoid_changes_a_locked_dish_and_says_so(env):
+    first_plan(env, "番茄炒蛋", "清炒小白菜", parse={"dishes": 2, "mode": "shopping"})
+    pork, pepper = ids_of(env, "红烧肉", "青椒炒蛋")
+    hand_edit(env, Add(recipe_id=pork))
+    out = revise(
+        env,
+        "今天不想吃肉",
+        [proposal("general", remove=[(pork, "", "replace")], add=[pepper])],
+        parse=MEAL_AVOID_MEAT,
+    )
+    plan = out["current_plan"]
+    assert plan["passed"] is True and out["retries"] == 0
+    assert pork not in recipe_ids(plan) and pepper in recipe_ids(plan)
+    text = out["messages"][-1].content
+    assert text.startswith("红烧肉是你手动加的，因为这顿不吃肉，换成了青椒炒蛋。")
+    assert "把红烧肉换成了" not in text
+
+
+def test_meal_avoid_dish_left_in_the_plan_fails(env):
+    """A revision that keeps a dish breaking this meal's wish fails H2; the plan stays and
+    the state goes back to the plan's own rules, so a hand edit is not checked against a wish
+    the plan never met."""
+    before = meat_heavy_plan(env)
+    out = revise(
+        env,
+        "今天不想吃肉",
+        [proposal("general", note="没有合适的菜。")] * (MAX_RETRIES + 1),
+        parse=MEAL_AVOID_MEAT,
+    )
+    assert out["current_plan"] == before["current_plan"]
+    validations = [e for e in last_record(env).events if e["kind"] == "validation"]
+    h2 = [v for v in validations[0]["result"]["violations"] if v["code"] == "H2"]
+    assert {v["detail"]["diner_key"] for v in h2} == {"meal"}
+    assert out["constraints"]["guest_rules"] == before["constraints"]["guest_rules"]
+    assert not out["constraints"].get("meal_avoid")
+    # The card says the meal's wish could not be met, never a diner's rule (fix round 1).
+    texts = [u["text"] for u in reply_plan(out)["unmet"] if u["code"] == "H2"]
+    assert texts and set(texts) == {"这顿不吃肉，菜谱库里没有足够不含它的菜"}
+
+
+def test_meal_avoid_group_word_covers_every_meat_entry(env):
+    """"肉" is no dictionary entry: it expands to every meat entry, so dishes whose names hold
+    no 肉 are left out too, and a vegetable dish stays."""
+    from minemydinner.agent.plan_card import meal_rules
+    from minemydinner.planning.dietary import check_recipes
+
+    ribs = make_recipe(env.session, "红烧排骨", "meat dish", [L("排骨", "main")])
+    brisket = make_recipe(env.session, "土豆炖牛腩", "meat dish", [L("牛腩"), L("土豆")])
+    leg = make_recipe(env.session, "香煎鸡腿", "meat dish", [L("鸡腿", "main")])
+    cabbage = env.dishes["清炒小白菜"]
+    rules = meal_rules(env.session, ["肉"])
+    assert rules and all(r.diner_key == "meal" and r.text is None for r in rules)
+    check = check_recipes(env.session, rules, [ribs.id, brisket.id, leg.id, cabbage.id])
+    assert {c.recipe_id for c in check.hard} == {ribs.id, brisket.id, leg.id}
+    # Another word is matched as before: a dictionary entry, else a text rule.
+    assert [r.text for r in meal_rules(env.session, ["不存在的食材"])] == ["不存在的食材"]
+    assert meal_rules(env.session, ["meat"]) == rules
+
+
+def test_no_plan_reason_names_the_meal_wish():
+    from minemydinner.agent.card_text import no_plan_reason
+
+    assert no_plan_reason("H2", "zh", ["肉"]) == "这顿不吃肉，菜谱库里没有足够不含它的菜"
+    assert no_plan_reason("H2", "en", ["pork"]) == "No plan fits leaving out pork at this meal"
+    assert "diner" in no_plan_reason("H2", "en")
+
+
+def test_meal_avoid_carries_into_the_next_revision(env):
+    """Spec 5.4 with 5.2's rule for conditions: a later parse that leaves the field empty
+    never clears the plan's one-meal wish."""
+    meat_heavy_plan(env)
+    pork, beef, cabbage, melon, beans = ids_of(
+        env, "红烧肉", "土豆炖牛肉", "清炒小白菜", "冬瓜汤", "干煸豆角"
+    )
+    revise(
+        env,
+        "今天不想吃肉",
+        [
+            proposal(
+                "general",
+                remove=[(pork, "", "replace"), (beef, "", "replace")],
+                add=[cabbage, melon],
+            )
+        ],
+        parse=MEAL_AVOID_MEAT,
+    )
+    assert reply_plan(env.graph.get_state(env.config).values)["meal_avoid"] == ["肉"]
+    egg = ids_of(env, "番茄炒蛋")[0]
+    out = revise(
+        env,
+        "番茄这道换一个",
+        [proposal("named", remove=[(egg, "番茄这道", "replace")], add=[beans])],
+        parse={"counts_stated_now": False},
+    )
+    assert out["current_plan"]["passed"] is True
+    assert out["current_plan"]["meal_avoid"] == ["肉"]
+    assert {r["diner_key"] for r in out["constraints"]["guest_rules"]} == {"meal"}

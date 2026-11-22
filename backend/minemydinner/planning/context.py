@@ -17,9 +17,17 @@ if TYPE_CHECKING:
     from minemydinner.agent.labels import LabelTable
 
 
+# The diner key of this meal's own rules: a one-meal avoidance ("今天不想吃肉", plan 3b-1b
+# spec 5.4). It is no person: it never gets a "Diner N" label and never reaches a profile.
+MEAL_KEY = "meal"
+# How the meal's own rules are named to a model, in place of a diner code.
+MEAL_CODE = "This meal"
+
+
 @dataclass(frozen=True)
 class RuleRef:
-    """One dietary rule. `diner_key` is "diner:<id>" or "guest:<n>" for a temporary guest."""
+    """One dietary rule. `diner_key` is "diner:<id>", "guest:<n>" for a temporary guest, or
+    MEAL_KEY for this meal's own rule (carried in `MealConstraints.guest_rules`)."""
 
     diner_key: str
     rule_type: str
@@ -33,6 +41,9 @@ class MealConstraints:
     diner_ids: tuple[int, ...]
     guest_rules: tuple[RuleRef, ...] = ()
     unconfirmed_diners: int = 0
+    # The one-meal avoidance as the user said it ("肉"); its rules are in guest_rules under
+    # MEAL_KEY, one per ingredient for a group word, so models are told these words instead.
+    meal_avoid: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,12 +110,20 @@ def diner_codes(
 
     With the conversation's label table, each key gets its label there (new keys are
     assigned the next number). Without one, codes follow diner_ids order, with guests
-    continuing the numbering.
+    continuing the numbering. This meal's own rules are no person: their key gets MEAL_CODE
+    and never a label.
     """
     keys = [f"diner:{diner_id}" for diner_id in constraints.diner_ids]
+    meal = False
     for item in constraints.guest_rules:
-        if item.diner_key not in keys:
+        if item.diner_key == MEAL_KEY:
+            meal = True
+        elif item.diner_key not in keys:
             keys.append(item.diner_key)
     if table is not None:
-        return {key: table.label_for(key) for key in keys}
-    return {key: f"Diner {number}" for number, key in enumerate(keys, start=1)}
+        codes = {key: table.label_for(key) for key in keys}
+    else:
+        codes = {key: f"Diner {number}" for number, key in enumerate(keys, start=1)}
+    if meal:
+        codes[MEAL_KEY] = MEAL_CODE
+    return codes

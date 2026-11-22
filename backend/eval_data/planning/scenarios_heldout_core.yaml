@@ -16,6 +16,8 @@ x-profiles:
   leftovers: &leftovers {番茄: 3, 鸡蛋: 6, 小白菜: plenty, 蒜: plenty}
   all_cookware: &all_cookware [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
   no_oven: &no_oven [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   - name: core_quick_dinner_15_minutes
     request: 快手的晚餐，15分钟内

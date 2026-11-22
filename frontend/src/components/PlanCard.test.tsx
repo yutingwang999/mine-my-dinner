@@ -978,6 +978,49 @@ describe("PlanCard manual edits", () => {
     expect(screen.getByText("Changed since planning: a guest avoids 牛肉; this dish contains 牛肉.")).toBeInTheDocument();
   });
 
+  it("shows a meal wish conflict as this meal's wish", async () => {
+    const meatWish: Conflict = {
+      ...beef,
+      diner_key: "meal",
+      diner_name: null,
+      is_self: false,
+      kind: "text",
+      ingredient_id: null,
+      ingredient_name: null,
+      text: "肉",
+      lines: ["五花肉"],
+    };
+    const { unmount } = render(
+      <NextIntlClientProvider locale="zh" messages={zh}>
+        <PlanCard plan={withConflict([meatWish])} editable threadId="t1" onEdited={vi.fn()} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByText("这顿不要肉，这道菜含五花肉")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认保留" })).toBeInTheDocument();
+    expect(screen.queryByText(/一位客人|Diner|小王/)).toBeNull();
+    unmount();
+
+    // Kept by confirmation, and asked about when adding, in English.
+    const kept = edited({
+      recipes: TWO.recipes,
+      edit: { ...EDIT, kept: [meatWish] } as ChatPlan["edit"],
+    });
+    const { unmount: unmountKept } = renderWithProviders(<PlanCard plan={kept} />);
+    expect(screen.getByText("Kept anyway: not this meal: 肉")).toBeInTheDocument();
+    expect(screen.queryByText(/a guest|Diner/)).toBeNull();
+    unmountKept();
+
+    mockFetch({
+      [`POST ${BASE}/keep`]: () =>
+        reply(409, { code: "needs_confirmation", suggest_paste: false, conflicts: [meatWish] }),
+    });
+    renderWithProviders(<Editable initial={withConflict([meatWish])} />);
+    await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    const dialog = await screen.findByRole("group", { name: "This dish conflicts with" });
+    expect(within(dialog).getByText("Not this meal: 肉")).toBeInTheDocument();
+    expect(within(dialog).queryByText(/a guest|Diner/)).toBeNull();
+  });
+
   it("offers restore only on an edited card, and restores", async () => {
     const restored = plan({ edited: false, model_version: 0, edit: EDIT, count_notes: [], notes: [] });
     const calls = mockFetch({ [`POST ${BASE}/restore`]: () => ({ plan: restored }) });

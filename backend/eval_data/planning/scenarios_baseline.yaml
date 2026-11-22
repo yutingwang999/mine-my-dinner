@@ -1,5 +1,7 @@
 # Fictional planning scenarios. `inventory` maps an ingredient name to a count (number)
 # or a level (plenty, low, none). `cookware` lists the cookware the household owns.
+# The set's role (docs/planning-evaluation-history.md, "Scenario sets").
+role: regression
 scenarios:
   - name: fridge_only_one_person
     request: 今晚我一个人吃，只用冰箱里现有的食材，做一个菜。
