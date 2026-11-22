@@ -4,6 +4,8 @@ Before the planner calls a model, code asks one question: **can this request be 
 
 It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/feasibility.py`, wired in `backend/minemydinner/agent/graph.py`). The design is in `docs/superpowers/specs/2026-11-14-phase-1-plan-2a-planner-efficiency-design.md`, Sections 5.2 and 5.3. Related: `docs/planner-stock-rules.md` (what "makeable" and "in stock" mean) and `docs/planner-shortlist-and-ranking.md` (the candidate list built when planning goes ahead).
 
+What each model (route, parse, planner, revise) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
+
 ## 1. When it runs
 
 - After the request is parsed and its defaults applied, **before the first planner model call**.

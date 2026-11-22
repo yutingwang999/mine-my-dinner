@@ -4,6 +4,8 @@ This explains how the code chooses the dishes the planning model sees first: how
 
 "Makeable" and "missing" follow the stock rules in `docs/planner-stock-rules.md`.
 
+What each model (route, parse, planner, revise) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
+
 The model still chooses the dishes. Code only decides which candidates it sees first and in what order. Hard rules (allergies, dish counts, named ingredients, time limits) are checked by code after the model chooses, whatever the order was.
 
 ## 1. The pipeline

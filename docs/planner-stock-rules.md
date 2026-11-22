@@ -2,6 +2,8 @@
 
 This explains how the planner decides whether an ingredient is "at home", where that decision is used during one planning run, and the few places that look at stock differently. It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/stock.py`, `feasibility.py`, `validate.py`). The candidate list built on top of it is described in `docs/planner-shortlist-and-ranking.md`, and the feasibility check that uses it before planning in `docs/planner-feasibility-check.md`.
 
+What each model (route, parse, planner, revise) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
+
 The rule is written once (`_held` and `is_available` in `stock.py`) and reached through `compute_missing`, which lists what each recipe is missing. Every step that asks "is this dish missing something?" goes through it, so a dish is judged the same way in the feasibility check, the candidate list, the planner's tools, validation, and the plan card.
 
 ## 1. How stock is recorded
