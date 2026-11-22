@@ -25,6 +25,19 @@ def meal_constraints(values: dict) -> MealConstraints:
     )
 
 
+# Card fields kept for the server only: the request the card was built from (its
+# `friend_rules` codes are diner labels such as "Diner 2", which are never shown) and whether a
+# revision kept the plan. Next-action buttons read both from the stored state (plan 3b-1b).
+SERVER_ONLY_CARD_FIELDS = ("request", "plan_kept")
+
+
+def client_card(card: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The card as the client receives it: without the server-only fields."""
+    if card is None:
+        return None
+    return {key: value for key, value in card.items() if key not in SERVER_ONLY_CARD_FIELDS}
+
+
 # Group words of a one-meal avoidance and the dictionary category each covers ("今天不想吃肉"
 # leaves out every meat entry, not only names that contain 肉). Person rules have no groups.
 MEAL_GROUP_WORDS = {

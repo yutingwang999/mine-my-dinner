@@ -408,9 +408,10 @@ scenarios:
     edits_between_turns: [{add: 香煎鸡腿}]
     follow_up: 今晚先不碰肉了
     # The hand-added chicken leg is locked, but the avoidance names it (spec 5.4), so it may
-    # go; the replacements may be of another type, and the total of five stays.
+    # go; the replacements may be of another type, and the total of five stays. The first
+    # message (four people) shows the diner card; the follow-up must not.
     expect_route: revise
-    expect_card: false
+    expect_follow_up_diner_card: false
     expect_removed: [青椒肉丝, 宫保鸡丁, 香煎鸡腿]
     expect_titles_include: [蒜蓉西兰花, 紫菜豆腐汤]
     expect_counts: {meat_dishes: 0}
@@ -430,8 +431,9 @@ scenarios:
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
     first_plan: [青椒肉丝, 清蒸鲈鱼, 蒜蓉西兰花]
     follow_up: I don't feel like pork tonight.
+    # "the two of us" shows the diner card on the first message; the follow-up must not.
     expect_route: revise
-    expect_card: false
+    expect_follow_up_diner_card: false
     expect_removed: [青椒肉丝]
     expect_max_changed: 1
     expect_titles_include: [清蒸鲈鱼, 蒜蓉西兰花]
@@ -570,14 +572,17 @@ scenarios:
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
     first_plan: [青椒肉丝, 蒜蓉西兰花]
     follow_up: 肉丝换成红烧排骨
-    # 红烧排骨 takes 60 minutes; the user named it, so the revision fails on the time limit.
+    # 红烧排骨 takes 60 minutes (stated), over the half-hour limit. The search lists it under
+    # over_time_limit (design 5.2, 2026-11-22), so the revision answers nothing fits and the
+    # card offers drop_time_limit (never "not in the library"); after the button the ribs
+    # come in.
     button_after: drop_time_limit
     expect_spec: {time_limit_min: null}
     expect_removed: [青椒肉丝]
     expect_titles_exact: [红烧排骨, 蒜蓉西兰花]
     expect_no_question: true
     max_model_calls: 18
-    expect: The named dish breaks the half-hour limit, so the revision fails and offers no time limit; after the button the ribs come in.
+    expect: The named dish takes longer than the half-hour limit, so nothing fits and the card offers no time limit, saying how long the dish takes; after the button the ribs come in.
 
   # ---- 5.5: buttons after an early stop plan anew with the card's request ----
   - name: button_relax_named_after_early_stop
@@ -603,16 +608,18 @@ scenarios:
     max_model_calls: 12
     expect: The fridge is empty, so the first message stops early; after allowing shopping two dishes are planned and nothing is asked again.
   - name: button_no_time_limit_after_early_stop
-    request: 五分钟以内做好两个菜，可以买菜。
+    # Every dessert in the library has a stated time of 40 minutes or more; an estimated time
+    # never blocks a limit, so a type with stated times only makes the early stop real.
+    request: 二十分钟以内做一份甜点，可以买菜。
     locale: zh
     inventory: {}
-    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
     button_after: drop_time_limit
     expect_spec: {time_limit_min: null}
-    expect_counts: {dishes: 2}
+    expect_counts: {desserts: 1}
     expect_no_question: true
     max_model_calls: 12
-    expect: No dish takes five minutes or less, so the first message stops early; with no time limit two dishes are planned.
+    expect: No dessert takes twenty minutes or less, so the first message stops early; with no time limit one dessert is planned.
 
   # ---- 5.6: a new plan whose taste wish the library cannot meet ----
   - name: new_plan_unmeetable_wish

@@ -2558,6 +2558,23 @@ def test_diner_checks_keep_the_meal_avoidance(session, monkeypatch):
     assert [c.meal_avoid for c in seen] == [("肉",)]
 
 
+def test_label_check_reads_the_card_as_the_client_gets_it(session):
+    """The stored card keeps its request, whose friend_rules code is a label; the client never
+    receives it, so the label check reads the client view of the card (`client_card`)."""
+    from minemydinner.evaluation import planning
+
+    plan = {
+        "recipes": [],
+        "request": {"friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}]},
+        "plan_kept": True,
+    }
+    failures = planning._diner_failures(session, _scenario(), {"current_plan": plan}, [], [])
+    assert not any(f.startswith("label shown") for f in failures)
+    plan["note"] = "Diner 2 会喜欢"
+    failures = planning._diner_failures(session, _scenario(), {"current_plan": plan}, [], [])
+    assert any(f.startswith("label shown") for f in failures)
+
+
 def test_a_button_after_an_early_stop_is_pressed_and_judged(tmp_path, eval_db):
     """button_after with no follow-up: the first message stops early, the runner presses the
     card's button with its fixed message, and the button turn is the judged one."""
@@ -2768,7 +2785,8 @@ def test_a_button_after_a_failed_revision_revises_the_kept_plan(tmp_path, eval_d
     assert button_run["request"]["button"] == "switch_to_shopping"
     assert button_run["request"]["revision"] is not None
     # The button turn: one revise call; the failed follow-up's revise turn: route, parse and
-    # every attempt (MAX_RETRIES + 1), counted apart.
+    # one attempt, counted apart (an empty add that fails only the counts is "nothing fits",
+    # not retried: development run 1 of plan 3b-1b).
     assert outcome.turn_model_calls == 1
-    assert outcome.earlier_revise_calls == 2 + 3
+    assert outcome.earlier_revise_calls == 2 + 1
     _assert_clean(eval_db)

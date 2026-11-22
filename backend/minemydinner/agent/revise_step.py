@@ -48,7 +48,7 @@ CATEGORY_WORDS = {
 # words of every dish with an open conflict or a kept override.
 CONFLICT_WORDS = ["不适合", "不合适", "不能吃", "doesn't suit", "not suitable"]
 # The mark of a dish that breaks this meal's one-meal avoidance in the reviser's current plan
-# (plan 3b-1b spec 5.4); revise_v3 names it.
+# (plan 3b-1b spec 5.4); revise_v3 and revise_v4 name it.
 BREAKS_MEAL_WISH = "BREAKS THIS MEAL'S WISH"
 # The unmet code of a revision that found nothing fitting the wish.
 WISH_UNMET = "wish_unmet"
@@ -421,6 +421,62 @@ def revision_actions(
     if spec["mode"] == "fridge_only" and "H4" in codes:
         chosen.add("switch_to_shopping")
     return [a for a in NEXT_ACTION_ORDER if a in chosen]
+
+
+def over_limit_entries(dishes: list[dict], limit: int, locale: str) -> list[dict]:
+    """Unmet entries for the asked-for dishes the time limit left out (design 5.2,
+    2026-11-22), worded as an H6 finding: how long each takes against the limit."""
+    return [
+        {
+            "code": "H6",
+            "recipe_id": dish["id"],
+            "text": unmet_for_user(
+                {
+                    "code": "H6",
+                    "recipe_id": dish["id"],
+                    "detail": {"time_min": dish["time_min"], "limit": limit},
+                },
+                {dish["id"]: dish["title"]},
+                locale,
+            ),
+        }
+        for dish in dishes
+    ]
+
+
+def over_limit_note(dishes: list[dict], limit: int, locale: str) -> str:
+    """The reply's sentence for the asked-for dishes the time limit left out: each is in the
+    library but takes longer than the limit, and dropping the limit lets it in. Never "not in
+    the library"."""
+    if is_zh(locale):
+        parts = [
+            f"{d['title']}在你的菜谱库里，但需要 {d['time_min']} 分钟，"
+            f"超过了这次 {limit} 分钟的时间限制。"
+            for d in dishes
+        ]
+        tail = "不限时间就可以用它。" if len(dishes) == 1 else "不限时间就可以用它们。"
+        return "".join([*parts, tail])
+    parts = [
+        f"{d['title']} is in your library but takes {d['time_min']} minutes, longer than "
+        f"this meal's {limit}-minute limit."
+        for d in dishes
+    ]
+    tail = "Drop the time limit to use it." if len(dishes) == 1 else (
+        "Drop the time limit to use them."
+    )
+    return " ".join([*parts, tail])
+
+
+def with_over_limit(
+    unmet: list[dict], actions: list[str], dishes: list[dict], limit: int, locale: str
+) -> tuple[list[dict], list[str]]:
+    """A kept plan's unmet entries and next actions when asked-for dishes were left out only by
+    the time limit: their H6 entries replace the "nothing in your library fits" entry, the
+    card offers drop_time_limit, and import is no longer offered (the dish is there)."""
+    entries = [u for u in unmet if u["code"] != WISH_UNMET]
+    entries += [e for e in over_limit_entries(dishes, limit, locale) if e not in entries]
+    chosen = (set(actions) - {"import_recipes"}) | {"drop_time_limit"}
+    return entries, [a for a in NEXT_ACTION_ORDER if a in chosen]
 
 
 def empty_plan_question(locale: str) -> str:

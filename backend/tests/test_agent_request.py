@@ -38,7 +38,7 @@ def test_default_composition(n, expected):
 def test_prompt_versions_name_existing_files():
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v5+revise_v3"
+    assert PROMPT_VERSION == "route_v4+parse_v7+planner_v5+revise_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -402,12 +402,12 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v3+parse_v7+planner_v5+revise_v3"
+    assert PROMPT_VERSION == "route_v4+parse_v7+planner_v5+revise_v4"
     assert PROMPT_VERSIONS["parse"] == "parse_v7"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v7.md").read_text(encoding="utf-8")
 
 
-def test_revise_v1_and_v2_are_frozen_and_revise_v3_is_current():
+def test_revise_v1_v2_v3_are_frozen_and_revise_v4_is_current():
     import hashlib
 
     v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
@@ -419,9 +419,19 @@ def test_revise_v1_and_v2_are_frozen_and_revise_v3_is_current():
     assert hashlib.sha256(v2).hexdigest() == (
         "90696404beb4ed7bfb54c36c666160d7462477cf8e916c2c1510609d7f1b5266"
     )
-    assert PROMPT_VERSIONS["revise"] == "revise_v3"
+    # revise_v3 was used by development run 1 of plan 3b-1b, so it must never change.
+    frozen = (PROMPT_DIR / "revise_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(frozen).hexdigest() == (
+        "2168b11130c1be2a936030552a7b9513548549951b1eb806c2493e1deed777d8"
+    )
+    assert PROMPT_VERSIONS["revise"] == "revise_v4"
     v3 = load_prompt("revise")
-    assert v3 == (PROMPT_DIR / "revise_v3.md").read_text(encoding="utf-8")
+    assert v3 == (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    # Development run 1: a replaced dish is never dropped; a dish over the time limit is
+    # never "not in the library".
+    assert "A dish the words want replaced is never dropped" in v3
+    assert "never drop the eggplant dish" in v3
+    assert "over_time_limit" in v3 and "never say it is not in the library" in v3
     # Plan 3b-1b: drop or replace, the add-only kind, wishes for this meal only, the note.
     assert "mode drop" in v3 and "mode replace" in v3
     assert "- add: the message only adds dishes" in v3
@@ -436,6 +446,26 @@ def test_revise_v1_and_v2_are_frozen_and_revise_v3_is_current():
     assert "count the dishes" not in v3
     # Development-set sentences stay out of the prompt (plan 3b-1b brief).
     assert "换个思路" not in v3 and "差点意思" not in v3
+
+
+def test_route_v3_is_frozen_and_route_v4_sends_a_meal_wish_to_revise():
+    import hashlib
+
+    # route_v3 was used by development run 1 of plan 3b-1b, so it must never change.
+    v3 = (PROMPT_DIR / "route_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(v3).hexdigest() == (
+        "154a7b399f6d8a509fbdd88921f071c83e7210ff27c22e73331cd221ae764438"
+    )
+    assert PROMPT_VERSIONS["route"] == "route_v4"
+    v4 = load_prompt("route")
+    assert v4 == (PROMPT_DIR / "route_v4.md").read_text(encoding="utf-8")
+    old = v3.decode("utf-8").splitlines()
+    new = v4.splitlines()
+    # One rule added, nothing else changed.
+    added = [line for line in new if line not in old]
+    assert len(added) == 1 and added[0].startswith("- A wish about this meal's taste")
+    assert [line for line in new if line in old] == old
+    assert "clearly asks for a different meal or a fresh start" in added[0]
 
 
 def test_parse_v4_is_frozen_and_parse_v5_changes_only_the_cold_dish_rule():

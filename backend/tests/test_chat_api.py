@@ -703,3 +703,39 @@ def test_passed_revision_streams_one_card_and_its_steps(client, tmp_path, sessio
     assert steps[0] == "parse" and steps[-1] == "present"
     assert {"context", "check", "retry"} <= set(steps)
     assert steps.index("retry") > steps.index("check")
+
+
+def test_friend_rule_code_never_reaches_the_client(client, tmp_path, session, recipe):
+    # The card keeps the request it was built from (plan 3b-1b spec 5.5), and that request's
+    # friend_rules carry the label "Diner 2". The client gets the card without the request:
+    # no payload holds the label, while the stored card keeps it for the buttons.
+    from minemydinner.models import Diner
+    from tests.planningfakes import self_diner
+
+    self_diner(session)
+    session.add(Diner(display_name="小王", is_self=False))
+    session.flush()
+    model = plan_model(recipe)
+    model.structured["ParsedRequest"] = [
+        {
+            "headcount": 2,
+            "others_mentioned": True,
+            "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}],
+        }
+    ]
+    install(tmp_path, session, model, "plan_then_adjust")
+    tid = new_thread(client)
+    first = sse(post_message(client, tid, "我和小王吃饭，小王对花生过敏"))
+    assert of(first, "interrupt")[0]["kind"] == "diners"
+    events = sse(post_resume(client, tid, None))
+    [card] = of(events, "plan")
+    assert "request" not in card and "plan_kept" not in card
+    body = client.get(f"/api/chat/threads/{tid}").json()
+    assert "request" not in body["current_plan"]
+    for payload in (first, events, body):
+        assert "Diner 2" not in json.dumps(payload, ensure_ascii=False)
+    runtime = app.dependency_overrides[get_chat_runtime]()
+    values = runtime.graph.get_state({"configurable": {"thread_id": tid}}).values
+    stored = values["reply_plans"][values["messages"][-1].id]
+    assert stored["request"]["friend_rules"][0]["code"] == "Diner 2"
+    assert values["current_plan"]["request"]["friend_rules"][0]["code"] == "Diner 2"

@@ -92,6 +92,7 @@ from minemydinner.agent.revise_step import (
     kept_locked,
     must_unmet_names,
     open_conflict_ids,
+    over_limit_note,
     pairing_detail,
     replaceable_dishes,
     reply_text,
@@ -104,6 +105,7 @@ from minemydinner.agent.revise_step import (
     unmet_entries,
     untouched_locked,
     wish_unmet_actions,
+    with_over_limit,
     without_deleted,
 )
 from minemydinner.agent.revision import (
@@ -324,6 +326,21 @@ def _button_card(state: ChatState) -> dict | None:
     return None
 
 
+def _offering_words(state: ChatState) -> list[str]:
+    """On a button revision, the user's words of the turn whose card offered the button. That
+    card kept the plan, so the state's `revision` is still that turn's: its message, which
+    already holds the words before an earlier button in a chain. A state without it falls
+    back to the user's messages just before the offering reply."""
+    message = (state.get("revision") or {}).get("message")
+    if message:
+        return [message]
+    messages = state["messages"][:-1]
+    last_reply = max(
+        (i for i, m in enumerate(messages) if isinstance(m, AIMessage)), default=None
+    )
+    return [] if last_reply is None else _current_request(messages[:last_reply])
+
+
 def _button_turn(state: ChatState) -> bool:
     """This turn is a button whose request code changed (route_intent set `button`)."""
     return bool(state.get("button")) and _is_action_message(state)
@@ -337,6 +354,37 @@ def _reply_card(card: dict, request: dict | None, plan_kept: bool = False) -> di
     if plan_kept:
         shown["plan_kept"] = True
     return shown
+
+
+# The failures an empty change ("nothing fits") may have and still not be retried: nothing was
+# added (R8), or the counts are off (H4, and R7, its stand-in without a stated count).
+NOTHING_FITS_PROBLEMS = {"R7", "R8"}
+NOTHING_FITS_VIOLATIONS = {"H4"}
+
+
+def _too_many(finding) -> bool:
+    """An H4 finding where some exact count is over what was asked ("4个菜就够了" on five
+    dishes): dropping a dish always fixes that, so an empty answer is no "nothing fits"."""
+    detail = finding.detail
+    return any(
+        detail["present"].get(category, 0) > need
+        for category, need in detail["required"].items()
+    )
+
+
+def nothing_fits(
+    proposal: RevisionProposal | None, problems: list, failing: list
+) -> bool:
+    """True for the model's "nothing fits" answer (empty remove and add, not unclear) whose
+    only failures are R8 or count problems that need another dish (not too many dishes):
+    such an attempt is not retried (development run 1 of plan 3b-1b)."""
+    if proposal is None or proposal.remove or proposal.add or asks_back(proposal):
+        return False
+    if any(v.code == "H4" and _too_many(v) for v in failing):
+        return False
+    return {p.code for p in problems} <= NOTHING_FITS_PROBLEMS and {
+        v.code for v in failing
+    } <= NOTHING_FITS_VIOLATIONS
 
 
 def _revises(state: ChatState) -> bool:
@@ -517,6 +565,29 @@ def _notes_from_searches(notes: dict | None, messages: list) -> dict | None:
             bool(result.get("semantic_paused")),
         )
     return notes
+
+
+def _over_limit_from_searches(found: list[dict], messages: list) -> list[dict]:
+    """`found` with the dishes each search_recipes result in `messages` listed as over the
+    request's time limit (`over_time_limit`, design 5.2), once each by id."""
+    seen = {dish["id"] for dish in found}
+    merged = list(found)
+    for message in messages:
+        if not (isinstance(message, ToolMessage) and message.name == "search_recipes"):
+            continue
+        try:
+            result = json.loads(message.content)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(result, dict):
+            continue
+        for dish in result.get("over_time_limit") or []:
+            if isinstance(dish, dict) and dish.get("id") not in seen:
+                seen.add(dish["id"])
+                merged.append(
+                    {"id": dish["id"], "title": dish["title"], "time_min": dish["time_min"]}
+                )
+    return merged
 
 
 def _empty_search_notes() -> dict:
@@ -1311,6 +1382,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         )
         defaults_used = revision_defaults(plan.get("defaults_used") or [], plan["spec"], spec)
         texts = _current_request(state["messages"])
+        # The user's words the reviser sees and its quotes are checked against. On a button
+        # pressed on a failed revision's card, the wish of the turn that offered it comes
+        # first: it is still the user's words, so a named re-attempt may quote it.
+        words = [*_offering_words(state), *texts] if button is not None else texts
         settled_data = state.get("settled_diners")
         settled = SettledDiners.from_state(settled_data) if settled_data else None
         request = {
@@ -1354,7 +1429,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "shortlist_ids": [],
             "revision": {
                 "from_version": index,
-                "message": "\n".join(texts),
+                "message": "\n".join(words),
                 "recipe_ids": shown,
                 "problems": [],
                 "deleted": deleted,
@@ -1451,6 +1526,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # then fails the attempt.
         answer = out.get("structured_response")
         notes = _notes_from_searches(notes, out["messages"])
+        # Asked-for dishes the time limit left out, for a kept plan's card (design 5.2).
+        found = state["revision"].get("over_time_limit") or []
+        over = _over_limit_from_searches(found, out["messages"])
+        if over != found:
+            update["revision"] = {**state["revision"], "over_time_limit": over}
         return {
             **update,
             "proposal": answer.model_dump() if answer is not None else None,
@@ -1499,7 +1579,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if proposal is not None and asks_back(proposal):
             # Unclear: the plan stays and the model's question is the reply. Any other empty
             # change ("nothing fits") is checked like a change: an open conflict still fails
-            # H2 and a changed count still fails H4.
+            # H2 (and is retried) and a changed count still fails H4 (not retried, see
+            # `nothing_fits`).
             update: dict[str, Any] = {
                 "revision": {**revision, "recipe_ids": current_ids, "problems": []}
             }
@@ -1594,6 +1675,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
         if state.get("first_passed") is None:
             update["first_passed"] = passed
+        if not passed and nothing_fits(proposal, problems, failing):
+            # The model's own "nothing fits" (an empty change) that fails only because nothing
+            # was added (R8) or on the counts (H4, R7): a retry would only ask it again for
+            # what it said is not there (development run 1). The plan stays, with what stopped
+            # it and the count actions. An empty change with an open conflict (H2) still
+            # retries.
+            update["revision"]["nothing_fits"] = True
+            return Command(update=update, goto="present_revision")
         if not passed and state["retries"] < MAX_RETRIES:
             update["retries"] = state["retries"] + 1
             return Command(update=update, goto="reviser")
@@ -1619,6 +1708,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         update: dict[str, Any] = {}
         # Only a card in `reply_plans` follows the reply; the empty-plan question has none.
         shows_card = True
+        # Asked-for dishes the time limit left out (design 5.2, 2026-11-22): a kept plan says
+        # how long they take and offers to drop the limit, never "not in the library".
+        limit = state["spec"].get("time_limit_min")
+        over = (revision.get("over_time_limit") or []) if limit is not None else []
         with deps.session_factory() as session:
             if revision.get("empty"):
                 # The change would leave no dish (spec 5.1): nothing changes, and the reply
@@ -1679,10 +1772,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 card["notes"] = deleted_note(plan, deleted)
                 titles_now = {r["id"]: r["title"] for r in live["recipes"]}
                 hand, kept = untouched_locked(live, proposal, titles_now)
+                model_note = proposal.note.strip()
+                if over:
+                    card["unmet"], card["next_actions"] = with_over_limit(
+                        unmet, actions, over, limit, locale
+                    )
+                    model_note = over_limit_note(over, limit, locale)
                 parts = [
                     failed_note(locale, True),
                     changed_text([], [], hand, locale, kept),
-                    proposal.note.strip(),
+                    model_note,
                 ]
                 note = "\n\n".join(part for part in parts if part)
             else:
@@ -1707,9 +1806,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     locale,
                     state["constraints"].get("meal_avoid") or [],
                 )
+                if over:
+                    unmet, actions = with_over_limit(unmet, actions, over, limit, locale)
                 card = unchanged_card(live, unmet, actions)
                 card["notes"] = deleted_note(plan, deleted)
                 note = failed_note(locale, bool(actions))
+                if over:
+                    note = f"{note}\n\n{over_limit_note(over, limit, locale)}"
+                elif revision.get("nothing_fits") and proposal.note.strip():
+                    # The model's own word on why nothing fits (`nothing_fits`).
+                    note = f"{note}\n\n{proposal.note.strip()}"
         if "current_plan" not in update:
             # The plan stays, but `request` keeps this turn's parse (decided for plan 3b-1):
             # "plan again" then plans the latest request from scratch (spec 5.1). The meal's

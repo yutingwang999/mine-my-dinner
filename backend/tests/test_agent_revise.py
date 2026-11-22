@@ -805,6 +805,29 @@ def test_fridge_only_add_with_nothing_makeable_offers_shopping(env, session):
     assert "switch_to_shopping" in reply_plan(out)["next_actions"]
 
 
+def test_an_empty_change_failing_only_the_counts_is_nothing_fits(env):
+    """Development run 1: an empty change is the model's own "nothing fits" answer. When its
+    only failures are the add-only problem (R8) or the counts (H4), it is not retried; the
+    plan stays, with what stopped it, the count actions and the model's note."""
+    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    out = revise(
+        env,
+        "能不能多来一道荤的",
+        [proposal("add", note="库里没有别的荤菜能加了。")],
+        parse={"dishes": 4, "meat_dishes": 2, "counts_stated_now": True},
+    )
+    assert out["retries"] == 0
+    assert len(reviser_requests(env)) == 1
+    assert out["current_plan"] == before["current_plan"]
+    shown = reply_plan(out)
+    assert shown["passed"] is False
+    assert {u["code"] for u in shown["unmet"]} == {"R8", "H4"}
+    assert "relax_split" in shown["next_actions"]
+    assert out["messages"][-1].content.endswith("库里没有别的荤菜能加了。")
+    record = last_record(env)
+    assert record.final_passed is False and record.retries == 0
+
+
 def test_locked_changed_text_in_both_languages():
     from minemydinner.agent.revise_step import empty_plan_question, locked_changed_text
 

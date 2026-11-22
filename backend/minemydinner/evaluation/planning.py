@@ -42,7 +42,7 @@ from minemydinner.agent.labels import (
     restore_labels,
 )
 from minemydinner.agent.records import PlanningRecorder
-from minemydinner.agent.plan_card import meal_constraints
+from minemydinner.agent.plan_card import client_card, meal_constraints
 from minemydinner.agent.request import (
     ACTION_MESSAGES,
     REQUEST_STYLES,
@@ -1335,7 +1335,8 @@ def _diner_failures(
         if isinstance(m, AIMessage) and isinstance(m.content, str)
     ]
     shown += [text for card in cards for text in _strings(card)]
-    shown += list(_strings(state.get("current_plan")))
+    # The plan card as the client gets it: its stored request keeps label codes (plan 3b-1b).
+    shown += list(_strings(client_card(state.get("current_plan"))))
     return [
         *card_failures(scenario.expect_card, cards, ingredient_names),
         *rule_failures(

@@ -2551,6 +2551,107 @@ def test_action_message_as_first_message_takes_the_normal_path(revise_env):
 # ---- plan 3b-1b Task 6: next-action buttons in code (spec 5.5) ----
 
 
+def test_named_dish_over_the_time_limit_offers_to_drop_it(revise_env):
+    """Development run 1 (design 5.2, 2026-11-22): the named dish is in the library but over
+    the time limit. The search lists it apart; the nothing-fits card offers drop_time_limit
+    and says how long it takes, never that it is not in the library; the button then lets the
+    revision bring it in."""
+    env = revise_env
+    slow = make_recipe(
+        env.session, "酱焖羊蝎子", "meat dish", [L("羊肉", "main")],
+        time_min=75, time_source="stated",
+    )
+    limited = {"dishes": 2, "soups": 1, "mode": "shopping", "time_limit_min": 30}
+    first_meal(env, parse=limited)
+    [beef] = dish_ids(env, "土豆炖牛肉")
+    failed = say(
+        env, "土豆炖牛肉换成酱焖羊蝎子", "revise",
+        parse={**limited, "counts_stated_now": False},
+        replies=[
+            tool_call("search_recipes", {"query": "酱焖羊蝎子"}),
+            revision("named", note="菜谱库里没有酱焖羊蝎子，可以导入。"),
+        ],
+    )
+    assert failed["retries"] == 0
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["plan_kept"] is True and card["passed"] is False
+    assert "drop_time_limit" in card["next_actions"]
+    assert "import_recipes" not in card["next_actions"]
+    assert [(u["code"], u["recipe_id"]) for u in card["unmet"]] == [("H6", slow.id)]
+    assert card["unmet"][0]["text"] == "酱焖羊蝎子：需要 75 分钟，超过 30 分钟的限制"
+    reply = failed["messages"][-1].content
+    assert "酱焖羊蝎子在你的菜谱库里，但需要 75 分钟" in reply and "30 分钟" in reply
+    assert "没有" not in reply and "导入" not in reply
+    out = say(
+        env, ACTION_MESSAGES["zh"]["drop_time_limit"], "plan",
+        replies=[revision("general", remove=[(beef, "")], add=[slow.id])],
+    )
+    plan = out["current_plan"]
+    assert plan["passed"] and slow.id in [r["id"] for r in plan["recipes"]]
+    assert plan["spec"]["time_limit_min"] is None
+
+
+def test_button_revision_quotes_the_offering_turns_words(revise_env):
+    """Follow-up 1 to development run 1: on a button pressed on a failed revision's card, the
+    earlier wish is still the user's words. A named re-attempt that quotes it passes the
+    quote check (R1), and the reviser's message line shows both; the record keeps the button
+    and the turn's own message."""
+    env = revise_env
+    slow = make_recipe(
+        env.session, "酱焖羊蝎子", "meat dish", [L("羊肉", "main")],
+        time_min=75, time_source="stated",
+    )
+    limited = {"dishes": 2, "soups": 1, "mode": "shopping", "time_limit_min": 30}
+    first_meal(env, parse=limited)
+    [beef] = dish_ids(env, "土豆炖牛肉")
+    say(
+        env, "土豆炖牛肉换成酱焖羊蝎子", "revise",
+        parse={**limited, "counts_stated_now": False},
+        replies=[
+            tool_call("search_recipes", {"query": "酱焖羊蝎子"}),
+            revision("named", note="要 75 分钟。"),
+        ],
+    )
+    named = tool_call(
+        "RevisionProposal",
+        {
+            "target": "named",
+            "remove": [
+                {
+                    "id": beef, "quote": "土豆炖牛肉", "mode": "replace",
+                    "replace_with": slow.id, "replace_with_quote": "酱焖羊蝎子",
+                }
+            ],
+            "add": [slow.id],
+            "note": "",
+        },
+    )
+    out = say(env, ACTION_MESSAGES["zh"]["drop_time_limit"], "plan", replies=[named])
+    assert out["retries"] == 0
+    plan = out["current_plan"]
+    ids = [r["id"] for r in plan["recipes"]]
+    assert plan["passed"] and slow.id in ids and beef not in ids
+    opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
+    assert opening.endswith("The user's message: 土豆炖牛肉换成酱焖羊蝎子\n不限时间")
+    record = latest_record(env)
+    assert record.request["button"] == "drop_time_limit"
+    assert record.request["messages"] == ["不限时间"]
+
+
+def test_over_time_limit_sentence_in_both_languages():
+    from minemydinner.agent.revise_step import over_limit_note
+
+    dish = [{"id": 1, "title": "Braised ribs", "time_min": 60}]
+    assert over_limit_note(dish, 30, "en") == (
+        "Braised ribs is in your library but takes 60 minutes, longer than this meal's "
+        "30-minute limit. Drop the time limit to use it."
+    )
+    assert over_limit_note(dish, 30, "zh") == (
+        "Braised ribs在你的菜谱库里，但需要 60 分钟，超过了这次 30 分钟的时间限制。"
+        "不限时间就可以用它。"
+    )
+
+
 def test_button_on_failed_revision_revises_again(revise_env):
     env = revise_env
     for name in ("牛肉", "小白菜", "紫菜", "豆角", "辣椒"):
