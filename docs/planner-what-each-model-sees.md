@@ -1,6 +1,6 @@
 # What Each Model Sees
 
-A planning conversation calls up to four models: the route, the parse, the planner, and the revise step. This document says, for each one, what it receives, what it never receives, and why, with complete example inputs. It describes the code as of Phase 1 plan 3b-1b, with the prompt versions `route_v4`, `parse_v7`, `planner_v5`, and `revise_v4` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`). The design is in `docs/superpowers/specs/2026-11-21-phase-1-plan-3b1b-revise-fixes-design.md`, Section 5.8. Related: `docs/planner-request-and-counts.md` (the steps and the counts), `docs/planner-shortlist-and-ranking.md` (the candidate list), `docs/planner-feasibility-check.md`, and `docs/planner-stock-rules.md`.
+A planning conversation calls up to four models: the route, the parse, the planner, and the revise step. This document says, for each one, what it receives, what it never receives, and why, with complete example inputs. It describes the code as of Phase 1 plan 3b-1b, with the prompt versions `route_v5`, `parse_v8`, `planner_v5`, and `revise_v4` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`). The design is in `docs/superpowers/specs/2026-11-21-phase-1-plan-3b1b-revise-fixes-design.md`, Section 5.8. Related: `docs/planner-request-and-counts.md` (the steps and the counts), `docs/planner-shortlist-and-ranking.md` (the candidate list), `docs/planner-feasibility-check.md`, and `docs/planner-stock-rules.md`.
 
 **Whenever a model's input changes, this document is updated in the same change.**
 
@@ -15,8 +15,8 @@ A planning conversation calls up to four models: the route, the parse, the plann
 
 | Model | Receives | Never receives | Why |
 |---|---|---|---|
-| Route (`route_v4`) | The route prompt and the conversation's messages: every user message and every assistant reply's text | Cards (plan, diner, choice), the assistant's questions, the app note about the current plan | Telling "change this plan" from "plan again" needs context; the answer is one word, so the whole conversation is cheap |
-| Parse (`parse_v7`) | The parse prompt, the conversation with the assistant's questions placed as assistant messages, and on a revise turn the app note line describing the current plan | The diner card's contents, the rest of the plan card, the dietary rules on record | It merges several turns into one full request; a question lets a short answer ("两个") attach to it; the plan line lets "再加一道" count from the plan; the card is kept from models for privacy |
+| Route (`route_v5`) | The route prompt and the conversation's messages: every user message and every assistant reply's text | Cards (plan, diner, choice), the assistant's questions, the app note about the current plan | Telling "change this plan" from "plan again" needs context; the answer is one word, so the whole conversation is cheap |
+| Parse (`parse_v8`) | The parse prompt, the conversation with the assistant's questions placed as assistant messages, and on a revise turn the app note line describing the current plan | The diner card's contents, the rest of the plan card, the dietary rules on record | It merges several turns into one full request; a question lets a short answer ("两个") attach to it; the plan line lets "再加一道" count from the plan; the card is kept from models for privacy |
 | Planner (`planner_v5`) | The planner prompt, one opening message (the shortlist, then the code-written request summary with anonymous diner rule lines), a retry message after a failed attempt, and its own tool calls and results within the attempt | The conversation, the user's words (except the wish, the named ingredients, and the one-meal avoidance as the request holds them), earlier attempts' tool calls | The request is already read and completed; raw words could pull it away from what code checks; the fixed opening is cached across attempts |
 | Revise (`revise_v4`) | The revise prompt, an opening with the same shortlist and summary under "Revise this meal.", the current plan one dish per line with its marks, the user's words of this turn, a retry message, and its own tool calls | Earlier turns, the plan card's other fields (diners line, warnings, unmet list), earlier attempts' tool calls | It must see the plan it changes and the exact words it quotes (code checks quotes against them); earlier conditions are in the summary |
 
@@ -38,7 +38,7 @@ All examples are generated from the code, not written by hand. A test-only scrip
 
 The assistant's note and the scripted answers are made up; the inputs around them are exactly what the code sends. Recipe ids are the test database's and differ between runs.
 
-## 5. Route (`route_v4`)
+## 5. Route (`route_v5`)
 
 **Built by** `route_intent` in `agent/graph.py`: `[SystemMessage(route prompt), *state["messages"]]`.
 
@@ -51,7 +51,7 @@ The assistant's note and the scripted answers are made up; the inputs around the
 Example, the second turn:
 
 ```
-[system] <the route_v4 prompt file>
+[system] <the route_v5 prompt file>
 [human] 今晚两个人，三个菜，可以买菜
 [ai] 先炖土豆炖牛腩，再快炒青椒肉丝和红烧茄子。
 [human] 茄子这道不要
@@ -59,7 +59,7 @@ Example, the second turn:
 
 The first turn's route input is the system message and the first user message only.
 
-## 6. Parse (`parse_v7`)
+## 6. Parse (`parse_v8`)
 
 **Built by** `parse_request` in `agent/graph.py`: the thread's messages with each recorded question that has text inserted as an assistant message where it was asked (`parse_messages` in `agent/questions.py`), then, on a revise turn, one more user-role line written by code (`current_plan_line`): `[App note, not written by the user] Current plan: <counts>: <titles>`.
 
@@ -67,7 +67,7 @@ The first turn's route input is the system message and the first user message on
 
 - Every user message and assistant reply, as the route does.
 - The text questions: the ask-first question ("要规划这一餐，请告诉我……") and the count problem question (counts that contradict each other, or more than 12 items in total), in the wording the chat shows. The request-style question, the diner card, and the revise-or-plan choice card are forms and have no text, so they are not inserted.
-- On a revise turn, the app note: the plan's dish counts in the parse's own terms ("dishes" are meat plus vegetable dishes) and its titles. No diner, no lock, no conflict. `parse_v7` counts relative words from it ("再加一道" is the note's count plus one) and never takes it for the user's words: `counts_stated_now` is true only when the newest user message itself states a count.
+- On a revise turn, the app note: the plan's dish counts in the parse's own terms ("dishes" are meat plus vegetable dishes) and its titles. No diner, no lock, no conflict. `parse_v8` counts relative words from it ("再加一道" is the note's count plus one) and never takes it for the user's words: `counts_stated_now` is true only when the newest user message itself states a count.
 
 **Answers** with a `ParsedRequest`. The fields that reach later models: the counts, `mode`, `time_limit_min`, `query` (the taste wish, in the user's words), `must_use`, `prefer_use`, `all_use`, `exclude_recent_days`, and since `parse_v7` `meal_avoid`: the ingredients or ingredient groups the user does not want at this meal only ("今天不想吃肉" is `["肉"]`), never taste words (those go to `query`) and never a lasting rule of a person (those go to `self_rules`, `friend_rules`, or `guests` and may bring the diner card back). Code turns `meal_avoid` into this meal's own rules (diner key `meal`, no person and no profile; `with_meal_avoid` in `agent/plan_card.py`).
 
@@ -78,7 +78,7 @@ The first turn's route input is the system message and the first user message on
 Example, the second turn:
 
 ```
-[system] <the parse_v7 prompt file>
+[system] <the parse_v8 prompt file>
 [human] 今晚两个人，三个菜，可以买菜
 [ai] 先炖土豆炖牛腩，再快炒青椒肉丝和红烧茄子。
 [human] 茄子这道不要
@@ -136,7 +136,7 @@ Diners' dietary limits:
 
 1. The same shortlist and request summary as the planner's, under the heading `Revise this meal.` instead of `Plan this meal.`. The summary is the revision's: its counts are the current plan's own counts (exact, hand edits included) unless the message states a count, and its other conditions carry over from the plan's request unless this turn states new ones (`revision_spec` in `agent/revision.py`; `docs/planner-request-and-counts.md`, Section 7). A one-meal avoidance in force adds the `This meal only, not a diner's rule: leave out ...` line.
 2. `Current plan:` and one line per dish: `- <id> <title> (<dish type>; <main ingredients>)`, then its marks. The main ingredients are the lines marked main, else the first three required lines.
-3. `The user's message: <the user's words of this turn>` (all user messages since the last assistant reply, joined by line breaks; on a button turn the words of the failed turn whose card offered the button, then the button's fixed text on its own line, because the earlier wish is still the user's words). Code checks the quotes against this same text.
+3. `The user's message: <the user's words of this turn>` (all user messages since the last assistant reply, joined by line breaks). On a button turn after a failed revision it is three lines instead (since the fixes of development run 2): `The user's message:`, then `Earlier wish: <the words of the failed turn whose card offered the button>`, then `Then the user pressed: <the button's fixed text> (the request above already includes this change)`. The earlier wish is still the user's words, so a named re-attempt may quote it; the labels keep a count button from reading as a second wish that contradicts the first ("再多做两个菜" then "少做几道菜" made the reviser ask which count was meant). Code checks the quotes against the earlier wish and this turn's words together.
 
 ### The marks on a dish line
 
@@ -192,7 +192,7 @@ The summary says 3 dishes, 2 meat and 1 vegetable: the plan's own counts, becaus
 
 ### A second example: every mark
 
-The same first turn with two changes on record: the user does not eat 花生, and after the plan was shown the user added 宫保鸡丁 by hand (it has 花生; the user confirmed keeping it), then saved a new rule (does not eat 茄子) and added 蒜蓉西兰花 by hand. The second message is "今天不想吃土豆，换一道吧", which `parse_v7` reads as `meal_avoid: ["土豆"]`. The revise opening, after the shortlist (which no longer offers 青椒土豆片, as it breaks the avoidance):
+The same first turn with two changes on record: the user does not eat 花生, and after the plan was shown the user added 宫保鸡丁 by hand (it has 花生; the user confirmed keeping it), then saved a new rule (does not eat 茄子) and added 蒜蓉西兰花 by hand. The second message is "今天不想吃土豆，换一道吧", which `parse_v8` reads as `meal_avoid: ["土豆"]`. The revise opening, after the shortlist (which no longer offers 青椒土豆片, as it breaks the avoidance):
 
 ```
 Revise this meal.
@@ -247,7 +247,15 @@ The parse input of that turn ends with the app note `[App note, not written by t
 | A next-action button on a card that keeps its request | no | no | on a new plan's card (no plan, early stop, failed new plan) | on a failed revision's card (the plan was kept) |
 | A next-action button on a card saved before cards kept their request | no | yes | yes | no |
 
-**Button turns** (plan 3b-1b, `agent/actions.py`): a button sends a fixed message (`ACTION_MESSAGES` in `agent/request.py`). Code takes the request of the card that offered it, changes one field (`switch_to_shopping`, `fewer_dishes`, `drop_time_limit`, `relax_split`, `relax_named`), and sends the turn on with no route call, no parse call, and no ask-first question. The planner or the revise step then reads that changed request through the ordinary summary; neither is told a button was pressed, except that on a revision the revise step's `The user's message:` line is the failed turn's words followed by the button's text (since the first fix round after development run 1, so a named re-attempt may quote the earlier wish; the run's record keeps `button` and the turn's own message, the button's text). Example: after the failed revision above, the card offered `fewer_dishes`; pressing it ("少做几道菜") made revise calls only (three attempts here, because the scripted answer kept failing), and their opening had `Dishes (meat plus vegetable): 4`, `Split: 2 to 3 meat dishes, 1 to 2 vegetable dishes`, the same `Current plan:` lines and marks, and `The user's message:` with the failed turn's words, then `少做几道菜` on the next line (the example ran before the earlier words were added). The route and the parse of later turns see the button's text as a user message, as the chat shows it.
+**Button turns** (plan 3b-1b, `agent/actions.py`): a button sends a fixed message (`ACTION_MESSAGES` in `agent/request.py`). Code takes the request of the card that offered it, changes one field (`switch_to_shopping`, `fewer_dishes`, `drop_time_limit`, `relax_split`, `relax_named`), and sends the turn on with no route call, no parse call, and no ask-first question. The planner or the revise step then reads that changed request through the ordinary summary; neither is told a button was pressed, except that on a revision the revise step's message lines show the failed turn's words as `Earlier wish:` and the button's text as `Then the user pressed:` (item 3 above; the earlier words since the first fix round after development run 1, so a named re-attempt may quote the earlier wish, and the two labelled lines since the fixes of development run 2; the run's record keeps `button` and the turn's own message, the button's text). Example: after the failed revision above, the card offered `fewer_dishes`; pressing it ("少做几道菜") made revise calls only (three attempts here, because the scripted answer kept failing), and their opening had `Dishes (meat plus vegetable): 4`, `Split: 2 to 3 meat dishes, 1 to 2 vegetable dishes`, the same `Current plan:` lines and marks, and, as the code writes them now, these last lines:
+
+```
+The user's message:
+Earlier wish: 今天不想吃土豆，换一道吧
+Then the user pressed: 少做几道菜 (the request above already includes this change)
+```
+
+ The route and the parse of later turns see the button's text as a user message, as the chat shows it.
 
 ## 10. Privacy: a saved friend
 

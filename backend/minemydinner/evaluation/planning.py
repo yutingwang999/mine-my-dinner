@@ -1462,7 +1462,9 @@ def run_scenario(
         asked = note == QUESTION_STOP
         if not note and scenario.follow_up:
             # expect_first_reasons judges the model's own first plan, before first_plan
-            # replaces its dishes.
+            # replaces its dishes. first_plan also replaces the first reply's text with a
+            # sentence naming the fixed dishes, so the follow-up's route and parse read the
+            # plan the scenario set (development run 2 of plan 3b-1b).
             first_plan = graph.get_state(config).values.get("current_plan")
             if scenario.first_plan:
                 replace_first_plan(graph, factory, config, scenario.first_plan, scenario.locale)

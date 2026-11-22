@@ -6,7 +6,9 @@
 # are used while building. It shares no request with the held-out set
 # (scenarios_revise_heldout.yaml), which is never tuned against.
 #
-# Most scenarios fix the first plan (first_plan) so the follow-up starts from known dishes;
+# Most scenarios fix the first plan (first_plan) so the follow-up starts from known dishes
+# (the first reply's text is replaced too, so the route reads those dishes; see the header
+# of scenarios_revise_heldout.yaml);
 # some add or remove dishes by hand first (edits_between_turns): a dish added by hand is
 # locked. Every revision is also checked for locked dishes removed without being named.
 # The keys are defined in the header of scenarios_revise_heldout.yaml and in Scenario

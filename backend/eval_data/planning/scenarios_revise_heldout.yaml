@@ -10,7 +10,10 @@
 # Keys added for follow-up scenarios (implemented by the runner in plan 3b-1 Task 7):
 # - first_plan: [titles] - after the first message's turn, the runner replaces the newest
 #   reply's dishes with these library titles as a model version (not edited, no locks), so
-#   the follow-up starts from a known plan.
+#   the follow-up starts from a known plan. Since development run 2 of plan 3b-1b it also
+#   replaces that reply's text (the planner's note about its own dishes) with a sentence
+#   naming these dishes ("这顿做：A、B、C。", "This meal: A, B, C."), so the follow-up's route
+#   and parse read the plan the scenario set, as a real reply names its card's dishes.
 # - edits_between_turns: [{add: title} | {remove: title} | {keep: title}] - 3a edits applied
 #   in order after `between_turns`, through `apply_edit` and `update_state` as the API does
 #   (an add that needs confirmation is confirmed).

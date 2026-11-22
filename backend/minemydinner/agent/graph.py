@@ -326,14 +326,22 @@ def _button_card(state: ChatState) -> dict | None:
     return None
 
 
+def revision_words(revision: dict) -> str:
+    """All the user's words a revision is checked against: on a button revision the offering
+    turn's wish (`earlier`), then this turn's message. A revision stored before `earlier`
+    existed has both in `message` already."""
+    return "\n".join(w for w in (revision.get("earlier"), revision.get("message")) if w)
+
+
 def _offering_words(state: ChatState) -> list[str]:
     """On a button revision, the user's words of the turn whose card offered the button. That
-    card kept the plan, so the state's `revision` is still that turn's: its message, which
-    already holds the words before an earlier button in a chain. A state without it falls
+    card kept the plan, so the state's `revision` is still that turn's: its words
+    (`revision_words`), which already hold the words before an earlier button in a chain. A
+    state without it falls
     back to the user's messages just before the offering reply."""
-    message = (state.get("revision") or {}).get("message")
-    if message:
-        return [message]
+    words = revision_words(state.get("revision") or {})
+    if words:
+        return [words]
     messages = state["messages"][:-1]
     last_reply = max(
         (i for i, m in enumerate(messages) if isinstance(m, AIMessage)), default=None
@@ -1384,8 +1392,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         texts = _current_request(state["messages"])
         # The user's words the reviser sees and its quotes are checked against. On a button
         # pressed on a failed revision's card, the wish of the turn that offered it comes
-        # first: it is still the user's words, so a named re-attempt may quote it.
-        words = [*_offering_words(state), *texts] if button is not None else texts
+        # first (`earlier`): it is still the user's words, so a named re-attempt may quote
+        # it. The reviser sees it on its own labelled line, apart from the button's text
+        # (development run 2: "再多做两个菜" then "少做几道菜" read as one contradictory wish).
+        earlier = _offering_words(state) if button is not None else []
         settled_data = state.get("settled_diners")
         settled = SettledDiners.from_state(settled_data) if settled_data else None
         request = {
@@ -1429,7 +1439,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "shortlist_ids": [],
             "revision": {
                 "from_version": index,
-                "message": "\n".join(words),
+                "message": "\n".join(texts),
+                "earlier": "\n".join(earlier) or None,
                 "recipe_ids": shown,
                 "problems": [],
                 "deleted": deleted,
@@ -1511,6 +1522,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     mains,
                     state["revision"]["message"],
                     state["revision"].get("avoid_ids") or [],
+                    state["revision"].get("earlier"),
                 )
                 update["planner_opening"] = opening
                 update["shortlist_ids"] = shortlist_ids
@@ -1610,7 +1622,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 problems = check_revision(
                     plan,
                     proposal,
-                    revision["message"],
+                    revision_words(revision),
                     facts,
                     spec=spec,
                     avoid_ids=avoid_ids,

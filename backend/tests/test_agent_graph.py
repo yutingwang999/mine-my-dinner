@@ -2632,10 +2632,47 @@ def test_button_revision_quotes_the_offering_turns_words(revise_env):
     ids = [r["id"] for r in plan["recipes"]]
     assert plan["passed"] and slow.id in ids and beef not in ids
     opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
-    assert opening.endswith("The user's message: 土豆炖牛肉换成酱焖羊蝎子\n不限时间")
+    assert opening.endswith(
+        "The user's message:\nEarlier wish: 土豆炖牛肉换成酱焖羊蝎子\n"
+        "Then the user pressed: 不限时间 (the request above already includes this change)"
+    )
     record = latest_record(env)
     assert record.request["button"] == "drop_time_limit"
     assert record.request["messages"] == ["不限时间"]
+
+
+def test_fewer_dishes_after_a_failed_add_shows_the_button_apart(revise_env):
+    """Development run 2, item 7: after a count wish that failed, the fewer_dishes button's
+    text and the earlier wish reached the reviser as one message ("…再多做两个菜\n少做几道菜")
+    and read as a contradiction. The reviser now sees them on two labelled lines; the quote
+    check still accepts both; a revision that adds what the new counts ask for passes."""
+    env = revise_env
+    first_meal(env)
+    beans, cucumber = dish_ids(env, "干煸豆角", "凉拌黄瓜")
+    wish = "冰箱里的东西再多做两个菜"
+    failed = say(
+        env, wish, "revise",
+        parse={"dishes": 4, "soups": 1, "mode": "shopping", "counts_stated_now": True},
+        replies=[revision("general", add=[beans])],
+    )
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["plan_kept"] is True and "fewer_dishes" in card["next_actions"]
+    since = len(reviser_calls(env))
+    out = say(
+        env, ACTION_MESSAGES["zh"]["fewer_dishes"], "plan",
+        replies=[revision("general", add=[cucumber])],
+    )
+    assert len(reviser_calls(env)) == since + 1
+    plan = out["current_plan"]
+    assert plan["passed"] and cucumber in [r["id"] for r in plan["recipes"]]
+    assert latest_record(env).request["spec"]["dishes"] == 3
+    opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
+    assert f"The user's message: {wish}\n少做几道菜" not in opening
+    assert opening.endswith(
+        f"Earlier wish: {wish}\n"
+        "Then the user pressed: 少做几道菜 (the request above already includes this change)"
+    )
+    assert latest_record(env).request["messages"] == ["少做几道菜"]
 
 
 def test_over_time_limit_sentence_in_both_languages():

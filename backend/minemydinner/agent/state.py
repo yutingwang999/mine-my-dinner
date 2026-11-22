@@ -64,9 +64,10 @@ class ChatState(TypedDict):
     shortlist_ids: list[int]
     retries: int
     # The revision in progress (plan 3b-1): `from_version` (the plan_versions index of the plan
-    # it changes), `message` (the user's words it is checked against), and the last attempt's
-    # `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then holds the
-    # RevisionProposal dump, or None when an attempt gave no answer.
+    # it changes), `message` (this turn's words), `earlier` (on a button revision, the words
+    # of the turn whose card offered the button; quotes are checked against both), and the
+    # last attempt's `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then
+    # holds the RevisionProposal dump, or None when an attempt gave no answer.
     revision: dict | None
     current_plan: dict | None
     plan_versions: list[dict]

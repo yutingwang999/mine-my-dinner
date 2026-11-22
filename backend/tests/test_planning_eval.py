@@ -2148,6 +2148,53 @@ def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
     _assert_clean(eval_db)
 
 
+def test_a_fixed_first_plan_rewrites_the_reply_the_route_reads(tmp_path, eval_db):
+    """Development run 2, item 5: first_plan replaced the dishes but the first reply still
+    named the planner's own dishes, so the follow-up's route read a plan the scenario never
+    set. The reply now names the fixed plan's dishes, as a real reply names its card's."""
+    from minemydinner.agent.request import load_prompt
+    from minemydinner.evaluation.revise_eval import FIRST_PLAN_REPLY
+
+    model = ScriptModel(
+        eval_db,
+        [
+            lambda ids: final_proposal(
+                [ids[t] for t in ("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
+                note="先炒青椒肉丝，再做清炒小白菜。",
+            ),
+            _revision("named", remove=[("红烧茄子", "茄子这道")], add=["清炒小白菜"]),
+        ],
+        intents=[{"intent": "plan"}, {"intent": "revise"}],
+        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+    )
+    scenario = _revise_scenario(
+        "reply", rules=[], first_plan=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
+        expect_removed=["红烧茄子"],
+    )
+    [outcome] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
+    )
+    assert outcome.as_expected, (outcome.failures, outcome.note)
+    route = load_prompt("route")
+    route_calls = [s for s in model.sent if s and s[0].type == "system" and s[0].content == route]
+    follow_up_route = route_calls[-1]
+    [reply] = [m for m in follow_up_route if m.type == "ai"]
+    assert reply.content == FIRST_PLAN_REPLY["zh"].format(dishes="宫保鸡丁、番茄炒蛋、红烧茄子")
+    assert "青椒肉丝" not in reply.content
+    # The card of that reply is still found by its id (the message was replaced, not added).
+    assert follow_up_route[-1].content == "茄子这道不要，换一个别的"
+    _assert_clean(eval_db)
+
+
+def test_first_plan_reply_sentence_in_both_languages():
+    from minemydinner.evaluation.revise_eval import first_plan_reply
+
+    assert first_plan_reply(["宫保鸡丁", "番茄炒蛋"], "zh") == "这顿做：宫保鸡丁、番茄炒蛋。"
+    assert first_plan_reply(["Kung pao chicken", "Tomato eggs"], "en") == (
+        "This meal: Kung pao chicken, Tomato eggs."
+    )
+
+
 def test_the_choice_card_is_answered_or_stops_the_turn(tmp_path, eval_db):
     model = ScriptModel(
         eval_db,

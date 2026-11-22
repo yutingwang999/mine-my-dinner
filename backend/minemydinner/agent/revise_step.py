@@ -178,12 +178,22 @@ def revision_opening(
     mains: dict[int, list[str]],
     message: str,
     avoid_ids: Collection[int] = (),
+    earlier: str | None = None,
 ) -> str:
     """The revise step's first message: the shortlist and the request summary (`base`, as the
     planner's opening), then the current plan (`avoid_ids` marked), then the user's
-    message."""
+    message. On a button revision `earlier` is the wish of the turn whose card offered the
+    button: it and the button's text are shown on two labelled lines, so a count button does
+    not read as a second wish that contradicts the first (development run 2 of plan 3b-1b)."""
     plan_text = current_plan_text(plan, mains, avoid_ids)
-    return f"{base}\n\n{plan_text}\n\nThe user's message: {message}"
+    if earlier:
+        said = (
+            f"The user's message:\nEarlier wish: {earlier}\n"
+            f"Then the user pressed: {message} (the request above already includes this change)"
+        )
+    else:
+        said = f"The user's message: {message}"
+    return f"{base}\n\n{plan_text}\n\n{said}"
 
 
 def carried_overrides(plan: dict, recipe_ids: list[int]) -> list[H2Override]:

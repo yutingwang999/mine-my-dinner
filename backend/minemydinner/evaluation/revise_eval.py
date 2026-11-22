@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from langchain_core.messages import AIMessage
 from sqlalchemy import Table, delete, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -191,12 +192,29 @@ def _recipe_ids(session: Session, titles: Sequence[str]) -> list[int]:
     return [rows[t] for t in titles]
 
 
+# The text of the reply whose dishes `first_plan` replaced. In the app a plan reply's text is
+# the planner's note about the dishes on its card; the planner's note named its own dishes, so
+# it is replaced by a plain sentence naming the fixed plan's dishes. Later turns' route and
+# parse then read the plan the scenario set, as they would read a real reply (development
+# run 2 of plan 3b-1b: a rule about lamb was routed "other" because the stale reply named no
+# lamb dish).
+FIRST_PLAN_REPLY = {"zh": "这顿做：{dishes}。", "en": "This meal: {dishes}."}
+
+
+def first_plan_reply(titles: Sequence[str], locale: str) -> str:
+    """The fixed first plan's reply text, in the scenario's locale."""
+    if locale == "zh":
+        return FIRST_PLAN_REPLY["zh"].format(dishes="、".join(titles))
+    return FIRST_PLAN_REPLY["en"].format(dishes=", ".join(titles))
+
+
 def replace_first_plan(
     graph, factory: sessionmaker[Session], config: dict, titles: Sequence[str], locale: str
 ) -> None:
     """Replace the newest reply's dishes with `titles` as a model version: the plan card of
     those dishes checked against the first request (not edited, no locks), in place of the
-    first turn's model version, written as `present_plan` would."""
+    first turn's model version, written as `present_plan` would. The reply's text is replaced
+    too (same message id), by `first_plan_reply`, so it names the dishes on its card."""
     values = graph.get_state(config).values
     try:
         reply_id = newest_reply_id(values)
@@ -228,6 +246,8 @@ def replace_first_plan(
         "current_plan": card,
         "plan_versions": versions,
         "reply_plans": {**(values.get("reply_plans") or {}), reply_id: card},
+        # Same id: add_messages replaces the reply in place.
+        "messages": [AIMessage(first_plan_reply(titles, locale), id=reply_id)],
     }
     graph.update_state(config, update, as_node="present_plan")
 
