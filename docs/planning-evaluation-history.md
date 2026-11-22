@@ -374,3 +374,28 @@ Gemini models showed little or no cache hits (gemini-3.5-flash-lite 0.00 in ever
 Against the criteria, on the round 6 runs: first pass 6/6, 12/12 and 8/8; average calls 3.0-3.5 per plan scenario; every infeasible scenario stopped within 2 calls with the expected reasons and next actions; uncached cost $0.0146 on the baseline set against $0.064, and model time 3.4-3.5 s against 11.3 s; largest call 3,658 tokens against the 32,000 budget; every scenario of all three sets as expected, with no scenario over 5 calls in this round. The call limits (`MODEL_CALL_LIMIT` 6, `TOOL_CALL_LIMIT` 10 per attempt) were never reached in any round: the most planner calls in one attempt was 5 (round 4).
 
 Known pattern to watch: when the shortlist is complete but the model is unhappy with it (no meat dish to balance the meal, egg dishes as the only "vegetable dishes"), it sometimes ignores the instruction not to search. It costs calls, not correctness.
+
+### Spike: one reader for follow-up turns (2026-11-22) — an experiment, not a round
+
+**Question.** Before the plan 3b-2 design (diner changes, together with simplifying the revise turn), the user asked whether giving the model more of the work would fix the follow-up misses of round 10. A throwaway spike (branch `spike/one-reader`, commit `97c4c50`, not merged; its prompt `one_reader_v0.md` is saved in each run folder's `prompts/`) replaced the route, parse and revise calls of a follow-up turn with **one** model call that read everything at once: the whole conversation (labels for saved nicknames), the current plan with its marks, the confirmed diner card summary, the request's conditions and the revise shortlist, with a search tool capped at 3 calls. It answered one of `plan` (the full new dish list and a note), `question`, `new_meal` or `nothing_fits`. Code kept only the hard checks (diner rules, stock, cookware, time), with one retry; locked dishes and counts were recorded, not enforced. The first turn and buttons stayed as in round 10. Development set only (`scenarios_revise.yaml`, 37 scenarios), test database.
+
+| Run | Reader model | As expected | Calls per follow-up turn (avg / max) | Locked dishes removed | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|
+| 20261122T095944Z | deepseek-flash | 25/37 | 1.4 / 4 | 1 | $0.0342 | 6.0 s |
+| 20261122T100355Z | deepseek-flash | 26/37 | 1.4 / 3 | 1 | $0.0350 | 5.6 s |
+| 20261122T100754Z | deepseek-v4-pro | 24/37 | 1.6 / 5 | 0 | $0.0917 | 9.8 s |
+| 20261122T101428Z | deepseek-v4-pro | 24/37 | 1.6 / 5 | 1 | $0.0634 | 7.1 s |
+| Round 10 and development runs 3-4 (today's structure, for comparison) | deepseek-flash | 33-35/37 | 3.4 / 6-8 | 0 | about $0.05 | about 7 s |
+
+Total cost of the spike: $0.224.
+
+**Misses, by kind.**
+- *Not built in the spike* (not a reading error): no diner card from follow-up words (`revise_with_new_guest`, `lasting_rule_for_a_friend_while_revising`), and the request changes of button turns were not modelled (three or four `button_*` scenarios).
+- *Mapping* (not a reading error): a reader's `question` was counted as route `unsure`, while `which_soup_asks` and `drop_every_dish_asks` expect a revision that asks.
+- *Real misreadings*, about 5-6 per run against 2-4 in today's structure: a new meal read as a revision (`new_plan_four_dishes`, `new_plan_after_hand_add`, both models, every run); wrong counts (the stronger model kept 3 dishes where 4 were expected in `named_swap_eggplant_after_hand_add` and `scope_all_but_corn`, and asked instead of trimming in `fewer_dishes_on_hand_grown_plan`); a locked dish removed under a general wish (3 of 4 runs; today's structure blocks this in code); `meal_avoid_meat_zh` in every run; `choice_card_answered_revise` once.
+
+**Conclusion.**
+- One reader with the same model did not read follow-ups better: the errors from split information went away, but new ones came (new meal versus revision, counts), and without the code guards locked dishes were removed.
+- The stronger model did not help (no better, 2-3 times the cost, slower), so the limit is the structure and the code guards, not model power.
+- The clear gain was fewer calls: about 1.5 per follow-up turn instead of 3.4, and faster turns.
+- This supports, for the plan 3b-2 design: one model reads the whole context once and answers **what the message wants** in a structured form; code decides which dishes and people that touches and keeps the guards (locked dishes, counts, rules); a model chooses concrete dishes only within that narrow frame.
