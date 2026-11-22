@@ -29,6 +29,7 @@ from minemydinner.agent.edits import (
 )
 from minemydinner.agent.graph import WISH_UNMET_NOTE_EN, WISH_UNMET_NOTE_ZH
 from minemydinner.agent.labels import LabelTable, labels_scope, load_label_context
+from minemydinner.agent.one_reader import ROUTE_OF_ANSWER
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
 from minemydinner.agent.request import ParsedRequest
 from minemydinner.agent.revise_step import WISH_UNMET, open_conflict_ids
@@ -369,6 +370,9 @@ def route_of(turn_events: list[list[dict]], values: dict) -> str | None:
         for event in events:
             if event.get("kind") == "model_call" and event.get("step") == "route":
                 return (event.get("response") or {}).get("intent")
+            # SPIKE: the one-reader's answer, mapped to the route it stands in for.
+            if event.get("kind") == "one_reader" and event.get("answer") in ROUTE_OF_ANSWER:
+                return ROUTE_OF_ANSWER[event["answer"]]
         return None
 
     for events in turn_events:
@@ -381,6 +385,17 @@ def route_of(turn_events: list[list[dict]], values: dict) -> str | None:
     if intent is not None:
         return intent
     return "other" if values.get("intent") == "other" else None
+
+
+def one_reader_answer(turn_events: list[list[dict]]) -> str | None:
+    """SPIKE: the one-reader's last answer kind in the judged turn's runs, None when the turn
+    made no one-reader call (the normal path)."""
+    answer = None
+    for events in turn_events:
+        for event in events or []:
+            if event.get("kind") == "one_reader":
+                answer = event.get("answer")
+    return answer
 
 
 def asked_back(values: dict) -> bool:

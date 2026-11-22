@@ -86,6 +86,7 @@ from minemydinner.evaluation.revise_eval import (
     hide_dishes,
     locked_of,
     locked_removed,
+    one_reader_answer,
     plan_dishes,
     replace_first_plan,
     route_of,
@@ -106,6 +107,8 @@ from minemydinner.seed import seed_all
 from minemydinner.settings import Settings, get_settings
 
 EVAL_TASK = "planning_eval"
+# SPIKE: the one-reader's task (--one-reader), a copy of EVAL_TASK on its own model.
+READER_TASK = "planning_eval_reader"
 # The tables the cleanup keeps: the migration marker, the cost records, and the planning
 # records (all of which the evaluation reads), and the checkpointer's migration marker.
 KEPT_TABLES = ("alembic_version", "llm_calls", "planning_runs", "checkpoint_migrations")
@@ -1545,7 +1548,7 @@ def run_scenario(
         all_rows = session.scalars(
             select(LlmCall).where(LlmCall.id > watermark).order_by(LlmCall.id)
         ).all()
-        rows = [r for r in all_rows if r.task == EVAL_TASK]
+        rows = [r for r in all_rows if r.task in (EVAL_TASK, READER_TASK)]
         turn_rows = [r for r in rows if r.id > call_mark]
         embedding_calls = sum(r.task == "embeddings" for r in all_rows)
         record = {
@@ -1573,6 +1576,9 @@ def run_scenario(
     else:
         turn = "plan"
     route = route_of(turn_events, state) if follow_up_sent or not scenario.follow_up else None
+    # SPIKE: the one-reader's answer on the judged turn (None on the normal path). A question
+    # stands in for the choice card and for a question to the user.
+    reader = one_reader_answer(turn_events) if follow_up_sent else None
     reply = next(
         (
             str(m.content)
@@ -1583,11 +1589,13 @@ def run_scenario(
     )
     # The revise step asked back (which dish?) or asked whether to plan a new meal.
     revise_asked = turn == "revision" and (asked_back(state) or asked_empty(state))
+    if reader is not None:
+        revise_asked = turn == "revision" and (asked_empty(state) or reader == "question")
     run_request = (run.request or {}) if run is not None else {}
     shared = {
         "turn": turn,
         "route": route,
-        "choice_card": bool(choices),
+        "choice_card": bool(choices) or reader == "question",
         "questions": len(questions) + int(revise_asked),
         "follow_up_card": follow_up_card,
         "wish_unmet_said": wish_unmet_said(_last_reply_card(state), reply, turn),
@@ -1623,7 +1631,8 @@ def run_scenario(
         first_plan=first_plan,
         # A follow-up that ended without a planning run (an unanswered choice card, an
         # "other" reply) has no plan to pass or fail.
-        check_plan_flag=not (turn == "none" and (not note or choice_stop)),
+        check_plan_flag=not (turn == "none" and (not note or choice_stop))
+        and reader != "question",
     )
     failures += diner_checks
     if zero_dishes:
@@ -1739,6 +1748,7 @@ def evaluate(
     use_shortlist: bool = True,
     with_embeddings: bool = False,
     stats: dict[str, int] | None = None,
+    one_reader: bool = False,
 ) -> list[RunOutcome]:
     """Seed, load the library, run every scenario, and always empty the app tables after.
 
@@ -1762,7 +1772,14 @@ def evaluate(
                     stats["library_embeddings_failed"] = failed
         recorder = PlanningRecorder(factory)
         graph = build_graph(
-            GraphDeps(factory, client, recorder, task=EVAL_TASK, use_shortlist=use_shortlist),
+            GraphDeps(
+                factory,
+                client,
+                recorder,
+                task=EVAL_TASK,
+                use_shortlist=use_shortlist,
+                one_reader_task=READER_TASK if one_reader else None,
+            ),
             checkpointer,
         )
         prices = {
@@ -2012,6 +2029,11 @@ def run_info(
             },
             "models": {
                 EVAL_TASK: _task_models(client, EVAL_TASK),
+                **(
+                    {READER_TASK: _task_models(client, READER_TASK)}
+                    if READER_TASK in client.config.tasks
+                    else {}
+                ),
                 "embeddings": _task_models(client, "embeddings"),
                 "prices_updated": client.config.prices_updated.isoformat(),
             },
@@ -2025,13 +2047,15 @@ def make_run_id(
     no_shortlist: bool,
     with_embeddings: bool,
     planning_model: str | None = None,
+    one_reader_model: str | None = None,
 ) -> str:
     stamp = started.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     name = scenarios_path.stem.removeprefix("scenarios_")
     shortlist_part = "no-shortlist" if no_shortlist else "shortlist"
     vectors_part = "vectors" if with_embeddings else "no-vectors"
     run_id = f"{stamp}-{name}-{shortlist_part}-{vectors_part}"
-    return f"{run_id}-{planning_model}" if planning_model else run_id
+    run_id = f"{run_id}-{planning_model}" if planning_model else run_id
+    return f"{run_id}-one-reader-{one_reader_model}" if one_reader_model else run_id
 
 
 def percentile(values: list[int], pct: float) -> int:
@@ -2294,7 +2318,20 @@ def main(argv: list[str] | None = None) -> int:
         help="run the whole planning_eval task (route, parse, planner) on this tool-calling "
         "catalog model, with no fallback",
     )
+    parser.add_argument(
+        "--one-reader",
+        action="store_true",
+        help="SPIKE: follow-up turns make no route, parse or revise call; one model reads the "
+        "whole turn and decides the new plan",
+    )
+    parser.add_argument(
+        "--one-reader-model",
+        help="SPIKE: the catalog model of the one-reader (default: the planning_eval model)",
+    )
     args = parser.parse_args(argv)
+    if args.one_reader_model and not args.one_reader:
+        print("--one-reader-model needs --one-reader", file=sys.stderr)
+        return 2
     if args.planning_model:
         try:
             models = tool_calling_models()
@@ -2327,6 +2364,17 @@ def main(argv: list[str] | None = None) -> int:
     llm_config = load_llm_config(model_overrides=settings.model_overrides())
     if args.planning_model:
         llm_config = pin_task_model(llm_config, EVAL_TASK, args.planning_model)
+    reader_model = None
+    if args.one_reader:
+        tasks = {**llm_config.tasks, READER_TASK: llm_config.tasks[EVAL_TASK]}
+        llm_config = llm_config.model_copy(update={"tasks": tasks})
+        if args.one_reader_model:
+            try:
+                llm_config = pin_task_model(llm_config, READER_TASK, args.one_reader_model)
+            except ConfigError as error:
+                print(error, file=sys.stderr)
+                return 2
+        reader_model = llm_config.models[llm_config.tasks[READER_TASK].primary].model
     client = LLMClient(
         llm_config,
         factory,
@@ -2357,6 +2405,7 @@ def main(argv: list[str] | None = None) -> int:
                 use_shortlist=not args.no_shortlist,
                 with_embeddings=args.with_embeddings,
                 stats=stats,
+                one_reader=args.one_reader,
             )
         failed = False
     except (UnsafeDatabase, ValueError) as error:
@@ -2385,6 +2434,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.no_shortlist,
                     args.with_embeddings,
                     args.planning_model,
+                    reader_model,
                 )
                 summary = build_summary(
                     run_id, info, collected, stats.get("library_embedding_calls", 0)

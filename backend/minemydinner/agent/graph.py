@@ -51,6 +51,12 @@ from minemydinner.agent.labels import (
 )
 from minemydinner.agent.edits import locked_ids, revised_card
 from minemydinner.agent.middleware import dump_message
+from minemydinner.agent.one_reader import (
+    OneReaderAnswer,
+    build_one_reader,
+    conversation_text,
+    reader_input,
+)
 from minemydinner.agent.plan_card import (
     build_dishes_card,
     card_base,
@@ -84,6 +90,7 @@ from minemydinner.agent.revise_step import (
     card_search_notes,
     carried_overrides,
     count_fix_hint,
+    current_plan_text,
     deleted_note,
     dish_facts,
     empty_plan_question,
@@ -109,6 +116,7 @@ from minemydinner.agent.revise_step import (
     without_deleted,
 )
 from minemydinner.agent.revision import (
+    RemovedDish,
     RevisionProblem,
     RevisionProposal,
     asks_back,
@@ -258,6 +266,10 @@ class GraphDeps:
     # Query embeddings per planning run (by run_id), shared by the shortlist and every
     # attempt's searches. Kept here, not in the checkpointed state; dropped when the run ends.
     run_query_vectors: dict[int, dict[str, list[float]]] = field(default_factory=dict)
+    # SPIKE (evaluation only, agent/one_reader.py): the LLMClient task of the one-reader. When
+    # set, a follow-up turn on a thread with a current plan makes no route, parse or revise
+    # call; one model reads the whole turn instead. The app never sets it.
+    one_reader_task: str | None = None
 
 
 def load_route_prompt() -> str:
@@ -638,6 +650,7 @@ def _empty_search_notes() -> dict:
 def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     planner_agent: CompiledStateGraph | None = None
     reviser_agent: CompiledStateGraph | None = None
+    one_reader_agent: CompiledStateGraph | None = None
 
     def get_planner() -> CompiledStateGraph:
         # Built on first use, so conversations that never plan never build a model.
@@ -652,6 +665,35 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             reviser_agent = build_reviser(deps)
         return reviser_agent
 
+    def get_one_reader() -> CompiledStateGraph:
+        nonlocal one_reader_agent
+        if one_reader_agent is None:
+            one_reader_agent = build_one_reader(deps)
+        return one_reader_agent
+
+    def one_reader_route(state: ChatState, fresh: dict) -> dict | None:
+        """SPIKE: the one-reader's turn, or None for the normal path. A message turn keeps the
+        plan's request; a button turn gets the button's change in code, as today."""
+        if not deps.one_reader_task or state.get("current_plan") is None:
+            return None
+        if not _is_action_message(state):
+            request = state.get("plan_request") or state.get("request")
+            return {**fresh, "intent": "one_reader", "request": request, "model_calls": []}
+        card = _button_card(state)
+        if card is None:
+            return None
+        action = action_of(state["messages"][-1].content)
+        base = card["request"]
+        if card.get("plan_kept") and not base.get("counts_stated_now"):
+            base = on_plan_counts(base, state["current_plan"])
+        return {
+            **fresh,
+            "intent": "one_reader",
+            "request": apply_action(base, action, card.get("spec")),
+            "button": action,
+            "model_calls": [],
+        }
+
     def route_intent(state: ChatState) -> dict:
         # Each new message is a new request, which may be asked about once. The thread's
         # request is kept before this turn's parse replaces it: a revision compares the two.
@@ -664,6 +706,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # "Plan again": the previous parsed request stands as this turn's parse, with
             # no model call; choose sends the turn on as after a parse.
             return {**fresh, "intent": "plan", "model_calls": [{"kind": "parse_reused"}]}
+        reader = one_reader_route(state, fresh)
+        if reader is not None:
+            return reader
         if _is_action_message(state):
             card = _button_card(state)
             if card is None:
@@ -711,6 +756,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def choose(state: ChatState) -> str:
         # A revise turn is parsed like a new plan; after_parse then sends it to the revise
         # step. "unsure" asks first with the choice card.
+        if state["intent"] == "one_reader":
+            return "start_revision"
         if state["intent"] == "unsure":
             return "ask_revise_or_plan"
         if state["intent"] not in ("plan", "revise"):
@@ -1449,6 +1496,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
         if button is not None:
             request["button"] = button
+        if state.get("intent") == "one_reader":
+            request["one_reader"] = True
         run_id = deps.recorder.start(
             thread_id=config["configurable"]["thread_id"],
             request=request,
@@ -1768,11 +1817,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         limit = state["spec"].get("time_limit_min")
         over = (revision.get("over_time_limit") or []) if limit is not None else []
         with deps.session_factory() as session:
-            if revision.get("empty"):
+            if revision.get("empty") or revision.get("question"):
                 # The change would leave no dish (spec 5.1): nothing changes, and the reply
-                # is a plain question with no card.
+                # is a plain question with no card. SPIKE: the one-reader's own question
+                # (`question`) is shown the same way.
                 card = unchanged_card(plan, [], [])
-                note = empty_plan_question(locale)
+                note = revision.get("question") or empty_plan_question(locale)
                 shows_card = False
             elif proposal is not None and asks_back(proposal):
                 card = unchanged_card(live, [], [])
@@ -1821,6 +1871,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     [{"code": WISH_UNMET, "recipe_id": None}], [], {}, locale
                 )
                 actions = wish_unmet_actions(state["spec"])
+                if revision.get("reason"):
+                    # SPIKE: the one-reader's nothing-fits reason.
+                    unmet = [{**unmet[0], "text": revision["reason"]}]
                 card = unchanged_card(live, unmet, actions)
                 card["notes"] = deleted_note(plan, deleted)
                 titles_now = {r["id"]: r["title"] for r in live["recipes"]}
@@ -1910,6 +1963,218 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "messages": [AIMessage(note, id=reply_id)],
         }
 
+    # ---- SPIKE: the one-reader (evaluation only, agent/one_reader.py) ----
+
+    def reader_check(session, ctx, plan: dict, spec: PlanSpec, ids: list[int]) -> dict:
+        """Today's hard checks on the reader's dish list. The counts are the list's own (the
+        reader decides them); a difference from the request is recorded, never failed."""
+        rows = dict(
+            session.execute(select(Recipe.id, Recipe.dish_type).where(Recipe.id.in_(ids))).all()
+        )
+        present = count_categories(rows[i] for i in ids if i in rows)
+        try:
+            checked = PlanSpec.model_validate(
+                {**spec.model_dump(), **present, "meat_bound": "exact", "vegetable_bound": "exact"}
+            )
+        except ValueError:
+            checked = spec
+        current_ids = [r["id"] for r in plan["recipes"]]
+        result = validate_plan(session, ctx, checked, ids, carried_overrides(plan, ids))
+        missed_before: set[str] = set()
+        if must_unmet_names(result.violations):
+            before = validate_plan(
+                session,
+                ctx,
+                PlanSpec.model_validate(plan["spec"]),
+                current_ids,
+                carried_overrides(plan, current_ids),
+            )
+            missed_before = must_unmet_names(before.violations)
+        locked = (locked_ids(plan) - open_conflict_ids(plan)) & set(ids)
+        failing, allowed = split_violations(result.violations, locked, missed_before)
+        counts = [v for v in failing if v.code == "H4"]
+        failing = [v for v in failing if v.code != "H4"]
+        asked = spec.model_dump()
+        return {
+            "passed": not failing,
+            "result": result.model_dump(mode="json"),
+            "failing": [v.model_dump(mode="json") for v in failing],
+            "allowed": [v.model_dump(mode="json") for v in [*allowed, *counts]],
+            "spec": checked.model_dump(),
+            "counts_differ": {
+                name: {"request": asked.get(name), "plan": value}
+                for name, value in present.items()
+                if asked.get(name) is not None and asked.get(name) != value
+            },
+        }
+
+    def one_reader_turn(state: ChatState) -> Command:
+        try:
+            return reader_attempts(state)
+        except BaseException:
+            deps.run_query_vectors.pop(state["run_id"], None)
+            raise
+
+    def reader_attempts(state: ChatState) -> Command:
+        """One reader call (a retry once after a hard-check failure or no answer), then the
+        answer as a revision state for present_revision, or a hand-off to the new-plan path."""
+        plan = revision_plan(state)
+        spec = PlanSpec.model_validate(state["spec"])
+        revision = dict(state["revision"])
+        run_id = state["run_id"]
+        vectors = deps.run_query_vectors.setdefault(run_id, {})
+        current_ids = [r["id"] for r in plan["recipes"]]
+        constraints = meal_constraints(state)
+        with deps.session_factory() as session:
+            ctx = load_planning_context(session, constraints)
+            block, notes, shortlist_ids = build_opening(
+                state,
+                session,
+                ctx,
+                spec,
+                vectors,
+                "This meal's request (the current plan's conditions):",
+            )
+            _, mains = dish_facts(session, current_ids)
+            self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+        codes = diner_codes(constraints, current_table())
+        eaters = [
+            f"{label} (the user)" if key == f"diner:{self_id}" else label
+            for key, label in codes.items()
+            if key != MEAL_KEY
+        ]
+        unconfirmed = constraints.unconfirmed_diners
+        who = "Who eats this meal: " + (", ".join(eaters) or "the user") + (
+            f", plus {unconfirmed} more with unconfirmed limits" if unconfirmed else ""
+        )
+        messages = state["messages"]
+        newest = messages[-1].content if isinstance(messages[-1].content, str) else ""
+        opening = reader_input(
+            block,
+            who,
+            current_plan_text(plan, mains, revision.get("avoid_ids") or []),
+            conversation_text(messages[:-1]),
+            newest,
+            button=_button_turn(state),
+        )
+        sent = [HumanMessage(opening)]
+        over: list[dict] = []
+        answer: OneReaderAnswer | None = None
+        check: dict | None = None
+        first_passed: bool | None = None
+        attempt = 0
+        while True:
+            out = get_one_reader().invoke(
+                {"messages": sent, "run_id": run_id},
+                context=planner_context(state, spec, vectors),
+            )
+            notes = _notes_from_searches(notes, out["messages"])
+            over = _over_limit_from_searches(over, out["messages"])
+            answer = out.get("structured_response")
+            check = None
+            event: dict[str, Any] = {
+                "kind": "one_reader",
+                "attempt": attempt,
+                "answer": answer.kind if answer else None,
+                "recipe_ids": list(answer.recipe_ids) if answer else [],
+                "message": deps.client.prepare_text(answer.message) if answer else "",
+            }
+            retry = None
+            if answer is None:
+                retry = "You gave no answer. Answer now with the OneReaderAnswer tool."
+            elif answer.kind == "plan" and answer.recipe_ids:
+                with deps.session_factory() as session:
+                    ctx = load_planning_context(session, constraints)
+                    check = reader_check(session, ctx, plan, spec, list(answer.recipe_ids))
+                event["validation"] = map_strings(
+                    {k: v for k, v in check.items() if k != "result"}, deps.client.prepare_text
+                )
+                deps.recorder.add_event(
+                    run_id,
+                    {
+                        "kind": "validation",
+                        "attempt": attempt,
+                        "recipe_ids": list(answer.recipe_ids),
+                        "passed": check["passed"],
+                        "problems": [],
+                        "result": map_strings(check["result"], deps.client.prepare_text),
+                    },
+                )
+                if first_passed is None:
+                    first_passed = check["passed"]
+                if not check["passed"]:
+                    reasons = [_violation_for_model(v, codes) for v in check["failing"]]
+                    retry = (
+                        f"Your plan {list(answer.recipe_ids)} failed these checks. Answer again "
+                        "and fix each one (another kind of answer is fine if it fits better):\n"
+                        + "\n".join(f"- {r}" for r in reasons)
+                    )
+            deps.recorder.add_event(run_id, event)
+            if retry is None or attempt >= 1:
+                break
+            attempt += 1
+            sent = [HumanMessage(opening), HumanMessage(retry)]
+
+        update: dict[str, Any] = {
+            "retries": attempt,
+            "first_passed": bool(first_passed),
+            "search_notes": _merge_notes(notes, [], False),
+            "shortlist_ids": shortlist_ids,
+            "planner_opening": opening,
+            "proposal": None,
+            "validation": {"passed": False, "violations": [], "allowed": [], "warnings": []},
+        }
+        revision.update(recipe_ids=current_ids, problems=[], over_time_limit=over)
+        kind = answer.kind if answer else None
+        message = answer.message.strip() if answer else ""
+        if kind == "new_meal":
+            # Today's new-plan path for this turn; the reader's run is closed unfinished.
+            deps.recorder.fail(run_id, attempt)
+            deps.run_query_vectors.pop(run_id, None)
+            if _button_turn(state):
+                goto = "select_diners" if friend_deleted_since(state) else "load_context"
+            else:
+                goto = "parse_request"
+            return Command(update={"intent": "plan", "model_calls": []}, goto=goto)
+        if kind == "question":
+            revision["question"] = message or unchanged_note(state.get("locale", "en"))
+        elif kind == "nothing_fits":
+            update["proposal"] = RevisionProposal(target="general", note=message).model_dump()
+            update["validation"] = {**update["validation"], "passed": True}
+            if message:
+                revision["reason"] = message
+        elif kind == "plan" and not answer.recipe_ids:
+            # No dish left: today's empty-plan question.
+            revision["empty"] = True
+        elif kind == "plan":
+            ids = list(answer.recipe_ids)
+            if check["passed"] and set(ids) == set(current_ids):
+                # Kept as it is: the unchanged card with the reader's note.
+                update["proposal"] = RevisionProposal(target="unclear", note=message).model_dump()
+            else:
+                update["proposal"] = RevisionProposal(
+                    target="general",
+                    remove=[
+                        RemovedDish(id=i, mode="replace") for i in current_ids if i not in ids
+                    ],
+                    add=[i for i in dict.fromkeys(ids) if i not in current_ids],
+                    note=message,
+                ).model_dump()
+                update["validation"] = {
+                    "passed": check["passed"],
+                    "violations": check["failing"],
+                    "allowed": check["allowed"],
+                    "warnings": check["result"]["warnings"],
+                }
+                revision.update(recipe_ids=ids, spec=check["spec"])
+        else:
+            # No answer after the retry: a failed revision.
+            revision["problems"] = [
+                {"code": "R6", "recipe_id": None, "text": "The one-reader gave no answer."}
+            ]
+        update["revision"] = revision
+        return Command(update=update, goto="present_revision")
+
     def with_labels(node: Callable, restore: bool = True) -> Callable:
         """Run `node` with the conversation's label table as the current label context, so
         the client hooks replace saved nicknames in every model call the node makes. The
@@ -1981,7 +2246,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         "route_intent", choose, ["parse_request", "other", "ask_revise_or_plan", *gates]
     )
     builder.add_edge("ask_revise_or_plan", "parse_request")
-    builder.add_edge("start_revision", "reviser")
+    if deps.one_reader_task:
+        builder.add_node(
+            "one_reader",
+            with_labels(one_reader_turn),
+            destinations=("present_revision", "parse_request", "select_diners", "load_context"),
+        )
+        builder.add_conditional_edges(
+            "start_revision",
+            lambda s: "one_reader" if s.get("intent") == "one_reader" else "reviser",
+            ["reviser", "one_reader"],
+        )
+    else:
+        builder.add_edge("start_revision", "reviser")
     builder.add_edge("reviser", "check_revised")
     builder.add_edge("present_revision", END)
     builder.add_conditional_edges("parse_request", after_parse, gates)
