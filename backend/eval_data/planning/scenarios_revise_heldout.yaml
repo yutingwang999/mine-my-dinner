@@ -128,7 +128,7 @@ scenarios:
     expect_titles_none: [番茄炒蛋]
     expect_titles_include: [青椒肉丝, 清炒菠菜]
     expect_counts: {dishes: 5}
-    deferred_to: 3b-2
+    deferred_to: 3b-2 plan two (diner changes)
     expect_locale_reply: zh
     expect: After the diner change is confirmed, the egg dish goes (小李 is allergic to egg) and the plan has the original count plus 2. Until 3b-2 a diner change plans from scratch.
 
@@ -161,6 +161,7 @@ scenarios:
     follow_up: 鱼香肉丝不要，换成西红柿炒鸡蛋
     expect_route: revise
     expect_unchanged: true
+    expect_plan: false  # added in plan 3b-2 Task 1 with the user's approval: a kept plan is a card that did not pass
     expect_locale_reply: zh
     expect: The asked-for dish is not in the library, so the revision fails and the plan stays as it was, with the reason.
 
