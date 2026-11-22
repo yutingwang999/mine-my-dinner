@@ -150,9 +150,9 @@ git commit -m "feat: follow_up_v1 and pick_v1 - principle prompts for the reader
 
 **Interfaces:**
 - Consumes: Tasks 2 and 5.
-- Produces: node `read_follow_up` (label hooks as the other model nodes) storing `state["reading"]` (the reading as a dict); routing: a thread with a current plan and a message that is not a button goes `read_follow_up` instead of `route_intent`; `kind` → `change`: the change path (Task 7); `new_meal`: `parse_request` then today's new-plan path; `people`: `parse_request` then today's diner-card path; `other`: the existing `other` node. The choice card is no longer produced; a resume of a pending choice card from an older thread still works (Review Focus 1).
+- Produces: node `read_follow_up` (label hooks as the other model nodes) storing `state["reading"]` (the reading as a dict); routing: a thread with a current plan and a message that is not a button goes `read_follow_up` instead of `route_intent`; `kind` → `change`: the change path (Task 7); `new_meal`: `parse_request` then today's new-plan path; `people`: `parse_request` then today's diner-card path; `other`: the existing `other` node. The choice card is no longer produced; a resume of a pending choice card from an older thread still works (Review Focus 1). "Has a plan" means a current plan with at least one dish (an early stop with no dishes keeps today's route path). The fixed messages keep today's paths and never reach the reader: "plan again" (`REPLAN_MESSAGE`) and the next-action button messages.
 
-- [ ] **Step 1: Write the failing tests** (scripted reader): each kind routes as above with one reader call and no route call; `other` leaves the plan, request and card untouched; an old checkpoint with a pending choice card resumes; the reader input contains the plan lines, the diner lines and the current `meal_avoid` (Review Focus 3).
+- [ ] **Step 1: Write the failing tests** (scripted reader): each kind routes as above with one reader call and no route call; "plan again" after a plan makes no reader call and reuses the request as today; a follow-up after an early stop with no dishes goes through the route as today; `other` leaves the plan, request and card untouched; an old checkpoint with a pending choice card resumes; the reader input contains the plan lines, the diner lines and the current `meal_avoid` (Review Focus 3).
 - [ ] **Step 2: Run** — expected FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the graph tests — expected PASS.
@@ -222,7 +222,7 @@ git commit -m "docs: the reader, the frame and the picker in what each model see
 - Test: `backend/tests/test_planning_eval.py`
 
 **Interfaces:**
-- Produces: `must_failures(facts) -> list[str]` run on every scenario (spec 6's list), counted as `must_violations` in the summary; the allowed-changes derivation from existing keys (spec 6); `expect_route` mapped from the reading's kind; per-scenario and summary counts of reader calls, picker calls, picker attempts and frame `ignored` entries; prompt lengths in `summary.json`.
+- Produces: `must_failures(facts) -> list[str]` run on every scenario (spec 6's list), counted as `must_violations` in the summary; `unnecessary_question(facts) -> bool` (spec 6: a question other than the empty-plan question when the scenario allows a change), counted as `unnecessary_questions` with its rate; the allowed-changes derivation from existing keys (spec 6); `expect_route` mapped from the reading's kind; per-scenario and summary counts of reader calls, picker calls, picker attempts and frame `ignored` entries; prompt lengths in `summary.json`.
 
 - [ ] **Step 1: Write the failing tests** (stubbed `_drive`): each must-check fails when it should and passes when it should; the kind mapping; the allowed-changes derivation with no keys checks only locks, counts and rules.
 - [ ] **Step 2: Run** `$PY -m pytest -q tests/test_planning_eval.py` — expected FAIL.

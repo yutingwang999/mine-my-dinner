@@ -167,7 +167,8 @@ Kept: buttons in code, `client_card`, the over-time-limit list, `carry_unstated`
 
 **Two layers of expectations.**
 
-- **Must never be wrong** (checked in code by the runner, every scenario, every run): no locked dish removed without its quote, rule or avoidance; no dish removed or added that the scenario does not allow; stated counts met; diner and one-meal rules met; no "not in the library" for a library dish; no "0 dishes"; an unmet wish is said; no internal words shown; no question when a reasonable change exists (except the empty-plan question).
+- **Must never be wrong** (checked in code by the runner, every scenario, every run): no locked dish removed without its quote, rule or avoidance; no dish removed or added that the scenario does not allow; stated counts met; diner and one-meal rules met; no "not in the library" for a library dish; no "0 dishes"; an unmet wish is said; no internal words shown.
+- **Unnecessary questions** (decided by the user, 2026-11-22: not a failure): a follow-up that ends with a question although a reasonable change exists (anything but the empty-plan question and a reference that matches no dish) still counts as expected when the scenario's outcome allows the plan to stay; it is counted apart as an unnecessary question, with a loose limit (thresholds below), so a general habit of asking shows up without forcing prompt patches.
 - **Several outcomes acceptable** (`expect_any_of`, or looser keys): where a sentence has more than one reasonable reading, the scenario lists every acceptable outcome. Scenarios that today accept only "ask" or only "choice card" are rewritten.
 - **Where "which dishes may change" comes from** (Claude's call after the builder check): the runner derives it from the existing keys (`expect_removed`, `expect_removed_any`, `expect_max_changed`, `expect_unchanged`, `expect_titles_include`) and the frame the run recorded; a scenario that sets none of them is checked only by the other must-never-be-wrong checks (locks, counts, rules). The development set gets the keys it needs while it is rewritten. In the regression sets, `expect_route` maps to the reading's kind (`change` → revise, `new_meal` → plan), and every `expect_choice_card` / "unsure" expectation is listed for the user to rewrite, with the other proposed changes.
 
@@ -187,6 +188,7 @@ Kept: buttons in code, `client_card`, the over-time-limit list, `carry_unstated`
 | New held-out set as expected | ≥ 80% |
 | 3b-1 and 3b-1b sets (regression) | ≥ 80% each, every miss explained |
 | Model calls per revise turn | average ≤ 2.5, no turn over 7 |
+| Unnecessary questions | ≤ 20% of the follow-up scenarios where a reasonable change exists |
 | Older new-plan sets | no regression |
 | Prompt size | the reader and picker prompts together shorter than `route_v6` + `revise_v4` |
 
