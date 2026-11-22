@@ -14,7 +14,7 @@ A model does two things only: it understands the user's words, and it chooses th
 | 2. Defaults | Code | `apply_defaults` in `agent/request.py` | The parsed request | The spec: the hard requirements every later step follows |
 | 3. Feasibility check | Code | `planning/feasibility.py` | The spec, the library, the fridge | Go ahead, or stop early with reasons |
 | 4. First message | Code | `agent/graph.py` | The spec and the candidate list | The text the planner reads (candidate list, then request summary) |
-| 5. Planner | Model (`planner_v5`) | `agent/planner.py` | That text, plus its tools | The chosen recipe ids |
+| 5. Planner | Model (`planner_v5`) | `agent/planner.py` | That text, plus its tools | The chosen recipe ids, and whether they meet the taste wish (`wish_met`); with no answer, code picks from the shortlist |
 | 6. Validation | Code | `_h4` and the other rules in `planning/validate.py` | The spec and the chosen recipes | Passed, or the rules it breaks |
 | 7. Retry message and plan card | Code | `agent/graph.py` | The validation result | Text for the planner's next attempt, and the reasons shown to the user |
 
@@ -92,7 +92,7 @@ An unconstrained side is never written as a number. The four places:
 3. **The unmet rule on the plan card**, in the user's language: "方案有 3 道菜，1 道荤菜，2 道素菜，要求是 3 道菜，至少 2 道荤菜，最多 1 道素菜".
 4. **The reason of an early stop** (`reason_text`): "this meal needs at least 2 meat dishes" when the needed count is the low end of a range that is not exact, otherwise the plain number ("this meal needs 6 vegetable dishes").
 
-The "plan has" side always reports what the plan contains.
+The "plan has" side always reports what the plan contains. Since plan 3b-1b an attempt with no dishes never reaches place 3: a planner that gives no answer is replaced by a code-picked plan from the shortlist, an empty attempt is never kept as the closest plan, and when every attempt was empty the card shows no reason and the note says no dishes could be put together (`docs/planner-feasibility-check.md`, Section 5). The count note of a hand-edited card (`_count_notes` in `agent/edits.py`) reads the request the plan was built from (`plan_request`), not a later turn's parse.
 
 **The card's "As you asked" line shows the user's own words, not the ranges.** "四个菜，至少一个荤菜，素菜最多两个" gives the planner "at least 2 meat dishes, at most 2 vegetable dishes" (the tightened ranges, which are stricter and clearer), while the card says "4 dishes (at least 1 meat dish, at most 2 vegetable dishes)" / "4 道菜（至少 1 道荤菜、最多 2 道素菜）". The two differ on purpose (decided with the user). When the dish total was assumed, the card lists the named side on its own ("As you asked: at most 1 vegetable dish") and the total under "Assumed".
 
