@@ -159,7 +159,7 @@ A revision turn builds its spec with `revision_spec` (`agent/revision.py`) inste
 
 ## 8. Next-action buttons (plan 3b-1b)
 
-A next-action button sends a fixed message (`ACTION_MESSAGES` in `agent/request.py`; the frontend's `chat.actionMessage` must match it). When the newest reply's card keeps the request it was built from (every card since plan 3b-1b), code takes that request and changes one field (`apply_action` in `agent/actions.py`):
+A next-action button sends a fixed message (`ACTION_MESSAGES` in `agent/request.py`; the frontend's `chat.actionMessage` must match it). The button belongs to the newest card: that of the newest reply with a card, as in the chat, where a later reply without one (an "other" reply, a question, the empty-plan question) leaves its buttons active. When that card keeps the request it was built from (every card since plan 3b-1b), code takes that request and changes one field (`apply_action` in `agent/actions.py`):
 
 | Button | Change |
 |---|---|

@@ -1365,8 +1365,18 @@ def _shown_plan(values: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _last_card(values: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest card of the thread, also after later replies without a card (the empty-plan
+    question, an "other" reply): its buttons are the ones the chat keeps actionable (plan
+    3b-1b). None when no reply has a card."""
+    try:
+        return values["reply_plans"][newest_reply_id(values)]
+    except EditError:
+        return None
+
+
+def _last_reply_card(values: dict[str, Any]) -> dict[str, Any] | None:
     """The card of the newest assistant reply, None when that reply has none (the empty-plan
-    question, an "other" reply). Its buttons are the ones the chat shows (plan 3b-1b)."""
+    question, an "other" reply)."""
     for message in reversed(values.get("messages") or []):
         if isinstance(message, AIMessage):
             return (values.get("reply_plans") or {}).get(message.id or "")
@@ -1580,7 +1590,7 @@ def run_scenario(
         "choice_card": bool(choices),
         "questions": len(questions) + int(revise_asked),
         "follow_up_card": follow_up_card,
-        "wish_unmet_said": wish_unmet_said(_last_card(state), reply, turn),
+        "wish_unmet_said": wish_unmet_said(_last_reply_card(state), reply, turn),
         "offered": offered,
         "button_blocked": button_blocked,
         "button": run_request.get("button"),

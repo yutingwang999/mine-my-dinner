@@ -26,9 +26,11 @@ def meal_constraints(values: dict) -> MealConstraints:
 
 
 # Card fields kept for the server only: the request the card was built from (its
-# `friend_rules` codes are diner labels such as "Diner 2", which are never shown) and whether a
-# revision kept the plan. Next-action buttons read both from the stored state (plan 3b-1b).
-SERVER_ONLY_CARD_FIELDS = ("request", "plan_kept")
+# `friend_rules` codes are diner labels such as "Diner 2", which are never shown), whether a
+# revision kept the plan and that turn's words (`wish_words`). Next-action buttons read them
+# from the stored state (plan 3b-1b). `meal_avoid` (this meal's one-meal avoidance, which a
+# later revision reads) is not shown by the client either.
+SERVER_ONLY_CARD_FIELDS = ("request", "plan_kept", "wish_words", "meal_avoid")
 
 
 def client_card(card: dict[str, Any] | None) -> dict[str, Any] | None:

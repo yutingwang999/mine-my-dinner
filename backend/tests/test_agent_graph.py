@@ -2813,6 +2813,126 @@ def test_button_on_failed_revision_revises_again(revise_env):
     assert "The user feels like: 海鲜" in opening.content
 
 
+FRIDGE_TWO_AND_SOUP = {"dishes": 2, "soups": 1, "mode": "fridge_only", "counts_stated_now": False}
+SHOPPING_PRESSED = "Then the user pressed: 允许购物 (the request above already includes this change)"
+
+
+def _failed_seafood_wish(env: ReviseEnv) -> tuple[int, int, int]:
+    """A fridge-only plan with a dish added by hand, then a wish nothing fits: the plan stays
+    and the card offers switch_to_shopping. Returns (cabbage, beans, cucumber)."""
+    for name in ("牛肉", "小白菜", "紫菜", "豆角", "辣椒"):
+        stock(env.session, name, level="plenty")
+    first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "fridge_only"})
+    cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
+    _hand_add(env, beans)
+    failed = say(
+        env, "想吃点海鲜", "revise",
+        parse={**FRIDGE_TWO_AND_SOUP, "query": "海鲜"},
+        replies=[revision("general", note="冰箱里没有海鲜。")],
+    )
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["plan_kept"] is True and "switch_to_shopping" in card["next_actions"]
+    return cabbage, beans, cucumber
+
+
+def _press_shopping_on_kept_plan(env: ReviseEnv, cabbage: int, beans: int, cucumber: int):
+    """Press 允许购物 and check the turn revised the kept plan: no route or parse, the
+    hand-added dish kept and still locked, the failed turn's wish as the earlier wish."""
+    since = len(env.model.sent)
+    revisions = len(reviser_calls(env))
+    out = say(
+        env, "允许购物", "plan",
+        replies=[revision("general", remove=[(cabbage, "")], add=[cucumber])],
+    )
+    assert "__interrupt__" not in out
+    assert route_and_parse_calls(env, since) == []
+    assert len(reviser_calls(env)) == revisions + 1
+    assert out["intent"] == "revise"
+    assert out["request"]["mode"] == "shopping" and out["request"]["query"] == "海鲜"
+    assert latest_record(env).request["button"] == "switch_to_shopping"
+    plan = out["current_plan"]
+    ids = [r["id"] for r in plan["recipes"]]
+    assert plan["passed"] and beans in ids and cucumber in ids and cabbage not in ids
+    assert beans in plan["locked"]
+    opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
+    assert opening.endswith(f"Earlier wish: 想吃点海鲜\n{SHOPPING_PRESSED}")
+    return out
+
+
+def test_button_on_a_kept_card_after_a_reply_without_a_card(revise_env):
+    """Final review I-1: the chat keeps the newest card's buttons after a reply without a card
+    (an "other" reply here). The button still revises the kept plan, not a fresh plan."""
+    env = revise_env
+    dishes = _failed_seafood_wish(env)
+    other_turn = say(env, "你好", "other")
+    reply = other_turn["messages"][-1]
+    assert reply.id not in (other_turn.get("reply_plans") or {})
+    _press_shopping_on_kept_plan(env, *dishes)
+
+
+def test_button_after_the_empty_plan_question_uses_the_failed_turns_wish(revise_env):
+    """Final review I-1: an empty-plan question (R9, no card) between the failed revision and
+    the button leaves its own words in the state's revision. The reviser's earlier wish is
+    still the failed turn's, kept on its card."""
+    from minemydinner.agent.revise_step import EMPTY_PLAN_QUESTION_ZH
+
+    env = revise_env
+    dishes = _failed_seafood_wish(env)
+    shown = [r["id"] for r in env.graph.get_state(env.config).values["current_plan"]["recipes"]]
+    message = "全都不要了"
+    empty = say(
+        env, message, "revise",
+        parse=FRIDGE_TWO_AND_SOUP,
+        replies=[
+            tool_call(
+                "RevisionProposal",
+                {
+                    "target": "scope",
+                    "remove": [{"id": i, "quote": "", "mode": "drop"} for i in shown],
+                    "add": [],
+                    "note": "好的。",
+                    "scope_quote": message,
+                },
+            )
+        ],
+    )
+    assert empty["messages"][-1].content == EMPTY_PLAN_QUESTION_ZH
+    assert empty["messages"][-1].id not in empty["reply_plans"]
+    assert empty["revision"]["message"] == message
+    _press_shopping_on_kept_plan(env, *dishes)
+
+
+@pytest.mark.parametrize("between", [False, True])
+def test_button_on_a_kept_card_saved_before_its_words_were_kept(revise_env, between):
+    """A failed revision's card saved before cards kept their turn's words: the earlier wish
+    comes from the state's revision when the card is the newest reply, else from the user's
+    messages before the card's reply."""
+    env = revise_env
+    dishes = _failed_seafood_wish(env)
+    values = env.graph.get_state(env.config).values
+    reply_plans = {
+        key: {k: v for k, v in card.items() if k != "wish_words"}
+        for key, card in values["reply_plans"].items()
+    }
+    env.graph.update_state(env.config, {"reply_plans": reply_plans}, as_node="present_plan")
+    if between:
+        say(env, "你好", "other")
+    _press_shopping_on_kept_plan(env, *dishes)
+
+
+def test_kept_card_keeps_its_turns_words_for_the_server_only(revise_env):
+    from minemydinner.agent.plan_card import SERVER_ONLY_CARD_FIELDS, client_card
+
+    env = revise_env
+    _failed_seafood_wish(env)
+    values = env.graph.get_state(env.config).values
+    card = values["reply_plans"][values["messages"][-1].id]
+    assert card["wish_words"] == "想吃点海鲜"
+    assert "wish_words" in SERVER_ONLY_CARD_FIELDS
+    assert "wish_words" not in client_card(card)
+    assert "meal_avoid" in card and "meal_avoid" not in client_card(card)
+
+
 def _hand_grown_failed_wish(env: ReviseEnv) -> None:
     """Asked 3 dishes and a soup; a 4th dish added and the soup removed by hand; then a wish
     that states no count and fits nothing (the plan stays, the card keeps that turn's request

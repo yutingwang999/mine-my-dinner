@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select
 
 from minemydinner.agent.graph import GraphDeps, build_graph
 from minemydinner.agent.labels import replace_nicknames, restore_labels
+from minemydinner.agent.plan_card import client_card
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import set_request_style
 from minemydinner.api.chat import ChatRuntime, get_chat_runtime
@@ -261,8 +262,9 @@ def test_sequential_edits_build_on_each_other(client, env):
     assert ids(plan) == [env.pork.id]
     assert [e["action"] for e in plan["edit"]["log"]] == ["add", "add", "remove", "remove"]
     versions = values_of(env, tid)["plan_versions"]
-    # One model version and one manual version, updated in place.
-    assert len(versions) == 2 and versions[-1] == plan
+    # One model version and one manual version, updated in place; the client gets it without
+    # the server-only fields.
+    assert len(versions) == 2 and client_card(versions[-1]) == plan
 
 
 def test_edit_keeps_thread_at_end_and_chat_continues(client, env):

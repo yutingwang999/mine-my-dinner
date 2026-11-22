@@ -316,15 +316,33 @@ def _is_action_message(state: ChatState) -> bool:
     )
 
 
-def _button_card(state: ChatState) -> dict | None:
-    """The card that offered the button of this turn: the card of the newest assistant reply,
-    when it keeps the request it was built from. None when that reply has no card or the card
-    was saved before cards kept their request (or was replaced by a hand edit)."""
-    for message in reversed(state["messages"][:-1]):
-        if isinstance(message, AIMessage):
-            card = (state.get("reply_plans") or {}).get(message.id or "")
-            return card if card is not None and card.get("request") is not None else None
+def _newest_card(state: ChatState) -> tuple[int, dict] | None:
+    """The newest reply that has a card, as (its index in `messages`, the card): the card the
+    chat keeps actionable, also after later replies without a card (an "other" reply, a
+    question, the empty-plan question). None when no reply has a card."""
+    plans = state.get("reply_plans") or {}
+    messages = state["messages"]
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, AIMessage) and (message.id or "") in plans:
+            return index, plans[message.id]
     return None
+
+
+def _button_card(state: ChatState) -> dict | None:
+    """The card that offered the button of this turn: the newest card (`_newest_card`), when
+    it keeps the request it was built from. None when no reply has a card or the card was
+    saved before cards kept their request (or was replaced by a hand edit)."""
+    found = _newest_card(state)
+    if found is None:
+        return None
+    card = found[1]
+    return card if card.get("request") is not None else None
+
+
+# The card field that keeps a kept revision card's turn words (`revision_words`), so a button
+# pressed on that card later, after turns without a card, still sees that turn's wish.
+WISH_WORDS = "wish_words"
 
 
 def revision_words(revision: dict) -> str:
@@ -335,19 +353,26 @@ def revision_words(revision: dict) -> str:
 
 
 def _offering_words(state: ChatState) -> list[str]:
-    """On a button revision, the user's words of the turn whose card offered the button. That
-    card kept the plan, so the state's `revision` is still that turn's: its words
-    (`revision_words`), which already hold the words before an earlier button in a chain. A
-    state without it falls
-    back to the user's messages just before the offering reply."""
-    words = revision_words(state.get("revision") or {})
-    if words:
-        return [words]
+    """On a button revision, the user's words of the turn whose card offered the button (the
+    newest card). That card keeps them (`WISH_WORDS`, `revision_words` of its turn, which
+    already hold the words before an earlier button in a chain). A card saved before it kept
+    them: when it is the newest reply, the state's `revision` is still its turn's; otherwise
+    (or with no revision) the user's messages just before the card's reply."""
+    found = _newest_card(state)
+    if found is None:
+        return []
+    reply_index, card = found
+    if card.get(WISH_WORDS):
+        return [card[WISH_WORDS]]
     messages = state["messages"][:-1]
-    last_reply = max(
+    newest_reply = max(
         (i for i, m in enumerate(messages) if isinstance(m, AIMessage)), default=None
     )
-    return [] if last_reply is None else _current_request(messages[:last_reply])
+    if newest_reply == reply_index:
+        words = revision_words(state.get("revision") or {})
+        if words:
+            return [words]
+    return _current_request(messages[:reply_index])
 
 
 def _button_turn(state: ChatState) -> bool:
@@ -355,25 +380,32 @@ def _button_turn(state: ChatState) -> bool:
     return bool(state.get("button")) and _is_action_message(state)
 
 
-def _reply_card(card: dict, request: dict | None, plan_kept: bool = False) -> dict:
+def _reply_card(
+    card: dict, request: dict | None, plan_kept: bool = False, words: str = ""
+) -> dict:
     """A reply card as `reply_plans` keeps it: with the request of the turn it was built from,
     so a button on it changes that request (spec 5.5), and `plan_kept` on a revision card that
-    left the plan as it was (failed, unclear, nothing fits), so the button revises again."""
+    left the plan as it was (failed, unclear, nothing fits), so the button revises again, with
+    that turn's words (`WISH_WORDS`) as the earlier wish. All three are server-only fields."""
     shown = {**card, "request": request}
     if plan_kept:
         shown["plan_kept"] = True
+        if words:
+            shown[WISH_WORDS] = words
     return shown
 
 
 # The failures an empty change ("nothing fits") may have and still not be retried: nothing was
-# added (R8), or the counts are off (H4, and R7, its stand-in without a stated count).
-NOTHING_FITS_PROBLEMS = {"R7", "R8"}
+# added (R8), or the counts are off (H4). R7 (the type pairing) never comes from an empty change.
+NOTHING_FITS_PROBLEMS = {"R8"}
 NOTHING_FITS_VIOLATIONS = {"H4"}
 
 
 def _too_many(finding) -> bool:
-    """An H4 finding where some exact count is over what was asked ("4个菜就够了" on five
-    dishes): dropping a dish always fixes that, so an empty answer is no "nothing fits"."""
+    """An H4 finding where some exact (`required`) count is over what was asked ("4个菜就够了"
+    on five dishes): dropping a dish always fixes that, so an empty answer is no "nothing
+    fits". Side ranges are not read: a side over its high bound counts as needing another
+    dish, so an empty answer there is not retried."""
     detail = finding.detail
     return any(
         detail["present"].get(category, 0) > need
@@ -1698,7 +1730,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             update["first_passed"] = passed
         if not passed and nothing_fits(proposal, problems, failing):
             # The model's own "nothing fits" (an empty change) that fails only because nothing
-            # was added (R8) or on the counts (H4, R7): a retry would only ask it again for
+            # was added (R8) or on the counts (H4): a retry would only ask it again for
             # what it said is not there (development run 1). The plan stays, with what stopped
             # it and the count actions. An empty change with an open conflict (H2) still
             # retries.
@@ -1729,6 +1761,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         update: dict[str, Any] = {}
         # Only a card in `reply_plans` follows the reply; the empty-plan question has none.
         shows_card = True
+        # The plan stays unless a passed change makes a new version.
+        plan_kept = True
         # Asked-for dishes the time limit left out (design 5.2, 2026-11-22): a kept plan says
         # how long they take and offers to drop the limit, never "not in the library".
         limit = state["spec"].get("time_limit_min")
@@ -1776,12 +1810,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     avoid_ids=revision.get("avoid_ids") or [],
                     meal_avoid=state["constraints"].get("meal_avoid") or [],
                 )
-                update.update(
-                    current_plan=card,
-                    plan_versions=[*versions, card],
-                    plan_request=state["request"],
-                    spec=checked,
-                )
+                # The card becomes the current plan and a new version below, once it carries
+                # its request.
+                plan_kept = False
+                update.update(plan_request=state["request"], spec=checked)
             elif passed:
                 # The checks passed with no change: the model found nothing that fits the
                 # wish. The plan stays; the reply says so with next actions (spec 5.4).
@@ -1837,7 +1869,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 elif revision.get("nothing_fits") and proposal.note.strip():
                     # The model's own word on why nothing fits (`nothing_fits`).
                     note = f"{note}\n\n{proposal.note.strip()}"
-        if "current_plan" not in update:
+        if plan_kept:
             # The plan stays, but `request` keeps this turn's parse (decided for plan 3b-1):
             # "plan again" then plans the latest request from scratch (spec 5.1). The meal's
             # one-meal avoidance goes back to the plan's own, like the spec.
@@ -1852,10 +1884,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 search_notes=card_search_notes(plan),
             )
         # The card keeps this turn's request, for a button on it (spec 5.5); a passed
-        # revision's card is also the new current plan.
-        kept = "current_plan" not in update
-        card = _reply_card(card, state["request"], plan_kept=kept)
-        if not kept:
+        # revision's card is also the new current plan. A kept card also keeps this turn's
+        # words, the earlier wish of a button pressed on it, even after replies without a card.
+        card = _reply_card(
+            card, state["request"], plan_kept=plan_kept, words=revision_words(revision)
+        )
+        if not plan_kept:
             update.update(current_plan=card, plan_versions=[*versions, card])
         deps.run_query_vectors.pop(state["run_id"], None)
         deps.recorder.finish(
@@ -1863,7 +1897,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             retries=state["retries"],
             first_passed=bool(state.get("first_passed")),
             # Only a revision that became the current plan passed.
-            final_passed=not kept,
+            final_passed=not plan_kept,
             final_plan=map_strings(card, deps.client.prepare_text),
         )
         reply_id = str(uuid.uuid4())

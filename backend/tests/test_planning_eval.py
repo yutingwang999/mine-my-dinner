@@ -2837,3 +2837,26 @@ def test_a_button_after_a_failed_revision_revises_the_kept_plan(tmp_path, eval_d
     assert outcome.turn_model_calls == 1
     assert outcome.earlier_revise_calls == 2 + 1
     _assert_clean(eval_db)
+
+
+def test_runner_presses_the_newest_card_after_a_reply_without_one():
+    """Final review I-1: the runner's button card follows the chat (the newest card stays
+    actionable after a reply without a card); wish_unmet_said still reads the newest reply's
+    own card, none for the empty-plan question."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from minemydinner.evaluation.planning import _last_card, _last_reply_card
+
+    kept = {"plan_kept": True, "next_actions": ["switch_to_shopping"]}
+    values = {
+        "messages": [
+            HumanMessage("想吃点海鲜"),
+            AIMessage("没能改好。", id="a"),
+            HumanMessage("全都不要了"),
+            AIMessage("这样就一道菜都不剩了。要重新规划一顿吗？", id="b"),
+        ],
+        "reply_plans": {"a": kept},
+    }
+    assert _last_card(values) is kept
+    assert _last_reply_card(values) is None
+    assert _last_card({"messages": [AIMessage("hi", id="c")], "reply_plans": {}}) is None
