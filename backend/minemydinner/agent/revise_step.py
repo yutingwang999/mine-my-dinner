@@ -1,38 +1,18 @@
-"""Helpers of the revise step in the planning graph (plan 3b-1 spec 5.2-5.5): the facts a quote
-is matched against, the current plan as the model sees it, which failed checks a locked dish
-may keep as warnings, and the reply and card when a revision changes nothing. The graph's
-nodes (`start_revision`, `reviser`, `check_revised`, `present_revision`) call these."""
+"""Helpers of the change path in the planning graph (plan 3b-1 spec 5.2-5.5, plan 3b-2 spec
+5.4-5.6): the facts a quote is matched against, the current plan as the reader and the picker
+see it, the plan's carried overrides and locks, and the reply's sentences and card. The graph's
+nodes (`read_follow_up`, `build_change`, `pick_dishes`, `present_change`) and `present_plan`
+call these; the plan 3b-1 revise step that first used them is gone (plan 3b-2)."""
 
 from collections.abc import Collection
 
-from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from minemydinner.agent.card_text import CATEGORY_WORDS as COUNT_WORDS
-from minemydinner.agent.card_text import (
-    NEXT_ACTION_ORDER,
-    detail_ranges,
-    is_zh,
-    next_actions,
-    no_plan_reason,
-    side_phrases,
-    unmet_for_user,
-)
-from minemydinner.agent.edits import ALLOWED_CODES, latest_model_index, locked_ids
-from minemydinner.agent.revision import (
-    DishFacts,
-    RevisionProposal,
-    attempt_counts,
-    changed_text,
-)
+from minemydinner.agent.card_text import NEXT_ACTION_ORDER, is_zh, unmet_for_user
+from minemydinner.agent.edits import latest_model_index, locked_ids
+from minemydinner.agent.revision import DishFacts
 from minemydinner.models import Recipe, RecipeIngredient
-from minemydinner.planning.composition import (
-    CATEGORY_OF_DISH_TYPE,
-    SPLIT_CATEGORIES,
-    count_categories,
-)
-from minemydinner.planning.context import MEAL_KEY
 from minemydinner.planning.validate import Finding, H2Override, PlanSpec
 
 # The category words a quote may use to point at a dish of each type ("那道汤").
@@ -47,10 +27,10 @@ CATEGORY_WORDS = {
 # Words that point at the dishes that do not suit ("不适合的菜拿掉", spec 5.4): added to the
 # words of every dish with an open conflict or a kept override.
 CONFLICT_WORDS = ["不适合", "不合适", "不能吃", "doesn't suit", "not suitable"]
-# The mark of a dish that breaks this meal's one-meal avoidance in the reviser's current plan
-# (plan 3b-1b spec 5.4); revise_v3 and revise_v4 name it.
+# The mark of a dish that breaks this meal's one-meal avoidance in the current plan the models
+# see (plan 3b-1b spec 5.4); revise_v3 and revise_v4 named it.
 BREAKS_MEAL_WISH = "BREAKS THIS MEAL'S WISH"
-# The unmet code of a revision that found nothing fitting the wish.
+# The unmet code of a plan or a change that found nothing fitting the wish.
 WISH_UNMET = "wish_unmet"
 # Main ingredients shown per dish when a recipe marks none as main.
 MAX_SHOWN_INGREDIENTS = 3
@@ -197,30 +177,6 @@ def current_plan_text(
     return "Current plan:\n" + ("\n".join(lines) or "- no dishes")
 
 
-def revision_opening(
-    base: str,
-    plan: dict,
-    mains: dict[int, list[str]],
-    message: str,
-    avoid_ids: Collection[int] = (),
-    earlier: str | None = None,
-) -> str:
-    """The revise step's first message: the shortlist and the request summary (`base`, as the
-    planner's opening), then the current plan (`avoid_ids` marked), then the user's
-    message. On a button revision `earlier` is the wish of the turn whose card offered the
-    button: it and the button's text are shown on two labelled lines, so a count button does
-    not read as a second wish that contradicts the first (development run 2 of plan 3b-1b)."""
-    plan_text = current_plan_text(plan, mains, avoid_ids)
-    if earlier:
-        said = (
-            f"The user's message:\nEarlier wish: {earlier}\n"
-            f"Then the user pressed: {message} (the request above already includes this change)"
-        )
-    else:
-        said = f"The user's message: {message}"
-    return f"{base}\n\n{plan_text}\n\n{said}"
-
-
 def carried_overrides(plan: dict, recipe_ids: list[int]) -> list[H2Override]:
     """The plan's overrides of dishes still in the revised plan; a removed dish's are dropped."""
     kept = set(recipe_ids)
@@ -238,35 +194,6 @@ def kept_locked(plan: dict, recipe_ids: list[int]) -> list[int]:
     return [i for i in plan.get("locked") or [] if i in kept]
 
 
-def split_violations(
-    violations: list[Finding], locked: set[int], must_unmet_before: Collection[str] = ()
-) -> tuple[list[Finding], list[Finding]]:
-    """(failing, allowed): H1, H3, H6 and H7 caused only by locked dishes are allowed, as on a
-    manual version (3a ALLOWED_CODES), since the revision may not remove them. A "must use"
-    H7 points at no dish: it is allowed only when the current plan already missed that name
-    (`must_unmet_before`, for example after a hand edit removed the dish that used it), so a
-    revision is not failed for what it did not cause. Every other finding fails, H2
-    included."""
-    failing, allowed = [], []
-    for finding in violations:
-        if finding.code in ("H1", "H3", "H6"):
-            caused = {finding.recipe_id}
-        elif finding.code == "H7" and finding.detail.get("rule") == "all":
-            caused = set(finding.detail.get("recipes_without") or [])
-        else:
-            caused = set()
-        must_before = (
-            finding.code == "H7"
-            and finding.detail.get("rule") == "must"
-            and finding.detail.get("name") in must_unmet_before
-        )
-        if must_before or (finding.code in ALLOWED_CODES and caused and caused <= locked):
-            allowed.append(finding)
-        else:
-            failing.append(finding)
-    return failing, allowed
-
-
 def must_unmet_names(violations: list[Finding]) -> set[str]:
     """The "must use" names a set of findings misses (H7 with rule must)."""
     return {
@@ -274,162 +201,6 @@ def must_unmet_names(violations: list[Finding]) -> set[str]:
         for f in violations
         if f.code == "H7" and f.detail.get("rule") == "must"
     }
-
-
-def _count_words(n: int, category: str) -> str:
-    one, many, _ = COUNT_WORDS[category]
-    return f"{n} {one if n == 1 else many}"
-
-
-def count_fix_hint(detail: dict, replaceable: dict[str, list[tuple[int, str]]]) -> str:
-    """For the reviser's retry after an H4 finding or a type pairing problem (R7): which
-    categories have too many or too few dishes, that a replacement takes the dish type of the
-    dish it replaces, and (plan 3b-1b spec 5.2) the concrete dishes of each category that is
-    over that may be replaced instead (`replaceable`: per category, the unlocked dishes of
-    the current plan as (id, title)). Only the revise step adds it; a new plan's retry keeps
-    the H4 line alone."""
-    required, present = detail["required"], detail["present"]
-    ranges = detail_ranges(detail)
-    over: list[str] = []
-    under: list[str] = []
-    over_categories: list[str] = []
-    side_off = False
-    for category in ("meat_dishes", "vegetable_dishes"):
-        low, high = ranges[category]
-        have = present.get(category, 0)
-        if have > high:
-            over.append(_count_words(have - high, category))
-            over_categories.append(category)
-            side_off = True
-        elif have < low:
-            under.append(_count_words(low - have, category))
-            side_off = True
-    gap = present.get("dishes", 0) - required.get("dishes", 0)
-    if gap and not side_off:
-        words = f"{_count_words(abs(gap), 'dishes')} (meat or vegetable)"
-        (over if gap > 0 else under).append(words)
-    for category in ("soups", "staples", "desserts", "snacks"):
-        diff = present.get(category, 0) - required.get(category, 0)
-        if diff > 0:
-            over.append(_count_words(diff, category))
-            over_categories.append(category)
-        elif diff < 0:
-            under.append(_count_words(-diff, category))
-    total = required.get("dishes", 0)
-    sides = side_phrases(ranges, total, False)
-    keep = _count_words(total, "dishes")
-    if sides:
-        keep += ": " + " and ".join(sides.values())
-    lines = [f"The revised plan must have {keep}."]
-    if over:
-        lines.append(f"Too many: {', '.join(over)}.")
-    if under:
-        lines.append(f"Too few: {', '.join(under)}.")
-    lines.append(
-        "Replace each removed dish with one of the same dish type (a meat dish for a meat "
-        "dish, a vegetable dish for a vegetable dish, a soup for a soup) unless the message "
-        "changes a count, and choose the dish to remove from the category the wish fits."
-    )
-    for category in over_categories:
-        dishes = replaceable.get(category) or []
-        if dishes:
-            named = ", ".join(f"{title} (id {i})" for i, title in dishes)
-            lines.append(f"Replace one of these {COUNT_WORDS[category][1]}: {named}.")
-    return " ".join(lines)
-
-
-def replaceable_dishes(plan: dict) -> dict[str, list[tuple[int, str]]]:
-    """Per count category, the dishes of the plan a retry may suggest replacing: every dish
-    that is not locked (a dish with an open conflict is never locked)."""
-    locked = locked_ids(plan) - open_conflict_ids(plan)
-    found: dict[str, list[tuple[int, str]]] = {}
-    for recipe in plan["recipes"]:
-        category = CATEGORY_OF_DISH_TYPE.get(recipe["dish_type"])
-        if category is not None and recipe["id"] not in locked:
-            found.setdefault(category, []).append((recipe["id"], recipe["title"]))
-    return found
-
-
-def pairing_detail(plan: dict, proposal: RevisionProposal, dish_types: dict[int, str]) -> dict:
-    """For the retry after a type pairing problem (R7), an H4-shaped detail with exact sides:
-    the counts the change list would give if every replaced dish (and, for a general wish,
-    every removed one) took its own dish type, against the counts it gives. A category that
-    is over names the dishes that may be replaced instead ("replace one of these meat
-    dishes")."""
-    own = {r["id"]: r["dish_type"] for r in plan["recipes"]}
-    removed = {r.id: r for r in proposal.remove if r.id in own}
-    expected = [own[i] for i in own if i not in removed]
-    expected += [
-        own[i]
-        for i, item in removed.items()
-        if item.mode == "replace" or proposal.target == "general"
-    ]
-    if proposal.target == "add":
-        expected += [dish_types.get(i, "") for i in proposal.add if i not in own]
-    required = count_categories(expected)
-    return {
-        "required": required,
-        "present": attempt_counts(plan, proposal, dish_types),
-        "ranges": {c: [required[c], required[c]] for c in SPLIT_CATEGORIES},
-    }
-
-
-def attempt_spec(
-    spec: PlanSpec,
-    plan: dict,
-    proposal: RevisionProposal | None,
-    dish_types: dict[int, str],
-    counts_stated: bool,
-) -> PlanSpec:
-    """The spec one revision attempt is checked against (plan 3b-1b spec 5.1). When the
-    message states a count (`counts_stated`) the revision's spec stands, as in 3b-1.
-    Otherwise the counts are the change list's own (`attempt_counts`), as exact counts: a
-    drop shrinks the plan and an add grows it, and the type pairing (R7) and add-only (R8)
-    checks guard the size instead of H4. Counts outside the allowed total keep `spec`, so
-    H4 reports them."""
-    if proposal is None or counts_stated:
-        return spec
-    counts = attempt_counts(plan, proposal, dish_types)
-    updates = {**counts, "meat_bound": "exact", "vegetable_bound": "exact"}
-    try:
-        return PlanSpec.model_validate({**spec.model_dump(), **updates})
-    except ValidationError:
-        return spec
-
-
-def problem_for_user(problem: dict, titles: dict[int, str], locale: str) -> str:
-    """A revision problem (R1-R6) in the user's words."""
-    zh = is_zh(locale)
-    title = titles.get(problem.get("recipe_id"), "")
-    code = problem["code"]
-    if code in ("R1", "R2"):
-        if title:
-            return f"没能确定你的话指的是{title}" if zh else f"I could not tell that you meant {title}"
-        return "没能确定你的话指的是哪些菜" if zh else "I could not tell which dishes you meant"
-    if code == "R3":
-        if zh:
-            return f"{title}是你手动加的或确认保留的，这次的要求没有点到它，所以不能换掉"
-        return f"{title} was added or kept by you and your message does not name it, so it stays"
-    if code == "R4":
-        if zh:
-            return "这样的要求最多只能换掉一半的菜"
-        return "A wish like this may change at most half of the dishes"
-    if code == "R5":
-        return f"你说过要保留{title}" if zh else f"You asked to keep {title}"
-    if code == "R7":
-        if zh:
-            return "换上的菜要和换掉的菜是同一类（荤菜换荤菜、素菜换素菜、汤换汤）"
-        return (
-            "A replacement has to be the same kind of dish as the one it replaces "
-            "(meat for meat, vegetable for vegetable, soup for soup)"
-        )
-    if code == "R8":
-        return "这次只是加菜，但没能加上合适的菜" if zh else "No fitting dish could be added"
-    if code == WISH_UNMET:
-        if zh:
-            return "你的菜谱库里没有找到符合这次要求的菜"
-        return "Nothing in your library fits this wish"
-    return "没能得到有效的修改" if zh else "No valid change could be made"
 
 
 def wish_unmet_actions(spec: dict) -> list[str]:
@@ -441,21 +212,13 @@ def wish_unmet_actions(spec: dict) -> list[str]:
     return [a for a in NEXT_ACTION_ORDER if a in chosen]
 
 
-def revision_actions(
-    spec: dict, problem_codes: Collection[str], violation_codes: Collection[str]
-) -> list[str]:
-    """The next actions of a failed revision: `next_actions` over its failing checks, where a
-    type pairing (R7) or add-only (R8) problem counts as a count problem (H4), since an
-    attempt checked against its own counts never fails H4 itself. In fridge-only mode a
-    count problem also offers to allow shopping: a revision fails on the counts there when
-    nothing more can be made from what is at home ("再加一道" with nothing makeable)."""
-    codes = list(violation_codes)
-    if {"R7", "R8"} & set(problem_codes):
-        codes.append("H4")
-    chosen = set(next_actions(spec, [], codes))
-    if spec["mode"] == "fridge_only" and "H4" in codes:
-        chosen.add("switch_to_shopping")
-    return [a for a in NEXT_ACTION_ORDER if a in chosen]
+def wish_unmet_entries(locale: str) -> list[dict]:
+    """The card's unmet entry when nothing in the library fits the wish."""
+    if is_zh(locale):
+        text = "你的菜谱库里没有找到符合这次要求的菜"
+    else:
+        text = "Nothing in your library fits this wish"
+    return [{"code": WISH_UNMET, "recipe_id": None, "text": text}]
 
 
 def over_limit_entries(dishes: list[dict], limit: int, locale: str) -> list[dict]:
@@ -502,54 +265,8 @@ def over_limit_note(dishes: list[dict], limit: int, locale: str) -> str:
     return " ".join([*parts, tail])
 
 
-def with_over_limit(
-    unmet: list[dict], actions: list[str], dishes: list[dict], limit: int, locale: str
-) -> tuple[list[dict], list[str]]:
-    """A kept plan's unmet entries and next actions when asked-for dishes were left out only by
-    the time limit: their H6 entries replace the "nothing in your library fits" entry, the
-    card offers drop_time_limit, and import is no longer offered (the dish is there)."""
-    entries = [u for u in unmet if u["code"] != WISH_UNMET]
-    entries += [e for e in over_limit_entries(dishes, limit, locale) if e not in entries]
-    chosen = (set(actions) - {"import_recipes"}) | {"drop_time_limit"}
-    return entries, [a for a in NEXT_ACTION_ORDER if a in chosen]
-
-
 def empty_plan_question(locale: str) -> str:
     return EMPTY_PLAN_QUESTION_ZH if is_zh(locale) else EMPTY_PLAN_QUESTION_EN
-
-
-def meal_only_h2(findings: list[dict]) -> bool:
-    """True when there is an H2 finding and every one is this meal's one-meal avoidance."""
-    h2 = [f for f in findings if f["code"] == "H2"]
-    return bool(h2) and all((f.get("detail") or {}).get("diner_key") == MEAL_KEY for f in h2)
-
-
-def unmet_entries(
-    problems: list[dict],
-    violations: list[dict],
-    titles: dict[int, str],
-    locale: str,
-    meal_avoid: Collection[str] = (),
-) -> list[dict]:
-    """What stopped the last attempt, in the card's unmet shape: the revision problems, then
-    the failing checks. H2 and H5 are worded without naming the dish, as on a plan that is
-    not shown; an H2 that is only this meal's avoidance (`meal_avoid`, its names) says so."""
-    entries = [
-        {"code": p["code"], "recipe_id": p.get("recipe_id"), "text": problem_for_user(p, titles, locale)}
-        for p in problems
-    ]
-    meal = list(meal_avoid) if meal_only_h2(violations) else []
-    for finding in violations:
-        if finding["code"] in ("H2", "H5"):
-            text = no_plan_reason(finding["code"], locale, meal)
-        else:
-            text = unmet_for_user(finding, titles, locale)
-        entries.append({"code": finding["code"], "recipe_id": finding["recipe_id"], "text": text})
-    unique: list[dict] = []
-    for entry in entries:
-        if entry not in unique:
-            unique.append(entry)
-    return unique
 
 
 def failed_note(locale: str, has_actions: bool) -> str:
@@ -573,98 +290,12 @@ def revision_defaults(defaults_used: list[str], old_spec: dict, new_spec: PlanSp
     ]
 
 
-def untouched_locked(
-    plan: dict, proposal: RevisionProposal, after: dict[int, str]
-) -> tuple[list[str], list[str]]:
-    """The locked dishes a general wish left (spec 5.2), as (added by hand, kept by the user's
-    confirmation) titles. Only when the wish removed something or changed nothing: an add-only
-    turn ("再加一道吧") touched nothing it could have. A wish that names or scopes dishes left
-    the others by the user's own words, so none are listed."""
-    if proposal.target != "general" or (proposal.add and not proposal.remove):
-        return [], []
-    conflicted = open_conflict_ids(plan)
-    hand = [i for i in kept_locked(plan, list(after)) if i not in conflicted]
-    kept = [
-        i
-        for i in after
-        if i in locked_ids(plan) and i not in hand and i not in conflicted
-    ]
-    return [after[i] for i in hand], [after[i] for i in kept]
-
-
 def meal_avoid_reason(names: list[str], locale: str) -> str:
     """Why a locked dish changed for this meal's one-meal avoidance, for `locked_changed_text`
     ("这顿不吃肉")."""
     if is_zh(locale):
         return f"这顿不吃{'、'.join(names)}"
     return f"this meal leaves out {', '.join(names)}"
-
-
-def reply_text(
-    plan: dict,
-    proposal: RevisionProposal,
-    card: dict,
-    locale: str,
-    avoid_ids: Collection[int] = (),
-    meal_avoid: Collection[str] = (),
-) -> str:
-    """What changed, written by code from the change list (spec 5.4), then the model's note.
-    For a general wish, the locked dishes it left are named too. A locked dish changed because
-    it breaks this meal's avoidance (`avoid_ids`, the names in `meal_avoid`) is named with
-    that reason."""
-    before = {r["id"]: r["title"] for r in plan["recipes"]}
-    after = {r["id"]: r["title"] for r in card["recipes"]}
-    removed_ids = {r.id for r in proposal.remove}
-    # A locked dish the message changed (named, in a scope, or with the conflict "the dishes
-    # that do not suit" points at) gets its own sentence (plan 3b-1b spec 5.4).
-    locked = locked_ids(plan) - open_conflict_ids(plan)
-    pairs = replacement_pairs(plan, proposal, card)
-    changed_locked = [i for i in before if i in removed_ids and i in locked]
-    taken = {pairs.get(i) for i in changed_locked}
-    removed = [before[i] for i in before if i in removed_ids and i not in locked]
-    added = [
-        after[i] for i in proposal.add if i in after and i not in before and i not in taken
-    ]
-    hand, kept = untouched_locked(plan, proposal, after)
-    hand_added = set(plan.get("locked") or [])
-    changes = [
-        (before[i], after.get(pairs.get(i)), i in hand_added) for i in changed_locked
-    ]
-    avoided = set(avoid_ids)
-    reason = meal_avoid_reason(list(meal_avoid), locale) if meal_avoid else ""
-    by_wish = [c for i, c in zip(changed_locked, changes, strict=True) if i in avoided]
-    by_words = [c for i, c in zip(changed_locked, changes, strict=True) if i not in avoided]
-    parts = [
-        changed_text(removed, added, hand, locale, kept),
-        locked_changed_text(by_wish, locale, reason=reason),
-        locked_changed_text(by_words, locale),
-    ]
-    text = ("" if is_zh(locale) else " ").join(p for p in parts if p)
-    note = proposal.note.strip()
-    return f"{text}\n\n{note}" if note else text
-
-
-def replacement_pairs(plan: dict, proposal: RevisionProposal, card: dict) -> dict[int, int]:
-    """Which added dish took each replaced dish's place, for the reply: the named replacement
-    (`replace_with`), else the first added dish of the same type, else the first added dish
-    left. A dropped dish has no pair."""
-    own = {r["id"]: r["dish_type"] for r in plan["recipes"]}
-    new = {r["id"]: r["dish_type"] for r in card["recipes"] if r["id"] not in own}
-    left = [i for i in proposal.add if i in new]
-    pairs: dict[int, int] = {}
-    replaced = [r for r in proposal.remove if r.id in own and r.mode == "replace"]
-    for item in replaced:
-        if item.replace_with in left:
-            pairs[item.id] = item.replace_with
-            left.remove(item.replace_with)
-    for item in [r for r in replaced if r.id not in pairs]:
-        match = next((i for i in left if new[i] == own[item.id]), None)
-        if match is None and left:
-            match = left[0]
-        if match is not None:
-            pairs[item.id] = match
-            left.remove(match)
-    return pairs
 
 
 def locked_changed_text(
@@ -735,7 +366,7 @@ def change_sentences(
     pairs: list[tuple[str, str]], dropped: list[str], added: list[str], locale: str
 ) -> str:
     """What a change did to the dishes not locked: each replacement as (old, new) title, then
-    the dishes dropped, then the dishes added, as `changed_text` words them."""
+    the dishes dropped, then the dishes added ("把…换成了… / 去掉了… / 加了…")."""
     zh = is_zh(locale)
     join = "、" if zh else ", "
     parts = []

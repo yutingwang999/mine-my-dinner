@@ -9,7 +9,7 @@ from typing import Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-from minemydinner.agent.revision import _COUNT_GROUP, _unset
+from minemydinner.agent.revision import COUNT_GROUP, unset
 
 
 class ReadRemoval(BaseModel):
@@ -186,7 +186,7 @@ def request_after(request: dict, reading: FollowUpReading) -> dict:
     stated = {k: v for k, v in reading.counts.model_dump().items() if v is not None}
     new["counts_stated_now"] = bool(stated)
     if stated:
-        for name in _COUNT_GROUP:
+        for name in COUNT_GROUP:
             new[name] = [] if name == "range_fields" else None
         new.update(stated)
     cond = reading.conditions
@@ -197,7 +197,7 @@ def request_after(request: dict, reading: FollowUpReading) -> dict:
     elif cond.time_limit_min is not None:
         new["time_limit_min"] = cond.time_limit_min
     for name in ("must_use", "prefer_use"):
-        if not _unset(getattr(cond, name)):
+        if not unset(getattr(cond, name)):
             new[name] = list(getattr(cond, name))
     new["meal_avoid"] = list(reading.meal_avoid)
     if reading.wish.strip():

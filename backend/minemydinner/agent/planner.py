@@ -17,7 +17,6 @@ from minemydinner.agent.budget import TokenBudgetMiddleware
 from minemydinner.agent.middleware import CallLayerMiddleware
 from minemydinner.agent.picker import PickerAnswer
 from minemydinner.agent.request import load_prompt
-from minemydinner.agent.revision import RevisionProposal
 from minemydinner.llm.registry import build_chat_model
 from minemydinner.planning.tools import (
     PLANNER_TOOLS,
@@ -62,8 +61,6 @@ class PlanProposal(BaseModel):
 
 # Covers the tools and the final-answer schema, the model-facing surface of the planner.
 TOOLS_VERSION = tools_version(PLANNER_TOOLS, [PlanProposal])
-# The revise step's surface: the same tools with its own final-answer schema.
-REVISE_TOOLS_VERSION = tools_version(PLANNER_TOOLS, [RevisionProposal])
 # The picker's surface: the search tool and its answer schema.
 PICK_TOOLS_VERSION = tools_version(PICK_TOOLS, [PickerAnswer])
 
@@ -107,12 +104,6 @@ def _build_agent(
 def build_planner(deps: "GraphDeps") -> CompiledStateGraph:
     """The planner agent: proposes one meal from scratch."""
     return _build_agent(deps, load_prompt("planner"), PlanProposal, "planner")
-
-
-def build_reviser(deps: "GraphDeps") -> CompiledStateGraph:
-    """The revise step's agent (plan 3b-1 spec 5.4): the planner's setup, tools and limits,
-    with the revise prompt and a change list as its answer."""
-    return _build_agent(deps, load_prompt("revise"), RevisionProposal, "revise")
 
 
 def build_picker(deps: "GraphDeps", prompt: str | None = None) -> CompiledStateGraph:

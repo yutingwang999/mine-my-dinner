@@ -36,11 +36,10 @@ def test_default_composition(n, expected):
 
 
 def test_prompt_versions_name_existing_files():
-    assert list(PROMPT_VERSIONS) == [
-        "route", "parse", "planner", "revise", "follow_up", "pick"
-    ]
+    # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
+    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4+follow_up_v1+pick_v1"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v1+pick_v1"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -70,7 +69,8 @@ def test_follow_up_v1_and_pick_v1_load_and_stay_within_the_size_budget():
     picker = load_prompt("pick")
     assert reader == (PROMPT_DIR / "follow_up_v1.md").read_text(encoding="utf-8")
     assert picker == (PROMPT_DIR / "pick_v1.md").read_text(encoding="utf-8")
-    replaced = len(load_prompt("route")) + len(load_prompt("revise"))
+    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    replaced = len(load_prompt("route")) + len(revise_v4)
     # Spec 5.8a: the reader stays under half of route_v6 plus revise_v4; spec 6: the reader
     # and the picker together are shorter than the two prompts they replace.
     assert len(reader) < replaced / 2
@@ -438,12 +438,12 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4+follow_up_v1+pick_v1"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v1+pick_v1"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
 
-def test_revise_v1_v2_v3_are_frozen_and_revise_v4_is_current():
+def test_revise_v1_v2_v3_are_frozen_and_revise_v4_keeps_its_rules():
     import hashlib
 
     v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
@@ -460,9 +460,10 @@ def test_revise_v1_v2_v3_are_frozen_and_revise_v4_is_current():
     assert hashlib.sha256(frozen).hexdigest() == (
         "2168b11130c1be2a936030552a7b9513548549951b1eb806c2493e1deed777d8"
     )
-    assert PROMPT_VERSIONS["revise"] == "revise_v4"
-    v3 = load_prompt("revise")
-    assert v3 == (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    # revise_v4, the last revise prompt, is no longer loaded (plan 3b-2); it stays as the
+    # record of the runs that used it.
+    assert "revise" not in PROMPT_VERSIONS
+    v3 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
     # Development run 1: a replaced dish is never dropped; a dish over the time limit is
     # never "not in the library".
     assert "A dish the words want replaced is never dropped" in v3

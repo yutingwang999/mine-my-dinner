@@ -648,7 +648,7 @@ def test_run_folder_layout_and_summary(tmp_path):
     assert set(cond) == {
         "git_commit", "scenarios_file", "library_file", "prompt_version", "prompt_versions",
         "prompt_files", "tools_version", "flags", "constants", "models", "planning_model",
-        "revise_tools_version",
+        "pick_tools_version",
     }
     assert cond["git_commit"] == "abc123" and len(cond["scenarios_file"]["sha256"]) == 64
     assert cond["flags"] == {"no_shortlist": True, "with_embeddings": True}
@@ -738,8 +738,8 @@ def test_tools_and_prompts_are_saved(tmp_path):
     }
     copied = {p.name: p.read_bytes() for p in (folder / "prompts").iterdir()}
     in_use = {p.name: p.read_bytes() for p in prompt_files()}
-    # route, parse, planner, revise (plan 3b-1), follow_up and pick (plan 3b-2).
-    assert copied == in_use and len(copied) == 6
+    # route, parse, planner, follow_up and pick (plan 3b-2; revise_v4 is no longer loaded).
+    assert copied == in_use and len(copied) == 5
     cond = data["conditions"]
     assert cond["prompt_version"] == PROMPT_VERSION
     assert cond["prompt_versions"] == PROMPT_VERSIONS
@@ -1870,6 +1870,7 @@ def test_the_loader_reads_the_revise_keys(tmp_path):
         library_exclude=["宫保鸡丁"],
         deferred_to="3b-2",
     )
+    # The choice card's keys are still read (plan 3b-2 Task 8 removed the card).
     assert s.first_plan == ["番茄炒蛋", "红烧茄子"] and s.choice_answer == "revise"
     assert s.edits_between_turns[2] == {"keep": "宫保鸡丁"} and s.expect_max_changed == 1
     assert s.deferred_to == "3b-2" and len(s.expect_any_of) == 2
@@ -1878,7 +1879,6 @@ def test_the_loader_reads_the_revise_keys(tmp_path):
 @pytest.mark.parametrize(
     "changes",
     [
-        {"follow_up": "x", "choice_answer": "maybe"},
         {"follow_up": "x", "expect_route": "replan"},
         {"edits_between_turns": [{"add": "番茄炒蛋"}]},
         {"follow_up": "x", "edits_between_turns": [{"swap": "番茄炒蛋"}]},
@@ -1994,9 +1994,18 @@ def test_a_locked_dish_gone_counts_unless_expected_removed():
 
 
 def test_the_plan_flag_is_not_judged_on_a_turn_without_a_run():
-    facts = TurnFacts(turn="none", route="unsure", choice_card=True, before=BEFORE, after=BEFORE)
-    scenario = _scenario(follow_up="x", expect_choice_card=True, expect_unchanged=True)
+    facts = TurnFacts(turn="none", route="other", before=BEFORE, after=BEFORE)
+    scenario = _scenario(follow_up="x", expect_unchanged=True)
     assert expectation_failures(scenario, _plan(), False, 3, facts, check_plan_flag=False) == []
+
+
+def test_an_expected_choice_card_is_never_met():
+    """The choice card was removed (plan 3b-2 Task 8): expecting it fails, not expecting it
+    passes."""
+    assert _judge(_facts(), expect_choice_card=True) == [
+        "choice card expected, but the app no longer shows one"
+    ]
+    assert _judge(_facts(), expect_choice_card=False) == []
 
 
 def _revise_outcome(name, turn="revision", passed=True, **changes):
@@ -2055,7 +2064,7 @@ REVISE_LIBRARY = [
 
 
 class ScriptModel(ScriptedChatModel):
-    """Planner, reviser and picker replies built at call time from library titles: each entry of
+    """Planner and picker replies built at call time from library titles: each entry of
     `script` is a function of a title-to-id lookup, used once and in order."""
 
     def __init__(self, factory, script, intents, parses, readings=None, **kwargs):
@@ -2094,18 +2103,6 @@ def _propose(*titles):
     return lambda ids: final_proposal([ids[t] for t in titles])
 
 
-def _revision(target, remove=(), add=(), note="改好了。"):
-    return lambda ids: tool_call(
-        "RevisionProposal",
-        {
-            "target": target,
-            "remove": [{"id": ids[t], "quote": q} for t, q in remove],
-            "add": [ids[t] for t in add],
-            "note": note,
-        },
-    )
-
-
 def _revise_scenario(name, **changes):
     values = {
         "name": name,
@@ -2117,10 +2114,6 @@ def _revise_scenario(name, **changes):
         "follow_up": "茄子这道不要，换一个别的",
     }
     return Scenario(**{**values, **changes})
-
-
-def _revise_sent(model):
-    return [m for m in model.sent if m and "RevisionProposal" in str(m[0].content)]
 
 
 def _pick_sent(model):
@@ -2249,9 +2242,9 @@ def test_first_plan_reply_sentence_in_both_languages():
 
 
 def test_a_follow_up_once_given_the_choice_card_is_read_and_acted_on(tmp_path, eval_db):
-    """Plan 3b-2 spec 5.1: the choice card is no longer shown. A follow-up the route once
+    """Plan 3b-2 spec 5.1: the choice card was removed (Task 8). A follow-up the route once
     answered "unsure" is read; here the reader takes it as a new meal, and the turn plans
-    with no card (a scenario's choice_answer is then unused)."""
+    with no card (a scenario's choice_answer is read and ignored)."""
     model = ScriptModel(
         eval_db,
         [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _propose("宫保鸡丁", "番茄炒蛋", "红烧茄子")],
@@ -2368,20 +2361,22 @@ def test_an_unclear_revision_is_a_question(tmp_path, eval_db):
     _assert_clean(eval_db)
 
 
-def test_the_run_folder_records_the_revise_answer_schema(tmp_path):
+def test_the_run_folder_records_the_picker_answer_schema(tmp_path):
     import json
 
-    from minemydinner.agent.planner import REVISE_TOOLS_VERSION, TOOLS_VERSION
-    from minemydinner.agent.revision import RevisionProposal
+    from minemydinner.agent.picker import PickerAnswer
+    from minemydinner.agent.planner import PICK_TOOLS_VERSION, TOOLS_VERSION
 
     folder, data = _write(tmp_path)
     tools = json.loads((folder / "tools.json").read_text(encoding="utf-8"))
-    assert tools["revise_final_answer"] == {
-        "name": "RevisionProposal", "schema": RevisionProposal.model_json_schema()
+    assert tools["pick_final_answer"] == {
+        "name": "PickerAnswer", "schema": PickerAnswer.model_json_schema()
     }
+    assert tools["pick_tools"] == ["search_recipes"]
+    assert "revise_final_answer" not in tools
     assert tools["tools_version"] == TOOLS_VERSION
-    assert tools["revise_tools_version"] == REVISE_TOOLS_VERSION
-    assert data["conditions"]["revise_tools_version"] == REVISE_TOOLS_VERSION
+    assert tools["pick_tools_version"] == PICK_TOOLS_VERSION
+    assert data["conditions"]["pick_tools_version"] == PICK_TOOLS_VERSION
     revisions = data["metrics"]["groups"]["all"]["revisions"]
     assert set(revisions) == {
         "turns", "pass_rate", "locked_removed", "avg_changed", "avg_turn_model_calls",
@@ -2592,8 +2587,8 @@ def test_the_3b1b_keys_judge_the_turn():
     for keys, word in cases:
         failures = _judge(met, **keys)
         assert len(failures) == 1 and word in failures[0], (keys, failures)
-    # A question or a choice card on the judged turn breaks expect_no_question.
-    for facts in (_facts(questions=1), _facts(choice_card=True)):
+    # A question on the judged turn breaks expect_no_question.
+    for facts in (_facts(questions=1),):
         assert _judge(facts, expect_no_question=True), facts
     # A button turn whose request was not built in code (no request["button"]).
     failures = _judge(_facts(offered=("fewer_dishes",)), button_after="fewer_dishes")

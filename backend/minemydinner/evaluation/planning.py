@@ -72,7 +72,6 @@ from minemydinner.models import (
     RecipeIngredient,
 )
 from minemydinner.evaluation.revise_eval import (
-    CHOICE_STOP,
     NOT_IN_ANY_OF,
     FollowUpSetupError,
     TurnFacts,
@@ -175,7 +174,7 @@ class RunOutcome:
     card: dict[str, Any] | None = None
     # ---- plan 3b-1: the judged turn (the follow-up, else the first message) ----
     # "plan" (planned from scratch), "revision" (the revise step ran), or "none" (the
-    # follow-up made no planning run: an unanswered choice card, an "other" reply).
+    # follow-up made no planning run: an "other" reply).
     # first_passed, final_passed and retries are the judged turn's run's.
     turn: str = "plan"
     # The route model's answer for the judged turn; None when no route call was made.
@@ -286,11 +285,13 @@ class Scenario:
     # 3a edits applied in order after between_turns: [{add | remove | keep: title}]; an add
     # or keep that needs confirmation is confirmed.
     edits_between_turns: list[dict[str, str]] = field(default_factory=list)
-    # The answer to the choice card (revise | plan); with none the runner stops at the card.
+    # The answer to the plan 3b-1 choice card, removed in plan 3b-2 Task 8: still read so an
+    # older scenario file loads, and ignored.
     choice_answer: str | None = None
     # The route result of the follow-up (plan | revise | unsure).
     expect_route: str | None = None
-    # Whether the choice card appeared on the follow-up.
+    # Whether the choice card appeared on the follow-up. The card was removed (plan 3b-2
+    # Task 8), so only false can be met; still read so an older scenario file loads.
     expect_choice_card: bool | None = None
     # The follow-up ends with a question to the user and no new plan version.
     expect_question: bool | None = None
@@ -317,8 +318,8 @@ class Scenario:
     # The judged turn tells the user, in code-written form, that the wish was not met
     # (revise_eval.wish_unmet_said).
     expect_wish_unmet: bool | None = None
-    # The judged turn asks no question (ask-first, count, which-dish, empty-plan) and shows
-    # no choice card (true), or asks one (false).
+    # The judged turn asks no question (ask-first, count, which-dish, empty-plan) (true), or
+    # asks one (false).
     expect_no_question: bool | None = None
     # A diner card appears on the follow-up turn itself.
     expect_follow_up_diner_card: bool | None = None
@@ -1247,15 +1248,12 @@ def _drive(
     text: str,
     answers: list[str],
     cards: list[dict[str, Any]],
-    choices: list[dict[str, Any]] | None = None,
     questions: list[Any] | None = None,
 ) -> str:
     """Send one user message and answer what the graph asks, the way the chat API resumes:
-    the diner card from `diners_answer` (every card shown is added to `cards`), the choice
-    card from `choice_answer` (every one shown is added to `choices`), and other questions
-    with the next of `answers` (consumed; every question asked, answered or not, is added to
-    `questions`). Returns "" when the turn ended, CHOICE_STOP when
-    it stopped at a choice card the scenario does not answer, or a note when it stopped at a
+    the diner card from `diners_answer` (every card shown is added to `cards`) and other
+    questions with the next of `answers` (consumed; every question asked, answered or not, is
+    added to `questions`). Returns "" when the turn ended, or a note when it stopped at a
     question the scenario does not answer."""
     graph.invoke({"messages": [HumanMessage(text)], "locale": scenario.locale}, config)
     for _ in range(MAX_ANSWERS_PER_TURN):
@@ -1271,12 +1269,6 @@ def _drive(
                     value, scenario.diners_answer, lambda name: _one(session, Ingredient, name).id
                 )
             resume: Any = answer.model_dump(mode="json")
-        elif kind == "revise_or_plan":
-            if choices is not None:
-                choices.append(value)
-            if scenario.choice_answer is None:
-                return CHOICE_STOP
-            resume = scenario.choice_answer
         else:
             if kind == "question" and questions is not None:
                 questions.append(value)
@@ -1421,8 +1413,7 @@ def run_scenario(
     note = ""
     first_plan = None
     cards: list[dict[str, Any]] = []
-    # The choice cards and the questions of the judged turn.
-    choices: list[dict[str, Any]] = []
+    # The questions of the judged turn.
     questions: list[Any] = []
     answers = list(scenario.answers)
     # Set once the judged follow-up (a follow-up message, or a button) is sent: the plan
@@ -1444,7 +1435,7 @@ def run_scenario(
     # The (run, call) marks before the follow-up message, kept when a button follows it, so
     # the follow-up's own revise turn still counts toward the calls per revise turn.
     earlier_marks: tuple[int, int] | None = None
-    # The turn each message's choices and questions are collected for: the last one sent.
+    # The turn each message's questions are collected for: the last one sent.
     last_first = not scenario.follow_up and not scenario.button_after
     last_follow_up = not scenario.button_after
 
@@ -1467,7 +1458,7 @@ def run_scenario(
             hidden = hide_dishes(factory, scenario.library_exclude)
         note = _drive(
             graph, factory, config, scenario, scenario.request, answers, cards,
-            choices if last_first else None, questions if last_first else None,
+            questions if last_first else None,
         )
         asked = note == QUESTION_STOP
         if not note and scenario.follow_up:
@@ -1484,13 +1475,12 @@ def run_scenario(
             cards_before = len(cards)
             note = _drive(
                 graph, factory, config, scenario, scenario.follow_up, answers, cards,
-                choices if last_follow_up else None, questions if last_follow_up else None,
+                questions if last_follow_up else None,
             )
             follow_up_card = len(cards) > cards_before
             asked = note == QUESTION_STOP
             if note:
                 note = note.replace("at a question", "at a question after the follow-up")
-                note = note.replace("at the choice card", "at the choice card after the follow-up")
         if not note and scenario.button_after:
             # Plan 3b-1b: press the newest card's button with its fixed message, as the chat
             # does; the button turn is the judged turn. A button the card does not offer is
@@ -1505,12 +1495,11 @@ def run_scenario(
                 pressed = True
                 message = ACTION_MESSAGES[scenario.locale][scenario.button_after]
                 note = _drive(
-                    graph, factory, config, scenario, message, answers, cards, choices, questions
+                    graph, factory, config, scenario, message, answers, cards, questions
                 )
                 asked = note == QUESTION_STOP
                 if note:
                     note = note.replace("at a question", "at a question after the button")
-                    note = note.replace("at the choice card", "at the choice card after the button")
     except FollowUpSetupError as error:
         # The follow-up was never sent: no turn to rate (turn "none"), never as expected.
         note = f"failed: {error}"
@@ -1521,14 +1510,13 @@ def run_scenario(
     finally:
         if hidden is not None:
             bring_back(factory, hidden)
-    choice_stop = note.startswith(CHOICE_STOP)
     # The button was never offered a chance: the turn before it stopped (a question with no
-    # answer, an unanswered choice card, a failure).
+    # answer, a failure).
     button_blocked = note if scenario.button_after and not pressed and note else None
     state = graph.get_state(config).values
     # Only the judged turn's own run is failed: a follow-up that stopped before its run
     # leaves the first turn's record as it was.
-    if note and not choice_stop and (state.get("run_id") or 0) > run_mark:
+    if note and (state.get("run_id") or 0) > run_mark:
         recorder.fail(state["run_id"], state.get("retries") or 0)
     with factory() as session:
         # With a follow-up the thread has a run per message, in id order; the judged turn's
@@ -1587,7 +1575,6 @@ def run_scenario(
     shared = {
         "turn": turn,
         "route": route,
-        "choice_card": bool(choices),
         "questions": len(questions) + int(revise_asked),
         "follow_up_card": follow_up_card,
         "wish_unmet_said": wish_unmet_said(_last_reply_card(state), reply, turn),
@@ -1621,9 +1608,9 @@ def run_scenario(
         reply=reply,
         library_titles=library_titles,
         first_plan=first_plan,
-        # A follow-up that ended without a planning run (an unanswered choice card, an
-        # "other" reply) has no plan to pass or fail.
-        check_plan_flag=not (turn == "none" and (not note or choice_stop)),
+        # A follow-up that ended without a planning run (an "other" reply) has no plan to
+        # pass or fail.
+        check_plan_flag=not (turn == "none" and not note),
     )
     failures += diner_checks
     if zero_dishes:
@@ -1973,9 +1960,9 @@ def run_info(
     # Imported here: only the saved results need these constants and versions.
     from minemydinner.agent.planner import (
         MODEL_CALL_LIMIT,
+        PICK_TOOLS_VERSION,
         PLANNER_INPUT_TOKEN_BUDGET,
         TOOL_CALL_LIMIT,
-        REVISE_TOOLS_VERSION,
         TOOLS_VERSION,
     )
     from minemydinner.agent.request import PROMPT_VERSION, PROMPT_VERSIONS, prompt_files
@@ -2000,7 +1987,7 @@ def run_info(
                 path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in prompt_files()
             },
             "tools_version": TOOLS_VERSION,
-            "revise_tools_version": REVISE_TOOLS_VERSION,
+            "pick_tools_version": PICK_TOOLS_VERSION,
             "flags": {"no_shortlist": no_shortlist, "with_embeddings": with_embeddings},
             "constants": {
                 "MODEL_CALL_LIMIT": MODEL_CALL_LIMIT,
@@ -2218,14 +2205,15 @@ def build_summary(
 
 
 def _tools_document() -> dict[str, Any]:
-    """The model-facing surface: the planner's tools (the revise step uses the same ones), each
-    step's final-answer schema, and the tools version each step's records carry."""
+    """The model-facing surface: the planner's tools (the picker uses search_recipes of them),
+    each step's final-answer schema, and the tools version each step's records carry."""
+    from minemydinner.agent.picker import PickerAnswer
     from minemydinner.agent.planner import (
-        REVISE_TOOLS_VERSION,
+        PICK_TOOLS,
+        PICK_TOOLS_VERSION,
         TOOLS_VERSION,
         PlanProposal,
     )
-    from minemydinner.agent.revision import RevisionProposal
     from minemydinner.planning.tools import PLANNER_TOOLS
 
     return {
@@ -2238,12 +2226,10 @@ def _tools_document() -> dict[str, Any]:
             for tool in PLANNER_TOOLS
         ],
         "final_answer": {"name": "PlanProposal", "schema": PlanProposal.model_json_schema()},
-        "revise_final_answer": {
-            "name": "RevisionProposal",
-            "schema": RevisionProposal.model_json_schema(),
-        },
+        "pick_tools": [tool.name for tool in PICK_TOOLS],
+        "pick_final_answer": {"name": "PickerAnswer", "schema": PickerAnswer.model_json_schema()},
         "tools_version": TOOLS_VERSION,
-        "revise_tools_version": REVISE_TOOLS_VERSION,
+        "pick_tools_version": PICK_TOOLS_VERSION,
     }
 
 

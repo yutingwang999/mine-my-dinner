@@ -46,6 +46,8 @@ class ChatState(TypedDict):
     # written when it starts, then cleared.
     model_calls: list[dict]
     run_id: int | None
+    # The planner's last proposal (PlanProposal dump). A thread saved during plan 3b-1 may
+    # hold a revise step's RevisionProposal dump here; nothing reads it now.
     proposal: dict | None
     validation: dict | None
     first_passed: bool | None
@@ -67,11 +69,9 @@ class ChatState(TypedDict):
     # The recipe ids the shortlist offered, in opening order, for the retry message.
     shortlist_ids: list[int]
     retries: int
-    # The revision in progress (plan 3b-1): `from_version` (the plan_versions index of the plan
-    # it changes), `message` (this turn's words), `earlier` (on a button revision, the words
-    # of the turn whose card offered the button; quotes are checked against both), and the
-    # last attempt's `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then
-    # holds the RevisionProposal dump, or None when an attempt gave no answer.
+    # The plan 3b-1 revise step's state, kept so threads saved before plan 3b-2 load: its
+    # `message` and `earlier` (the words of a revise turn) still give a button pressed on that
+    # turn's card its offering words (`graph._offering_words`). The change path sets it to None.
     revision: dict | None
     # The change in progress (plan 3b-2 spec 5.4-5.6): `from_version`, `deleted`, `plan_ids`
     # (the plan it changes), the `frame` (Frame dump), the `reading` it was built from (on a

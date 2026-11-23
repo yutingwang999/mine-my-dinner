@@ -11,7 +11,7 @@ from minemydinner.agent.picker import (
     choice_slots,
     picker_messages,
 )
-from minemydinner.agent.planner import PICK_SEARCH_LIMIT, PICK_TOOLS_VERSION, REVISE_TOOLS_VERSION
+from minemydinner.agent.planner import PICK_SEARCH_LIMIT, PICK_TOOLS_VERSION, TOOLS_VERSION
 from minemydinner.agent.revision import DishFacts
 from tests.recipefakes import seeded  # noqa: F401
 
@@ -66,7 +66,7 @@ ADD_SOUP = Slot(kind="add", dish_type="soup")
 def test_constants():
     assert PICK_MAX_ATTEMPTS == 2
     assert PICK_SEARCH_LIMIT == 2
-    assert PICK_TOOLS_VERSION != REVISE_TOOLS_VERSION
+    assert PICK_TOOLS_VERSION != TOOLS_VERSION
 
 
 # What a valid answer does.

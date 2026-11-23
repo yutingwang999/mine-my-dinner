@@ -2291,24 +2291,11 @@ def first_meal(env: ReviseEnv, titles=MEAL, parse: dict | None = None) -> dict:
     return out
 
 
-def revision(target: str, remove=(), add=(), note: str = ""):
-    removed = [{"id": i, "quote": q} for i, q in remove]
-    args = {"target": target, "remove": removed, "add": list(add), "note": note}
-    return tool_call("RevisionProposal", args)
-
-
 def model_calls_by_prompt(env, kind: str) -> list[list]:
     from minemydinner.agent.request import load_prompt
 
     prompt = load_prompt(kind)
     return [s for s in env.model.sent if s and s[0].type == "system" and s[0].content == prompt]
-
-
-def reviser_calls(env) -> list[list]:
-    return [
-        s for s in env.model.sent
-        if s and s[0].type == "system" and "RevisionProposal" in s[0].content
-    ]
 
 
 def planner_runs(env) -> list[list]:
@@ -2366,7 +2353,7 @@ def test_revise_without_a_plan_plans(revise_env):
     out = say(env, "想要辣一些的", "revise", replies=[final_proposal(ids)])
     assert out["intent"] == "plan"
     assert out["current_plan"]["passed"] and "revision" not in out["current_plan"]
-    assert len(planner_runs(env)) == 1 and reviser_calls(env) == []
+    assert len(planner_runs(env)) == 1
     # No plan yet: the parse input has no plan line.
     assert model_calls_by_prompt(env, "parse")[-1][-1].content == "想要辣一些的"
 
@@ -2375,7 +2362,7 @@ def test_unsure_without_a_plan_plans(revise_env):
     env = revise_env
     out = say(env, "今晚吃什么", "unsure", replies=[final_proposal(dish_ids(env, *MEAL))])
     assert "__interrupt__" not in out and out["intent"] == "plan"
-    assert out["current_plan"]["passed"] and reviser_calls(env) == []
+    assert out["current_plan"]["passed"]
 
 
 def test_revise_goes_to_the_change_path(revise_env):
@@ -2395,7 +2382,7 @@ def test_revise_goes_to_the_change_path(revise_env):
     )
     assert out["intent"] == "revise"
     # No load_context and no parse: the planner did not run again and the run is a revision.
-    assert len(planner_runs(env)) == planned and reviser_calls(env) == []
+    assert len(planner_runs(env)) == planned
     assert len(model_calls_by_prompt(env, "parse")) == parses
     record = latest_record(env)
     assert record.request["revision"] == {"from_version": 0}
@@ -2469,7 +2456,7 @@ def test_a_new_meal_reading_plans_a_new_meal(revise_env):
     assert "__interrupt__" not in out and out["intent"] == "plan"
     assert len(reader_calls(env)) == 1
     assert len(model_calls_by_prompt(env, "route")) == routes
-    assert len(planner_runs(env)) == planned + 1 and reviser_calls(env) == []
+    assert len(planner_runs(env)) == planned + 1
     assert "revision" not in out["current_plan"]
     assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
     # Parsed as a new request: the parse input has no plan line.
@@ -2502,7 +2489,6 @@ def test_a_people_reading_shows_the_diner_card_and_plans_anew(tmp_path, session,
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
     assert len(planner_requests(env)) == planned + 1
-    assert not any("RevisionProposal" in s[0].content for s in env.model.sent if s)
     assert "revision" not in out["current_plan"]
     assert [e.get("step") for e in run_record(env).events[:2]] == ["read_follow_up", "parse"]
 
@@ -2554,6 +2540,23 @@ def test_fixed_messages_after_a_plan_are_never_read(revise_env):
     assert len(model_calls_by_prompt(env, "route")) == routes
 
 
+def test_a_revise_answer_after_an_early_stop_keeps_the_plans_conditions(graph_env, session):
+    """An early stop has no dishes, so the route still runs; a "revise" answer is parsed as a
+    follow-up of that reply: the plan line is in the parse input, the plan's conditions fill
+    what the parse leaves unstated (`carry_unstated`), and no ask-first question is asked."""
+    _early_stop_env(graph_env, session)
+    out = plan(graph_env, "dinner from the fridge", parse={"mode": "fridge_only", "dishes": 1})
+    assert out["current_plan"]["recipes"] == []
+    set_request_style(session, "ask_first")
+    graph_env.model.structured["Intent"] = [{"intent": "revise"}]
+    out = plan(graph_env, "something lighter then", parse={"query": "light"})
+    assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert out["request"]["mode"] == "fridge_only" and out["request"]["query"] == "light"
+    parse_input = model_calls_by_prompt(graph_env, "parse")[-1]
+    assert parse_input[-1].content.startswith(PLAN_NOTE)
+    assert reader_calls(graph_env) == []
+
+
 def test_a_follow_up_after_an_early_stop_is_routed(graph_env, session):
     """An early stop has no dishes: a follow-up takes the route as before plan 3b-2, and an
     unsure answer plans (the choice card is no longer shown)."""
@@ -2570,16 +2573,18 @@ def test_a_follow_up_after_an_early_stop_is_routed(graph_env, session):
     assert len(model_calls_by_prompt(graph_env, "route")) == 3
 
 
-def test_an_old_pending_choice_card_still_resumes(revise_env):
-    """A thread saved before plan 3b-2, paused on the choice card after its route call, is
-    resumed as before: the answer "revise" revises with no reader call."""
+def test_an_old_revise_turn_paused_on_a_question_is_read_after_the_answer(revise_env):
+    """A thread saved before plan 3b-2 in a revise turn, paused on the contradiction question:
+    after the answer the parse runs as before, then the reader reads the turn (no revise
+    step)."""
     env = revise_env
     first = first_meal(env)
     env.graph.update_state(
         env.config,
         {
-            "messages": [HumanMessage("来点辣的")],
-            "intent": "unsure",
+            "messages": [HumanMessage("两个菜，三个荤菜")],
+            "intent": "revise",
+            "reading": None,
             "previous_request": first["request"],
             "asked_question": False,
             "button": None,
@@ -2587,25 +2592,21 @@ def test_an_old_pending_choice_card_still_resumes(revise_env):
         },
         as_node="route_intent",
     )
+    env.model.structured["ParsedRequest"] = [{"dishes": 2, "meat_dishes": 3}]
     out = env.graph.invoke(None, env.config)
-    (card,) = out["__interrupt__"]
-    assert card.value == {"kind": "revise_or_plan", "message": "来点辣的"}
+    (question,) = out["__interrupt__"]
+    assert question.value["kind"] == "question"
     cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
     env.model.structured["ParsedRequest"] = [{"query": "辣"}]
-    env.model.replies = [revision("general", remove=[(cabbage, "")], add=[beans])]
-    out = env.graph.invoke(Command(resume="revise"), env.config)
-    assert "__interrupt__" not in out and out["intent"] == "revise"
-    assert out["current_plan"]["passed"] and len(reviser_calls(env)) == 1
-    assert out["questions"][-1]["value"]["choice"] == "revise"
-    assert reader_calls(env) == []
-    # The thread goes on: the next follow-up is read and takes the change path, with the
-    # old revise step's state left behind by the resumed turn.
-    beef, beans_now = dish_ids(env, "土豆炖牛肉", "干煸豆角")
-    pepper = dish_ids(env, "青椒炒肉")[0]
-    swap = {"kind": "change", "remove": [{"id": beef, "mode": "replace", "quote": "牛肉"}]}
-    after = read(env, "牛肉换掉", swap, replies=[pick(slots=[(0, pepper)])])
-    assert "__interrupt__" not in after and pepper in ids_of_plan(after["current_plan"])
-    assert after["revision"] is None and len(reader_calls(env)) == 1
+    env.model.structured["FollowUpReading"] = [
+        {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    ]
+    env.model.replies = [pick(slots=[(0, beans)])]
+    out = env.graph.invoke(Command(resume="白菜换成辣的"), env.config)
+    assert "__interrupt__" not in out
+    assert beans in ids_of_plan(out["current_plan"]) and len(reader_calls(env)) == 1
+    # The turn keeps the request before its parse, not the parse it already made.
+    assert out["previous_request"] == first["request"]
 
 
 def test_an_old_thread_state_is_read_and_revised(revise_env):
@@ -2722,7 +2723,6 @@ def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
     # Planned from scratch: the planner ran, the reviser never did.
     assert len(planner_requests(env)) == planned + 1
-    assert not any("RevisionProposal" in s[0].content for s in env.model.sent if s)
     assert "revision" not in out["current_plan"]
     assert "revision" not in run_record(env).request
     assert out["constraints"]["guest_rules"] == [GUEST_PEANUT]
@@ -2779,7 +2779,6 @@ def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
     chosen = {"selected": [me.id, wang.id], "stated": {wang.id: [PEANUT_RULE]}, "headcount": 2}
     out = resume(env, {card.id: chosen})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert reviser_calls(env) == []
     record = run_record(env)
     assert "revision" not in record.request
     assert record.request["spec"]["mode"] == "shopping"
@@ -2798,7 +2797,6 @@ def test_revise_saying_only_me_still_shows_the_card(tmp_path, session, seeded, v
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert reviser_calls(env) == []
     assert run_record(env).request["spec"]["mode"] == "shopping"
     assert out["constraints"]["headcount"] == 1
 
@@ -2810,7 +2808,7 @@ def test_plan_again_still_plans_from_scratch(revise_env):
     ids = dish_ids(env, "青椒炒肉", "干煸豆角", "紫菜蛋花汤")
     out = say(env, REPLAN_MESSAGE["zh"], "revise", replies=[final_proposal(ids)])
     assert route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == [] and len(planner_runs(env)) == 2
+    assert len(planner_runs(env)) == 2
     assert out["request"] == first["request"]
     assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
     assert "revision" not in out["current_plan"]
@@ -2834,7 +2832,6 @@ def test_action_message_after_a_no_plan_reply_plans_from_scratch(revise_env, loc
     out = say(env, f" {text} ", "revise", replies=[final_proposal([])], locale=locale)
     assert "__interrupt__" not in out
     assert route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == []
     assert out["intent"] == "plan" and "revision" not in out["current_plan"]
     assert out["request"] == apply_action(card["request"], key, card["spec"])
     record = latest_record(env)
@@ -2851,7 +2848,7 @@ def test_action_message_after_a_plan_plans_from_scratch(revise_env, locale, key,
     assert "__interrupt__" not in out
     assert route_and_parse_calls(env, since) == []
     # Planned anew (fewer_dishes retries the scripted three dishes against its new total).
-    assert reviser_calls(env) == [] and len(planner_runs(env)) >= 2
+    assert len(planner_runs(env)) >= 2
     assert out["request"] == apply_action(first["request"], key, first["current_plan"]["spec"])
     assert "revision" not in out["current_plan"]
 
@@ -3185,7 +3182,7 @@ def test_button_on_a_new_plan_card_plans_from_scratch(revise_env):
     )
     assert "__interrupt__" not in out
     assert route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == [] and len(planner_runs(env)) == 1
+    assert len(planner_runs(env)) == 1
     assert out["request"]["meat_dishes"] is None and out["request"]["meat_bound"] is None
     assert out["request"]["dishes"] == 2 and out["request"]["mode"] is None
     record = latest_record(env)
@@ -3378,7 +3375,7 @@ def test_lasting_rule_still_shows_the_card(revise_env):
     out = resume(env, {card.id: None})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
     # Planned anew (3b-1 behaviour), not revised.
-    assert len(planner_runs(env)) == planned + 1 and not reviser_calls(env)
+    assert len(planner_runs(env)) == planned + 1
     assert "revision" not in out["current_plan"]
 
 
@@ -3674,7 +3671,7 @@ def test_a_named_drop_makes_one_reader_call_and_no_picker_call(revise_env):
     assert "__interrupt__" not in out and out["intent"] == "revise"
     assert len(reader_calls(env)) == 1 and picker_calls(env) == []
     # No parse, no reviser and no planner on a change.
-    assert len(model_calls_by_prompt(env, "parse")) == 1 and reviser_calls(env) == []
+    assert len(model_calls_by_prompt(env, "parse")) == 1
     plan = out["current_plan"]
     assert ids_of_plan(plan) == [beef, cabbage]
     assert plan["passed"] and plan["revision"] == {"from_version": 0}
@@ -3875,7 +3872,7 @@ def test_each_button_on_a_kept_plan_revises_through_the_frame(revise_env, key):
     assert "__interrupt__" not in out and out["button"] == key
     # No reader, route, parse or reviser call: the frame comes from the button's request.
     assert len(reader_calls(env)) == 1 and route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == [] and out["intent"] == "revise"
+    assert out["intent"] == "revise"
     record = latest_record(env)
     assert record.request["button"] == key and "revision" in record.request
     [frame] = change_events(env, "frame")

@@ -1,7 +1,8 @@
 """Follow-up scenarios of the planning evaluation (plan 3b-1 spec 5.6): a fixed first plan,
-3a hand edits between the turns, the choice card's answer, dishes hidden for one scenario,
-and the follow-up's own checks (route, choice card, question, which dishes changed, locked
-dishes kept).
+3a hand edits between the turns, dishes hidden for one scenario, and the follow-up's own
+checks (route, question, which dishes changed, locked dishes kept). The choice card is gone
+(plan 3b-2 Task 8): its scenario keys are still read, `choice_answer` is ignored and
+`expect_choice_card: true` cannot be met.
 
 `planning.py` wires these into `load_scenarios`, `run_scenario`, and the summary. Nothing here
 imports `planning.py`, so the scenario is typed loosely (any object with the Scenario fields).
@@ -32,14 +33,12 @@ from minemydinner.agent.labels import LabelTable, labels_scope, load_label_conte
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
 from minemydinner.agent.request import ParsedRequest
 from minemydinner.agent.revise_step import WISH_UNMET, open_conflict_ids
-from minemydinner.agent.revision import asks_back
 from minemydinner.models import Diner, Rating, Recipe, RecipeCookware, RecipeImage, RecipeIngredient
 from minemydinner.planning.context import load_planning_context
 from minemydinner.planning.validate import PlanSpec, validate_plan
 
 # The values the scenario keys take.
 ROUTES = ("plan", "revise", "unsure")
-CHOICE_ANSWERS = ("revise", "plan")
 EDIT_KINDS = {"add": Add, "remove": Remove, "keep": Keep}
 # Keys that set up or judge the plan before and after a follow-up, so they need one.
 FOLLOW_UP_KEYS = (
@@ -54,11 +53,8 @@ FOLLOW_UP_KEYS = (
 # expect_* keys an expect_any_of entry may not hold: the list itself, and the diner checks,
 # which are judged once over the whole scenario.
 NOT_IN_ANY_OF = ("expect_any_of", "expect_card", "expect_rules_applied", "expect_rules_not_applied")
-# _drive's note when the follow-up stopped at the choice card because the scenario gives no
-# answer: an expected end of the turn, not a failure.
-CHOICE_STOP = "stopped at the choice card"
 # The judged turn: "plan" (planned from scratch), "revision" (the revise step ran), or "none"
-# (the follow-up made no planning run: an unanswered choice card, an "other" reply).
+# (the follow-up made no planning run: an "other" reply).
 TURN_KINDS = ("plan", "revision", "none")
 # The tables a hidden dish's rows live in, parent first.
 _RECIPE_TABLES: tuple[Table, ...] = (
@@ -108,8 +104,6 @@ def check_revise_keys(scenario: Any, any_of_keys: Collection[str]) -> None:
             or not _titles_list([next(iter(item.values()))])
         ):
             raise bad("edits_between_turns items must be {add: title}, {remove: title} or {keep: title}")
-    if scenario.choice_answer not in (None, *CHOICE_ANSWERS):
-        raise bad(f"choice_answer must be one of {list(CHOICE_ANSWERS)}")
     if scenario.expect_route not in (None, *ROUTES):
         raise bad(f"expect_route must be one of {list(ROUTES)}")
     for key in (
@@ -314,15 +308,13 @@ class TurnFacts:
 
     turn: str = "plan"
     route: str | None = None
-    choice_card: bool = False
     question: bool = False
     before: dict[int, str] | None = None
     after: dict[int, str] | None = None
     locked_before: frozenset[int] = field(default_factory=frozenset)
     # ---- plan 3b-1b ----
     # Questions the judged turn asked: ask-first and count questions (answered or not), a
-    # revision that asked which dish was meant, and the empty-plan question. The choice card
-    # is `choice_card`.
+    # revision that asked which dish was meant, and the empty-plan question.
     questions: int = 0
     # A diner card appeared on the follow-up turn itself (not on the first message).
     follow_up_card: bool = False
@@ -394,12 +386,8 @@ def route_of(turn_events: list[list[dict]], values: dict) -> str | None:
 
 
 def asked_back(values: dict) -> bool:
-    """The revise step answered "unclear" with no change: the reply asks which dish is meant
-    (the graph's own rule, `asks_back`, on the state's proposal)."""
-    proposal = values.get("proposal")
-    if isinstance(proposal, dict) and asks_back(proposal):
-        return True
-    # The change path (plan 3b-2 spec 5.6): a reference that matched no dish.
+    """The reply asks which dish is meant: a reference that matched no dish (plan 3b-2 spec
+    5.6), as the change path records it."""
     return (values.get("change") or {}).get("asked") == "which_dish"
 
 
@@ -409,10 +397,9 @@ def follow_up_failures(scenario: Any, facts: TurnFacts) -> list[str]:
     failures = []
     if scenario.expect_route is not None and facts.route != scenario.expect_route:
         failures.append(f"route {facts.route}, expected {scenario.expect_route}")
-    if scenario.expect_choice_card is not None and facts.choice_card != scenario.expect_choice_card:
-        failures.append(
-            f"choice card shown={facts.choice_card}, expected {scenario.expect_choice_card}"
-        )
+    if scenario.expect_choice_card:
+        # The card was removed (plan 3b-2 Task 8): it is never shown.
+        failures.append("choice card expected, but the app no longer shows one")
     if scenario.expect_question is not None and facts.question != scenario.expect_question:
         failures.append(f"question to the user={facts.question}, expected {scenario.expect_question}")
     failures += _3b1b_failures(scenario, facts)
@@ -471,12 +458,9 @@ def _3b1b_failures(scenario: Any, facts: TurnFacts) -> list[str]:
             )
     wanted = scenario.expect_no_question
     if wanted is not None:
-        asked = facts.questions > 0 or facts.choice_card
+        asked = facts.questions > 0
         if wanted and asked:
-            failures.append(
-                f"a question was asked ({facts.questions} questions, choice card "
-                f"{facts.choice_card}), expected none"
-            )
+            failures.append(f"a question was asked ({facts.questions} questions), expected none")
         elif not wanted and not asked:
             failures.append("no question was asked, expected one")
     if scenario.expect_wish_unmet is not None and facts.wish_unmet_said != scenario.expect_wish_unmet:
@@ -547,11 +531,8 @@ def fallback_count(runs_events: Iterable[Iterable[dict]]) -> int:
 
 
 def asked_empty(values: dict) -> bool:
-    """The revision would have left no dish and asked whether to plan a new meal (spec 5.1)
-    instead; read from the state's revision of the judged run."""
-    revision = values.get("revision")
-    if isinstance(revision, dict) and bool(revision.get("empty")):
-        return True
+    """The change would have left no dish and asked whether to plan a new meal (spec 5.1)
+    instead, as the change path records it."""
     return (values.get("change") or {}).get("asked") == "empty_plan"
 
 

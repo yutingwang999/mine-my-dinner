@@ -176,65 +176,6 @@ describe("ChatPage", () => {
     expect(await screen.findByRole("button", { name: "Skip" })).toBeInTheDocument();
   });
 
-  it("asks the revise-or-plan card, disables the composer, and resumes with the choice", async () => {
-    setup({
-      "POST /api/chat/threads/t1/messages": () =>
-        stream(frame("interrupt", { kind: "revise_or_plan", message: "something lighter" }), DONE),
-      "POST /api/chat/threads/t1/resume": () =>
-        stream(frame("message", { role: "assistant", text: "Revised." }), DONE),
-    });
-    await send("something lighter");
-    expect(await screen.findByRole("button", { name: "Change this plan" })).toBeInTheDocument();
-    await userEvent.type(screen.getByRole("textbox", { name: "Your message" }), "typing");
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    await userEvent.click(screen.getByRole("button", { name: "Plan a new meal" }));
-    expect(await screen.findByText("Revised.")).toBeInTheDocument();
-    expect(callsTo(calls, "POST", "/api/chat/threads/t1/resume")[0].body).toEqual({
-      value: "plan",
-      locale: "en",
-    });
-    expect(screen.getByText("You chose: Plan a new meal")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Change this plan" })).toBeNull();
-  });
-
-  it("restores a pending revise-or-plan card and resumes with revise", async () => {
-    window.localStorage.setItem(THREAD_KEY, "t9");
-    setup({
-      "GET /api/chat/threads/t9": () => ({
-        items: [{ type: "user", text: "lighter" }],
-        messages: [],
-        current_plan: null,
-        pending: { kind: "revise_or_plan", message: "lighter" },
-      }),
-      "POST /api/chat/threads/t9/resume": () => stream(DONE),
-    });
-    await userEvent.click(await screen.findByRole("button", { name: "Change this plan" }));
-    await waitFor(() => expect(callsTo(calls, "POST", "/api/chat/threads/t9/resume")).toHaveLength(1));
-    expect(callsTo(calls, "POST", "/api/chat/threads/t9/resume")[0].body).toEqual({
-      value: "revise",
-      locale: "en",
-    });
-  });
-
-  it("shows the answered choice, and Skipped, in a stored thread", async () => {
-    window.localStorage.setItem(THREAD_KEY, "t8");
-    setup({
-      "GET /api/chat/threads/t8": () => ({
-        items: [
-          { type: "user", text: "a" },
-          { type: "question", value: { kind: "revise_or_plan", message: "a", choice: "revise" } },
-          { type: "user", text: "b" },
-          { type: "question", value: { kind: "revise_or_plan", message: "b", choice: null } },
-        ],
-        messages: [],
-        current_plan: null,
-        pending: null,
-      }),
-    });
-    expect(await screen.findByText("You chose: Change this plan")).toBeInTheDocument();
-    expect(screen.getByText("Skipped")).toBeInTheDocument();
-  });
-
   it("starts a new thread when the remembered one no longer exists", async () => {
     window.localStorage.setItem(THREAD_KEY, "gone");
     setup({

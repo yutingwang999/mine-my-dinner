@@ -19,10 +19,9 @@ from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadCounts
 from minemydinner.agent.frame import Frame
 from minemydinner.agent.picker import ChoiceAnswer, PickerAnswer, SlotAnswer, choice_slots
 from minemydinner.agent.revise_step import (
-    WISH_UNMET,
     over_limit_entries,
-    unmet_entries,
     wish_unmet_actions,
+    wish_unmet_entries,
 )
 from minemydinner.agent.revision import DishFacts
 from minemydinner.planning.composition import count_categories
@@ -240,7 +239,7 @@ def change_unmet(
         code = item["reason"] if item["kind"] == "missing" else item["kind"]
         entries.append({"code": code, "recipe_id": item.get("recipe_id"), "text": text})
     if wish_unmet:
-        entries += unmet_entries([{"code": WISH_UNMET, "recipe_id": None}], [], {}, locale)
+        entries += wish_unmet_entries(locale)
     return entries
 
 

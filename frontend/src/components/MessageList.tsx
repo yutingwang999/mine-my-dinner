@@ -4,7 +4,6 @@ import { useFormatter, useTranslations } from "next-intl";
 
 import { DinerCard, type DinerDraft } from "@/components/DinerCard";
 import { PlanCard } from "@/components/PlanCard";
-import { ReviseOrPlanCard } from "@/components/ReviseOrPlanCard";
 import { RequestStylePrompt } from "@/components/RequestStylePrompt";
 import type {
   AskedQuestion,
@@ -28,7 +27,6 @@ type Props = {
   /** Sends the fixed "plan again" message after a left-out ingredient is confirmed. */
   onReplan: () => void;
   onChooseStyle: (value: RequestStyle | null) => void;
-  onChooseRevise: (value: "revise" | "plan") => void;
   onConfirmDiners: (answer: DinerAnswer) => void;
   /** The pending card's edits, kept across a failed confirm. */
   dinerDraft?: DinerDraft;
@@ -82,7 +80,6 @@ export function MessageList({
   onAction,
   onReplan,
   onChooseStyle,
-  onChooseRevise,
   onConfirmDiners,
   dinerDraft,
   onDinerDraft,
@@ -95,7 +92,6 @@ export function MessageList({
   const t = useTranslations("chat");
   const tEdit = useTranslations("chat.edit");
   const tStyle = useTranslations("chat.requestStyle");
-  const tRevise = useTranslations("chat.reviseOrPlan");
   const errorText = useErrorText();
   const questionText = useQuestionText();
   const dinersText = useDinersText();
@@ -127,11 +123,7 @@ export function MessageList({
                     ? tStyle("title")
                     : item.value.kind === "diners"
                       ? dinersText(item.value)
-                      : item.value.kind === "revise_or_plan"
-                        ? item.value.choice
-                          ? tRevise("chose", { choice: tRevise(item.value.choice) })
-                          : tRevise("skipped")
-                        : questionText(item.value)}
+                      : questionText(item.value)}
                 </p>
               </li>
             );
@@ -181,12 +173,6 @@ export function MessageList({
           <li className="chat-message chat-assistant">
             <strong className="sr-only">{t("assistant")}</strong>
             <RequestStylePrompt busy={busy} onChoose={onChooseStyle} />
-          </li>
-        )}
-        {pending?.kind === "revise_or_plan" && (
-          <li className="chat-message chat-assistant">
-            <strong className="sr-only">{t("assistant")}</strong>
-            <ReviseOrPlanCard message={pending.message} busy={busy} onChoose={onChooseRevise} />
           </li>
         )}
       </ul>

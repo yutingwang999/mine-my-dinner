@@ -81,7 +81,7 @@ When the thread **has a current plan** and the user writes a message (not a butt
    - `new_meal` → today's new-plan path for this turn (parse, diner card when needed, planner), as a route answer `plan` does today.
    - `people` → a change in who eats or a lasting rule about someone: today's behaviour for this plan (the parse runs, the diner card shows, the meal is planned anew). Plan two replaces this.
    - `other` → a message that is not about this meal's plan ("你好", "谢谢", a cooking question, a request the app cannot do yet such as adding a recipe): today's fixed "other" reply; the plan, the request and the card stay as they are, and the next message is read against the same plan. No parse call.
-3. The choice card (revise or plan) is no longer produced: an ambiguous message is acted on (Section 5.6). The frontend keeps rendering it for threads saved before this plan; a later cleanup can remove the component.
+3. The choice card (revise or plan) is no longer produced: an ambiguous message is acted on (Section 5.6). The card, its resume and its frontend component were removed in Task 8 (user decision, 2026-11-23: no saved thread was paused on one).
 
 Button turns: unchanged up to the request (code applies the button's change to the card's request). A button that revises again skips the reader: the frame builder (Section 5.4) compares the request the button built with the kept plan, and the picker fills what it asks for, with the offering turn's words as the wish context (plan 3b-1b behaviour, now feeding the frame and the picker).
 

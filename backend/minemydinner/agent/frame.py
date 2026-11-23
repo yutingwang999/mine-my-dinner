@@ -449,7 +449,8 @@ def build_frame(
     builder = _Builder(plan_ids, locked, facts)
     in_plan = set(builder.plan_ids)
     # A locked dish goes for a rule or an avoidance only (today's rule); stock, cookware or
-    # the time limit never move it, as `split_violations` allows them for locked dishes.
+    # the time limit never move it, as a manual version keeps them as warnings
+    # (edits.ALLOWED_CODES).
     breaking = {
         i: reason for i, reason in breaking.items() if i not in locked or reason in RULE_BREAKS
     }
