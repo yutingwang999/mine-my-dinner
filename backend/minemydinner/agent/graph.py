@@ -71,6 +71,7 @@ from minemydinner.agent.edits import locked_ids, revised_card
 from minemydinner.agent.follow_up import (
     FollowUpReading,
     ReadConditions,
+    hand_edit_line,
     reader_messages,
     request_after,
 )
@@ -825,6 +826,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             people = with_meal_avoid(session, constraints, [])
             ctx = load_planning_context(session, meal_constraints({"constraints": people}))
             diner_lines = meal_preferences(session, ctx, current_table())
+            # The hand edits on this plan after it was proposed (Task 11 fix 2): they add
+            # no message.
+            log = (state["current_plan"].get("edit") or {}).get("log") or []
+            edited = {e["recipe_id"] for e in log if e.get("recipe_id") is not None}
+            titles: dict[int, str] = {}
+            if edited:
+                rows = session.execute(select(Recipe.id, Recipe.title).where(Recipe.id.in_(edited)))
+                titles = dict(rows.all())
         messages = [
             SystemMessage(load_prompt("follow_up")),
             *reader_messages(
@@ -833,6 +842,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 diner_lines,
                 reader_conditions(base, plan, constraints.get("headcount"), meal_avoid),
                 state.get("locale", "en"),
+                hand_edits=hand_edit_line(log, titles),
             ),
         ]
         result = deps.client.invoke_structured(deps.task, messages, FollowUpReading)
@@ -1531,6 +1541,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         button = state["button"] if _button_turn(state) else None
         base = state.get("plan_request") or state.get("previous_request") or {}
         wish_choice = False
+        # A card saved before cards kept their unfinished parts has no structured reading, so
+        # its button gives the picker the offering turn's words (`picker_wish`).
+        words_for_picker = False
         if button is None:
             reading = FollowUpReading.model_validate(state["reading"])
             request = request_after(base, reading)
@@ -1541,6 +1554,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             request = state["request"]
             card = _button_card(state) or {}
             unfinished = card.get(UNFINISHED)
+            words_for_picker = UNFINISHED not in card
             if UNFINISHED not in card and card.get("plan_kept") and request.get("query"):
                 # A kept card saved before cards kept their unfinished parts: its wish is
                 # what was not done. It names no dish, so the picker chooses which dishes
@@ -1656,6 +1670,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "frame": frame.model_dump(),
             "reading": used.model_dump(),
             "words": words,
+            "words_for_picker": words_for_picker,
             "breaking": pairs,
             "named": named,
             "outcome": None,
@@ -1733,9 +1748,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     def picker_wish(state: ChatState, change: dict) -> str:
         """The wish the picker reads, in the user's words: the reading's, else the request's
-        taste wish; on a button turn with the offering turn's words as its context."""
+        taste wish. A button turn's reading is the offering turn's structured reading (its
+        card's unfinished parts), so the wish reaches the picker through it and the offering
+        turn's words are not shown: they could contradict the button ("荤菜再来一个" on
+        relax_split, Task 11 fix 2). Only a card saved before cards kept that reading
+        (`words_for_picker`) still passes the words, as the wish's context."""
         wish = (change["reading"].get("wish") or "").strip() or state["request"].get("query") or ""
-        if not _button_turn(state) or not change.get("words"):
+        if (
+            not _button_turn(state)
+            or not change.get("words_for_picker")
+            or not change.get("words")
+        ):
             return wish
         earlier = f"the user's earlier message: {change['words']}"
         return f"{wish} ({earlier})" if wish else earlier
@@ -1823,6 +1846,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             ctx = load_planning_context(session, meal_constraints(state))
             facts, mains = dish_facts(session, ids)
             plan_lines = current_plan_text(plan, mains, avoid)
+            # The plan's counts after what code already decided (its drops leave, the dishes
+            # placed by name come in), shown next to the stated ones.
+            placed, _ = dish_facts(session, frame.placed)
+            kept = [facts[i] for i in ids if i in facts and i not in frame.drops]
+            plan_counts = count_categories(
+                f.dish_type for f in [*kept, *(placed[i] for i in frame.placed if i in placed)]
+            )
             rules = meal_preferences(session, ctx, current_table())
             shortlist, found = picker_shortlist(
                 session, ctx, spec, frame, facts, state["request"], vectors, ids
@@ -1865,7 +1895,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             attempts = attempt + 1
             # Fresh messages every attempt: never the previous attempt's tool results.
             messages = picker_messages(
-                frame, plan_lines, rules_text, wish, shortlist, locale, conditions_line(spec)
+                frame, plan_lines, rules_text, wish, shortlist, locale, conditions_line(spec),
+                plan_counts=plan_counts,
             )
             if problems:
                 messages.append(

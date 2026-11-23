@@ -321,6 +321,21 @@ def test_picker_messages_show_named_and_wish_slots_and_the_stated_counts():
     ) in text
 
 
+def test_picker_messages_show_the_current_counts_next_to_the_stated_ones():
+    """Task 11 fix 2, item 2: with a soup in the plan, "the plan already has four dishes" is a
+    misread count; the line says how many the plan has now and that dishes leave soups out."""
+    frame = _frame(
+        slots=[Slot(kind="add")], count_ranges={"dishes": [4, 4], "soups": [1, 1]}
+    )
+    now = {"dishes": 3, "soups": 1, "meat_dishes": 2, "vegetable_dishes": 1}
+    text = picker_messages(frame, "P", "R", "", "S", "zh", plan_counts=now)[0].content
+    assert (
+        "Stated counts (code checks the result): dishes (meat and vegetable dishes, soups not "
+        "included): 3 in the plan after what is already decided, exactly 4 stated; soups: 1 in "
+        "the plan after what is already decided, exactly 1 stated"
+    ) in text
+
+
 # A must-use ingredient no dish uses (spec 5.4): a replace choice made for it.
 
 MUST_TOFU = Choice(

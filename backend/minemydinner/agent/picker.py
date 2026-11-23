@@ -414,6 +414,29 @@ def _slot_line(index: int, slot: Slot) -> str:
     return line
 
 
+def _stated_counts_line(frame: Frame, plan_counts: dict[str, int] | None) -> str:
+    """The stated counts, each with the plan's number after what code already decided (its
+    drops and the dishes placed by name) when `plan_counts` is given: "dishes (meat and
+    vegetable dishes, soups not included): 3 in the plan after what is already decided,
+    exactly 4 stated". Code facts only."""
+    items = []
+    for name, (low, high) in frame.count_ranges.items():
+        stated = _range_text(low, high)
+        if plan_counts is None:
+            items.append(f"{name.replace('_', ' ')}: {stated}")
+            continue
+        label = (
+            "dishes (meat and vegetable dishes, soups not included)"
+            if name == "dishes"
+            else name.replace("_", " ")
+        )
+        items.append(
+            f"{label}: {plan_counts.get(name, 0)} in the plan after what is already decided, "
+            f"{stated} stated"
+        )
+    return f"Stated counts (code checks the result): {'; '.join(items)}"
+
+
 def picker_messages(
     frame: Frame,
     plan_lines: str,
@@ -422,10 +445,13 @@ def picker_messages(
     shortlist: str,
     locale: str,
     conditions: str = "",
+    plan_counts: dict[str, int] | None = None,
 ) -> list[BaseMessage]:
     """The picker's input after the system prompt (spec 5.5): one user message with the
     shortlist, the current plan, the diner and meal rules, the meal's conditions
-    (`conditions_line`), the counts the user stated, the user's wish (in the user's words),
+    (`conditions_line`), the counts the user stated (with `plan_counts`, the plan's number
+    after what code already decided next to each, `count_categories` of those dishes: Task 11 fix 2, so a soup is never
+    counted as a dish), the user's wish (in the user's words),
     what code already decided, the choices with their limits (a must-use choice names its
     ingredient), the slots (the dish each replaces with the user's words, an add's type, a
     named dish) and how choice slots are numbered, and the reply locale."""
@@ -438,11 +464,7 @@ def picker_messages(
     if conditions:
         parts.append(conditions)
     if frame.count_ranges:
-        counts = "; ".join(
-            f"{name.replace('_', ' ')}: {_range_text(low, high)}"
-            for name, (low, high) in frame.count_ranges.items()
-        )
-        parts.append(f"Stated counts (code checks the result): {counts}")
+        parts.append(_stated_counts_line(frame, plan_counts))
     parts.append(f"The user's wish: {wish.strip() or 'none'}")
     if decided:
         parts.append("Already decided:\n" + "\n".join(decided))

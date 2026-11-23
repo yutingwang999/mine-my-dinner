@@ -2899,8 +2899,9 @@ def test_button_revision_quotes_the_offering_turns_words(revise_env):
 
 def test_fewer_dishes_after_a_failed_add_shows_the_button_apart(revise_env):
     """Development run 2, item 7, on the change path: after a count wish nothing could fill,
-    fewer_dishes re-runs the unfinished adds against its own lower count, and the picker
-    reads the earlier wish as context, apart from the button."""
+    fewer_dishes re-runs the unfinished adds against its own lower count. Since Task 11 fix 2
+    the picker reads the offering turn's structured reading, not its words (this one stated no
+    wish), and sees the current count next to the stated one."""
     env = revise_env
     first_meal(env)
     [cucumber] = dish_ids(env, "凉拌黄瓜")
@@ -2918,7 +2919,12 @@ def test_fewer_dishes_after_a_failed_add_shows_the_button_apart(revise_env):
     assert plan["passed"] and cucumber in ids_of_plan(plan) and len(ids_of_plan(plan)) == 4
     assert latest_record(env).request["spec"]["dishes"] == 3
     text = picker_input(env)
-    assert f"the user's earlier message: {wish}" in text
+    assert wish not in text and "The user's wish: none" in text
+    assert "soups: 1 in the plan after what is already decided, exactly 1 stated" in text
+    assert (
+        "dishes (meat and vegetable dishes, soups not included): 2 in the plan after what is "
+        "already decided, exactly 3 stated"
+    ) in text
     assert "- Slot 0: a vegetable dish, added" in text and "Slot 1" not in text
     assert latest_record(env).request["messages"] == ["少做几道菜"]
 
@@ -2998,7 +3004,10 @@ def _press_shopping_on_kept_plan(env: ReviseEnv, cabbage: int, beans: int, cucum
     ids = ids_of_plan(plan)
     assert plan["passed"] and beans in ids and cucumber in ids and cabbage not in ids
     assert beans in plan["locked"]
-    assert "the user's earlier message: 想吃点海鲜" in picker_input(env)
+    # Task 11 fix 2, item 1: the offering reading's wish reaches the picker, not its words.
+    text = picker_input(env)
+    assert "The user's wish: 海鲜\n" in text
+    assert "想吃点海鲜" not in text and "earlier message" not in text
     return out
 
 
@@ -3226,6 +3235,50 @@ def _hand_add(env: ReviseEnv, recipe_id: int) -> None:
     outcome, update = apply_edit(env.session, ctx, values, Add(recipe_id=recipe_id), "zh")
     assert outcome.plan is not None
     env.graph.update_state(env.config, update, as_node="present_plan")
+
+
+def _hand_remove(env: ReviseEnv, recipe_id: int) -> None:
+    from minemydinner.agent.edits import Remove, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    values = env.graph.get_state(env.config).values
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=recipe_id), "zh")
+    assert outcome.plan is not None
+    env.graph.update_state(env.config, update, as_node="present_plan")
+
+
+def reader_input(env, call: int = -1) -> str:
+    return [m for m in reader_calls(env)[call] if m.type == "human"][0].content
+
+
+def test_the_reader_sees_what_the_user_changed_by_hand(revise_env):
+    """Task 11 fix 2, item 3: hand edits add no message, so a reply before them names the plan
+    as it was. The reader's input says what the user changed by hand on this plan, in order,
+    by title; with no edit there is no such line. An "other" reply keeps the plan and its
+    edit log, so the line must stay true after it (fix round 1): it says the edits came after
+    the plan was proposed, never "since the last reply", and lists each edit once."""
+    env = revise_env
+    first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    say(env, "谢谢", "other")
+    assert "by hand" not in reader_input(env)
+    _hand_add(env, beans)
+    _hand_remove(env, cabbage)
+    line = (
+        "The user changed this plan by hand after it was proposed: added 干煸豆角; removed "
+        "清炒小白菜."
+    )
+    say(env, "你好", "other")
+    text = reader_input(env)
+    assert line in text
+    assert text.index("Current plan") < text.index(line) < text.index("Diners:")
+    # A third message, after an "other" reply that came after the edits.
+    say(env, "在吗", "other")
+    text = reader_input(env)
+    assert text.count(line) == 1 and "since the last reply" not in text.lower()
+    assert text.count("by hand") == 1
 
 
 THREE = ("土豆炖牛肉", "清炒小白菜", "青椒炒肉")
@@ -3917,8 +3970,10 @@ def test_a_button_on_a_kept_plan_re_runs_the_unfinished_wish(revise_env):
     out = press(env, "switch_to_shopping", replies=[pick(slots=[(0, beans)], wish_met=True)])
     plan = out["current_plan"]
     assert ids_of_plan(plan) == [beef, beans, soup] and plan["spec"]["mode"] == "shopping"
-    # The offering turn's words are the picker's wish context.
-    assert "想吃点海鲜" in picker_input(env)
+    # The offering turn's reading carries the wish to the picker; its words do not (Task 11
+    # fix 2, item 1).
+    text = picker_input(env)
+    assert "The user's wish: 海鲜\n" in text and "想吃点海鲜" not in text
     assert out["request"]["query"] == "海鲜"
 
 
@@ -4548,6 +4603,48 @@ def test_a_side_count_add_nothing_fills_offers_relax_split_which_adds_any_dish(r
     assert "- Slot 0: added" in picker_input(env)
     assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
     assert out["current_plan"]["passed"]
+
+
+def test_a_button_turn_shows_the_picker_no_earlier_words(revise_env):
+    """Task 11 fix 2, item 1: a button re-runs the offering turn's structured reading (kept on
+    its card), so the picker reads the reading's wish, never that turn's raw words: "荤菜再来一个吧"
+    would ask for a meat dish while relax_split allows either side."""
+    env = revise_env
+    first_meal(env)
+    [beans] = dish_ids(env, "干煸豆角")
+    message = "荤菜再来一个吧"
+    reading = {
+        "kind": "change",
+        "add": [{"dish_type": "meat dish", "count": 1}],
+        "counts": {"meat_dishes": 2},
+    }
+    out = read(env, message, reading, replies=[pick(slots=[(0, None)])])
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["unfinished"]["words"] == message and "relax_split" in card["next_actions"]
+    press(env, "relax_split", replies=[pick(slots=[(0, beans)])])
+    text = picker_input(env)
+    assert message not in text and "earlier message" not in text
+    assert "The user's wish: none" in text
+
+
+def test_the_picker_counts_the_plan_after_the_decided_drops(revise_env):
+    """Task 11 fix 2, fix round 1: the counts line counts the plan after what code already
+    decided (a named drop leaves), so the picker never counts a dish that is going."""
+    env = revise_env
+    first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    reading = {
+        "kind": "change",
+        "remove": [{"id": cabbage, "mode": "drop", "quote": "小白菜"}],
+        "counts": {"dishes": 2},
+    }
+    read(env, "小白菜不要了，还是两个菜", reading, replies=[pick(slots=[(0, beans)])])
+    text = picker_input(env)
+    assert f"- Leaving the plan: {cabbage}" in text
+    assert (
+        "dishes (meat and vegetable dishes, soups not included): 1 in the plan after what is "
+        "already decided, exactly 2 stated"
+    ) in text
 
 
 def test_an_add_with_no_stated_side_offers_no_relax_split(revise_env):

@@ -418,3 +418,14 @@ The new follow-up structure (reader `follow_up_v1`, frame in code, picker `pick_
 - `button_shopping_after_seafood_wish`: "a wish for something the plan lacks" was read as a wish alone, so nothing changed; `follow_up_v2` turns such a wish into an add or a replacement.
 - `new_guest_brings_the_card`: a new diner plus "one more dish" was read as a change; `follow_up_v2` reads any change in who eats as `people`.
 - Also: the picker's shortlist no longer lists dishes already in the plan.
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T125329Z (run 2) | follow_up_v2, pick_v1 | 38/42 | 3 (3 scenarios) | 0/30 | 2.1 / 5 | $0.0513 | 6.0 s |
+
+**Run 2 misses and what was done** (fixed before run 3, with the user's approval, 2026-11-24): five of run 1's six misses passed.
+- `start_over_with_four` (must: stated count): the plan had 3 meat/vegetable dishes and a soup; the picker read "dishes: exactly 4" as already met, counting the soup. The picker's input now shows each stated count next to the plan's current number and says that dishes exclude soups.
+- `button_relax_split_after_failed_add` (must: stated count): on the relax_split button the picker was given the offering turn's words ("荤菜再来一个吧") as the wish, searched only meat dishes and left the any-type slot empty. No button turn passes the earlier words any more; the structured reading kept on the card carries the wish (a legacy card without it still uses the words).
+- `too_many_eggs` (must: more dishes changed than allowed): the reader both dropped one egg dish and listed all three as wish targets, against its own reading sentence. `follow_up_v3`: a request is applied once.
+- `general_lighter_or_added`: the picker looked only at meat dishes for a lighter dish. `pick_v2`: the plan's balance yields to the wish.
+- Also: the reader's input now says what the user changed by hand since the last reply (edits add no message, so the conversation named the plan before them).

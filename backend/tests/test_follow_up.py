@@ -4,6 +4,7 @@ from minemydinner.agent.follow_up import (
     FollowUpReading,
     ReadCounts,
     ReadConditions,
+    hand_edit_line,
     reader_messages,
     request_after,
 )
@@ -115,3 +116,36 @@ def test_reader_messages_order_and_no_nickname():
     ]
     assert order == sorted(order)
     assert "zh" in text
+    assert "by hand" not in text
+
+
+def test_hand_edit_line_lists_the_edits_in_order_by_title():
+    """Task 11 fix 2, item 3: what the user changed by hand on this plan after it was proposed,
+    from the card's edit log: adds, removals and a restore, in order; keeps are not plan
+    changes. Fix round 1: never "since the last reply", which an "other" reply makes false."""
+    log = [
+        {"action": "add", "recipe_id": 5, "at": "t1"},
+        {"action": "keep", "recipe_id": 5, "at": "t2"},
+        {"action": "remove", "recipe_id": 7, "at": "t3"},
+        {"action": "restore", "recipe_id": None, "at": "t4"},
+    ]
+    titles = {5: "红烧茄子", 7: "番茄炒蛋"}
+    assert hand_edit_line(log, titles) == (
+        "The user changed this plan by hand after it was proposed: added 红烧茄子; removed "
+        "番茄炒蛋; restored the proposed plan."
+    )
+    assert hand_edit_line([], titles) == ""
+    assert hand_edit_line([{"action": "keep", "recipe_id": 5}], titles) == ""
+    # A dish with no title (it left the library) is still a fact, without a name.
+    assert hand_edit_line([{"action": "remove", "recipe_id": 9}], titles) == (
+        "The user changed this plan by hand after it was proposed: removed a dish."
+    )
+
+
+def test_reader_messages_put_the_hand_edit_line_after_the_plan():
+    line = "The user changed this plan by hand after it was proposed: added 红烧茄子."
+    text = reader_messages(
+        [HumanMessage("换掉汤")], "Current plan:\n- 7 番茄汤 (soup; 番茄)", [], "Request", "zh",
+        hand_edits=line,
+    )[0].content
+    assert text.index("Current plan:") < text.index(line) < text.index("Diners:")

@@ -160,22 +160,51 @@ class FollowUpReading(BaseModel):
     )
 
 
+def hand_edit_line(log: list[dict], titles: dict[int, str]) -> str:
+    """What the user changed by hand on the current plan after it was proposed, from its card's
+    edit log (`agent/edits.py`): adds, removals and a restore, in order, dishes by title (Task
+    11 fix 2: hand edits add no message, so a reply before them names the plan as it was and a
+    removed dish is invisible in the plan lines). The wording holds whatever came after the
+    edits: an "other" reply or a change that kept the plan leaves the plan and its log as they
+    are, so "since the last reply" would be false (fix round 1). A keep confirms a conflict
+    and changes no dish. Empty when nothing changed. Facts only, never a person.
+
+    The restore branch is not reached by today's edit model: a restore makes the restored
+    card current, and its log starts empty (the restore entry stays on the manual version in
+    `plan_versions`). It is kept so a log that ever holds one still reads truthfully."""
+    changes = []
+    for entry in log:
+        action = entry.get("action")
+        if action == "restore":
+            changes.append("restored the proposed plan")
+        elif action in ("add", "remove"):
+            title = titles.get(entry.get("recipe_id"))
+            verb = "added" if action == "add" else "removed"
+            changes.append(f"{verb} {title}" if title else f"{verb} a dish")
+    if not changes:
+        return ""
+    return "The user changed this plan by hand after it was proposed: " + "; ".join(changes) + "."
+
+
 def reader_messages(
     conversation: list[BaseMessage],
     plan_lines: str,
     diner_lines: list[str],
     conditions_text: str,
     locale: str,
+    hand_edits: str = "",
 ) -> list[BaseMessage]:
     """The reader's input after the system prompt (spec 5.3): one user message with the plan
-    lines, the diner lines (anonymous "Diner N" rules, never a saved nickname), the current
-    conditions and the whole conversation, in that order."""
+    lines, what the user changed by hand on this plan after it was proposed (`hand_edit_line`,
+    when anything), the diner lines (anonymous "Diner N" rules, never a saved nickname), the
+    current conditions and the whole conversation, in that order."""
     turns = []
     for message in conversation:
         who = "Assistant" if isinstance(message, AIMessage) else "User"
         turns.append(f"{who}: {message.content}")
     parts = [
         plan_lines,
+        *([hand_edits] if hand_edits else []),
         "Diners:\n" + ("\n".join(diner_lines) or "- no diner rules"),
         conditions_text,
         "Conversation:\n" + "\n".join(turns),
