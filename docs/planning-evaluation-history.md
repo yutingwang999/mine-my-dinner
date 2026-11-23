@@ -405,6 +405,26 @@ Total cost of the spike: $0.224.
 
 The new follow-up structure (reader `follow_up_v1`, frame in code, picker `pick_v1`; Tasks 2-10b) on the rewritten development set (`scenarios_revise.yaml`, 42 scenarios, `library_revise.yaml`), test database, deepseek-flash, **with embeddings** (`--with-embeddings`; round 10 ran without, so its search fell back to text matching while the tool said "matched by meaning" — see the carryover on `semantic_paused`). Results of record come from Task 12's round.
 
+**The five runs side by side** (the tables after it give each run with its misses):
+
+| | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Target |
+|---|---|---|---|---|---|---|
+| Run folder | 20261123T112836Z | 20261123T125329Z | 20261123T135719Z | 20261123T153538Z | 20261123T164312Z | |
+| Commit | `e770385` | `af1a940` | `e807d2c` | `294198a` | `896d17c` | |
+| Reader / picker prompt | follow_up_v1 / pick_v1 | follow_up_v2 / pick_v1 | follow_up_v3 / pick_v2 | follow_up_v3 / pick_v3 | follow_up_v4 / pick_v4 | |
+| As expected (development set) | 36/42 | 38/42 | 40/42 | 40/42 | **41/42** | ≥ 90% (38) |
+| Must-never-be-wrong | 1 | 3 | 0 | 1 (runner false positive) | **0** | 0 |
+| Unnecessary questions | 0/30 | 0/30 | 0/30 | 0/30 | 0/30 | ≤ 20% |
+| Calls per change turn (avg / max) | 2.2 / 4 | 2.1 / 5 | 2.4 / 5 | 2.2 / 6 | 2.1 / 4 | ≤ 2.5 / ≤ 7 |
+| Locked dishes removed | 0 | 0 | 0 | 0 | 0 | 0 |
+| After a button, as expected | 4/7 | 5/6 | 5/6 | 6/6 | 6/6 | |
+| Picker answers cut by DeepSeek (of picker calls) | 3 empty / 37 | 4 / 43 | 10 / 47 | 3 / 45 | **0 / 41** | |
+| Reader asked again | — | — | — | 0 | 0 | |
+| Cost (cache-aware) | $0.0493 | $0.0513 | $0.0490 | $0.0484 | $0.0496 | |
+| Avg latency | 6.2 s | 6.0 s | 6.7 s | 6.5 s | 6.5 s | |
+
+Run 1's three "empty" picker replies were cut answers recorded before `invalid_tool_calls` was kept; the cut answers are traced in `docs/investigations/2026-11-24-deepseek-picker-tool-call-cut.md`. The reader re-ask exists from run 4 on.
+
 | Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
 |---|---|---|---|---|---|---|---|
 | 20261123T112836Z (run 1) | follow_up_v1, pick_v1 | 36/42 | 1 (1 scenario) | 0/30 | 2.2 / 4 | $0.0493 | 6.2 s |
@@ -447,3 +467,9 @@ The new follow-up structure (reader `follow_up_v1`, frame in code, picker `pick_
 **Run 4.** Every button scenario passed (6/6). The picker's answer was still cut 3 times of 45 (7%), always after `"wish_met"` though it is no longer nullable; one answer was salvaged and two were set aside and asked again, and all three scenarios passed. The full account of the cut answers, with every occurrence, the raw HTTP evidence and a field-name experiment (`wish_met` 5 cut of 21, `wish_result` 0 of 19), is in `docs/investigations/2026-11-24-deepseek-picker-tool-call-cut.md`. Misses:
 - `button_fewer_after_failed_add`: the behaviour was right (one of the two dishes could be made at home and was added; the card offered shopping), but the runner reported "stated counts not met" because an unfilled add with no dish type did not count as touching the stated total. The runner was fixed.
 - `meal_avoid_beef`: "这顿别放牛肉" was read as a one-meal avoidance **and** a drop of the beef dish, so code dropped it instead of replacing it and the plan shrank to two dishes; the reply also said no replacement had been found, though none was searched. Left for the user's decision (code must not override the reader's reading; a clearer reader principle in a next version, and an honest reply).
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T164312Z (run 5, an extra run the user approved) | follow_up_v4, pick_v4 | 41/42 | 0 | 0/30 | 2.1 / 4 | $0.0496 | 6.5 s |
+
+**Run 5.** No picker answer was cut (0 of 41 picker calls, `tool_call_cut scan`), no reader was asked again, every button scenario passed (6/6), and `meal_avoid_beef` passed. The one miss, `change_the_soups` ("把汤换一换" on two dishes and two soups): the reader rightly listed both soups for replacement; the picker, choosing any type, filled one soup's slot with a vegetable dish (清炒菠菜) though the message was about soups, so the meal became three dishes and one soup. No count was stated, so code did not check it; it is a picker judgement against `pick_v4`'s "keep the plan's balance unless the user's words point to another kind" (carryover). This is the last development run of Task 11.
