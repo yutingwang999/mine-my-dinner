@@ -1867,9 +1867,7 @@ def test_the_loader_reads_the_revise_keys(tmp_path):
         follow_up="茄子这道不要，换一个别的",
         first_plan=["番茄炒蛋", "红烧茄子"],
         edits_between_turns=[{"add": "清炒小白菜"}, {"remove": "番茄炒蛋"}, {"keep": "宫保鸡丁"}],
-        choice_answer="revise",
         expect_route="revise",
-        expect_choice_card=False,
         expect_question=False,
         expect_unchanged=False,
         expect_removed=["红烧茄子"],
@@ -1879,8 +1877,7 @@ def test_the_loader_reads_the_revise_keys(tmp_path):
         library_exclude=["宫保鸡丁"],
         deferred_to="3b-2",
     )
-    # The choice card's keys are still read (plan 3b-2 Task 8 removed the card).
-    assert s.first_plan == ["番茄炒蛋", "红烧茄子"] and s.choice_answer == "revise"
+    assert s.first_plan == ["番茄炒蛋", "红烧茄子"] and s.expect_route == "revise"
     assert s.edits_between_turns[2] == {"keep": "宫保鸡丁"} and s.expect_max_changed == 1
     assert s.deferred_to == "3b-2" and len(s.expect_any_of) == 2
 
@@ -1946,7 +1943,6 @@ def test_each_follow_up_key_reports_a_failure_when_unmet():
     met = _facts()
     cases = [
         {"expect_route": "plan"},
-        {"expect_choice_card": True},
         {"expect_question": True},
         {"expect_unchanged": True},
         {"expect_removed": ["番茄炒蛋"]},
@@ -1958,7 +1954,6 @@ def test_each_follow_up_key_reports_a_failure_when_unmet():
         assert _judge(met, **keys), keys
     good = {
         "expect_route": "revise",
-        "expect_choice_card": False,
         "expect_question": False,
         "expect_unchanged": False,
         "expect_removed": ["红烧茄子"],
@@ -2012,13 +2007,16 @@ def test_the_plan_flag_is_not_judged_on_a_turn_without_a_run():
     assert expectation_failures(scenario, _plan(), False, 3, facts, check_plan_flag=False) == []
 
 
-def test_an_expected_choice_card_is_never_met():
-    """The choice card was removed (plan 3b-2 Task 8): expecting it fails, not expecting it
-    passes."""
-    assert _judge(_facts(), expect_choice_card=True) == [
-        "choice card expected, but the app no longer shows one"
-    ]
-    assert _judge(_facts(), expect_choice_card=False) == []
+@pytest.mark.parametrize(
+    "changes",
+    [{"expect_choice_card": True}, {"expect_choice_card": False}, {"choice_answer": "revise"},
+     {"expect_route": "unsure"}],
+)
+def test_the_removed_choice_card_keys_fail_to_load(tmp_path, changes):
+    """The choice card was removed (plan 3b-2 Task 8): its keys and the route "unsure" are
+    refused at load."""
+    with pytest.raises(ValueError):
+        _load_one(tmp_path, follow_up="换一下", **changes)
 
 
 def _revise_outcome(name, turn="revision", passed=True, **changes):
@@ -2179,7 +2177,6 @@ def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
         first_plan=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
         edits_between_turns=[{"keep": "宫保鸡丁"}, {"add": "蒜蓉西兰花"}, {"remove": "番茄炒蛋"}],
         expect_route="revise",
-        expect_choice_card=False,
         expect_question=False,
         expect_unchanged=False,
         expect_removed=["红烧茄子"],
@@ -2258,7 +2255,7 @@ def test_first_plan_reply_sentence_in_both_languages():
 def test_a_follow_up_once_given_the_choice_card_is_read_and_acted_on(tmp_path, eval_db):
     """Plan 3b-2 spec 5.1: the choice card was removed (Task 8). A follow-up the route once
     answered "unsure" is read; here the reader takes it as a new meal, and the turn plans
-    with no card (a scenario's choice_answer is read and ignored)."""
+    with no card."""
     model = ScriptModel(
         eval_db,
         [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _propose("宫保鸡丁", "番茄炒蛋", "红烧茄子")],
@@ -2270,9 +2267,7 @@ def test_a_follow_up_once_given_the_choice_card_is_read_and_acted_on(tmp_path, e
         "answered",
         rules=[],
         follow_up="换一下吧",
-        choice_answer="plan",
         expect_route="plan",
-        expect_choice_card=False,
         expect_titles_exact=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
     )
     [first] = evaluate(
@@ -3509,8 +3504,6 @@ def test_the_development_set_has_no_choice_card_keys():
     route can be "unsure" any more."""
     scenarios = load_scenarios(EVAL_DIR / "scenarios_revise.yaml")
     for scenario in scenarios:
-        assert scenario.expect_choice_card is None, scenario.name
-        assert scenario.choice_answer is None, scenario.name
         assert scenario.expect_route != "unsure", scenario.name
         for entry in scenario.expect_any_of:
             assert "expect_choice_card" not in entry and entry.get("expect_route") != "unsure"

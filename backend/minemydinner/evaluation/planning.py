@@ -314,16 +314,9 @@ class Scenario:
     # 3a edits applied in order after between_turns: [{add | remove | keep: title}]; an add
     # or keep that needs confirmation is confirmed.
     edits_between_turns: list[dict[str, str]] = field(default_factory=list)
-    # The answer to the plan 3b-1 choice card, removed in plan 3b-2 Task 8: still read so an
-    # older scenario file loads, and ignored.
-    choice_answer: str | None = None
-    # What the follow-up was taken as (plan | revise | other; "unsure" is never met since
-    # plan 3b-2): a follow-up on a plan is read, and the reading's kind stands for the route
+    # What the follow-up was taken as (plan | revise | other): a follow-up on a plan is read, and the reading's kind stands for the route
     # (revise_eval.ROUTE_OF_READING); a first message keeps the route model's answer.
     expect_route: str | None = None
-    # Whether the choice card appeared on the follow-up. The card was removed (plan 3b-2
-    # Task 8), so only false can be met; still read so an older scenario file loads.
-    expect_choice_card: bool | None = None
     # The follow-up ends with a question to the user and no new plan version.
     expect_question: bool | None = None
     # The dishes after the follow-up equal those before it.

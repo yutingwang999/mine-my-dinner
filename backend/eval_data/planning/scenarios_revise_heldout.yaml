@@ -21,6 +21,8 @@
 #   stops at the card.
 # - expect_route: plan | revise | unsure - the route result of the follow-up.
 # - expect_choice_card: bool - whether the choice card appeared on the follow-up.
+#   (Plan 3b-2 removed the choice card: choice_answer, expect_choice_card and
+#   expect_route: unsure are no longer used; no scenario here sets them.)
 # - expect_question: bool - the follow-up ends with a question to the user and no new plan
 #   version.
 # - expect_unchanged: bool - the dishes after the follow-up equal those before it.

@@ -40,7 +40,8 @@
 # - expect_route: plan | revise | other - what the turn was taken as. A follow-up on a plan
 #   is read, not routed: the reading's kind stands for it (change and people: revise,
 #   new_meal: plan, other: other); a first message keeps the route model's answer.
-#   ("unsure", the choice card's route, is still read for the older sets and never met.)
+#   (The choice card's keys, choice_answer and expect_choice_card, and the route "unsure"
+#   are no longer accepted; a scenario that sets one fails to load.)
 # - expect_question: bool - the turn ends with a question to the user and no new version.
 # - expect_unchanged: bool - the dishes after the turn are those before it.
 # - expect_removed: [titles] - each is gone. expect_removed_any: [titles] - one of them is

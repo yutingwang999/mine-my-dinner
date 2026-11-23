@@ -1,8 +1,8 @@
 """Follow-up scenarios of the planning evaluation (plan 3b-1 spec 5.6): a fixed first plan,
 3a hand edits between the turns, dishes hidden for one scenario, and the follow-up's own
 checks (route, question, which dishes changed, locked dishes kept). The choice card is gone
-(plan 3b-2 Task 8): its scenario keys are still read, `choice_answer` is ignored and
-`expect_choice_card: true` cannot be met.
+(plan 3b-2 Task 8): its scenario keys (`choice_answer`, `expect_choice_card`) and the
+route "unsure" are no longer accepted; a scenario that sets one fails to load.
 
 Plan 3b-2 spec 6 judges every scenario in two layers: what must never be wrong
 (`must_failures`, run on every scenario of every set) and what the scenario's keys accept
@@ -45,10 +45,8 @@ from minemydinner.planning.composition import CATEGORY_OF_DISH_TYPE, SPLIT_CATEG
 from minemydinner.planning.context import load_planning_context
 from minemydinner.planning.validate import PlanSpec, validate_plan
 
-# The values the scenario keys take. "unsure" was the route model's answer that showed the
-# choice card (gone since plan 3b-2 Task 8): still read so the regression sets load, never
-# met. "other" is a follow-up that is not about the meal's plan.
-ROUTES = ("plan", "revise", "unsure", "other")
+# The values the scenario keys take. "other" is a follow-up that is not about the meal's plan.
+ROUTES = ("plan", "revise", "other")
 EDIT_KINDS = {"add": Add, "remove": Remove, "keep": Keep}
 # Keys that set up or judge the plan before and after a follow-up, so they need one.
 FOLLOW_UP_KEYS = (
@@ -115,7 +113,6 @@ def check_revise_keys(scenario: Any, any_of_keys: Collection[str]) -> None:
     if scenario.expect_route not in (None, *ROUTES):
         raise bad(f"expect_route must be one of {list(ROUTES)}")
     for key in (
-        "expect_choice_card",
         "expect_question",
         "expect_unchanged",
         "expect_wish_unmet",
@@ -443,9 +440,6 @@ def follow_up_failures(scenario: Any, facts: TurnFacts) -> list[str]:
     failures = []
     if scenario.expect_route is not None and facts.route != scenario.expect_route:
         failures.append(f"route {facts.route}, expected {scenario.expect_route}")
-    if scenario.expect_choice_card:
-        # The card was removed (plan 3b-2 Task 8): it is never shown.
-        failures.append("choice card expected, but the app no longer shows one")
     if scenario.expect_question is not None and facts.question != scenario.expect_question:
         failures.append(f"question to the user={facts.question}, expected {scenario.expect_question}")
     failures += _3b1b_failures(scenario, facts)
