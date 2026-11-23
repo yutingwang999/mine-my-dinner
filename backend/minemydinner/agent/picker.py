@@ -9,13 +9,15 @@ a "replace" choice becomes one more slot of that dish's own type; these slots ar
 the frame's slots, in the order of the choices and, within a choice, of the ids the picker
 lists (`choice_slots`)."""
 
+from collections.abc import Collection
 from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-from minemydinner.agent.frame import Choice, Frame, Slot
+from minemydinner.agent.frame import Choice, Frame, Slot, fold
 from minemydinner.agent.revision import DishFacts
+from minemydinner.planning.validate import PlanSpec
 
 # A picker answer with problems is retried once with them (spec 5.7).
 PICK_MAX_ATTEMPTS = 2
@@ -122,8 +124,63 @@ def choice_slots(frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]
         for dish_id in _chosen(choice, by_index.get(index)):
             facts_of = facts.get(dish_id)
             dish_type = facts_of.dish_type if facts_of else ""
-            slots.append(Slot(kind="replace", dish_type=dish_type, replaces=dish_id))
+            slots.append(
+                Slot(
+                    kind="replace",
+                    dish_type=dish_type,
+                    replaces=dish_id,
+                    must_use=list(choice.must_use),
+                )
+            )
     return slots
+
+
+def must_use_misses(
+    frame: Frame, answer: PickerAnswer, uncovered: Collection[str]
+) -> tuple[list[str], set[int]]:
+    """Spec 5.4, 5.5: a replace choice made for a must-use ingredient no dish used, or the add
+    slot that takes its place, must bring a dish that uses it. `uncovered` holds the must-use
+    names the plan after the answer still misses (validation's H7). For each such choice or
+    slot whose ingredient is still missed, a problem naming the dishes it got, and those
+    dishes, so a last attempt leaves them out: a replaced dish stays and an add adds nothing
+    (the plan never shrinks unasked). A slot answered null is not a problem (nothing fits),
+    and a name without a choice or slot (missed before this turn) is never checked here.
+    Slots are numbered as `choice_slots` numbers them."""
+    missed = {fold(n) for n in uncovered}
+    by_index: dict[int, ChoiceAnswer] = {}
+    for item in answer.choices:
+        by_index.setdefault(item.index, item)
+    fills: dict[int, int | None] = {}
+    for item in answer.slots:
+        fills.setdefault(item.index, item.recipe_id)
+    # (what the model calls it, its slot numbers, the names it is for)
+    held: list[tuple[str, range, list[str]]] = [
+        (f"Slot {i}", range(i, i + 1), slot.must_use)
+        for i, slot in enumerate(frame.slots)
+        if slot.must_use
+    ]
+    position = len(frame.slots)
+    for index, choice in enumerate(frame.choices):
+        if choice.mode != "replace":
+            continue
+        count = len(_chosen(choice, by_index.get(index)))
+        held.append((f"Choice {index}", range(position, position + count), choice.must_use))
+        position += count
+    problems: list[str] = []
+    bad: set[int] = set()
+    for label, own, must in held:
+        names = [n for n in must if fold(n) in missed]
+        picked = [fills[i] for i in own if fills.get(i) is not None]
+        if not names or not picked:
+            continue
+        need = ", ".join(names)
+        problems.append(
+            f"{label} is for {need}, which no dish in the plan uses, but the new dish "
+            f"({_ids(picked)}) does not use {need}. Choose a dish that uses {need}, or answer "
+            "null for that slot when none fits."
+        )
+        bad.update(picked)
+    return problems, bad
 
 
 def _check_choices(frame: Frame, answer: PickerAnswer, problems: list[str]) -> list[list[int]]:
@@ -250,35 +307,58 @@ def _choice_line(index: int, choice: Choice) -> str:
     dishes = _ids(choice.candidates)
     if choice.mode == "drop":
         return f"- Choice {index}: drop exactly {choice.up_to} of {dishes} ({kind})"
-    return (
+    line = (
         f"- Choice {index}: replace 1 to {choice.up_to} of {dishes} ({kind}); "
         "each dish you choose becomes a new slot of its own dish type"
     )
+    if choice.must_use:
+        line += f"; the new dish must use {', '.join(choice.must_use)}, which no dish uses yet"
+    return line
+
+
+def conditions_line(spec: PlanSpec) -> str:
+    """The meal's hard conditions the new dishes are checked against (spec 5.5), one line."""
+    mode = (
+        "fridge only (new dishes use what is at home)"
+        if spec.mode == "fridge_only"
+        else "shopping allowed"
+    )
+    limit = f"{spec.time_limit_min} minutes" if spec.time_limit_min else "none"
+    must = ", ".join(spec.must_use) or "nothing"
+    return f"Meal conditions: {mode}; time limit: {limit}; must use in at least one dish: {must}"
 
 
 def _slot_line(index: int, slot: Slot) -> str:
     where = f" in place of {slot.replaces}" if slot.replaces is not None else ", added"
-    return f"- Slot {index}: {_article(slot.dish_type)}{where}"
+    line = f"- Slot {index}: {_article(slot.dish_type)}{where}"
+    if slot.must_use:
+        line += f"; it must use {', '.join(slot.must_use)}, which no dish uses yet"
+    return line
 
 
 def picker_messages(
-    frame: Frame, plan_lines: str, rules_text: str, wish: str, shortlist: str, locale: str
+    frame: Frame,
+    plan_lines: str,
+    rules_text: str,
+    wish: str,
+    shortlist: str,
+    locale: str,
+    conditions: str = "",
 ) -> list[BaseMessage]:
     """The picker's input after the system prompt (spec 5.5): one user message with the
-    shortlist, the current plan, the diner and meal rules, the user's wish (in the user's
-    words), what code already decided, the choices with their limits, the slots with their
-    dish types and how choice slots are numbered, and the reply locale."""
+    shortlist, the current plan, the diner and meal rules, the meal's conditions
+    (`conditions_line`), the user's wish (in the user's words), what code already decided,
+    the choices with their limits (a must-use choice names its ingredient), the slots with
+    their dish types and how choice slots are numbered, and the reply locale."""
     decided = []
     if frame.drops:
         decided.append(f"- Leaving the plan: {_ids(frame.drops)}")
     if frame.placed:
         decided.append(f"- Added by name: {_ids(frame.placed)}")
-    parts = [
-        shortlist,
-        plan_lines,
-        rules_text,
-        f"The user's wish: {wish.strip() or 'none'}",
-    ]
+    parts = [shortlist, plan_lines, rules_text]
+    if conditions:
+        parts.append(conditions)
+    parts.append(f"The user's wish: {wish.strip() or 'none'}")
     if decided:
         parts.append("Already decided:\n" + "\n".join(decided))
     if frame.choices:

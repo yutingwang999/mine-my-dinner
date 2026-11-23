@@ -336,8 +336,11 @@ def test_an_add_of_an_unknown_dish_type_is_ignored():
 
 def test_an_uncovered_must_use_ingredient_gives_one_replace_choice():
     frame = _frame(_change(), spec=_spec(must_use=["豆腐"]), locked={1})
+    # The choice names the ingredient it is for, so the picker is told and checked.
     assert frame.choices == [
-        Choice(dish_type=None, candidates=[2, 3, 4, 5], up_to=1, mode="replace")
+        Choice(
+            dish_type=None, candidates=[2, 3, 4, 5], up_to=1, mode="replace", must_use=["豆腐"]
+        )
     ]
 
     covered = _frame(_change(), spec=_spec(must_use=["菠菜"]))
@@ -348,6 +351,8 @@ def test_an_uncovered_must_use_ingredient_gives_one_replace_choice():
         _change(add=[ReadAdd(dish_type="soup", count=1)]), spec=_spec(must_use=["豆腐"])
     )
     assert with_add.choices == []
+    # That add takes the ingredient's place: it must use it.
+    assert [s.must_use for s in with_add.slots] == [["豆腐"]]
 
     # The caller may say which names no dish covers (validation's own rule).
     told = _frame(_change(), spec=_spec(must_use=["菠菜"]), uncovered_must=["菠菜"])

@@ -61,6 +61,7 @@ from minemydinner.agent.change_step import (
     slot_results,
     unfinished_items,
     unfinished_reading,
+    unused_must,
     withhold_count_drops,
     without_picks,
 )
@@ -90,6 +91,8 @@ from minemydinner.agent.picker import (
     PICK_MAX_ATTEMPTS,
     PickerAnswer,
     apply_picks,
+    conditions_line,
+    must_use_misses,
     picker_messages,
 )
 from minemydinner.agent.planner import (
@@ -162,6 +165,8 @@ from minemydinner.planning.validate import PlanSpec, ValidationResult, validate_
 
 # Retries after the first proposal fails validation (design 7.3: at most N times).
 MAX_RETRIES = 2
+# The record's reason for a picked dish left out because it misses a must-use ingredient.
+MUST_USE_MISS = "does not use the must-use ingredient"
 # A plan with one of these violations is never shown (design 6.3).
 NEVER_SHOWN = ("H2", "H5")
 
@@ -1700,17 +1705,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     def check_pick(state: ChatState, plan: dict, frame: Frame, answer, spec: PlanSpec, codes):
         """The picker's answer against the frame (`apply_picks`), then the hard checks of its
-        new dishes (rules, stock, cookware, time). Returns the outcome (None without an
-        answer), the problems for a retry, the new dishes that broke a check and the facts."""
+        new dishes (rules, stock, cookware, time) and of a must-use choice or add (its
+        ingredient, `must_use_misses`). Returns the outcome (None without an answer), the
+        problems for a retry, the new dishes that broke a check (each with why, for the
+        records) and the facts."""
         ids = state["change"]["plan_ids"]
         if answer is None:
-            return None, ["You gave no answer. Answer with the PickerAnswer tool."], set(), {}
+            return None, ["You gave no answer. Answer with the PickerAnswer tool."], {}, {}
         chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
         with deps.session_factory() as session:
             facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen], plan=plan)
             outcome = apply_picks(ids, frame, answer, facts)
             if outcome.problems:
-                return outcome, list(outcome.problems), set(), facts
+                return outcome, list(outcome.problems), {}, facts
             new = set(outcome.recipe_ids) - set(ids) - set(frame.placed)
             ctx = load_planning_context(session, meal_constraints(state))
             result = validate_plan(
@@ -1722,7 +1729,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             if v.recipe_id in new and v.code in ("H1", "H2", "H3", "H6")
         ]
         problems = [_violation_for_model(v.model_dump(mode="json"), codes) for v in bad]
-        return outcome, problems, {v.recipe_id for v in bad}, facts
+        # Only a must-use name this turn made a choice for is checked; a name the plan
+        # missed before is not the picker's to meet.
+        missed, unused = must_use_misses(frame, answer, must_unmet_names(result.violations))
+        left_out = {i: MUST_USE_MISS for i in unused}
+        left_out.update({v.recipe_id: "breaks a rule" for v in bad})
+        return outcome, problems + missed, left_out, facts
 
     def pick_dishes(state: ChatState) -> dict:
         try:
@@ -1766,12 +1778,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         problems: list[str] = []
         attempts = 0
         answer = outcome = None
-        bad: set[int] = set()
+        bad: dict[int, str] = {}
         first_passed = None
         for attempt in range(PICK_MAX_ATTEMPTS):
             attempts = attempt + 1
             # Fresh messages every attempt: never the previous attempt's tool results.
-            messages = picker_messages(frame, plan_lines, rules_text, wish, shortlist, locale)
+            messages = picker_messages(
+                frame, plan_lines, rules_text, wish, shortlist, locale, conditions_line(spec)
+            )
             if problems:
                 messages.append(
                     HumanMessage(
@@ -1805,7 +1819,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         used_frame = frame
         if problems:
             if answer is not None and outcome is not None and not outcome.problems:
-                answer = without_picks(answer, bad)
+                for reason in set(bad.values()):
+                    picks = [i for i, why in bad.items() if why == reason]
+                    answer = without_picks(answer, picks, reason)
             else:
                 used_frame, answer = fallback_pick(frame)
         # A stated count whose added dish was not found keeps the dishes it would have
@@ -1919,8 +1935,18 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     select(Recipe.id, Recipe.title).where(Recipe.id.in_({*ids, *result_ids}))
                 ).all()
             )
+            must_missed = None
+            if any(c.must_use for c in frame.choices) or any(s.must_use for s in frame.slots):
+                # Only a must-use name the result still misses is said unused: another new
+                # dish may use it even when its own slot found nothing.
+                ctx = load_planning_context(session, meal_constraints(state))
+                found = validate_plan(
+                    session, ctx, PlanSpec.model_validate(spec), result_ids,
+                    carried_overrides(live, result_ids),
+                )
+                must_missed = must_unmet_names(found.violations)
         titles.update({r["id"]: r["title"] for r in live["recipes"]})
-        items = unfinished_items(frame, outcome["slots"], titles, breaking)
+        items = unfinished_items(frame, outcome["slots"], titles, breaking, must_missed)
         said = {i["recipe_id"] for i in items if i["kind"] == "removed"}
         paired = {s["replaces"] for s in outcome["slots"] if s["recipe_id"] is not None}
         named_gone = {
@@ -1956,7 +1982,26 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             else ""
         )
         dishes_changed = result_ids != [r["id"] for r in live["recipes"]]
-        new_conditions = conditions_changed(live, spec, meal_avoid)
+        # A must-use ingredient no dish could use is said once, by the reply: it is not a
+        # change of conditions on its own (with no other change the plan stays, spec 5.5), and
+        # a new version neither carries it nor shows it again as unmet. The request keeps it,
+        # so a button on the card tries it again.
+        unused = unused_must(items)
+        compared = spec
+        if unused:
+            compared = {
+                **spec,
+                "must_use": [n for n in spec.get("must_use") or [] if fold(n) not in unused],
+            }
+        plan_request = state["request"]
+        if unused:
+            plan_request = {
+                **plan_request,
+                "must_use": [
+                    n for n in plan_request.get("must_use") or [] if fold(n) not in unused
+                ],
+            }
+        new_conditions = conditions_changed(live, compared, meal_avoid)
         frame_empty = not (
             frame.drops or frame.slots or frame.choices or frame.placed or frame.missing
         )
@@ -1984,7 +2029,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 shows_card = False
             elif dishes_changed or new_conditions:
                 ctx = load_planning_context(session, meal_constraints(state))
-                checked = PlanSpec.model_validate(spec)
+                checked = PlanSpec.model_validate(compared)
                 overrides = carried_overrides(live, result_ids)
                 found = validate_plan(session, ctx, checked, result_ids, overrides)
                 if any(v.code == "H4" for v in found.violations):
@@ -2027,7 +2072,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 ]
                 note = "\n\n".join(p for p in parts if p)
                 plan_kept = False
-                update.update(plan_request=state["request"], spec=card_spec)
+                update.update(plan_request=plan_request, spec=card_spec)
             else:
                 card = unchanged_card(live, unmet, actions)
                 card["notes"] = deleted_note(current, deleted)

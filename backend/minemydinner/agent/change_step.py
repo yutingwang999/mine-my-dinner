@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from minemydinner.agent.card_text import NEXT_ACTION_ORDER
 from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadCounts
-from minemydinner.agent.frame import Frame
+from minemydinner.agent.frame import Frame, fold
 from minemydinner.agent.picker import ChoiceAnswer, PickerAnswer, SlotAnswer, choice_slots
 from minemydinner.agent.revise_step import (
     over_limit_entries,
@@ -113,11 +113,14 @@ def withhold_count_drops(frame: Frame, answer: PickerAnswer) -> tuple[Frame, Pic
     return reduced, answer.model_copy(update={"choices": choices})
 
 
-def without_picks(answer: PickerAnswer, recipe_ids: Collection[int]) -> PickerAnswer:
-    """The answer with the slots that chose one of `recipe_ids` left unfilled."""
+def without_picks(
+    answer: PickerAnswer, recipe_ids: Collection[int], reason: str = "breaks a rule"
+) -> PickerAnswer:
+    """The answer with the slots that chose one of `recipe_ids` left unfilled, with `reason`
+    (kept in the records)."""
     bad = set(recipe_ids)
     slots = [
-        s.model_copy(update={"recipe_id": None, "reason": "breaks a rule"})
+        s.model_copy(update={"recipe_id": None, "reason": reason})
         if s.recipe_id in bad
         else s
         for s in answer.slots
@@ -145,12 +148,26 @@ def slot_results(frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]
 
 
 def unfinished_items(
-    frame: Frame, slots: list[dict], titles: dict[int, str], breaking: dict[int, str]
+    frame: Frame,
+    slots: list[dict],
+    titles: dict[int, str],
+    breaking: dict[int, str],
+    must_missed: Collection[str] | None = None,
 ) -> list[dict]:
     """What a change could not do, in order: named dishes not placed ("missing"), then the
     slots nothing filled: a dish that breaks a rule is removed ("removed"), any other keeps
-    its dish or adds nothing ("unfilled"). `why` is why a replaced dish had to change (a
-    `breaking` reason), so the next action fits it."""
+    its dish or adds nothing ("unfilled"; `must_use` names the must-use ingredient the slot
+    was for), then a must-use choice that made no slot. `why` is why a replaced dish had to
+    change (a `breaking` reason), so the next action fits it.
+
+    `must_missed`: the must-use names the result still misses (validation's H7); None reads
+    as every name. Only those are said unused, and a must-use choice's empty slot whose
+    ingredient another new dish uses is not unfinished at all: the choice was only for it."""
+    missed = None if must_missed is None else {fold(n) for n in must_missed}
+
+    def unused(names: list[str]) -> list[str]:
+        return [n for n in names if missed is None or fold(n) in missed]
+
     items: list[dict] = []
     for missing in frame.missing:
         detail = missing.detail
@@ -170,6 +187,9 @@ def unfinished_items(
         if slot["recipe_id"] is not None:
             continue
         replaces = slot["replaces"]
+        must = list(slot.get("must_use") or [])
+        if must and slot["kind"] == "replace" and not unused(must):
+            continue
         why = breaking.get(replaces, "") if replaces is not None else ""
         if replaces is not None and slot["reason"] == "breaks_rule":
             items.append(
@@ -185,9 +205,33 @@ def unfinished_items(
                 "why": why,
                 # An add for a stated count: the reply says the count could not be met.
                 "for_count": bool(slot.get("for_count")),
+                # A must-use slot: the reply says the ingredient is not used.
+                "must_use": unused(must),
             }
         )
+    # A must-use choice that made no slot at all (no usable picker answer, `fallback_pick`):
+    # its ingredient is not used either.
+    named = {fold(n) for slot in slots for n in slot.get("must_use") or []}
+    for choice in frame.choices:
+        left = unused([n for n in choice.must_use if fold(n) not in named])
+        if left:
+            items.append(
+                {
+                    "kind": "unfilled",
+                    "recipe_id": None,
+                    "dish_type": "",
+                    "title": None,
+                    "why": "",
+                    "for_count": False,
+                    "must_use": left,
+                }
+            )
     return items
+
+
+def unused_must(items: list[dict]) -> set[str]:
+    """The must-use names (folded) the unfinished parts leave unused."""
+    return {fold(n) for item in items for n in item.get("must_use") or []}
 
 
 def change_actions(items: list[dict], spec: dict, wish_unmet: bool) -> list[str]:

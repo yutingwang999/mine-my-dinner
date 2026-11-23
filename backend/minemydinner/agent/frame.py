@@ -55,6 +55,8 @@ class Slot(BaseModel):
     # True for an add slot made to meet a stated count: when it stays unfilled, the count
     # drops made with it are withheld, so the plan never shrinks unasked (spec 5.5).
     for_count: bool = False
+    # The must-use ingredients the new dish is for: a slot made by a must-use choice.
+    must_use: list[str] = Field(default_factory=list)
 
 
 class Choice(BaseModel):
@@ -67,6 +69,9 @@ class Choice(BaseModel):
     candidates: list[int]
     up_to: int
     mode: Literal["drop", "replace"]
+    # The must-use ingredient no dish uses that this replace choice is for (spec 5.4): the new
+    # dish must use it. Empty for every other choice.
+    must_use: list[str] = Field(default_factory=list)
 
 
 class Missing(BaseModel):
@@ -514,7 +519,7 @@ def build_frame(
                 Choice(dish_type=None, candidates=pool, up_to=up_to, mode="replace")
             )
 
-    # A must-use ingredient no dish uses: one replace, unless an added dish can use it.
+    # A must-use ingredient no dish uses: one replace, unless an added dish takes its place.
     if uncovered_must is None:
         before = {_fold(n) for n in spec_before.get("must_use") or []}
         uncovered_must = [
@@ -525,12 +530,20 @@ def build_frame(
             and not any(_uses(facts.get(i), name) for i in builder.kept())
             and not any(_names_use(names, name) for names in builder.placed_names)
         ]
-    if uncovered_must and not any(s.kind == "add" for s in builder.slots):
+    adds = [s for s in builder.slots if s.kind == "add"]
+    if uncovered_must and adds:
+        # The add takes the ingredient's place (spec 5.4): the first add made for a stated
+        # count, else the first add, must use every uncovered name.
+        carrier = next((s for s in adds if s.for_count), adds[0])
+        carrier.must_use = list(uncovered_must)
+    elif uncovered_must:
         pool = builder.candidates(CATEGORY_OF_DISH_TYPE)
-        for _ in uncovered_must:
+        for name in uncovered_must:
             if pool:
                 builder.choices.append(
-                    Choice(dish_type=None, candidates=pool, up_to=1, mode="replace")
+                    Choice(
+                        dish_type=None, candidates=pool, up_to=1, mode="replace", must_use=[name]
+                    )
                 )
 
     dropped_by_choice = sum(c.up_to for c in builder.choices if c.mode == "drop")

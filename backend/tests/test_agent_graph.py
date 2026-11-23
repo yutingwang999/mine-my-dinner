@@ -4142,3 +4142,162 @@ def test_a_withheld_count_drop_drops_the_pickers_note(revise_env):
     )
     assert ids_of_plan(out["current_plan"]) == [beef, cabbage, cucumber]
     assert "去掉了凉拌黄瓜" not in out["messages"][-1].content
+
+
+# ---- fix between Tasks 9 and 10: the picker is told a must-use ingredient ----
+
+MUST_PORK = {"kind": "change", "conditions": {"must_use": ["猪肉"]}}
+
+
+def test_the_picker_input_names_a_new_must_use_ingredient(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    out = read(
+        env, "要用上猪肉", MUST_PORK,
+        replies=[pick(choices=[(0, [beef])], slots=[(0, pepper)], note="青椒炒肉用上了猪肉。")],
+    )
+    text = picker_input(env)
+    assert (
+        f"- Choice 0: replace 1 to 1 of {beef}, {cabbage}, {soup} (any type); each dish you "
+        "choose becomes a new slot of its own dish type; the new dish must use 猪肉, which no "
+        "dish uses yet"
+    ) in text
+    assert "must use in at least one dish: 猪肉" in text
+    assert len(picker_calls(env)) == 1
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [pepper, cabbage, soup] and plan["passed"]
+
+
+def test_a_pick_that_ignores_the_must_use_ingredient_is_retried_with_the_reason(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    out = read(
+        env, "要用上猪肉", MUST_PORK,
+        replies=[
+            pick(choices=[(0, [cabbage])], slots=[(0, beans)]),
+            pick(choices=[(0, [beef])], slots=[(0, pepper)]),
+        ],
+    )
+    first_try, second_try = picker_calls(env)
+    retry = second_try[-1].content
+    assert "Choice 0" in retry and "猪肉" in retry and str(beans) in retry
+    attempts = change_events(env, "pick_attempt")
+    assert attempts[0]["problems"] and attempts[1]["problems"] == []
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [pepper, cabbage, soup] and plan["passed"]
+    assert out["messages"][-1].content.startswith("把土豆炖牛肉换成了青椒炒肉。")
+
+
+def test_two_picks_that_ignore_the_must_use_ingredient_keep_the_plan_and_say_so(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    out = read(
+        env, "要用上猪肉", MUST_PORK,
+        replies=[pick(choices=[(0, [cabbage])], slots=[(0, beans)], note="干煸豆角很香。")],
+    )
+    assert len(picker_calls(env)) == 2
+    # The plan never shrinks unasked: the chosen dish stays, and nothing else changed.
+    assert out["current_plan"] == first["current_plan"]
+    assert out["plan_versions"] == first["plan_versions"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True and ids_of_plan(card) == [beef, cabbage, soup]
+    reply = out["messages"][-1].content
+    assert "没找到用猪肉做的菜来换清炒小白菜，这次没用上猪肉，清炒小白菜先留着。" in reply
+    assert "干煸豆角" not in reply
+    assert card["next_actions"] == ["import_recipes"]
+    assert [u["code"] for u in card["unmet"]] == ["unfilled"]
+
+
+def test_no_usable_pick_for_a_must_use_ingredient_keeps_the_plan_and_says_so(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    # Both answers choose a dish that is not a candidate: code's fallback makes no replace.
+    out = read(env, "要用上猪肉", MUST_PORK, replies=[pick(choices=[(0, [pepper])])])
+    assert len(picker_calls(env)) == 2
+    assert out["current_plan"] == first["current_plan"]
+    assert "没找到用猪肉做的菜，这次没用上猪肉。" in out["messages"][-1].content
+
+
+def test_an_empty_must_use_slot_is_not_said_when_another_new_dish_uses_it(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    reading = {**MUST_PORK, "wish": "辣一些的", "wish_general": True}
+    # The wish choice's new dish uses 猪肉; the must-use choice's own slot finds nothing.
+    out = read(
+        env, "要用上猪肉，辣一些的", reading,
+        replies=[pick(choices=[(0, [beef]), (1, [cabbage])], slots=[(0, pepper), (1, None)])],
+    )
+    assert len(picker_calls(env)) == 1
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [pepper, cabbage, soup] and plan["passed"]
+    assert plan["spec"]["must_use"] == ["猪肉"]
+    reply = out["messages"][-1].content
+    assert "没用上" not in reply and "清炒小白菜" not in reply.split("。", 1)[1]
+    assert plan["unmet"] == []
+
+
+def test_an_add_takes_the_must_use_ingredients_place_and_is_held_to_it(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    reading = {**MUST_PORK, "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(
+        env, "加个荤菜，要用上猪肉", reading,
+        replies=[pick(slots=[(0, chicken.id)]), pick(slots=[(0, pepper)])],
+    )
+    first_try, second_try = picker_calls(env)
+    text = [m for m in first_try if m.type == "human"][0].content
+    assert "- Slot 0: a meat dish, added; it must use 猪肉, which no dish uses yet" in text
+    assert "Choice" not in text
+    assert "Slot 0 is for 猪肉" in second_try[-1].content
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage, soup, pepper] and plan["passed"]
+
+
+def test_an_add_that_misses_the_must_use_ingredient_twice_adds_nothing_and_says_so(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    reading = {**MUST_PORK, "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(env, "加个荤菜，要用上猪肉", reading, replies=[pick(slots=[(0, chicken.id)])])
+    assert len(picker_calls(env)) == 2
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert "没找到用猪肉做的荤菜，这次没用上猪肉。" in reply and "红烧鸡块" not in reply
+    [outcome] = change_events(env, "change_outcome")
+    [slot] = outcome["slots"]
+    assert slot["recipe_id"] is None and slot["why"] == "does not use the must-use ingredient"
+
+
+def test_a_partial_change_says_an_unused_must_use_ingredient_once(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {**MUST_PORK, "remove": [{"id": soup, "mode": "drop", "quote": "汤"}]}
+    out = read(
+        env, "汤不要了，要用上猪肉", reading,
+        replies=[pick(choices=[(0, [cabbage])], slots=[(0, beans)])],
+    )
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage] and plan["revision"] == {"from_version": 0}
+    reply = out["messages"][-1].content
+    assert reply.startswith("去掉了紫菜蛋花汤。")
+    assert reply.count("没用上猪肉") == 1
+    # Said once: the version neither carries the name nor shows it again as an H7 finding.
+    assert [u["code"] for u in plan["unmet"]] == ["unfilled"]
+    assert not any(w["code"] == "H7" for w in plan["warnings"])
+    assert plan["spec"]["must_use"] == [] and out["plan_request"]["must_use"] == []
+    # The request keeps it, so a button on this card tries it again.
+    assert out["request"]["must_use"] == ["猪肉"]

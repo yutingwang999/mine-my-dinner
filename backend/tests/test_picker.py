@@ -9,10 +9,13 @@ from minemydinner.agent.picker import (
     SlotAnswer,
     apply_picks,
     choice_slots,
+    conditions_line,
+    must_use_misses,
     picker_messages,
 )
 from minemydinner.agent.planner import PICK_SEARCH_LIMIT, PICK_TOOLS_VERSION, TOOLS_VERSION
 from minemydinner.agent.revision import DishFacts
+from minemydinner.planning.validate import PlanSpec
 from tests.recipefakes import seeded  # noqa: F401
 
 # The current plan: two meat dishes, two vegetable dishes and a soup; 60 to 64 are library
@@ -260,6 +263,76 @@ def test_picker_messages_without_a_wish_or_choices():
     text = picker_messages(_frame(slots=[ADD_SOUP]), "P", "R", "", "S", "en")[0].content
     assert "The user's wish: none" in text
     assert "Choice" not in text and "numbered from" not in text
+    assert "Meal conditions" not in text
+
+
+# A must-use ingredient no dish uses (spec 5.4): a replace choice made for it.
+
+MUST_TOFU = Choice(
+    dish_type=None, candidates=[1, 2, 4, 5], up_to=1, mode="replace", must_use=["豆腐"]
+)
+WISH = Choice(dish_type=None, candidates=[1, 2, 4, 5], up_to=2, mode="replace")
+
+
+def test_picker_messages_name_the_must_use_ingredient_and_the_conditions():
+    spec = PlanSpec(
+        dishes=2, meat_dishes=1, vegetable_dishes=1, soups=1, mode="fridge_only",
+        time_limit_min=30, must_use=["豆腐"],
+    )
+    text = picker_messages(
+        _frame(choices=[MUST_TOFU]), "P", "R", "", "S", "zh", conditions=conditions_line(spec)
+    )[0].content
+    assert (
+        "- Choice 0: replace 1 to 1 of 1, 2, 4, 5 (any type); each dish you choose becomes a "
+        "new slot of its own dish type; the new dish must use 豆腐, which no dish uses yet"
+    ) in text
+    assert (
+        "Meal conditions: fridge only (new dishes use what is at home); time limit: 30 "
+        "minutes; must use in at least one dish: 豆腐"
+    ) in text
+    loose = PlanSpec(dishes=1, soups=0, mode="shopping")
+    assert conditions_line(loose) == (
+        "Meal conditions: shopping allowed; time limit: none; must use in at least one dish: "
+        "nothing"
+    )
+
+
+def test_a_choice_slot_carries_the_must_use_ingredient():
+    answer = _answer([(0, 61)], choices=[(0, [4])])
+    [slot] = choice_slots(_frame(choices=[MUST_TOFU]), answer, FACTS)
+    assert slot.replaces == 4 and slot.must_use == ["豆腐"]
+
+
+def test_a_must_use_pick_that_leaves_the_ingredient_unused_is_a_problem():
+    frame = _frame(choices=[WISH, MUST_TOFU])
+    # The wish choice makes slots 0 and 1; the must-use choice's dish is slot 2.
+    answer = _answer([(0, 60), (1, 64), (2, 61)], choices=[(0, [2, 1]), (1, [4])])
+    problems, bad = must_use_misses(frame, answer, {"豆腐"})
+    assert bad == {61}
+    [problem] = problems
+    assert "Choice 1" in problem and "豆腐" in problem and "61" in problem
+    # The plan uses it (another new dish does): no problem.
+    assert must_use_misses(frame, answer, set()) == ([], set())
+    # Nothing fits ("null") is an answer, not a problem: the replaced dish stays.
+    empty = _answer([(0, 60), (1, 64), (2, None)], choices=[(0, [2, 1]), (1, [4])])
+    assert must_use_misses(frame, empty, {"豆腐"}) == ([], set())
+
+
+def test_an_add_slot_for_a_must_use_ingredient_is_named_and_held_to_it():
+    add = Slot(kind="add", dish_type="meat dish", for_count=True, must_use=["豆腐"])
+    frame = _frame(slots=[REPLACE_VEG, add])
+    text = picker_messages(frame, "P", "R", "", "S", "zh")[0].content
+    assert "- Slot 1: a meat dish, added; it must use 豆腐, which no dish uses yet" in text
+    problems, bad = must_use_misses(frame, _answer([(0, 60), (1, 61)]), {"豆腐"})
+    assert bad == {61} and len(problems) == 1 and problems[0].startswith("Slot 1 is for 豆腐")
+    # The other slot is never held to it, and a null add is not a problem.
+    assert must_use_misses(frame, _answer([(0, 60), (1, None)]), {"豆腐"}) == ([], set())
+
+
+def test_an_unused_must_use_name_without_a_choice_is_never_a_problem():
+    # A name the plan missed before this turn has no choice: the picker is not held to it.
+    answer = _answer([(0, 60), (1, 64)], choices=[(0, [2, 1])])
+    assert must_use_misses(_frame(choices=[WISH]), answer, {"豆腐"}) == ([], set())
 
 
 # The picker agent (planner.py).

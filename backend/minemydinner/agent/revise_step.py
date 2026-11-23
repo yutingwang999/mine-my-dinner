@@ -397,8 +397,8 @@ def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[st
     """One part of a change that could not be done, in the user's words. `item["kind"]`:
     "missing" (a named dish not placed: `reason` and, for a found dish, `title`, `blocked`,
     `time_min`), "unfilled" (a slot no dish fits: `dish_type` and the replaced dish's
-    `title`, or None for an add) or "removed" (a dish that breaks a rule, removed with no
-    replacement: `title`, `why`)."""
+    `title`, or None for an add; with `must_use`, the ingredient it was for is not used) or
+    "removed" (a dish that breaks a rule, removed with no replacement: `title`, `why`)."""
     zh = is_zh(locale)
     kind = item["kind"]
     if kind == "missing":
@@ -430,6 +430,28 @@ def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[st
         if zh:
             return f"{name}在你的菜谱库里，但{why or '它不符合这顿的要求'}，所以没有加上。"
         return f"{name} is in your library, but {why or 'it does not fit this meal'}, so it was not added."
+    if kind == "unfilled" and item.get("must_use"):
+        # A must-use ingredient no dish uses, and no dish that uses it was found (spec 5.4).
+        names = ("、" if zh else ", ").join(item["must_use"])
+        title = item.get("title")
+        if title:
+            if zh:
+                return f"没找到用{names}做的菜来换{title}，这次没用上{names}，{title}先留着。"
+            return (
+                f"No dish using {names} could take the place of {title}, so {names} is not "
+                f"used this time and {title} stays."
+            )
+        # An add that was to use it (or a choice that made no slot): nothing is added.
+        word = dish_type_word(item.get("dish_type") or "", locale)
+        if zh:
+            text = f"没找到用{names}做的{word}，这次没用上{names}。"
+            if item.get("for_count"):
+                text += "也没能按你说的数量改，原来的菜都留着。"
+            return text
+        text = f"No {word} using {names} could be found, so {names} is not used this time."
+        if item.get("for_count"):
+            text += " The counts could not be changed as you asked either; the dishes you had stay."
+        return text
     if kind == "unfilled":
         word = dish_type_word(item["dish_type"], locale)
         title = item.get("title")
