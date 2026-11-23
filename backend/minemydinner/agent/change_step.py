@@ -17,9 +17,9 @@ from collections.abc import Collection
 from pydantic import ValidationError
 
 from minemydinner.agent.card_text import NEXT_ACTION_ORDER, next_actions
-from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadCounts
+from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadConditions, ReadCounts
 from minemydinner.agent.frame import Frame, fold
-from minemydinner.agent.picker import ChoiceAnswer, PickerAnswer, SlotAnswer, choice_slots
+from minemydinner.agent.picker import ChoiceAnswer, Picks, SlotPick, choice_slots
 from minemydinner.agent.revise_step import (
     over_limit_entries,
     wish_unmet_actions,
@@ -115,7 +115,7 @@ def button_reading(
     )
 
 
-def fallback_pick(frame: Frame) -> tuple[Frame, PickerAnswer]:
+def fallback_pick(frame: Frame) -> tuple[Frame, Picks]:
     """The frame and answer applied when the picker gave no usable answer: the drop choices
     (a stated lower count) take their first candidates, the replace choices are left out
     (nothing changes for a wish), and no slot is filled, so a dish that breaks a rule still
@@ -123,23 +123,23 @@ def fallback_pick(frame: Frame) -> tuple[Frame, PickerAnswer]:
     added dish, its drops are withheld (`withhold_count_drops`)."""
     drops = [c for c in frame.choices if c.mode == "drop"]
     reduced = frame.model_copy(update={"choices": drops})
-    answer = PickerAnswer(
+    answer = Picks(
         choices=[ChoiceAnswer(index=i, ids=c.candidates[: c.up_to]) for i, c in enumerate(drops)],
         slots=[
-            SlotAnswer(index=i, recipe_id=None, reason="no answer")
+            SlotPick(index=i, recipe_id=None, reason="no answer")
             for i in range(len(frame.slots))
         ],
     )
     return withhold_count_drops(reduced, answer)
 
 
-def count_add_unfilled(frame: Frame, answer: PickerAnswer) -> bool:
+def count_add_unfilled(frame: Frame, answer: Picks) -> bool:
     """An add slot made to meet a stated count is left without a dish."""
     filled = {s.index for s in answer.slots if s.recipe_id is not None}
     return any(s.for_count and i not in filled for i, s in enumerate(frame.slots))
 
 
-def withhold_count_drops(frame: Frame, answer: PickerAnswer) -> tuple[Frame, PickerAnswer]:
+def withhold_count_drops(frame: Frame, answer: Picks) -> tuple[Frame, Picks]:
     """When an add slot made for a stated count stays unfilled, the count's drops are not
     applied either (spec 5.5: the plan never shrinks unasked): a drop of the other side,
     made to keep the total, would remove a dish the user never named and come no closer to
@@ -166,8 +166,8 @@ def withhold_count_drops(frame: Frame, answer: PickerAnswer) -> tuple[Frame, Pic
 
 
 def without_picks(
-    answer: PickerAnswer, recipe_ids: Collection[int], reason: str = "breaks a rule"
-) -> PickerAnswer:
+    answer: Picks, recipe_ids: Collection[int], reason: str = "breaks a rule"
+) -> Picks:
     """The answer with the slots that chose one of `recipe_ids` left unfilled, with `reason`
     (kept in the records)."""
     bad = set(recipe_ids)
@@ -195,7 +195,47 @@ def wish_only_slots(frame: Frame) -> set[int]:
     }
 
 
-def without_unmet_wish_picks(frame: Frame, answer: PickerAnswer) -> tuple[PickerAnswer, set[int]]:
+def needs_wish_met(frame: Frame, answer: Picks) -> bool:
+    """A slot made only for the wish (`wish_only_slots`) got a dish, so the wish-only guard
+    (`without_unmet_wish_picks`) needs to know whether the wish is met. A salvaged answer,
+    whose wish_met is unknown, is then set aside as no answer (Task 11 fix 3): applying it
+    could place a dish that misses the wish, and calling it unmet could say something false."""
+    only = wish_only_slots(frame)
+    return any(s.index in only and s.recipe_id is not None for s in answer.slots)
+
+
+def reading_changes_nothing(reading: FollowUpReading, meal_avoid: Collection[str]) -> bool:
+    """A `change` reading with a wish that changes nothing at all: no removal, no add, no wish
+    target, no stated count, no change of conditions, and this meal's avoidance the same as
+    `meal_avoid` (the plan's). A structural check, not a reading of the words (Task 11 fix 3):
+    the reader is then asked once more. A reading with no wish is never one (the ambiguous
+    reading that leads to the which-dish question, Task 7 ruling 12)."""
+    return (
+        reading.kind == "change"
+        and bool(reading.wish.strip())
+        and not reading.remove
+        and not reading.add
+        and not reading.wish_targets
+        and all(v is None for v in reading.counts.model_dump().values())
+        and reading.conditions == ReadConditions()
+        and sorted(reading.meal_avoid) == sorted(meal_avoid)
+    )
+
+
+def reader_problem(reading: FollowUpReading) -> str:
+    """The problem a reading that changes nothing is asked again with, in plain words."""
+    said = (
+        f'Your reading says "{reading.reading.strip()}"'
+        if reading.reading.strip()
+        else f'Your reading has the wish "{reading.wish.strip()}"'
+    )
+    return (
+        f"{said}, but it changes no dish: say which dish goes (remove) or what is added (add) "
+        "for the wish. Answer again with the whole reading."
+    )
+
+
+def without_unmet_wish_picks(frame: Frame, answer: Picks) -> tuple[Picks, set[int]]:
     """When the picker says the wish is not met (`wish_met` false), the slots made only for
     the wish (`wish_only_slots`) are left unfilled: a replaced dish stays and an add adds
     nothing (user decisions, 2026-11-23: a dish changed or added for a wish must meet it).
@@ -216,10 +256,10 @@ def without_unmet_wish_picks(frame: Frame, answer: PickerAnswer) -> tuple[Picker
     return answer.model_copy(update={"slots": slots}), emptied
 
 
-def slot_results(frame: Frame, answer: PickerAnswer) -> list[dict]:
+def slot_results(frame: Frame, answer: Picks) -> list[dict]:
     """Every slot (the frame's, then those the replace choices made) with the dish that fills
     it (`recipe_id`, None when nothing fits) and the picker's reason."""
-    answers: dict[int, SlotAnswer] = {}
+    answers: dict[int, SlotPick] = {}
     for item in answer.slots:
         answers.setdefault(item.index, item)
     results = []
@@ -241,6 +281,7 @@ def unfinished_items(
     titles: dict[int, str],
     breaking: dict[int, str],
     must_missed: Collection[str] | None = None,
+    not_done: bool = False,
 ) -> list[dict]:
     """What a change could not do, in order: named dishes not placed ("missing": an exact
     title hidden by a hard condition, then a named slot nothing filled: "not in the library"
@@ -254,7 +295,11 @@ def unfinished_items(
 
     `must_missed`: the must-use names the result still misses (validation's H7); None reads
     as every name. Only those are said unused, and a must-use choice's empty slot whose
-    ingredient another new dish uses is not unfinished at all: the choice was only for it."""
+    ingredient another new dish uses is not unfinished at all: the choice was only for it.
+
+    `not_done` (and a slot's own `not_done`): the picker gave no usable answer (code's
+    fallback), so an unfilled item says it could not be done this time, never that nothing
+    fits (Task 11 fix 3)."""
     missed = None if must_missed is None else {fold(n) for n in must_missed}
 
     def unused(names: list[str]) -> list[str]:
@@ -333,6 +378,8 @@ def unfinished_items(
                 "for_count": bool(slot.get("for_count")),
                 # A must-use slot: the reply says the ingredient is not used.
                 "must_use": unused(must),
+                # No usable picker answer: nothing was tried for this slot.
+                "not_done": bool(slot.get("not_done")),
             }
         )
     # A must-use choice that made no slot at all (no usable picker answer, `fallback_pick`):
@@ -350,6 +397,7 @@ def unfinished_items(
                     "why": "",
                     "for_count": False,
                     "must_use": left,
+                    "not_done": not_done,
                 }
             )
     return items

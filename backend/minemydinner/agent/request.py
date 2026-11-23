@@ -23,7 +23,7 @@ PROMPT_VERSIONS = {
     "parse": "parse_v8",
     "planner": "planner_v5",
     "follow_up": "follow_up_v3",
-    "pick": "pick_v2",
+    "pick": "pick_v3",
 }
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"

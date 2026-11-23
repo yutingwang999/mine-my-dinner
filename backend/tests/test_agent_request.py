@@ -39,7 +39,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v3+pick_v2"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v3+pick_v3"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -88,6 +88,37 @@ def test_follow_up_v2_is_frozen():
     )
 
 
+def test_follow_up_v3_and_pick_v2_are_frozen():
+    import hashlib
+
+    # Both were used by development run 3 of plan 3b-2 (one) Task 11, so they must never
+    # change; the picker's next change is pick_v3.
+    reader = (PROMPT_DIR / "follow_up_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "30cc49a5984fcd99f9e16f851d8b29733edb15d2fc9168a88b7a50100a9e982d"
+    )
+    picker = (PROMPT_DIR / "pick_v2.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "965c927154ff948a0147bca40dc9e2357e7fb230ae912dfb952103ae3f303432"
+    )
+
+
+def test_pick_v3_is_pick_v2_with_the_new_answer_fields():
+    """Task 11 fix 3: pick_v3 is pick_v2 with its wording moved to the answer schema with no
+    nullable field (recipe id 0 when nothing fits; wish_met "yes", "no" or "no_wish"); no
+    line is added or removed and no null is left."""
+    v2 = (PROMPT_DIR / "pick_v2.md").read_text(encoding="utf-8")
+    v3 = (PROMPT_DIR / "pick_v3.md").read_text(encoding="utf-8")
+    assert len(v3.splitlines()) == len(v2.splitlines())
+    assert "null" not in v3 and "null" in v2
+    assert "with one recipe id, or 0 when nothing fits" in v3
+    assert 'wish_met is "yes" when the new dishes meet the wish, and "no_wish" when there' in v3
+    changed = [(a, b) for a, b in zip(v2.splitlines(), v3.splitlines(), strict=True) if a != b]
+    assert len(changed) == 8
+    for old, _ in changed:
+        assert "null" in old or "wish_met" in old
+
+
 def test_follow_up_v3_and_pick_v2_add_one_principle_each():
     """Task 11 fix 2, items 4 and 5: each new version is its frozen predecessor plus its own
     lines, with no new example."""
@@ -102,7 +133,7 @@ def test_follow_up_v3_and_pick_v2_add_one_principle_each():
     ]
     added = [line for line in reader.splitlines() if line not in v2.splitlines()]
     assert len(added) == 2 and added[1].startswith("- Apply each request of the message once.")
-    picker = load_prompt("pick")
+    picker = (PROMPT_DIR / "pick_v2.md").read_text(encoding="utf-8")
     v1 = (PROMPT_DIR / "pick_v1.md").read_text(encoding="utf-8")
     assert "When only a dish of another kind meets the wish, take that kind" in picker
     assert "The rules, the stated counts and an added slot's dish type never yield." in picker
@@ -132,13 +163,14 @@ def test_follow_up_v2_states_the_task_11_principles():
     assert len([line for line in examples if line.startswith("- ")]) <= 5
 
 
-def test_follow_up_v3_and_pick_v2_load_and_stay_within_the_size_budget():
+def test_follow_up_v3_and_pick_v3_load_and_stay_within_the_size_budget():
     assert PROMPT_VERSIONS["follow_up"] == "follow_up_v3"
-    assert PROMPT_VERSIONS["pick"] == "pick_v2"
+    assert PROMPT_VERSIONS["pick"] == "pick_v3"
     reader = load_prompt("follow_up")
     picker = load_prompt("pick")
     assert reader == (PROMPT_DIR / "follow_up_v3.md").read_text(encoding="utf-8")
-    assert picker == (PROMPT_DIR / "pick_v2.md").read_text(encoding="utf-8")
+    assert picker == (PROMPT_DIR / "pick_v3.md").read_text(encoding="utf-8")
+    assert len(picker) == 4253
     revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
     replaced = len(load_prompt("route")) + len(revise_v4)
     # Spec 5.8a: the reader stays under half of route_v6 plus revise_v4; spec 6: the reader
@@ -508,7 +540,7 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v3+pick_v2"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v3+pick_v3"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 

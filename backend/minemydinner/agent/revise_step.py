@@ -403,6 +403,8 @@ def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[st
         if zh:
             return f"{name}在你的菜谱库里，但{why or '它不符合这顿的要求'}，所以没有加上。"
         return f"{name} is in your library, but {why or 'it does not fit this meal'}, so it was not added."
+    if kind == "unfilled" and item.get("not_done"):
+        return _not_done_sentence(item, locale)
     if kind == "unfilled" and item.get("must_use"):
         # A must-use ingredient no dish uses, and no dish that uses it was found (spec 5.4).
         names = ("、" if zh else ", ").join(item["must_use"])
@@ -458,6 +460,45 @@ def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[st
     if zh:
         return f"{item['title']}去掉了：{why or '它不符合这顿的要求'}，也没找到可以替换的菜。"
     return f"{item['title']} was removed: {why or 'it does not fit this meal'}, and nothing could replace it."
+
+
+def _not_done_sentence(item: dict, locale: str) -> str:
+    """An "unfilled" item the picker gave no usable answer for (code's fallback, Task 11 fix
+    3): it could not be done this time, which says nothing about the library. A replaced dish
+    stays; an add adds nothing; a must-use choice that made no slot replaces nothing."""
+    zh = is_zh(locale)
+    title = item.get("title")
+    must = item.get("must_use") or []
+    names = ("、" if zh else ", ").join(must)
+    word = dish_type_word(item.get("dish_type") or "", locale)
+    if must and not title and not item.get("dish_type"):
+        # A must-use choice that made no slot: which dish to replace was not chosen.
+        if zh:
+            return f"这次没能选出用{names}做的菜，没用上{names}，可以再试一次。"
+        return (
+            f"No dish using {names} could be chosen this time, so {names} is not used; you "
+            "can try again."
+        )
+    if zh:
+        if title:
+            text = f"这次没能换掉{title}，先保留了它，可以再试一次。"
+        else:
+            text = f"这次没能加上{('用' + names + '做的') if must else ''}{word}，可以再试一次。"
+        if must:
+            text += f"这次没用上{names}。"
+        if item.get("for_count"):
+            text += "也没能按你说的数量改，原来的菜都留着。"
+        return text
+    if title:
+        text = f"{title} could not be changed this time, so it stays; you can try again."
+    else:
+        using = f" using {names}" if must else ""
+        text = f"No {word}{using} could be added this time; you can try again."
+    if must:
+        text += f" {names} is not used this time."
+    if item.get("for_count"):
+        text += " The counts could not be changed as you asked; the dishes you had stay."
+    return text
 
 
 def reading_sentence(reading: str, locale: str) -> str:

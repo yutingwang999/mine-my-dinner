@@ -6,7 +6,8 @@ from minemydinner.agent.picker import (
     PICK_MAX_ATTEMPTS,
     ChoiceAnswer,
     PickerAnswer,
-    SlotAnswer,
+    Picks,
+    SlotPick,
     apply_picks,
     choice_slots,
     conditions_line,
@@ -54,9 +55,9 @@ def _frame(**over) -> Frame:
     return Frame(**fields)
 
 
-def _answer(slots=(), choices=(), **over) -> PickerAnswer:
-    return PickerAnswer(
-        slots=[SlotAnswer(index=i, recipe_id=r) for i, r in slots],
+def _answer(slots=(), choices=(), **over) -> Picks:
+    return Picks(
+        slots=[SlotPick(index=i, recipe_id=r) for i, r in slots],
         choices=[ChoiceAnswer(index=i, ids=list(ids)) for i, ids in choices],
         **over,
     )
@@ -309,10 +310,10 @@ def test_picker_messages_show_named_and_wish_slots_and_the_stated_counts():
     text = picker_messages(frame, "P", "R", "清淡点", "S", "zh")[0].content
     assert (
         '- Slot 0: in place of 2; the user\'s words: "西兰花"; the user named "小白菜": '
-        "the library dish these words mean, or null when none is"
+        "the library dish these words mean, or 0 when none is"
     ) in text
     assert (
-        '- Slot 1: added; the user named "佛跳墙": the library dish these words mean, or null '
+        '- Slot 1: added; the user named "佛跳墙": the library dish these words mean, or 0 '
         "when none is"
     ) in text
     assert "- Slot 2: in place of 4, for the wish" in text
@@ -480,9 +481,119 @@ def test_the_picker_answers_with_a_picker_answer(tmp_path, session, seeded, monk
     from tests.agentfakes import tool_call
 
     picker, primary, recorder, factory, client, _ = _picker_env(tmp_path, session, monkeypatch)
-    args = {"choices": [], "slots": [{"index": 0, "recipe_id": 60}], "note": "清淡。"}
+    args = {
+        "choices": [],
+        "slots": [{"index": 0, "recipe_id": 60}],
+        "note": "清淡。",
+        "wish_met": "yes",
+    }
     primary.replies = [tool_call("PickerAnswer", args)]
     run_id = recorder.start("t", {}, [], PROMPT_VERSION, PICK_TOOLS_VERSION, False)
     context = PlannerDeps(factory, client, MealConstraints(diner_ids=()), "fridge_only")
     out = picker.invoke({"messages": [HumanMessage("pick")], "run_id": run_id}, context=context)
-    assert out["structured_response"] == _answer([(0, 60)], note="清淡。")
+    answer = out["structured_response"]
+    assert isinstance(answer, PickerAnswer)
+    assert answer.picks() == _answer([(0, 60)], note="清淡。", wish_met=True)
+
+
+# Task 11 fix 3: the model-facing answer has no nullable field (DeepSeek cut the picker's
+# arguments right after one), and a cut answer is salvaged when its slots closed.
+
+
+def _nullable(schema) -> list:
+    """Every place in a JSON schema that allows null."""
+    found = []
+    if isinstance(schema, dict):
+        if schema.get("type") == "null" or "null" in (schema.get("type") or []):
+            found.append(schema)
+        for value in schema.values():
+            found += _nullable(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            found += _nullable(value)
+    return found
+
+
+def test_the_picker_answer_schema_has_no_nullable_field():
+    schema = PickerAnswer.model_json_schema()
+    assert _nullable(schema) == []
+    assert list(schema["properties"]) == ["choices", "slots", "note", "wish_met"]
+    assert schema["properties"]["wish_met"]["enum"] == ["yes", "no", "no_wish"]
+    assert "wish_met" in schema["required"]
+    slot = schema["$defs"]["SlotAnswer"]["properties"]["recipe_id"]
+    assert slot["type"] == "integer"
+
+
+def test_the_answer_converts_at_the_boundary_and_back():
+    wire = PickerAnswer(
+        choices=[ChoiceAnswer(index=0, ids=[4])],
+        slots=[
+            {"index": 0, "recipe_id": 60},
+            {"index": 1, "recipe_id": 0, "reason": "没有合适的"},
+        ],
+        note="清淡。",
+        wish_met="no",
+    )
+    picks = wire.picks()
+    assert picks == Picks(
+        choices=[ChoiceAnswer(index=0, ids=[4])],
+        slots=[
+            SlotPick(index=0, recipe_id=60),
+            SlotPick(index=1, recipe_id=None, reason="没有合适的"),
+        ],
+        note="清淡。",
+        wish_met=False,
+    )
+    assert PickerAnswer.of(picks) == wire
+    for word, value in (("yes", True), ("no", False), ("no_wish", None)):
+        assert PickerAnswer(wish_met=word).picks().wish_met is value
+        assert PickerAnswer.of(Picks(wish_met=value)).wish_met == word
+
+
+def test_a_cut_answer_keeps_its_closed_choices_and_slots():
+    from minemydinner.agent.picker import salvaged_picks
+
+    # The shape seen in development run 3: cut right after the key "wish_met".
+    cut = '{"choices": [], "slots": [{"index": 0, "recipe_id": 755}], "wish_met"'
+    assert salvaged_picks(cut) == (Picks(slots=[SlotPick(index=0, recipe_id=755)]), False)
+    # pick_v3's order: a closed note without wish_met is not taken; wish_met stays unknown.
+    cut = (
+        '{"choices": [{"index": 0, "ids": [4]}], "slots": [{"index": 0, "recipe_id": 0, '
+        '"reason": "没有"}], "note": "清淡。", "wish_m'
+    )
+    salvaged, known = salvaged_picks(cut)
+    assert salvaged == Picks(
+        choices=[ChoiceAnswer(index=0, ids=[4])],
+        slots=[SlotPick(index=0, recipe_id=None, reason="没有")],
+    )
+    assert salvaged.note == "" and salvaged.wish_met is None and known is False
+
+
+def test_a_closed_wish_met_is_kept_with_the_note():
+    """Fix round 1: an answer cut after its last field (only the closing brace missing) keeps
+    wish_met and the note; an invalid wish_met is unknown."""
+    from minemydinner.agent.picker import salvaged_picks
+
+    head = '{"choices": [], "slots": [{"index": 0, "recipe_id": 60}], "note": "清淡。", '
+    for word, value in (("yes", True), ("no", False), ("no_wish", None)):
+        salvaged, known = salvaged_picks(head + f'"wish_met": "{word}"')
+        assert known is True and salvaged.wish_met is value and salvaged.note == "清淡。"
+        assert salvaged.slots == [SlotPick(index=0, recipe_id=60)]
+    salvaged, known = salvaged_picks(head + '"wish_met": "maybe"')
+    assert known is False and salvaged.wish_met is None and salvaged.note == ""
+    salvaged, known = salvaged_picks(head + '"wish_met": "y')
+    assert known is False and salvaged.note == ""
+
+
+def test_a_cut_before_the_slots_closed_is_no_answer():
+    from minemydinner.agent.picker import salvaged_picks
+
+    for cut in (
+        "",
+        '{"choices": [], "slots": [{"index": 0, "recipe_id": 755}',
+        '{"choices": [{"index": 0, "ids": [4',
+        '{"choices": [], "slots": [{"index": 0}]',
+        '{"choices": [], "slots": "x", "wish_met"',
+        "not json",
+    ):
+        assert salvaged_picks(cut) is None, cut

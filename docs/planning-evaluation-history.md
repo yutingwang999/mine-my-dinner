@@ -429,3 +429,13 @@ The new follow-up structure (reader `follow_up_v1`, frame in code, picker `pick_
 - `too_many_eggs` (must: more dishes changed than allowed): the reader both dropped one egg dish and listed all three as wish targets, against its own reading sentence. `follow_up_v3`: a request is applied once.
 - `general_lighter_or_added`: the picker looked only at meat dishes for a lighter dish. `pick_v2`: the plan's balance yields to the wish.
 - Also: the reader's input now says what the user changed by hand since the last reply (edits add no message, so the conversation named the plan before them).
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T135719Z (run 3, the last development run Task 11 allows) | follow_up_v3, pick_v2 | 40/42 | 0 | 0/30 | 2.4 / 5 | $0.0490 | 6.7 s |
+
+**Run 3 misses** (left for the user's decision; no change made after run 3):
+- `message_after_shopping_button`: all four picker answers came back as tool calls whose arguments were cut off at the same place (`{"choices": [], "slots": [{"index": 0, "recipe_id": …}], "wish_met"`), recorded as invalid tool calls; the model billed about 105 output tokens each, no output limit is set and thinking is disabled, so the cut is on the provider's side or in parsing, not a token limit. The add stayed empty and the reply said no vegetable dish was found, although the picker had chosen one every time.
+- `button_shopping_after_seafood_wish`: "这顿想吃点水产的" was again read as a wish with no add, no removal and no wish targets (its own reading sentence said "replace one dish with a seafood dish"), so nothing changed and no button was offered; `follow_up_v3`'s principle that a wish always becomes a change did not hold here (run 1 the same, run 2 passed).
+
+**After run 3** (user-approved, 2026-11-24): the picker's cut answers were traced to DeepSeek itself — a replay of one cut input straight to the HTTP API returned HTTP 200, `finish_reason: "tool_calls"`, 110 completion tokens and arguments already cut after `"wish_met"`; 17 picker calls over the three runs (none from any other model, in any run folder) had it. `pick_v3` sends a schema with no nullable field (`wish_met` "yes" / "no" / "no_wish" after the note; `recipe_id` 0 for nothing fits), and code salvages an answer cut after its slots closed; a replay of run 3's cut inputs with `pick_v3` (15 calls) returned 12 answers, none cut. The reader is asked again once when a change reading with a wish changes nothing (`button_shopping_after_seafood_wish`).

@@ -57,6 +57,9 @@ from minemydinner.agent.change_step import (
     conditions_changed,
     fallback_pick,
     needs_picker,
+    needs_wish_met,
+    reader_problem,
+    reading_changes_nothing,
     result_spec,
     relax_split_spec,
     slot_results,
@@ -93,12 +96,13 @@ from minemydinner.agent.plan_card import (
 )
 from minemydinner.agent.picker import (
     PICK_MAX_ATTEMPTS,
-    PickerAnswer,
+    Picks,
     apply_picks,
     choice_slots,
     conditions_line,
     must_use_misses,
     picker_messages,
+    salvaged_picks,
 )
 from minemydinner.agent.planner import (
     PICK_MODEL_CALL_LIMIT,
@@ -216,6 +220,11 @@ FALLBACK_NOTE_ZH = "这份方案是按你的要求从菜谱库里直接选出的
 FALLBACK_NOTE_EN = "This plan was picked from your library to fit your request."
 # The problem the picker is told when a reply carried no answer (plan 3b-2 Task 11 fix 1).
 PICK_NO_ANSWER = "You gave no answer. Answer with the PickerAnswer tool."
+# The re-ask after an answer whose arguments were cut short (Task 11 fix 3, fix round 1).
+PICK_CUT_ANSWER = (
+    "Your answer was cut short before it ended. Answer again in full with the PickerAnswer "
+    "tool."
+)
 # No plan because every attempt came back with no dishes (nothing was blocked by a rule).
 EMPTY_PLAN_NOTE_ZH = "这次没能为这个要求配出菜，所以没有出方案。可以再发一次请求重试。"
 EMPTY_PLAN_NOTE_EN = (
@@ -847,12 +856,31 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         ]
         result = deps.client.invoke_structured(deps.task, messages, FollowUpReading)
         reading = result.parsed
+        # A new turn starts the buffer fresh; the run records it when it starts.
+        events = [_model_call_event(deps.client, "read_follow_up", messages, result)]
+        if reading_changes_nothing(reading, meal_avoid):
+            # Task 11 fix 3: a change reading with a wish that changes nothing contradicts
+            # itself (a structural check, not a reading of the words). It is asked again
+            # once, from fresh messages and the problem; the picker's turn budget gives up
+            # the call (`build_change`). A second answer that still changes nothing is used
+            # as it is.
+            problem = reader_problem(reading)
+            events.append(
+                {
+                    "kind": "reader_reask",
+                    "problem": deps.client.prepare_text(problem),
+                    "reading": map_strings(reading.model_dump(), deps.client.prepare_text),
+                }
+            )
+            messages = [*messages, HumanMessage(problem)]
+            result = deps.client.invoke_structured(deps.task, messages, FollowUpReading)
+            reading = result.parsed
+            events.append(_model_call_event(deps.client, "read_follow_up", messages, result))
         return {
             **_fresh_turn(state),
             "intent": READING_INTENTS[reading.kind],
             "reading": reading.model_dump(),
-            # A new turn starts the buffer fresh; the run records it when it starts.
-            "model_calls": [_model_call_event(deps.client, "read_follow_up", messages, result)],
+            "model_calls": events,
         }
 
     def read_paused_turn(state: ChatState) -> dict:
@@ -1674,6 +1702,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "breaking": pairs,
             "named": named,
             "outcome": None,
+            # The reader's calls past its first this turn, each taken from the picker's
+            # budget (spec 5.7).
+            "reader_reasks": sum(
+                1 for e in state.get("model_calls") or [] if e.get("kind") == "reader_reask"
+            ),
         }
         update = {
             "request": request,
@@ -1872,11 +1905,43 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         bad: dict[int, str] = {}
         hidden: dict[int, dict] = {}
         first_passed = None
-        # The picker's model calls so far this turn (`PICK_TURN_MODEL_CALLS`).
+        # The picker's model calls so far this turn (`PICK_TURN_MODEL_CALLS`). A reader asked
+        # again this turn used one of them (spec 5.7: seven calls in all).
         calls_used = 0
+        budget = PICK_TURN_MODEL_CALLS - change.get("reader_reasks", 0)
 
         def fits() -> bool:
-            return calls_used + PICK_MODEL_CALL_LIMIT <= PICK_TURN_MODEL_CALLS
+            return calls_used + PICK_MODEL_CALL_LIMIT <= budget
+
+        def read_answer(out: dict) -> tuple[Picks | None, bool, bool, bool]:
+            """The picker's answer in code's form, whether it was salvaged from a cut tool
+            call (Task 11 fix 3), whether a salvaged one was set aside because the wish-only
+            guard would need its unknown wish_met (`needs_wish_met`), and whether the reply
+            held a cut answer at all (its re-ask then says so)."""
+            answer = out.get("structured_response")
+            if answer is not None:
+                return answer.picks(), False, False, False
+            reply = next(
+                (m for m in reversed(out["messages"]) if isinstance(m, AIMessage)), None
+            )
+            cut = False
+            for call in (reply.invalid_tool_calls if reply is not None else []):
+                args = call.get("args")
+                if call.get("name") != "PickerAnswer" or not isinstance(args, str):
+                    continue
+                cut = True
+                found = salvaged_picks(args)
+                if found is None:
+                    continue
+                salvaged, wish_known = found
+                # The record keeps the arguments as sent; code works with restored text.
+                salvaged = Picks.model_validate(
+                    map_strings(salvaged.model_dump(), deps.client.restore_text)
+                )
+                if not wish_known and needs_wish_met(frame, salvaged):
+                    return None, False, True, True
+                return salvaged, True, False, True
+            return None, False, False, cut
 
         def model_calls(out: dict) -> int:
             # A model's reply carries usage or response metadata; the message the call-limit
@@ -1908,18 +1973,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             out = get_picker().invoke({"messages": messages, "run_id": run_id}, context=context)
             calls_used += model_calls(out)
             notes = _notes_from_searches(notes, out["messages"])
-            answer = out.get("structured_response")
+            answer, salvaged, set_aside, cut = read_answer(out)
             empty_replies = 0
             if answer is None and fits():
                 # A reply with no answer (no answer tool call, or one whose arguments could not
                 # be read; the tool choice is already forced) is asked again at once, once,
                 # without using up an attempt, while the turn's budget allows a whole attempt.
                 empty_replies = 1
-                again = [*messages, HumanMessage(PICK_NO_ANSWER)]
+                again = [*messages, HumanMessage(PICK_CUT_ANSWER if cut else PICK_NO_ANSWER)]
                 out = get_picker().invoke({"messages": again, "run_id": run_id}, context=context)
                 calls_used += model_calls(out)
                 notes = _notes_from_searches(notes, out["messages"])
-                answer = out.get("structured_response")
+                answer, salvaged, again_set_aside, _ = read_answer(out)
+                set_aside = set_aside or again_set_aside
             outcome, problems, bad, facts, hidden = check_pick(
                 state, plan, frame, answer, spec, codes
             )
@@ -1939,6 +2005,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     "recipe_ids": outcome.recipe_ids if outcome and not problems else None,
                     # Replies with no answer asked again within this attempt.
                     "empty_replies": empty_replies,
+                    # The answer was salvaged from a cut tool call (Task 11 fix 3).
+                    "salvaged": salvaged,
+                    # A salvaged answer was set aside: a wish-only slot needed its wish_met.
+                    "salvage_set_aside": set_aside,
                 },
             )
             if not problems:
@@ -2005,10 +2075,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "slots": slots,
             # A changed answer is no longer the picker's: its note and wish_met may name a
             # dish that is not placed. A hidden named dish changes only the note.
-            "wish_met": answer.wish_met if own else (False if has_wish else None),
+            # After code's fallback nothing was tried, so nothing is said about the wish
+            # (Task 11 fix 3, fix round 1): the slots say "this time" instead.
+            "wish_met": (
+                answer.wish_met
+                if own
+                else (False if has_wish and not fell_back else None)
+            ),
             "note": answer.note.strip() if own and not hidden else "",
             "choices": [c.model_dump() for c in used_frame.choices],
             "withheld_drops": [i for i in frame.count_drops if i not in used_frame.drops],
+            # Code's fallback replaced the picker's answer (Task 11 fix 3: the reply says
+            # what could not be done this time).
+            "not_done": fell_back,
         }
         return {
             "change": {**change, "outcome": result},
@@ -2086,7 +2165,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         outcome = change.get("outcome")
         if outcome is None:
             # Nothing to choose: the frame's drops and named dishes alone.
-            done = apply_picks(ids, frame, PickerAnswer(), {})
+            done = apply_picks(ids, frame, Picks(), {})
             outcome = {"recipe_ids": done.recipe_ids, "slots": [], "wish_met": None, "note": ""}
         result_ids = outcome["recipe_ids"]
         spec = state["spec"]
@@ -2108,7 +2187,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 )
                 must_missed = must_unmet_names(found.violations)
         titles.update({r["id"]: r["title"] for r in live["recipes"]})
-        items = unfinished_items(frame, outcome["slots"], titles, breaking, must_missed)
+        items = unfinished_items(
+            frame, outcome["slots"], titles, breaking, must_missed,
+            not_done=bool(outcome.get("not_done")),
+        )
         said = {i["recipe_id"] for i in items if i["kind"] == "removed"}
         paired = {s["replaces"] for s in outcome["slots"] if s["recipe_id"] is not None}
         named_gone = {

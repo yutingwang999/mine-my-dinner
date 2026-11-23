@@ -2142,10 +2142,10 @@ def _pick(slots=(), choices=(), wish_met=None, note="选好了。"):
         {
             "choices": [{"index": i, "ids": [ids[t] for t in titles]} for i, titles in choices],
             "slots": [
-                {"index": i, "recipe_id": ids[t] if t else None, "reason": ""} for i, t in slots
+                {"index": i, "recipe_id": ids[t] if t else 0, "reason": ""} for i, t in slots
             ],
-            "wish_met": wish_met,
             "note": note,
+            "wish_met": {True: "yes", False: "no", None: "no_wish"}[wish_met],
         },
     )
 

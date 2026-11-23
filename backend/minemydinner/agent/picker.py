@@ -15,10 +15,11 @@ the frame's slots, in the order of the choices and, within a choice, of the ids 
 lists (`choice_slots`)."""
 
 from collections.abc import Collection
+import json
 from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from minemydinner.agent.frame import Choice, Frame, Slot, fold
 from minemydinner.agent.revision import DishFacts
@@ -42,8 +43,34 @@ class ChoiceAnswer(BaseModel):
     )
 
 
+class SlotPick(BaseModel):
+    """The dish chosen for one slot, or none (code's form of a `SlotAnswer`)."""
+
+    index: int
+    recipe_id: int | None = None
+    reason: str = ""
+
+
+class Picks(BaseModel):
+    """The picker's answer as code checks and applies it (`PickerAnswer.picks`): a slot's
+    `recipe_id` is None when nothing fits, and `wish_met` is None when there is no wish or it
+    is unknown (a salvaged answer, `salvaged_picks`)."""
+
+    choices: list[ChoiceAnswer] = Field(default_factory=list)
+    slots: list[SlotPick] = Field(default_factory=list)
+    wish_met: bool | None = None
+    note: str = ""
+
+
+# The model-facing answer (pick_v3, Task 11 fix 3): no nullable field, since DeepSeek cut the
+# picker's tool-call arguments right after a nullable field in development runs 1 to 3. Its
+# field order is choices, slots, note, wish_met, so what code needs most comes first.
+NOTHING_FITS = 0
+WISH_MET = {"yes": True, "no": False, "no_wish": None}
+
+
 class SlotAnswer(BaseModel):
-    """The dish chosen for one slot, or none."""
+    """The dish chosen for one slot, or 0 when nothing fits."""
 
     index: int = Field(
         description=(
@@ -51,15 +78,15 @@ class SlotAnswer(BaseModel):
             "come after the listed ones, in the order of the choices and of their ids."
         )
     )
-    recipe_id: int | None = Field(
+    recipe_id: int = Field(
         description=(
             "The id of a library dish, not in the current plan and not chosen for another "
-            "slot; for an added dish of a stated type, a dish of that type; null when nothing "
+            "slot; for an added dish of a stated type, a dish of that type; 0 when nothing "
             "fits."
         )
     )
     reason: str = Field(
-        default="", description="When recipe_id is null: a short reason why nothing fits."
+        default="", description="When recipe_id is 0: a short reason why nothing fits."
     )
 
 
@@ -73,16 +100,109 @@ class PickerAnswer(BaseModel):
         default_factory=list,
         description="One answer per slot, including the slots your replace choices make.",
     )
-    wish_met: bool | None = Field(
-        default=None,
-        description="Whether the new dishes meet the user's wish. None when there is no wish.",
-    )
     note: str = Field(
         default="",
         description=(
             "One or two sentences to the user, in the reply locale, on why the new dishes fit."
         ),
     )
+    wish_met: Literal["yes", "no", "no_wish"] = Field(
+        description=(
+            "\"yes\" when the new dishes meet the user's wish, \"no\" when they do not, "
+            '"no_wish" when there is no wish.'
+        ),
+    )
+
+    def picks(self) -> Picks:
+        """Code's form: recipe id 0 becomes None, and wish_met "yes" / "no" / "no_wish"
+        becomes True / False / None."""
+        return Picks(
+            choices=[c.model_copy() for c in self.choices],
+            slots=[
+                SlotPick(
+                    index=s.index,
+                    recipe_id=None if s.recipe_id == NOTHING_FITS else s.recipe_id,
+                    reason=s.reason,
+                )
+                for s in self.slots
+            ],
+            wish_met=WISH_MET[self.wish_met],
+            note=self.note,
+        )
+
+    @classmethod
+    def of(cls, picks: Picks) -> "PickerAnswer":
+        """The model-facing form of `picks` (the inverse of `picks()`)."""
+        wish = next(k for k, v in WISH_MET.items() if v is picks.wish_met)
+        return cls(
+            choices=[c.model_copy() for c in picks.choices],
+            slots=[
+                SlotAnswer(
+                    index=s.index,
+                    recipe_id=NOTHING_FITS if s.recipe_id is None else s.recipe_id,
+                    reason=s.reason,
+                )
+                for s in picks.slots
+            ],
+            note=picks.note,
+            wish_met=wish,
+        )
+
+
+def _complete_fields(text: str) -> dict:
+    """The top-level fields of a JSON object cut short, each whose value closed before the
+    cut; parsing stops at the first field that did not."""
+    decoder = json.JSONDecoder()
+    fields: dict = {}
+
+    def skip(at: int) -> int:
+        while at < len(text) and text[at] in " \t\r\n":
+            at += 1
+        return at
+
+    position = skip(0)
+    if not text.startswith("{", position):
+        return fields
+    position += 1
+    while True:
+        position = skip(position)
+        try:
+            key, position = decoder.raw_decode(text, position)
+            position = skip(position)
+            if not isinstance(key, str) or not text.startswith(":", position):
+                return fields
+            value, position = decoder.raw_decode(text, skip(position + 1))
+        except ValueError:
+            return fields
+        fields[key] = value
+        position = skip(position)
+        if not text.startswith(",", position):
+            return fields
+        position += 1
+
+
+def salvaged_picks(args: str) -> tuple[Picks, bool] | None:
+    """Task 11 fix 3: a `PickerAnswer` tool call whose arguments were cut short (DeepSeek ends
+    them silently, server side; LangChain keeps the call in `invalid_tool_calls`). What closed
+    before the cut is kept: the choices and the slots, and whether `wish_met` is known. A
+    closed, valid wish_met (pick_v3 puts it last, so the answer lacks at most its closing
+    brace) is kept with the note; otherwise the note is empty and wish_met unknown (None).
+    Returns the answer and whether wish_met is known; None when the slots did not close (no
+    answer), or when what closed is not a valid answer."""
+    fields = _complete_fields(args)
+    if "slots" not in fields:
+        return None
+    try:
+        slots = [SlotAnswer.model_validate(s) for s in fields["slots"]]
+        choices = [ChoiceAnswer.model_validate(c) for c in fields.get("choices") or []]
+    except (ValidationError, TypeError):
+        return None
+    wish = fields.get("wish_met")
+    note = fields.get("note")
+    if wish in WISH_MET and isinstance(note, str | None):
+        answer = PickerAnswer(choices=choices, slots=slots, note=note or "", wish_met=wish)
+        return answer.picks(), True
+    return PickerAnswer(choices=choices, slots=slots, wish_met="no_wish").picks(), False
 
 
 class PickOutcome(BaseModel):
@@ -118,7 +238,7 @@ def _chosen(choice: Choice, answer: ChoiceAnswer | None) -> list[int]:
     return [i for i in dict.fromkeys(ids) if i in choice.candidates]
 
 
-def choice_slots(frame: Frame, answer: PickerAnswer) -> list[Slot]:
+def choice_slots(frame: Frame, answer: Picks) -> list[Slot]:
     """Every slot to fill: the frame's slots, then a replace slot (no dish type) for each dish
     chosen in a replace choice, in the order of the choices and of the chosen ids."""
     by_index: dict[int, ChoiceAnswer] = {}
@@ -134,7 +254,7 @@ def choice_slots(frame: Frame, answer: PickerAnswer) -> list[Slot]:
 
 
 def must_use_misses(
-    frame: Frame, answer: PickerAnswer, uncovered: Collection[str]
+    frame: Frame, answer: Picks, uncovered: Collection[str]
 ) -> tuple[list[str], set[int]]:
     """Spec 5.4, 5.5: a replace choice made for a must-use ingredient no dish used, or the add
     slot that takes its place, must bring a dish that uses it. `uncovered` holds the must-use
@@ -175,13 +295,13 @@ def must_use_misses(
         problems.append(
             f"{label} is for {need}, which no dish in the plan uses, but the new dish "
             f"({_ids(picked)}) does not use {need}. Choose a dish that uses {need}, or answer "
-            "null for that slot when none fits."
+            "0 for that slot when none fits."
         )
         bad.update(picked)
     return problems, bad
 
 
-def _check_choices(frame: Frame, answer: PickerAnswer, problems: list[str]) -> list[list[int]]:
+def _check_choices(frame: Frame, answer: Picks, problems: list[str]) -> list[list[int]]:
     """The chosen ids of each choice, with a problem for an id outside the candidates, a wrong
     number, or a dish chosen twice (in one choice or by two choices)."""
     by_index = _first_by_index(answer.choices, len(frame.choices), "Choice", problems)
@@ -220,7 +340,7 @@ def _check_slots(
     plan_ids: list[int],
     frame: Frame,
     slots: list[Slot],
-    answer: PickerAnswer,
+    answer: Picks,
     facts: dict[int, DishFacts],
     problems: list[str],
 ) -> dict[int, int | None]:
@@ -234,7 +354,9 @@ def _check_slots(
     for index, slot in enumerate(slots):
         item = by_index.get(index)
         if item is None:
-            problems.append(f"Slot {index} has no answer; give a dish id or null.")
+            problems.append(
+                f"Slot {index} has no answer; give a dish id, or 0 when nothing fits."
+            )
             continue
         recipe_id = item.recipe_id
         fills[index] = recipe_id
@@ -308,13 +430,13 @@ def _count_problems(
             problems.append(
                 f"The user stated {_range_text(low, high)} {_COUNT_WORDS[name]}, but with your "
                 f"dishes the plan has {actual[name]}. Keep the stated counts: choose dishes "
-                "that keep them, or null for a slot when none fits."
+                "that keep them, or 0 for a slot when none fits."
             )
     return problems
 
 
 def apply_picks(
-    plan_ids: list[int], frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]
+    plan_ids: list[int], frame: Frame, answer: Picks, facts: dict[int, DishFacts]
 ) -> PickOutcome:
     """Check the picker's answer against the frame and apply it. `facts` must cover the plan's
     dishes and every dish the answer names (a named dish without facts is unknown).
@@ -406,7 +528,7 @@ def _slot_line(index: int, slot: Slot) -> str:
         line += ", for the wish"
     if slot.named:
         line += (
-            f'; the user named "{slot.named}": the library dish these words mean, or null '
+            f'; the user named "{slot.named}": the library dish these words mean, or 0 '
             "when none is"
         )
     if slot.must_use:
