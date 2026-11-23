@@ -39,7 +39,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v3+pick_v3"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -103,6 +103,48 @@ def test_follow_up_v3_and_pick_v2_are_frozen():
     )
 
 
+def test_pick_v3_is_frozen():
+    import hashlib
+
+    # Used by development run 4 of plan 3b-2 (one) Task 11, so it must never change; the
+    # picker's next change is pick_v4. follow_up_v3 (run 4 too) is pinned above.
+    picker = (PROMPT_DIR / "pick_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "0d0f73bfceefc52eb3f090e8314873b6de8540b3d8a99532e5973ff8a0a0c116"
+    )
+
+
+def test_pick_v4_is_pick_v3_with_the_answer_field_renamed():
+    """Task 11 fix 4: DeepSeek cut answers right after the key "wish_met"; pick_v4 is pick_v3
+    with every mention of that answer field named wish_result, and nothing else."""
+    v3 = (PROMPT_DIR / "pick_v3.md").read_text(encoding="utf-8")
+    v4 = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
+    assert "wish_met" not in v4 and "wish_met" in v3
+    assert v4 == v3.replace("wish_met", "wish_result")
+
+
+def test_follow_up_v4_changes_two_principles_of_follow_up_v3():
+    """Task 11 fix 4: a dish that breaks a rule or this meal's avoidance is dropped only when
+    the message says not to replace it, and wish_targets lists only dishes the wish is about
+    (a wish for something the plan lacks goes to add or remove). No new example."""
+    v3 = (PROMPT_DIR / "follow_up_v3.md").read_text(encoding="utf-8")
+    v4 = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
+    old, new = v3.splitlines(), v4.splitlines()
+    assert len(old) == len(new)
+    changed = [(a, b) for a, b in zip(old, new, strict=True) if a != b]
+    assert len(changed) == 2
+    assert changed[0][0].startswith("- For each dish in remove, copy the words")
+    assert changed[1][0].startswith("- wish is in the user's words. It guides")
+    assert "list it with drop only when the message says not to replace it" in v4
+    assert "(no other dish wanted, or fewer dishes)" in v4
+    assert "or when it fits no dish of the plan" not in v4
+    assert "wish_targets lists only dishes the wish is about" in v4
+    assert "a wish for something the plan lacks goes to add or remove (replace) instead" in v4
+    # The example that leaves out a rule-breaking dish keeps remove empty.
+    assert '- "这顿不想吃排骨了": change; remove empty (code replaces the soup)' in v4
+    assert v3.split("Examples", 1)[1] == v4.split("Examples", 1)[1]
+
+
 def test_pick_v3_is_pick_v2_with_the_new_answer_fields():
     """Task 11 fix 3: pick_v3 is pick_v2 with its wording moved to the answer schema with no
     nullable field (recipe id 0 when nothing fits; wish_met "yes", "no" or "no_wish"); no
@@ -122,7 +164,7 @@ def test_pick_v3_is_pick_v2_with_the_new_answer_fields():
 def test_follow_up_v3_and_pick_v2_add_one_principle_each():
     """Task 11 fix 2, items 4 and 5: each new version is its frozen predecessor plus its own
     lines, with no new example."""
-    reader = load_prompt("follow_up")
+    reader = (PROMPT_DIR / "follow_up_v3.md").read_text(encoding="utf-8")
     v2 = (PROMPT_DIR / "follow_up_v2.md").read_text(encoding="utf-8")
     assert "A dish in remove is never also in wish_targets" in reader
     assert "only that dish changes" in reader
@@ -163,14 +205,15 @@ def test_follow_up_v2_states_the_task_11_principles():
     assert len([line for line in examples if line.startswith("- ")]) <= 5
 
 
-def test_follow_up_v3_and_pick_v3_load_and_stay_within_the_size_budget():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v3"
-    assert PROMPT_VERSIONS["pick"] == "pick_v3"
+def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v4"
+    assert PROMPT_VERSIONS["pick"] == "pick_v4"
     reader = load_prompt("follow_up")
     picker = load_prompt("pick")
-    assert reader == (PROMPT_DIR / "follow_up_v3.md").read_text(encoding="utf-8")
-    assert picker == (PROMPT_DIR / "pick_v3.md").read_text(encoding="utf-8")
-    assert len(picker) == 4253
+    assert reader == (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
+    assert picker == (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
+    assert len(reader) == 5499
+    assert len(picker) == 4268
     revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
     replaced = len(load_prompt("route")) + len(revise_v4)
     # Spec 5.8a: the reader stays under half of route_v6 plus revise_v4; spec 6: the reader
@@ -540,7 +583,7 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v3+pick_v3"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 

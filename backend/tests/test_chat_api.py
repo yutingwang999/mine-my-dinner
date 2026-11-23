@@ -625,7 +625,7 @@ def picker_reply(slots=(), choices=(), wish_met=None, note: str = "") -> AIMessa
             "choices": [{"index": i, "ids": list(ids)} for i, ids in choices],
             "slots": [{"index": i, "recipe_id": r or 0, "reason": ""} for i, r in slots],
             "note": note,
-            "wish_met": {True: "yes", False: "no", None: "no_wish"}[wish_met],
+            "wish_result": {True: "yes", False: "no", None: "no_wish"}[wish_met],
         },
     )
 

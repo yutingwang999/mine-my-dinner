@@ -798,7 +798,8 @@ def _touches(item: dict, stated: dict, types: dict[int, str]) -> bool:
     else:
         dish_type = item.get("dish_type") or ""
         if not dish_type:
-            return False
+            # An add with no type could have been any dish: the total or a side.
+            return kind == "unfilled" and any(name in stated for name in _ADD_COUNTS)
     category = CATEGORY_OF_DISH_TYPE.get(dish_type or "")
     if category is None:
         return True

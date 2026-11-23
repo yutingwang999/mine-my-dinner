@@ -64,7 +64,10 @@ class Picks(BaseModel):
 
 # The model-facing answer (pick_v3, Task 11 fix 3): no nullable field, since DeepSeek cut the
 # picker's tool-call arguments right after a nullable field in development runs 1 to 3. Its
-# field order is choices, slots, note, wish_met, so what code needs most comes first.
+# field order is choices, slots, note, wish_result, so what code needs most comes first.
+# pick_v4 (Task 11 fix 4): DeepSeek still cut answers right after the key "wish_met", and a
+# replay with the field named wish_result had none cut, so the model sees wish_result; code
+# keeps wish_met (`Picks`, the records, the reply).
 NOTHING_FITS = 0
 WISH_MET = {"yes": True, "no": False, "no_wish": None}
 
@@ -106,7 +109,7 @@ class PickerAnswer(BaseModel):
             "One or two sentences to the user, in the reply locale, on why the new dishes fit."
         ),
     )
-    wish_met: Literal["yes", "no", "no_wish"] = Field(
+    wish_result: Literal["yes", "no", "no_wish"] = Field(
         description=(
             "\"yes\" when the new dishes meet the user's wish, \"no\" when they do not, "
             '"no_wish" when there is no wish.'
@@ -114,8 +117,8 @@ class PickerAnswer(BaseModel):
     )
 
     def picks(self) -> Picks:
-        """Code's form: recipe id 0 becomes None, and wish_met "yes" / "no" / "no_wish"
-        becomes True / False / None."""
+        """Code's form: recipe id 0 becomes None, and wish_result "yes" / "no" / "no_wish"
+        becomes wish_met True / False / None."""
         return Picks(
             choices=[c.model_copy() for c in self.choices],
             slots=[
@@ -126,7 +129,7 @@ class PickerAnswer(BaseModel):
                 )
                 for s in self.slots
             ],
-            wish_met=WISH_MET[self.wish_met],
+            wish_met=WISH_MET[self.wish_result],
             note=self.note,
         )
 
@@ -145,7 +148,7 @@ class PickerAnswer(BaseModel):
                 for s in picks.slots
             ],
             note=picks.note,
-            wish_met=wish,
+            wish_result=wish,
         )
 
 
@@ -185,8 +188,9 @@ def salvaged_picks(args: str) -> tuple[Picks, bool] | None:
     """Task 11 fix 3: a `PickerAnswer` tool call whose arguments were cut short (DeepSeek ends
     them silently, server side; LangChain keeps the call in `invalid_tool_calls`). What closed
     before the cut is kept: the choices and the slots, and whether `wish_met` is known. A
-    closed, valid wish_met (pick_v3 puts it last, so the answer lacks at most its closing
-    brace) is kept with the note; otherwise the note is empty and wish_met unknown (None).
+    closed, valid `wish_result` (the schema puts it last, so the answer lacks at most its
+    closing brace) is kept with the note; otherwise the note is empty and wish_met unknown
+    (None).
     Returns the answer and whether wish_met is known; None when the slots did not close (no
     answer), or when what closed is not a valid answer."""
     fields = _complete_fields(args)
@@ -197,12 +201,12 @@ def salvaged_picks(args: str) -> tuple[Picks, bool] | None:
         choices = [ChoiceAnswer.model_validate(c) for c in fields.get("choices") or []]
     except (ValidationError, TypeError):
         return None
-    wish = fields.get("wish_met")
+    wish = fields.get("wish_result")
     note = fields.get("note")
     if wish in WISH_MET and isinstance(note, str | None):
-        answer = PickerAnswer(choices=choices, slots=slots, note=note or "", wish_met=wish)
+        answer = PickerAnswer(choices=choices, slots=slots, note=note or "", wish_result=wish)
         return answer.picks(), True
-    return PickerAnswer(choices=choices, slots=slots, wish_met="no_wish").picks(), False
+    return PickerAnswer(choices=choices, slots=slots, wish_result="no_wish").picks(), False
 
 
 class PickOutcome(BaseModel):

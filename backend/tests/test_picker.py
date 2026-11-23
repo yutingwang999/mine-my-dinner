@@ -1,6 +1,8 @@
 """The picker (plan 3b-2 spec 5.5): its answer schema, its input and the code that checks and
 applies its answer against the frame. Pure code: hand-built frames and facts, no model call."""
 
+import json
+
 from minemydinner.agent.frame import Choice, Frame, Slot
 from minemydinner.agent.picker import (
     PICK_MAX_ATTEMPTS,
@@ -485,7 +487,7 @@ def test_the_picker_answers_with_a_picker_answer(tmp_path, session, seeded, monk
         "choices": [],
         "slots": [{"index": 0, "recipe_id": 60}],
         "note": "清淡。",
-        "wish_met": "yes",
+        "wish_result": "yes",
     }
     primary.replies = [tool_call("PickerAnswer", args)]
     run_id = recorder.start("t", {}, [], PROMPT_VERSION, PICK_TOOLS_VERSION, False)
@@ -517,9 +519,12 @@ def _nullable(schema) -> list:
 def test_the_picker_answer_schema_has_no_nullable_field():
     schema = PickerAnswer.model_json_schema()
     assert _nullable(schema) == []
-    assert list(schema["properties"]) == ["choices", "slots", "note", "wish_met"]
-    assert schema["properties"]["wish_met"]["enum"] == ["yes", "no", "no_wish"]
-    assert "wish_met" in schema["required"]
+    # pick_v4 (Task 11 fix 4): DeepSeek cut answers right after the key "wish_met", so the
+    # model-facing field is named wish_result; code keeps wish_met.
+    assert list(schema["properties"]) == ["choices", "slots", "note", "wish_result"]
+    assert schema["properties"]["wish_result"]["enum"] == ["yes", "no", "no_wish"]
+    assert "wish_result" in schema["required"]
+    assert "wish_met" not in json.dumps(schema)
     slot = schema["$defs"]["SlotAnswer"]["properties"]["recipe_id"]
     assert slot["type"] == "integer"
 
@@ -532,7 +537,7 @@ def test_the_answer_converts_at_the_boundary_and_back():
             {"index": 1, "recipe_id": 0, "reason": "没有合适的"},
         ],
         note="清淡。",
-        wish_met="no",
+        wish_result="no",
     )
     picks = wire.picks()
     assert picks == Picks(
@@ -546,20 +551,25 @@ def test_the_answer_converts_at_the_boundary_and_back():
     )
     assert PickerAnswer.of(picks) == wire
     for word, value in (("yes", True), ("no", False), ("no_wish", None)):
-        assert PickerAnswer(wish_met=word).picks().wish_met is value
-        assert PickerAnswer.of(Picks(wish_met=value)).wish_met == word
+        assert PickerAnswer(wish_result=word).picks().wish_met is value
+        assert PickerAnswer.of(Picks(wish_met=value)).wish_result == word
+    # The answer as the model sends it round-trips through code's form.
+    sent = wire.model_dump()
+    assert sent["wish_result"] == "no" and "wish_met" not in sent
+    assert PickerAnswer.model_validate(sent).picks() == picks
 
 
 def test_a_cut_answer_keeps_its_closed_choices_and_slots():
     from minemydinner.agent.picker import salvaged_picks
 
-    # The shape seen in development run 3: cut right after the key "wish_met".
-    cut = '{"choices": [], "slots": [{"index": 0, "recipe_id": 755}], "wish_met"'
+    # The shape seen in development runs 2 to 4: cut right after the answer's wish key.
+    cut = '{"choices": [], "slots": [{"index": 0, "recipe_id": 755}], "wish_result"'
     assert salvaged_picks(cut) == (Picks(slots=[SlotPick(index=0, recipe_id=755)]), False)
-    # pick_v3's order: a closed note without wish_met is not taken; wish_met stays unknown.
+    # The schema's order: a closed note without wish_result is not taken; wish_met stays
+    # unknown.
     cut = (
         '{"choices": [{"index": 0, "ids": [4]}], "slots": [{"index": 0, "recipe_id": 0, '
-        '"reason": "没有"}], "note": "清淡。", "wish_m'
+        '"reason": "没有"}], "note": "清淡。", "wish_res'
     )
     salvaged, known = salvaged_picks(cut)
     assert salvaged == Picks(
@@ -569,20 +579,23 @@ def test_a_cut_answer_keeps_its_closed_choices_and_slots():
     assert salvaged.note == "" and salvaged.wish_met is None and known is False
 
 
-def test_a_closed_wish_met_is_kept_with_the_note():
+def test_a_closed_wish_result_is_kept_with_the_note():
     """Fix round 1: an answer cut after its last field (only the closing brace missing) keeps
-    wish_met and the note; an invalid wish_met is unknown."""
+    the wish answer and the note; an invalid one is unknown. pick_v4 names the field
+    wish_result; a key the schema does not have is no answer to it."""
     from minemydinner.agent.picker import salvaged_picks
 
     head = '{"choices": [], "slots": [{"index": 0, "recipe_id": 60}], "note": "清淡。", '
     for word, value in (("yes", True), ("no", False), ("no_wish", None)):
-        salvaged, known = salvaged_picks(head + f'"wish_met": "{word}"')
+        salvaged, known = salvaged_picks(head + f'"wish_result": "{word}"')
         assert known is True and salvaged.wish_met is value and salvaged.note == "清淡。"
         assert salvaged.slots == [SlotPick(index=0, recipe_id=60)]
-    salvaged, known = salvaged_picks(head + '"wish_met": "maybe"')
+    salvaged, known = salvaged_picks(head + '"wish_result": "maybe"')
     assert known is False and salvaged.wish_met is None and salvaged.note == ""
-    salvaged, known = salvaged_picks(head + '"wish_met": "y')
+    salvaged, known = salvaged_picks(head + '"wish_result": "y')
     assert known is False and salvaged.note == ""
+    salvaged, known = salvaged_picks(head + '"wish_met": "yes"')
+    assert known is False and salvaged.wish_met is None
 
 
 def test_a_cut_before_the_slots_closed_is_no_answer():
@@ -593,7 +606,7 @@ def test_a_cut_before_the_slots_closed_is_no_answer():
         '{"choices": [], "slots": [{"index": 0, "recipe_id": 755}',
         '{"choices": [{"index": 0, "ids": [4',
         '{"choices": [], "slots": [{"index": 0}]',
-        '{"choices": [], "slots": "x", "wish_met"',
+        '{"choices": [], "slots": "x", "wish_result"',
         "not json",
     ):
         assert salvaged_picks(cut) is None, cut

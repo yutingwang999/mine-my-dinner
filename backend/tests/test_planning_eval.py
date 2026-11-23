@@ -2145,7 +2145,7 @@ def _pick(slots=(), choices=(), wish_met=None, note="选好了。"):
                 {"index": i, "recipe_id": ids[t] if t else 0, "reason": ""} for i, t in slots
             ],
             "note": note,
-            "wish_met": {True: "yes", False: "no", None: "no_wish"}[wish_met],
+            "wish_result": {True: "yes", False: "no", None: "no_wish"}[wish_met],
         },
     )
 
@@ -3019,6 +3019,15 @@ def test_each_must_check_fails_when_it_should():
             },
             "count",
         ),
+        # An untyped add that could not be filled bears on the dish total and the sides only.
+        (
+            {
+                "reading": {"counts": {"soups": 1}},
+                "counts_after": {"soups": 0},
+                "change": {"unfinished": [{"kind": "unfilled", "dish_type": ""}]},
+            },
+            "count",
+        ),
         # A dish that breaks a diner rule or this meal's avoidance is still in the plan.
         ({"breaking": {3: "meal_avoid"}}, "rule"),
         ({"rule_breaks_shown": ("清炒小白菜",)}, "rule"),
@@ -3067,6 +3076,12 @@ def test_each_must_check_passes_when_it_should():
             "reading": {"counts": {"dishes": 2}},
             "counts_after": {"dishes": 3},
             "change": {"unfinished": [{"kind": "unfilled", "for_count": True}]},
+        },
+        # An add with no type that could not be filled (development run 4): total missed.
+        {
+            "reading": {"counts": {"dishes": 4}},
+            "counts_after": {"dishes": 3},
+            "change": {"unfinished": [{"kind": "unfilled", "dish_type": ""}]},
         },
         # The rule-breaking dish left; or the change would leave no dish and asked.
         {"breaking": {2: "diner_rule"}},

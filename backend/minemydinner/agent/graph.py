@@ -2197,11 +2197,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             r["id"] for r in change["reading"].get("remove") or []
             if change["named"].get(r.get("with_name") or "") in result_ids
         }
+        # Task 11 fix 4: a dish the reading drops (mode drop) leaves as the user asked, with
+        # no replacement searched, even when it breaks a rule: the reply says it was removed
+        # (`change_done_text`), never that nothing could replace it.
+        reader_drops = {
+            r["id"] for r in change["reading"].get("remove") or [] if r.get("mode") == "drop"
+        }
         for dish_id in ids:
             if (
                 dish_id not in result_ids
                 and breaking.get(dish_id) in RULE_BREAKS
-                and dish_id not in said | paired | named_gone
+                and dish_id not in said | paired | named_gone | reader_drops
             ):
                 items.append(
                     {

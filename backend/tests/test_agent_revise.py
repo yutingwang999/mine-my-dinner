@@ -134,7 +134,7 @@ def picked(slots=(), choices=()):
             "choices": [{"index": i, "ids": list(ids)} for i, ids in choices],
             "slots": [{"index": i, "recipe_id": r or 0, "reason": ""} for i, r in slots],
             "note": "",
-            "wish_met": "no_wish",
+            "wish_result": "no_wish",
         },
     )
 

@@ -3678,13 +3678,14 @@ def test_a_fallback_failing_every_attempt_ends_as_the_closest_plan(
 # ---- plan 3b-2 Task 7: the change path (spec 5.4-5.6) ----
 
 
-# pick_v3's wish_met words for True, False and None (Task 11 fix 3).
+# The picker's words for wish_met True, False and None (Task 11 fix 3), sent as wish_result
+# since pick_v4 (Task 11 fix 4).
 WISH_WORD = {True: "yes", False: "no", None: "no_wish"}
 
 
 def pick(slots=(), choices=(), wish_met=None, note: str = "") -> AIMessage:
     """The picker's answer: `slots` as (index, recipe id or None), `choices` as (index, ids),
-    sent as pick_v3 sends it (None as recipe id 0, wish_met as a word)."""
+    sent as pick_v4 sends it (None as recipe id 0, the wish answer as a word in wish_result)."""
     return tool_call(
         "PickerAnswer",
         {
@@ -3694,7 +3695,7 @@ def pick(slots=(), choices=(), wish_met=None, note: str = "") -> AIMessage:
                 for i, r in slots
             ],
             "note": note,
-            "wish_met": WISH_WORD[wish_met],
+            "wish_result": WISH_WORD[wish_met],
         },
     )
 
@@ -4828,6 +4829,40 @@ def test_a_rule_breaking_dish_removed_by_codes_fallback_says_no_replacement_was_
     assert "也没找到可以替换的菜" not in reply
 
 
+@pytest.mark.parametrize(
+    "locale, text, said, not_said",
+    [
+        ("zh", "这顿别放牛肉", "去掉了土豆炖牛肉。", "也没找到可以替换的菜"),
+        ("en", "no beef this time", "Removed 土豆炖牛肉.", "nothing could replace it"),
+    ],
+)
+def test_a_rule_breaking_dish_the_reader_drops_is_said_as_removed(
+    revise_env, locale, text, said, not_said
+):
+    """Task 11 fix 4 (development run 4, scenario meal_avoid_beef): the reader both left beef
+    out of this meal and dropped the beef dish. Code follows the reading (the dish leaves, no
+    replacement is searched), and the reply says it was removed, never that no replacement
+    was found."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {
+        "kind": "change",
+        "meal_avoid": ["牛肉"],
+        "remove": [{"id": beef, "mode": "drop", "quote": text}],
+        "reading": "我理解为这顿不要牛肉，土豆炖牛肉就不放了。",
+    }
+    out = read(env, text, reading, replies=[], locale=locale)
+    assert picker_calls(env) == []
+    assert ids_of_plan(out["current_plan"]) == [cabbage, soup]
+    reply = out["messages"][-1].content
+    assert said in reply and not_said not in reply
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["unfinished"] == []
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["next_actions"] == []
+
+
 def test_relax_split_spec_counts_only_stated_sides_and_guards_a_missing_total():
     """Review fixes 4 and 5."""
     from minemydinner.agent.change_step import UNFINISHED, relax_split_spec
@@ -4864,7 +4899,7 @@ def cut_pick(args: str) -> AIMessage:
     )
 
 
-def cut_slots(recipe_id: int, tail: str = ', "wish_met"') -> str:
+def cut_slots(recipe_id: int, tail: str = ', "wish_result"') -> str:
     return f'{{"choices": [], "slots": [{{"index": 0, "recipe_id": {recipe_id}}}]{tail}'
 
 
@@ -4874,7 +4909,7 @@ def test_a_cut_picker_answer_with_closed_slots_is_salvaged_and_applied(revise_en
     beef, cabbage, soup = dish_ids(env, *MEAL)
     [beans] = dish_ids(env, "干煸豆角")
     reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
-    cut = cut_slots(beans, ', "note": "豆角很下饭。", "wish_met"')
+    cut = cut_slots(beans, ', "note": "豆角很下饭。", "wish_result"')
     out = read(env, "白菜换掉", reading, replies=[cut_pick(cut)])
     assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
     assert len(picker_calls(env)) == 1
@@ -4970,9 +5005,9 @@ def test_codes_fallback_with_a_wish_says_nothing_about_the_wish(revise_env):
     assert "gave no answer" in picker_calls(env)[1][-1].content
 
 
-def test_a_cut_answer_with_a_closed_wish_met_is_not_set_aside(revise_env):
+def test_a_cut_answer_with_a_closed_wish_result_is_not_set_aside(revise_env):
     """Fix round 1: only the closing brace is missing, so wish_met is known and the wish-only
-    guard reads it like a full answer."""
+    guard reads it like a full answer (pick_v4 sends it as wish_result)."""
     env = revise_env
     first_meal(env)
     beef, cabbage, soup = dish_ids(env, *MEAL)
@@ -4982,7 +5017,7 @@ def test_a_cut_answer_with_a_closed_wish_met_is_not_set_aside(revise_env):
         "wish": "辣的",
         "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜", "for_wish": True}],
     }
-    cut = cut_slots(beans, ', "note": "干煸豆角带辣椒。", "wish_met": "yes"')
+    cut = cut_slots(beans, ', "note": "干煸豆角带辣椒。", "wish_result": "yes"')
     out = read(env, "白菜换个辣的", reading, replies=[cut_pick(cut)])
     assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
     [attempt] = change_events(env, "pick_attempt")
