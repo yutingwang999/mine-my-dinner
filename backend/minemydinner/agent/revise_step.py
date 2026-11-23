@@ -443,6 +443,18 @@ def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[st
         return f"没找到可以加的{word}。" if zh else f"No {word} could be added."
     # "removed": a dish that breaks a rule leaves even with no replacement (spec 5.5).
     why = rule_reason(item.get("why") or "", meal_avoid, locale)
+    if item.get("not_done"):
+        # No usable picker answer: no replacement was chosen this time, which says nothing
+        # about the library.
+        if zh:
+            return (
+                f"{item['title']}去掉了：{why or '它不符合这顿的要求'}；"
+                "这次没能选出替换的菜，可以再试一次。"
+            )
+        return (
+            f"{item['title']} was removed: {why or 'it does not fit this meal'}; no "
+            "replacement could be chosen this time. You can try again."
+        )
     if zh:
         return f"{item['title']}去掉了：{why or '它不符合这顿的要求'}，也没找到可以替换的菜。"
     return f"{item['title']} was removed: {why or 'it does not fit this meal'}, and nothing could replace it."

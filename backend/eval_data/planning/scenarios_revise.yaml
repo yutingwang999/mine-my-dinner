@@ -544,14 +544,18 @@ scenarios:
     inventory: {猪肉: plenty, 青椒: 2, 西兰花: 1, 蒜: plenty, 小白菜: plenty}
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
     first_plan: [青椒肉丝, 蒜蓉西兰花]
-    follow_up: 用家里的再添两道
-    # Makeable: 青椒肉丝, 蒜蓉西兰花, 清炒小白菜. Four cannot be made; one fewer is three.
-    button_after: fewer_dishes
-    expect_spec: {mode: fridge_only, dishes: 3}
+    follow_up: 就用家里现成的，再给我整两个菜
+    # Makeable: 青椒肉丝, 蒜蓉西兰花, 清炒小白菜. Spec 5.5: the part that can be done is applied
+    # (the bok choy is added); the second dish cannot be made at home, the reply says so and the
+    # card offers shopping. The name is kept for the record; no button is pressed any more.
+    expect_route: revise
+    expect_spec: {mode: fridge_only}
     expect_titles_exact: [青椒肉丝, 蒜蓉西兰花, 清炒小白菜]
+    expect_any_code: [unfilled]
+    expect_next_actions: [switch_to_shopping]
     expect_no_question: true
-    max_model_calls: 18
-    expect: Two more cannot be made from the stock; "one fewer" asks for three, so the bok choy is added and the two dishes stay.
+    max_model_calls: 12
+    expect: Only one more dish can be made from the stock, so the bok choy is added, the two dishes stay, and the card says the second dish could not be added and offers shopping.
   - name: button_relax_split_after_failed_add
     request: 今晚一荤一素，就用家里有的，不出去买。
     locale: zh

@@ -39,7 +39,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v1+pick_v1"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v2+pick_v1"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -62,12 +62,45 @@ def test_route_v6_and_revise_v4_are_frozen():
     )
 
 
-def test_follow_up_v1_and_pick_v1_load_and_stay_within_the_size_budget():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v1"
+def test_follow_up_v1_and_pick_v1_are_frozen():
+    import hashlib
+
+    # Both were used by development run 1 of plan 3b-2 (one) Task 11, so they must never
+    # change; the reader's next change is follow_up_v2.
+    reader = (PROMPT_DIR / "follow_up_v1.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "40a4baf9a651feacbdb949df863d17a41f3df368adc0d5bb14805f5d3efd5ff4"
+    )
+    picker = (PROMPT_DIR / "pick_v1.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "303e3eb9f66d68e22096734f6679f40ec211b535374d498649a9c198490e02ff"
+    )
+
+
+def test_follow_up_v2_states_the_task_11_principles():
+    reader = load_prompt("follow_up")
+    # Task 11 fix 1: a wish for something the plan lacks changes the plan, and a message that
+    # changes who eats is people even when it asks for another change too.
+    assert "A wish for something the plan lacks still changes the plan" in reader
+    assert "A message that changes who eats is people, even when it also asks" in reader
+    # Review fix 2: an add or a replace only for the wish is marked, and the example shows it.
+    assert "Mark an add or a replace with for_wish when it is there only to meet the wish." in reader
+    assert "add 1 vegetable dish, for_wish true." in reader
+    # Everything else of follow_up_v1 is kept.
+    v1 = (PROMPT_DIR / "follow_up_v1.md").read_text(encoding="utf-8")
+    kept = [line for line in v1.splitlines() if line not in reader.splitlines()]
+    assert kept == ['- "我先生以后都不吃羊肉" is people; "明天中午也帮我配一顿" is new_meal.']
+    # Invented examples only, at most five.
+    examples = reader.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 5
+
+
+def test_follow_up_v2_and_pick_v1_load_and_stay_within_the_size_budget():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v2"
     assert PROMPT_VERSIONS["pick"] == "pick_v1"
     reader = load_prompt("follow_up")
     picker = load_prompt("pick")
-    assert reader == (PROMPT_DIR / "follow_up_v1.md").read_text(encoding="utf-8")
+    assert reader == (PROMPT_DIR / "follow_up_v2.md").read_text(encoding="utf-8")
     assert picker == (PROMPT_DIR / "pick_v1.md").read_text(encoding="utf-8")
     revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
     replaced = len(load_prompt("route")) + len(revise_v4)
@@ -438,7 +471,7 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v1+pick_v1"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v2+pick_v1"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 

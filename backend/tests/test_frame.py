@@ -387,9 +387,30 @@ def test_adds_by_type_and_by_name():
 
 
 def test_an_add_of_an_unknown_dish_type_is_ignored():
-    frame = _frame(_change(add=[ReadAdd(dish_type="凉菜", count=1), ReadAdd(dish_type=None)]))
+    frame = _frame(_change(add=[ReadAdd(dish_type="凉菜", count=1)]))
     assert frame.slots == []
-    assert [item["reason"] for item in frame.ignored] == ["unknown_dish_type", "unknown_dish_type"]
+    assert [item["reason"] for item in frame.ignored] == ["unknown_dish_type"]
+
+
+def test_an_add_with_no_dish_type_adds_slots_of_any_type():
+    # "再添两道": the reading gives a count and no type. Code sets no type (spec 5.4): the
+    # picker chooses the kind of each new dish.
+    frame = _frame(_change(add=[ReadAdd(dish_type=None, count=2)]))
+    assert frame.slots == [Slot(kind="add"), Slot(kind="add")]
+    assert frame.ignored == [] and frame.keep == PLAN
+
+
+def test_an_add_with_no_dish_type_counts_toward_a_stated_total():
+    # "再加两个菜，一共六个": the two untyped adds already make the stated total, so the
+    # counts add nothing more.
+    frame = _frame(
+        _change(add=[ReadAdd(dish_type=None, count=2)], counts=ReadCounts(dishes=6)),
+        spec=_spec(dishes=6, meat_dishes=None, vegetable_dishes=None, meat_bound=None,
+                   vegetable_bound=None),
+    )
+    assert frame.slots == [Slot(kind="add"), Slot(kind="add")]
+    assert frame.choices == [] and frame.drops == []
+    assert frame.count_ranges == {"dishes": [6, 6]}
 
 
 def test_an_uncovered_must_use_ingredient_gives_one_replace_choice():

@@ -58,12 +58,14 @@ from minemydinner.agent.change_step import (
     fallback_pick,
     needs_picker,
     result_spec,
+    relax_split_spec,
     slot_results,
     unfinished_items,
     unfinished_reading,
     unused_must,
     withhold_count_drops,
     without_picks,
+    without_unmet_wish_picks,
 )
 from minemydinner.agent.edits import locked_ids, revised_card
 from minemydinner.agent.follow_up import (
@@ -98,7 +100,9 @@ from minemydinner.agent.picker import (
     picker_messages,
 )
 from minemydinner.agent.planner import (
+    PICK_MODEL_CALL_LIMIT,
     PICK_TOOLS_VERSION,
+    PICK_TURN_MODEL_CALLS,
     TOOLS_VERSION,
     PlanProposal,
     build_picker,
@@ -209,6 +213,8 @@ WISH_UNMET_NOTE_EN = "Nothing in your library fits “{wish}”, so this plan fo
 # request has no wish.
 FALLBACK_NOTE_ZH = "这份方案是按你的要求从菜谱库里直接选出的。"
 FALLBACK_NOTE_EN = "This plan was picked from your library to fit your request."
+# The problem the picker is told when a reply carried no answer (plan 3b-2 Task 11 fix 1).
+PICK_NO_ANSWER = "You gave no answer. Answer with the PickerAnswer tool."
 # No plan because every attempt came back with no dishes (nothing was blocked by a rule).
 EMPTY_PLAN_NOTE_ZH = "这次没能为这个要求配出菜，所以没有出方案。可以再发一次请求重试。"
 EMPTY_PLAN_NOTE_EN = (
@@ -764,10 +770,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 # (3b-1 spec 5.2), so "one fewer" is one fewer than the dishes shown. A turn
                 # that stated counts (a failed "再加一道") keeps them.
                 base = on_plan_counts(base, state["current_plan"])
+            card_spec = relax_split_spec(card) if action == "relax_split" else card.get("spec")
             return {
                 **fresh,
                 "intent": "revise" if revises else "plan",
-                "request": apply_action(base, action, card.get("spec")),
+                "request": apply_action(base, action, card_spec),
                 "button": action,
                 "model_calls": [],
             }
@@ -1562,7 +1569,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if button is not None:
             spec = spec.model_copy(update=spec_changes(request, button))
             meal_avoid = revision_meal_avoid(plan, base, request)
-            used = button_reading(unfinished, request, spec)
+            used = button_reading(
+                unfinished, request, spec, any_side=button == "relax_split"
+            )
         else:
             if reading.conditions.clear_time_limit:
                 spec = spec.model_copy(update={"time_limit_min": None})
@@ -1677,12 +1686,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         return Command(update=update, goto=goto)
 
     def picker_shortlist(
-        session, ctx, spec: PlanSpec, frame: Frame, facts: dict, request: dict, vectors: dict
+        session,
+        ctx,
+        spec: PlanSpec,
+        frame: Frame,
+        facts: dict,
+        request: dict,
+        vectors: dict,
+        plan_ids: list[int],
     ) -> tuple[str, Any]:
         """The shortlist for the dish types the picker may fill: an add's own type; for a
-        replace slot or a replace choice, which take a dish of any type, the replaced dishes'
-        types and the meat and vegetable dishes. A named add has no type: the picker
-        searches for it. Returns the text and the shortlist result."""
+        replace slot, a replace choice or an add of any type, which take a dish of any type,
+        the replaced dishes' types and the meat and vegetable dishes. A named add has no type:
+        the picker searches for it. The plan's dishes (`plan_ids`) and the dishes placed by
+        name are left out, since the picker may not choose them. Returns the text and the
+        shortlist result."""
         sides = ["meat dish", "vegetable dish"]
         types: list[str] = []
         for slot in frame.slots:
@@ -1690,6 +1708,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 types.append(slot.dish_type)
             elif slot.replaces is not None:
                 types += [facts[slot.replaces].dish_type] if slot.replaces in facts else []
+                types += sides
+            elif not slot.named:
                 types += sides
         for choice in frame.choices:
             if choice.mode == "replace":
@@ -1706,7 +1726,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         except ValidationError:
             return none, None
         found = build_shortlist_result(
-            session, deps.client, ctx, wanted, ParsedRequest.model_validate(request), vectors
+            session, deps.client, ctx, wanted, ParsedRequest.model_validate(request), vectors,
+            exclude_ids=[*plan_ids, *frame.placed],
         )
         return f"{SHORTLIST_HEADER}\n{shortlist_json(found.entries, found.complete)}", found
 
@@ -1733,7 +1754,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         library")."""
         ids = state["change"]["plan_ids"]
         if answer is None:
-            return None, ["You gave no answer. Answer with the PickerAnswer tool."], {}, {}, {}
+            return None, [PICK_NO_ANSWER], {}, {}, {}
         chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
         hidden: dict[int, dict] = {}
         with deps.session_factory() as session:
@@ -1804,7 +1825,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             plan_lines = current_plan_text(plan, mains, avoid)
             rules = meal_preferences(session, ctx, current_table())
             shortlist, found = picker_shortlist(
-                session, ctx, spec, frame, facts, state["request"], vectors
+                session, ctx, spec, frame, facts, state["request"], vectors, ids
             )
         notes = state.get("search_notes")
         if found is not None:
@@ -1821,7 +1842,26 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         bad: dict[int, str] = {}
         hidden: dict[int, dict] = {}
         first_passed = None
+        # The picker's model calls so far this turn (`PICK_TURN_MODEL_CALLS`).
+        calls_used = 0
+
+        def fits() -> bool:
+            return calls_used + PICK_MODEL_CALL_LIMIT <= PICK_TURN_MODEL_CALLS
+
+        def model_calls(out: dict) -> int:
+            # A model's reply carries usage or response metadata; the message the call-limit
+            # middleware adds when it ends a run carries neither.
+            return sum(
+                1
+                for m in out["messages"]
+                if isinstance(m, AIMessage) and (m.usage_metadata or m.response_metadata)
+            )
+
         for attempt in range(PICK_MAX_ATTEMPTS):
+            if attempt and not fits():
+                # The turn's budget is spent: the last answer's problems stand, and code's
+                # fallback below takes over.
+                break
             attempts = attempt + 1
             # Fresh messages every attempt: never the previous attempt's tool results.
             messages = picker_messages(
@@ -1835,8 +1875,20 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     )
                 )
             out = get_picker().invoke({"messages": messages, "run_id": run_id}, context=context)
+            calls_used += model_calls(out)
             notes = _notes_from_searches(notes, out["messages"])
             answer = out.get("structured_response")
+            empty_replies = 0
+            if answer is None and fits():
+                # A reply with no answer (no answer tool call, or one whose arguments could not
+                # be read; the tool choice is already forced) is asked again at once, once,
+                # without using up an attempt, while the turn's budget allows a whole attempt.
+                empty_replies = 1
+                again = [*messages, HumanMessage(PICK_NO_ANSWER)]
+                out = get_picker().invoke({"messages": again, "run_id": run_id}, context=context)
+                calls_used += model_calls(out)
+                notes = _notes_from_searches(notes, out["messages"])
+                answer = out.get("structured_response")
             outcome, problems, bad, facts, hidden = check_pick(
                 state, plan, frame, answer, spec, codes
             )
@@ -1854,6 +1906,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     ),
                     "problems": map_strings(problems, deps.client.prepare_text),
                     "recipe_ids": outcome.recipe_ids if outcome and not problems else None,
+                    # Replies with no answer asked again within this attempt.
+                    "empty_replies": empty_replies,
                 },
             )
             if not problems:
@@ -1863,6 +1917,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # The slots the picker itself answered null ("nothing fits"); none when code's fallback
         # replaced its answer. Only such a named slot is said to be not in the library.
         picker_nulls: set[int] = set()
+        # Code's fallback replaced the picker's answer: no slot was really tried.
+        fell_back = False
         if answer is not None:
             fills: dict[int, int | None] = {}
             for item in answer.slots:
@@ -1877,6 +1933,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 used_frame, answer = fallback_pick(frame)
                 hidden = {}
                 picker_nulls = set()
+                fell_back = True
         if hidden:
             # A named dish a hard condition hides is not placed; its slot says why.
             answer = without_picks(
@@ -1888,7 +1945,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if withheld is not used_frame:
             # The picker's note may describe a drop code withheld.
             own = False
-        if problems or hidden or withheld is not used_frame:
+        # A dish chosen only for the wish that does not meet it is not placed: the dish it
+        # was to replace stays (user decision, 2026-11-23).
+        answer, wish_unmet_slots = without_unmet_wish_picks(withheld, answer)
+        if wish_unmet_slots:
+            # The note may describe the dish that is not placed.
+            own = False
+        if problems or hidden or withheld is not used_frame or wish_unmet_slots:
             used_frame = withheld
             with deps.session_factory() as session:
                 chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
@@ -1902,6 +1965,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         for index, detail in hidden.items():
             if index < len(slots):
                 slots[index]["hidden"] = detail
+        for index in wish_unmet_slots:
+            slots[index]["wish_unmet"] = True
+        for slot in slots:
+            slot["not_done"] = fell_back
         result = {
             "recipe_ids": outcome.recipe_ids,
             "slots": slots,
@@ -2037,7 +2104,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         wish_unmet = bool(wish) and outcome["wish_met"] is False
         limit = spec.get("time_limit_min")
         sentences = [unfinished_sentence(i, limit, meal_avoid, locale) for i in items]
-        actions = change_actions(items, spec, wish_unmet)
+        actions = change_actions(items, spec, wish_unmet, stated=frame.count_ranges)
         unmet = change_unmet(items, sentences, limit, locale, wish_unmet)
         unmet_wish_text = change_wish_unmet(wish, locale) if wish_unmet else ""
         # Spec 5.4: a wish that touches no dish of the plan and guides no new dish changes

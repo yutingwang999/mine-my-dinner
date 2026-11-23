@@ -8,13 +8,15 @@ graph's nodes `build_change`, `pick_dishes` and `present_change` call these.
   what could not be done, `change_actions` and `change_unmet` give the card's next actions
   and unmet entries for those parts only, and `unfinished_reading` keeps them for a button.
 - With no usable picker answer, `fallback_pick` makes the frame's drop choices in code (a
-  stated count is hard) and fills no slot."""
+  stated count is hard) and fills no slot.
+- When the picker says the wish is not met, `without_unmet_wish_picks` leaves a slot made only
+  for the wish unfilled, so its dish stays (user decision, 2026-11-23)."""
 
 from collections.abc import Collection
 
 from pydantic import ValidationError
 
-from minemydinner.agent.card_text import NEXT_ACTION_ORDER
+from minemydinner.agent.card_text import NEXT_ACTION_ORDER, next_actions
 from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadCounts
 from minemydinner.agent.frame import Frame, fold
 from minemydinner.agent.picker import ChoiceAnswer, PickerAnswer, SlotAnswer, choice_slots
@@ -23,7 +25,12 @@ from minemydinner.agent.revise_step import (
     wish_unmet_actions,
     wish_unmet_entries,
 )
-from minemydinner.planning.composition import count_categories
+from minemydinner.planning.composition import (
+    CATEGORY_OF_DISH_TYPE,
+    DISH_TYPE_OF_CATEGORY,
+    SPLIT_CATEGORIES,
+    count_categories,
+)
 from minemydinner.planning.validate import PlanSpec
 
 # The card field (server only) holding a change's unfinished parts: {"reading": the parts as a
@@ -33,6 +40,10 @@ UNFINISHED = "unfinished"
 # The spec fields a change compares to tell a change of conditions with the same dishes.
 CONDITION_FIELDS = ("mode", "time_limit_min", "must_use", "prefer_use", "all_use")
 _COUNTS = tuple(ReadCounts.model_fields)
+# The dish types of the meat and vegetable sides.
+SIDE_TYPES = tuple(DISH_TYPE_OF_CATEGORY[c] for c in SPLIT_CATEGORIES)
+# The reason kept on a slot left unfilled because its dish did not meet the wish.
+WISH_NOT_MET = "does not meet the wish"
 
 
 def needs_picker(frame: Frame) -> bool:
@@ -40,13 +51,55 @@ def needs_picker(frame: Frame) -> bool:
     return bool(frame.slots or frame.choices)
 
 
-def button_reading(unfinished: dict | None, request: dict, spec: PlanSpec) -> FollowUpReading:
+def side_adds_left(unfinished: dict | None, request: dict) -> int:
+    """How many meat or vegetable dishes the unfinished typed adds of a card still ask for, on
+    a side whose count the card's turn stated (`request`, the card's request), as
+    `change_actions` offers relax_split only for those."""
+    if not request.get("counts_stated_now"):
+        return 0
+    stated = {c for c in SPLIT_CATEGORIES if request.get(c) is not None}
+    data = (unfinished or {}).get("reading") or {}
+    return sum(
+        add.get("count") or 0
+        for add in data.get("add") or []
+        if CATEGORY_OF_DISH_TYPE.get(add.get("dish_type") or "") in stated
+        and not (add.get("name") or "").strip()
+    )
+
+
+def relax_split_spec(card: dict) -> dict | None:
+    """The spec relax_split ("any mix") works from on a card: the card's own, with the total
+    raised by the meat or vegetable dishes the card's change could not add on a stated side
+    (`side_adds_left`), so the button keeps the total that turn asked for. A spec without a
+    total counts the card's dishes."""
+    spec = card.get("spec")
+    left = side_adds_left(card.get(UNFINISHED), card.get("request") or {})
+    if not left or spec is None:
+        return spec
+    shown = spec.get("dishes")
+    if shown is None:
+        shown = count_categories(r.get("dish_type", "") for r in card.get("recipes") or [])[
+            "dishes"
+        ]
+    return {**spec, "dishes": shown + left}
+
+
+def button_reading(
+    unfinished: dict | None, request: dict, spec: PlanSpec, *, any_side: bool = False
+) -> FollowUpReading:
     """The reading a button turn feeds the frame: the offering turn's unfinished parts, and
     the counts of the button's request when it states them (`counts_stated_now`: a count
     button, or an offering turn that stated counts), as `build_frame` binds them with no
     reading. Without a statement the change list decides the counts, so an unfinished add
-    still grows the plan."""
+    still grows the plan. `any_side` (relax_split): an unfinished add of a meat or vegetable
+    dish becomes an add of any type, so the picker may take either side."""
     data = dict((unfinished or {}).get("reading") or {})
+    adds = list(data.get("add") or [])
+    if any_side:
+        adds = [
+            {**add, "dish_type": None} if add.get("dish_type") in SIDE_TYPES else add
+            for add in adds
+        ]
     counts = {}
     if request.get("counts_stated_now"):
         counts = {
@@ -55,7 +108,7 @@ def button_reading(unfinished: dict | None, request: dict, spec: PlanSpec) -> Fo
     return FollowUpReading(
         kind="change",
         remove=data.get("remove") or [],
-        add=data.get("add") or [],
+        add=adds,
         wish=data.get("wish") or "",
         wish_targets=data.get("wish_targets") or [],
         counts=ReadCounts(**counts),
@@ -125,6 +178,42 @@ def without_picks(
         for s in answer.slots
     ]
     return answer.model_copy(update={"slots": slots})
+
+
+def wish_only_slots(frame: Frame) -> set[int]:
+    """The frame's slots whose one reason is the wish: a wish target, or an add or a replace
+    the reading marked `for_wish`; never a dish that breaks a rule, a dish the user named, or
+    a slot for a must-use ingredient or a stated count."""
+    return {
+        index
+        for index, slot in enumerate(frame.slots)
+        if slot.for_wish
+        and slot.reason == "asked"
+        and not slot.named
+        and not slot.must_use
+        and not slot.for_count
+    }
+
+
+def without_unmet_wish_picks(frame: Frame, answer: PickerAnswer) -> tuple[PickerAnswer, set[int]]:
+    """When the picker says the wish is not met (`wish_met` false), the slots made only for
+    the wish (`wish_only_slots`) are left unfilled: a replaced dish stays and an add adds
+    nothing (user decisions, 2026-11-23: a dish changed or added for a wish must meet it).
+    Every other slot keeps its dish.
+    Returns the answer and the slot numbers emptied."""
+    if answer.wish_met is not False:
+        return answer, set()
+    only = wish_only_slots(frame)
+    emptied = {s.index for s in answer.slots if s.index in only and s.recipe_id is not None}
+    if not emptied:
+        return answer, set()
+    slots = [
+        s.model_copy(update={"recipe_id": None, "reason": WISH_NOT_MET})
+        if s.index in emptied
+        else s
+        for s in answer.slots
+    ]
+    return answer.model_copy(update={"slots": slots}), emptied
 
 
 def slot_results(frame: Frame, answer: PickerAnswer) -> list[dict]:
@@ -212,6 +301,10 @@ def unfinished_items(
     for slot in slots:
         if slot["recipe_id"] is not None or slot.get("named"):
             continue
+        if slot.get("wish_unmet"):
+            # Left unfilled because its dish did not meet the wish: the unmet-wish sentence
+            # says it, and the dish stays.
+            continue
         replaces = slot["replaces"]
         must = list(slot.get("must_use") or [])
         if must and slot["kind"] == "replace" and not unused(must):
@@ -219,7 +312,14 @@ def unfinished_items(
         why = breaking.get(replaces, "") if replaces is not None else ""
         if replaces is not None and slot["reason"] == "breaks_rule":
             items.append(
-                {"kind": "removed", "recipe_id": replaces, "title": titles.get(replaces, ""), "why": why}
+                {
+                    "kind": "removed",
+                    "recipe_id": replaces,
+                    "title": titles.get(replaces, ""),
+                    "why": why,
+                    # No usable picker answer: no replacement was chosen, none was ruled out.
+                    "not_done": bool(slot.get("not_done")),
+                }
             )
             continue
         items.append(
@@ -260,11 +360,15 @@ def unused_must(items: list[dict]) -> set[str]:
     return {fold(n) for item in items for n in item.get("must_use") or []}
 
 
-def change_actions(items: list[dict], spec: dict, wish_unmet: bool) -> list[str]:
+def change_actions(
+    items: list[dict], spec: dict, wish_unmet: bool, stated: Collection[str] = ()
+) -> list[str]:
     """The next actions for the unfinished parts only (spec 5.5), as today's failure reasons
     map them: a dish not in the library offers importing; a dish hidden by the time limit,
     stock or cookware offers dropping the limit, shopping or registering cookware; a slot
-    nothing fits (and an unmet wish) offers what an unmet wish does."""
+    nothing fits (and an unmet wish) offers what an unmet wish does; an added meat or
+    vegetable dish nothing fits, whose side count is `stated` (the count fields this turn
+    states, `Frame.count_ranges`), also offers relax_split, as a short side on a new plan."""
     fridge = spec["mode"] == "fridge_only"
     chosen: set[str] = set()
 
@@ -290,6 +394,10 @@ def change_actions(items: list[dict], spec: dict, wish_unmet: bool) -> list[str]
                 for_block(item.get("blocked"))
         elif item["kind"] == "unfilled" and not for_block(item.get("why")):
             chosen.update(wish_unmet_actions(spec))
+            category = CATEGORY_OF_DISH_TYPE.get(item.get("dish_type") or "")
+            side_add = item.get("recipe_id") is None and category in SPLIT_CATEGORIES
+            if side_add and category in stated:
+                chosen.update(next_actions(spec, [], [], short_categories=[category]))
     if wish_unmet:
         chosen.update(wish_unmet_actions(spec))
     return [a for a in NEXT_ACTION_ORDER if a in chosen]
@@ -332,15 +440,20 @@ def unfinished_reading(
         r.model_dump() for r in reading.remove if r.id in left and r.id not in refused
     ]
     add = [ReadAdd(name=m.name).model_dump() for m in frame.missing if m.detail.get("replaces") is None]
-    unfilled_adds: dict[str, int] = {}
+    unfilled_adds: dict[tuple, int] = {}
     for slot in slots:
         if slot["kind"] != "add" or slot["recipe_id"] is not None:
             continue
         if slot.get("named"):
             add.append(ReadAdd(name=slot["named"]).model_dump())
         else:
-            unfilled_adds[slot["dish_type"]] = unfilled_adds.get(slot["dish_type"], 0) + 1
-    add += [ReadAdd(dish_type=t, count=n).model_dump() for t, n in unfilled_adds.items()]
+            # An add for the wish stays one, so a button keeps the wish's guard on it.
+            key = (slot["dish_type"], bool(slot.get("for_wish")))
+            unfilled_adds[key] = unfilled_adds.get(key, 0) + 1
+    add += [
+        ReadAdd(dish_type=t, count=n, for_wish=w).model_dump()
+        for (t, w), n in unfilled_adds.items()
+    ]
     wished = [
         s
         for i, s in enumerate(slots)

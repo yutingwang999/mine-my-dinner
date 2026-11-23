@@ -35,6 +35,10 @@ class ReadRemoval(BaseModel):
             "Empty when the user named none."
         ),
     )
+    for_wish: bool = Field(
+        default=False,
+        description="True when this replacement is there only to meet the wish.",
+    )
 
 
 class ReadAdd(BaseModel):
@@ -51,6 +55,10 @@ class ReadAdd(BaseModel):
     name: str = Field(
         default="",
         description="A dish the user named, in the user's words. Empty when none was named.",
+    )
+    for_wish: bool = Field(
+        default=False,
+        description="True when this add is there only to meet the wish.",
     )
 
 

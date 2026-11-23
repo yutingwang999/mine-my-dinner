@@ -402,6 +402,8 @@ def _slot_line(index: int, slot: Slot) -> str:
         line = f"- Slot {index}: {_article(slot.dish_type)}, added"
     else:
         line = f"- Slot {index}: added"
+    if slot.for_wish and slot.replaces is None:
+        line += ", for the wish"
     if slot.named:
         line += (
             f'; the user named "{slot.named}": the library dish these words mean, or null '

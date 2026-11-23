@@ -400,3 +400,21 @@ Total cost of the spike: $0.224.
 - The stronger model did not help (no better, 2-3 times the cost, slower), so the limit is the structure and the code guards, not model power.
 - The clear gain was fewer calls: about 1.5 per follow-up turn instead of 3.4, and faster turns.
 - This supports, for the plan 3b-2 design: one model reads the whole context once and answers **what the message wants** in a structured form; code decides which dishes and people that touches and keeps the guards (locked dishes, counts, rules); a model chooses concrete dishes only within that narrow frame.
+
+### Plan 3b-2 (one) development runs (2026-11-23) — not a round
+
+The new follow-up structure (reader `follow_up_v1`, frame in code, picker `pick_v1`; Tasks 2-10b) on the rewritten development set (`scenarios_revise.yaml`, 42 scenarios, `library_revise.yaml`), test database, deepseek-flash, **with embeddings** (`--with-embeddings`; round 10 ran without, so its search fell back to text matching while the tool said "matched by meaning" — see the carryover on `semantic_paused`). Results of record come from Task 12's round.
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T112836Z (run 1) | follow_up_v1, pick_v1 | 36/42 | 1 (1 scenario) | 0/30 | 2.2 / 4 | $0.0493 | 6.2 s |
+| Round 10, development set (old structure, 37 scenarios, no embeddings, for comparison) | route_v6, parse_v8, revise_v4 | 33-35/37 | — | — | 3.4 / 6-8 | about $0.05 | about 7 s |
+
+**Run 1 misses and what was done** (all fixed before run 2, with the user's approval):
+- `button_fewer_after_failed_add`: an add the reader gave with no dish type was dropped by code as an unknown type, so nothing was added and no button offered. Code now reads a missing type as any type. The scenario itself assumed all-or-nothing; under spec 5.5 the dish that can be made is added at once, so it was rewritten (new sentence).
+- `fridge_only_spicy_unmet` (the must violation): no spicy dish could be made, and the picker still swapped a dish for a non-spicy one with `wish_met: false`. A slot that exists only for the wish is now left unfilled when the wish is not met (user decision); the reader marks an add or a replacement made only for the wish (`for_wish`, `follow_up_v2`), so the same rule covers it.
+- `button_relax_split_after_failed_add`: a stated side count that could not be met offered no `relax_split`; it does now, and the button re-runs the unfinished add as any type.
+- `meal_avoid_shrimp_en`, `new_guest_brings_the_card`: the picker returned empty replies (3 of about 40 calls; most likely tool-call arguments that could not be parsed); an empty reply is now asked again at once, within a turn-wide budget of 6 picker calls, so a change turn stays at 7 calls or fewer.
+- `button_shopping_after_seafood_wish`: "a wish for something the plan lacks" was read as a wish alone, so nothing changed; `follow_up_v2` turns such a wish into an add or a replacement.
+- `new_guest_brings_the_card`: a new diner plus "one more dish" was read as a change; `follow_up_v2` reads any change in who eats as `people`.
+- Also: the picker's shortlist no longer lists dishes already in the plan.

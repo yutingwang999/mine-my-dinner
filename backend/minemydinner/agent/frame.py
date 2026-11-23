@@ -48,7 +48,7 @@ _EXACT_CATEGORIES = ("soups", "staples", "desserts", "snacks")
 class Slot(BaseModel):
     """A new dish the picker must choose: in place of `replaces`, or added. A replace slot has
     no dish type (the picker chooses the kind of dish); an add keeps the type the reading gave
-    it, or none for a named dish."""
+    it, or none for a named dish or an add of any type."""
 
     kind: Literal["replace", "add"]
     dish_type: str | None = None
@@ -66,7 +66,8 @@ class Slot(BaseModel):
     # A dish the user named that is no library title, in the user's words: the picker finds
     # the library dish the words mean, or answers that nothing fits ("not in the library").
     named: str = ""
-    # A dish the wish touches (the reading's `wish_targets`).
+    # Only for the wish: a dish the wish touches (the reading's `wish_targets`), or an add or
+    # a replace the reading marked `for_wish`. Left unfilled when the wish is not met.
     for_wish: bool = False
 
 
@@ -362,9 +363,17 @@ class _Builder:
         dish_type = dish_types[0] if len(dish_types) == 1 else None
         self.choices.append(Choice(dish_type=dish_type, candidates=pool, up_to=count, mode="drop"))
 
-    def add_count(self, dish_type: str, count: int, for_count: bool = False) -> None:
+    def untyped_adds(self) -> int:
+        """Add slots of any type (no type, no name): each is one more dish, of a kind the
+        picker chooses."""
+        return sum(1 for s in self.slots if s.kind == "add" and not s.dish_type and not s.named)
+
+    def add_count(
+        self, dish_type: str | None, count: int, for_count: bool = False, for_wish: bool = False
+    ) -> None:
         self.slots.extend(
-            Slot(kind="add", dish_type=dish_type, for_count=for_count) for _ in range(count)
+            Slot(kind="add", dish_type=dish_type, for_count=for_count, for_wish=for_wish)
+            for _ in range(count)
         )
 
 
@@ -425,6 +434,9 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
     if not binds("dishes") and not sides:
         return
     total = spec.dishes if binds("dishes") else present["dishes"]
+    # An add of any type is one of the dishes already, on whichever side the picker puts it:
+    # the sides only make up the rest of the total.
+    sides_total = max(total - builder.untyped_adds(), 0) if binds("dishes") else total
     named = {
         side: (getattr(spec, side), getattr(spec, side.split("_")[0] + "_bound"))
         if side in sides
@@ -436,7 +448,7 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
         builder.count_ranges["dishes"] = [total, total]
     for side in sides:
         builder.count_ranges[side] = list(ranges[side])
-    drop_m, drop_v, either, add_m, add_v = _side_changes(present, total, ranges)
+    drop_m, drop_v, either, add_m, add_v = _side_changes(present, sides_total, ranges)
     if drop_m:
         builder.remove_count((meat_type,), drop_m)
     if drop_v:
@@ -518,7 +530,13 @@ def build_frame(
         elif placed == "not_found":
             # No name, or a name that is no library title: the picker chooses (a named slot
             # carries the user's words for it to find).
-            builder.replace(item.id, breaking.get(item.id, ""), words=item.quote, named=name)
+            builder.replace(
+                item.id,
+                breaking.get(item.id, ""),
+                words=item.quote,
+                named=name,
+                for_wish=item.for_wish,
+            )
 
     # Dishes that break the new request; a dish already handled keeps its one entry.
     for dish_id in builder.plan_ids:
@@ -550,12 +568,14 @@ def build_frame(
         if add.name.strip():
             if builder.place(add.name, lookup(add.name), None) == "not_found":
                 builder.slots.append(Slot(kind="add", named=add.name.strip()))
-        elif add.dish_type not in CATEGORY_OF_DISH_TYPE:
+        elif add.dish_type is not None and add.dish_type not in CATEGORY_OF_DISH_TYPE:
             builder.ignored.append({"add": add.model_dump(), "reason": "unknown_dish_type"})
         elif add.count < 1:
             builder.ignored.append({"add": add.model_dump(), "reason": "bad_count"})
         else:
-            builder.add_count(add.dish_type, add.count)
+            # No type: a dish of any type (spec 5.4: code sets no type the reading did not
+            # give); the picker chooses the kind.
+            builder.add_count(add.dish_type, add.count, for_wish=add.for_wish)
 
     # The counts: from the change list, unless the message (or a button) states them.
     if reading is None:

@@ -37,6 +37,10 @@ TOOL_CALL_LIMIT = 10
 # The picker (plan 3b-2 spec 5.7), per attempt: at most two search calls, then its answer.
 PICK_SEARCH_LIMIT = 2
 PICK_MODEL_CALL_LIMIT = PICK_SEARCH_LIMIT + 1
+# The picker's model calls in one turn, searches and answers together (spec 5.7: with the
+# reader's call a change turn stays at seven calls or fewer). A re-ask after an empty reply and
+# a second attempt start only when a whole attempt still fits.
+PICK_TURN_MODEL_CALLS = 6
 # The picker only searches; code checks stock, cookware, time and rules of its dishes.
 PICK_TOOLS: list[BaseTool] = [search_recipes_tool]
 

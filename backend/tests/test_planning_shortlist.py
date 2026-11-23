@@ -312,6 +312,21 @@ def test_exclude_ids_reaches_the_next_batch(session, seeded):
     assert ids(following.hits) == everything[5:]
 
 
+def test_excluded_ids_are_never_listed(session, seeded):
+    # The picker's shortlist leaves out the plan's dishes; the planner passes no exclusion,
+    # so its shortlist is the same as before.
+    soups = make_many(session, 7, "soup", "汤")
+    plain = shortlist(session, spec(soups=1))["soup"]
+    assert len(plain) == 5
+    left_out = ids(plain)[:2]
+    result = build_shortlist_result(
+        session, FakeEmbedClient(), ctx_for(session), spec(soups=1), ParsedRequest(), {},
+        exclude_ids=left_out,
+    )
+    # Seven soups, two left out: the other five fill the five places.
+    assert set(ids(result.entries["soup"])) == {s.id for s in soups} - set(left_out)
+
+
 def test_shortlist_respects_dietary_exclusions(session, seeded):
     make_recipe(session, "番茄炒蛋", lines=[L("番茄", role="main"), L("鸡蛋", role="main")])
     odd = make_recipe(session, "神秘菜", lines=[L("某种酱", linked=False)])
