@@ -36,14 +36,50 @@ def test_default_composition(n, expected):
 
 
 def test_prompt_versions_name_existing_files():
-    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
+    assert list(PROMPT_VERSIONS) == [
+        "route", "parse", "planner", "revise", "follow_up", "pick"
+    ]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4+follow_up_v1+pick_v1"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
         assert load_prompt(kind)
     assert [p.name for p in prompt_files()] == [f"{v}.md" for v in PROMPT_VERSIONS.values()]
+
+
+def test_route_v6_and_revise_v4_are_frozen():
+    import hashlib
+
+    # Both were used by plan 3b-1b development runs and round 10, so they must never change;
+    # follow-ups move to follow_up and pick (plan 3b-2 spec 5.8).
+    route = (PROMPT_DIR / "route_v6.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(route).hexdigest() == (
+        "7354e2bc93e9999996a644693fad67e7e15555459ab0dce89ec71d4ab74d96f4"
+    )
+    revise = (PROMPT_DIR / "revise_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(revise).hexdigest() == (
+        "cf2d42fd50b493cf7720b572b64657624c4f55965411236f6211b10c24112296"
+    )
+
+
+def test_follow_up_v1_and_pick_v1_load_and_stay_within_the_size_budget():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v1"
+    assert PROMPT_VERSIONS["pick"] == "pick_v1"
+    reader = load_prompt("follow_up")
+    picker = load_prompt("pick")
+    assert reader == (PROMPT_DIR / "follow_up_v1.md").read_text(encoding="utf-8")
+    assert picker == (PROMPT_DIR / "pick_v1.md").read_text(encoding="utf-8")
+    replaced = len(load_prompt("route")) + len(load_prompt("revise"))
+    # Spec 5.8a: the reader stays under half of route_v6 plus revise_v4; spec 6: the reader
+    # and the picker together are shorter than the two prompts they replace.
+    assert len(reader) < replaced / 2
+    assert len(reader) + len(picker) < replaced
+    # Spec 5.8: neither prompt lets internal words reach the user.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in reader
+    assert 'never use ids, the plan\'s marks (LOCKED and the others) or "Diner N"' in picker
+    # Spec 5.5: a taste wish guides the picker but is not a requirement.
+    assert "The wish is not a requirement." in picker
 
 
 def test_package_data_glob_matches_every_prompt_file():
@@ -402,7 +438,7 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4+follow_up_v1+pick_v1"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
