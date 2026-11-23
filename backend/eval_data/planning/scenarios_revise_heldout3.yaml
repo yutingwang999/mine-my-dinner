@@ -7,8 +7,9 @@
 # library_revise3.yaml (青椒炒鸡蛋, 蘑菇炒肉, 青笋炒肉, 洋葱炒鸡蛋 for "鸡蛋炒洋葱", 清炖排骨 for
 # "炖排骨").
 #
-# Lines marked TODO(Task 10) are the user's expectations that need a key plan 3b-2 Task 10
-# adds; the controller turns them into keys after Task 10. No subagent opens this file.
+# Three of the user's expectations needed keys plan 3b-2 Task 10 added; the controller turned
+# them into keys after Task 10, with the user's review (marked "converted after Task 10").
+# No subagent opens this file.
 role: held-out
 scenarios:
   # ---- replacements and removals ----
@@ -85,7 +86,8 @@ scenarios:
     expect_plan: false
     expect_locale_reply: zh
     expect: The library has no yuxiang pork; the plan stays and the reply says the dish is not there.
-    # TODO(Task 10): the reply offers importing recipes (import_recipes among the next actions).
+    # The user's note: the reply offers importing recipes (converted after Task 10).
+    expect_next_actions: [import_recipes]
 
   # ---- adding ----
   - name: add_one_everything_else_has_egg
@@ -102,7 +104,8 @@ scenarios:
     expect_plan: false
     expect_locale_reply: zh
     expect: Every other dish the fridge allows has egg, so none can be added; the plan stays and the reply says why.
-    # TODO(Task 10): next-action buttons are offered (the card's next actions are not empty).
+    # The user's note: next-action buttons are offered, any kind (converted after Task 10).
+    expect_some_next_action: true
 
   - name: add_a_staple_after_light_meal_for_xiaowang
     request: 今天小王来，清淡点，可以出去买
@@ -214,7 +217,8 @@ scenarios:
     expect_unchanged: true
     expect_locale_reply: zh
     expect: Not about the plan; a plain reply, the plan stays. (The user left the expectation blank; this is Claude's reading.)
-    # TODO(Task 10): the reading kind is "other" and no planning run is made.
+    # The reading kind is "other": the runner maps it to route "other" (converted after Task 10).
+    expect_route: other
 
   - name: no_cucumber_dish_asks
     request: 两个人吃晚饭，三个菜一个主食，可以买菜。

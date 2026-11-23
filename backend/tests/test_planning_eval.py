@@ -85,6 +85,15 @@ def test_summarize_rates_and_averages():
         "buttons": "0/0",
         "fallbacks": 0,
         "fallback_scenarios": 0,
+        "must_violations": 0,
+        "must_violation_scenarios": 0,
+        "unnecessary_questions": 0,
+        "change_allowed_follow_ups": 0,
+        "unnecessary_question_rate": 0.0,
+        "reader_calls": 0,
+        "picker_calls": 0,
+        "picker_attempts": 0,
+        "frame_ignored": 0,
     }
 
 
@@ -648,7 +657,7 @@ def test_run_folder_layout_and_summary(tmp_path):
     assert set(cond) == {
         "git_commit", "scenarios_file", "library_file", "prompt_version", "prompt_versions",
         "prompt_files", "tools_version", "flags", "constants", "models", "planning_model",
-        "pick_tools_version",
+        "pick_tools_version", "prompt_lengths",
     }
     assert cond["git_commit"] == "abc123" and len(cond["scenarios_file"]["sha256"]) == 64
     assert cond["flags"] == {"no_shortlist": True, "with_embeddings": True}
@@ -667,7 +676,7 @@ def test_run_folder_layout_and_summary(tmp_path):
     m = metrics["groups"]["all"]
     assert set(m) == {
         "scenarios", "outcomes", "calls", "tokens", "cost", "latency", "notes", "revisions",
-        "replies",
+        "replies", "two_layers", "change_path",
     }
     assert m["replies"] == {
         "zero_dishes_shown": 0, "wish_unmet_not_said": 0, "buttons": "0/0", "fallbacks": 0,
@@ -1836,7 +1845,7 @@ def test_the_heldout_sets_fit_the_library(session):
 # ---- plan 3b-1: follow-up scenarios (revisions) ----
 
 from minemydinner.evaluation.planning import expectation_failures  # noqa: E402
-from minemydinner.evaluation.revise_eval import TurnFacts  # noqa: E402
+from minemydinner.evaluation.revise_eval import TurnFacts, must_failures  # noqa: E402
 from tests.agentfakes import tool_call  # noqa: E402
 
 REVISE_BASE = {"name": "r", "request": "r", "locale": "zh", "inventory": {}, "cookware": []}
@@ -1984,13 +1993,17 @@ def test_any_of_passes_when_one_entry_is_met():
 
 
 def test_a_locked_dish_gone_counts_unless_expected_removed():
+    # Plan 3b-2 Task 10: a must-never-be-wrong check, run apart from the scenario's keys.
     facts = _facts(locked_before=frozenset({2, 3}))
-    failures = _judge(facts)
+    assert _judge(facts) == []
+    failures = must_failures(_scenario(follow_up="x"), facts)
     assert len(failures) == 1 and "红烧茄子" in failures[0] and "locked" in failures[0]
-    assert _judge(facts, expect_removed=["红烧茄子"]) == []
-    assert _judge(facts, expect_any_of=[{"expect_removed": ["红烧茄子"]}]) == []
+    assert must_failures(_scenario(follow_up="x", expect_removed=["红烧茄子"]), facts) == []
+    assert must_failures(
+        _scenario(follow_up="x", expect_any_of=[{"expect_removed": ["红烧茄子"]}]), facts
+    ) == []
     # A new plan starts from scratch: no locked dish is judged.
-    assert _judge(_facts(turn="plan", locked_before=frozenset({2}))) == []
+    assert must_failures(_scenario(follow_up="x"), _facts(turn="plan", locked_before=frozenset({2}))) == []
 
 
 def test_the_plan_flag_is_not_judged_on_a_turn_without_a_run():
@@ -2907,3 +2920,662 @@ def test_runner_presses_the_newest_card_after_a_reply_without_one():
     assert _last_card(values) is kept
     assert _last_reply_card(values) is None
     assert _last_card({"messages": [AIMessage("hi", id="c")], "reply_plans": {}}) is None
+
+
+# ---- plan 3b-2 Task 10: the two layers (spec 6) ----
+
+from types import SimpleNamespace  # noqa: E402
+
+from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
+
+from minemydinner.agent.records import PlanningRecorder  # noqa: E402
+from minemydinner.agent.request import ACTION_MESSAGES, PROMPT_VERSIONS, load_prompt  # noqa: E402
+from minemydinner.evaluation import planning as planning_module  # noqa: E402
+from minemydinner.evaluation.planning import ANY_OF_KEYS, QUESTION_STOP, group_metrics  # noqa: E402
+from minemydinner.evaluation.revise_eval import (  # noqa: E402
+    ROUTES,
+    allowed_changes,
+    change_allowed,
+    internal_words,
+    route_of,
+    unnecessary_question,
+)
+
+LIBRARY_TITLES = ["番茄炒蛋", "红烧茄子", "清炒小白菜", "蒜蓉西兰花", "青椒肉丝"]
+
+
+def _reader_event(kind):
+    return {"kind": "model_call", "step": "read_follow_up", "response": {"kind": kind}}
+
+
+def test_the_reading_kind_stands_for_a_route():
+    """Ruling 4: change and people are revise, new_meal is plan, other is other; a first
+    turn keeps the route model's own answer."""
+    for kind, route in [
+        ("change", "revise"), ("people", "revise"), ("new_meal", "plan"), ("other", "other"),
+    ]:
+        assert route_of([[_reader_event(kind)]], {}) == route, kind
+    first = {"kind": "model_call", "step": "route", "response": {"intent": "plan"}}
+    assert route_of([[first]], {}) == "plan"
+    # A turn with no run (an "other" reply) reads as other.
+    assert route_of([], {"intent": "other"}) == "other"
+    # A scenario may expect "other".
+    assert "other" in ROUTES
+
+
+def _must(after=(1, 3, 4), scenario=None, library=LIBRARY_TITLES, **changes):
+    return must_failures(scenario or _scenario(follow_up="x"), _facts(after=after, **changes), library)
+
+
+def test_each_must_check_fails_when_it_should():
+    """Spec 6 / ruling 1: each must-never-be-wrong check, failing and passing."""
+    plain = _must()
+    assert plain == []
+    cases = [
+        # A locked dish gone with no quote, rule or avoidance.
+        ({"locked_before": frozenset({2})}, "locked"),
+        # A locked dish whose quote is not the user's words.
+        (
+            {
+                "locked_before": frozenset({2}),
+                "reading": {"remove": [{"id": 2, "quote": "鱼", "mode": "drop"}]},
+                "words": "茄子不要了",
+            },
+            "locked",
+        ),
+        # A locked dish that breaks only stock: stock never moves a locked dish (spec 5.4).
+        ({"locked_before": frozenset({2}), "breaking": {2: "stock"}}, "locked"),
+        # A quote the frame refused for a locked dish does not excuse it.
+        (
+            {
+                "locked_before": frozenset({2}),
+                "reading": {"remove": [{"id": 2, "quote": "茄子", "mode": "drop"}]},
+                "frame": {"drops": [], "ignored": [
+                    {"id": 2, "reason": "locked_without_quote", "quote": "茄子"}
+                ]},
+                "words": "茄子不要了",
+            },
+            "locked",
+        ),
+        # A quote that is not in the turn's own message.
+        (
+            {
+                "locked_before": frozenset({2}),
+                "reading": {"remove": [{"id": 2, "quote": "茄子", "mode": "drop"}]},
+                "frame": {"drops": [2]},
+                "words": "西兰花不要了",
+            },
+            "locked",
+        ),
+        # A stated count not met, with nothing said about it.
+        (
+            {"reading": {"counts": {"dishes": 2}}, "counts_after": {"dishes": 3}, "change": {}},
+            "count",
+        ),
+        # Something unfinished that has no bearing on the stated count does not excuse it.
+        (
+            {
+                "reading": {"counts": {"soups": 1}},
+                "counts_after": {"soups": 0},
+                "change": {"unfinished": [
+                    {"kind": "missing", "reason": "not_in_library", "name": "糖醋里脊"}
+                ]},
+            },
+            "count",
+        ),
+        # A dish that breaks a diner rule or this meal's avoidance is still in the plan.
+        ({"breaking": {3: "meal_avoid"}}, "rule"),
+        ({"rule_breaks_shown": ("清炒小白菜",)}, "rule"),
+        # "Not in the library" for a library dish (also a short name of exactly one title).
+        (
+            {"change": {"unfinished": [
+                {"kind": "missing", "reason": "not_in_library", "name": "红烧茄子"}
+            ]}},
+            "library",
+        ),
+        (
+            {"change": {"unfinished": [
+                {"kind": "missing", "reason": "not_in_library", "name": "小白菜"}
+            ]}},
+            "library",
+        ),
+        # "0 dishes".
+        ({"shown_texts": ("方案有 0 道菜",)}, "0 dishes"),
+        # An unmet wish not said.
+        ({"reading": {"wish": "辣一点"}, "change": {"wish_met": False}}, "wish"),
+        # Internal words.
+        ({"shown_texts": ("番茄炒蛋 LOCKED",)}, "internal"),
+        ({"shown_texts": ("换掉了 id 12",)}, "internal"),
+        ({"shown_texts": ("Diner 2 不吃辣",)}, "internal"),
+    ]
+    for changes, word in cases:
+        failures = _must(**changes)
+        assert len(failures) == 1 and word in failures[0], (changes, failures)
+        assert failures[0].startswith("must: ")
+
+
+def test_each_must_check_passes_when_it_should():
+    passing = [
+        # The locked dish's own quote the frame acted on, a rule or an avoidance, or the
+        # scenario's removal.
+        {
+            "locked_before": frozenset({2}),
+            "reading": {"remove": [{"id": 2, "quote": "茄子", "mode": "drop"}]},
+            "frame": {"drops": [2]},
+            "words": "茄子不要了",
+        },
+        {"locked_before": frozenset({2}), "breaking": {2: "meal_avoid"}},
+        # Stated counts met, or the reply said what could not be done.
+        {"reading": {"counts": {"dishes": 3}}, "counts_after": {"dishes": 3}, "change": {}},
+        {
+            "reading": {"counts": {"dishes": 2}},
+            "counts_after": {"dishes": 3},
+            "change": {"unfinished": [{"kind": "unfilled", "for_count": True}]},
+        },
+        # The rule-breaking dish left; or the change would leave no dish and asked.
+        {"breaking": {2: "diner_rule"}},
+        {"breaking": {3: "meal_avoid"}, "ended_with": "empty_plan"},
+        # A stock or time break kept for want of a replacement is not a rule.
+        {"breaking": {3: "stock"}},
+        # Not in the library, and really not: a new name, a one-character word, or a longer
+        # name that holds a title (another dish).
+        {"change": {"unfinished": [
+            {"kind": "missing", "reason": "not_in_library", "name": "糖醋里脊"},
+            {"kind": "missing", "reason": "not_in_library", "name": "蛋"},
+            {"kind": "missing", "reason": "not_in_library", "name": "番茄炒蛋盖饭"},
+        ]}},
+        # The unmet wish said; a met wish; no wish.
+        {"reading": {"wish": "辣一点"}, "change": {"wish_met": False}, "wish_unmet_said": True},
+        {"reading": {"wish": "辣一点"}, "change": {"wish_met": True}},
+        {"reading": {"wish": ""}, "change": {"wish_met": False}},
+        # Words that only look like internal ones.
+        {"shown_texts": ("已经锁定了这道菜", "I did 3 things, paid 12", "locked in")},
+    ]
+    for changes in passing:
+        assert _must(**changes) == [], changes
+
+
+def test_must_checks_on_a_new_plan_skip_what_only_a_change_has():
+    """Old new-plan sets: only the applicable checks apply (ruling 1)."""
+    facts = TurnFacts(turn="plan", locked_before=frozenset({2}))
+    assert must_failures(_scenario(expect_titles_include=["番茄炒蛋"]), facts, LIBRARY_TITLES) == []
+    texts = TurnFacts(turn="plan", shown_texts=("一共 0 道菜",))
+    assert len(must_failures(_scenario(), texts, LIBRARY_TITLES)) == 1
+    # A new plan from a follow-up drops every dish by design.
+    renewed = _facts(after=(4,), turn="plan", locked_before=frozenset({1}))
+    scenario = _scenario(follow_up="x", expect_removed=["红烧茄子"], expect_max_changed=1)
+    assert must_failures(scenario, renewed, LIBRARY_TITLES) == []
+
+
+def test_allowed_changes_come_from_the_existing_keys():
+    """Ruling 2: which dishes may change comes from expect_removed, expect_removed_any,
+    expect_max_changed, expect_unchanged and expect_titles_include, and the recorded frame."""
+    def must(after, **keys):
+        scenario = _scenario(follow_up="x", **keys)
+        return must_failures(scenario, _facts(after=after), LIBRARY_TITLES)
+
+    # 红烧茄子 (2) may go; 番茄炒蛋 (1) may not.
+    assert must((1, 3, 4), expect_removed=["红烧茄子"]) == []
+    [failure] = must((3, 4, 5), expect_removed=["红烧茄子"])
+    assert "番茄炒蛋" in failure and "not allow" in failure
+    assert must((3, 4), expect_removed_any=["番茄炒蛋", "红烧茄子"], expect_max_changed=2) == []
+    assert must((3,), expect_removed_any=["番茄炒蛋", "红烧茄子"], expect_max_changed=1) != []
+    # An expect_any_of entry's removals are allowed too.
+    assert must((1, 3), expect_any_of=[{"expect_removed": ["红烧茄子"]}]) == []
+    # Titles that must be shown may not go.
+    assert must((1, 3, 4), expect_titles_include=["红烧茄子"]) != []
+    # expect_unchanged: nothing goes and nothing comes.
+    assert must((1, 2, 3), expect_unchanged=True) == []
+    assert must((1, 2, 3, 4), expect_unchanged=True) != []
+    # expect_max_changed: 0 lets dishes come in (an add) but none go.
+    assert must((1, 2, 3, 4), expect_max_changed=0) == []
+    assert must((1, 2, 4), expect_max_changed=0) != []
+
+
+def test_with_no_change_keys_only_locks_counts_and_rules_are_checked():
+    """Ruling 2: a scenario that sets none of the keys is checked only by the other must
+    checks; the derivation gives nothing."""
+    scenario = _scenario(follow_up="x", expect_counts={"dishes": 3})
+    every_dish_changed = _facts(after=(4, 5))
+    assert allowed_changes(scenario, every_dish_changed) is None
+    assert must_failures(scenario, every_dish_changed, LIBRARY_TITLES) == []
+    # The other checks still run.
+    locked = _facts(after=(4, 5), locked_before=frozenset({1}))
+    assert "locked" in must_failures(scenario, locked, LIBRARY_TITLES)[0]
+    counts = _facts(after=(4, 5), reading={"counts": {"dishes": 3}}, counts_after={"dishes": 2},
+                    change={})
+    assert "count" in must_failures(scenario, counts, LIBRARY_TITLES)[0]
+    rules = _facts(after=(1, 4), breaking={1: "diner_rule"})
+    assert "rule" in must_failures(scenario, rules, LIBRARY_TITLES)[0]
+
+
+def test_the_recorded_frame_bounds_what_may_change():
+    """Without named removals, the dishes that may go are those the frame let go (drops,
+    replaced dishes, choice candidates, rule breaks), and no more new dishes come in than
+    the frame made room for."""
+    frame = {
+        "drops": [],
+        "slots": [{"kind": "replace", "replaces": 3, "dish_type": "vegetable dish"}],
+        "choices": [{"candidates": [1], "up_to": 1, "mode": "replace", "dish_type": None}],
+        "placed": [],
+        "ignored": [],
+    }
+    scenario = _scenario(follow_up="x", expect_max_changed=2)
+    allowed = allowed_changes(scenario, _facts(frame=frame))
+    assert allowed.may_go == frozenset({"番茄炒蛋", "清炒小白菜"}) and allowed.max_new == 2
+    assert must_failures(scenario, _facts(after=(2, 4, 5), frame=frame), LIBRARY_TITLES) == []
+    # 红烧茄子 (2) was not in the frame.
+    [failure] = must_failures(scenario, _facts(after=(1, 3, 4), frame=frame), LIBRARY_TITLES)
+    assert "红烧茄子" in failure
+    # Three new dishes, room for two.
+    titles = {**BEFORE, 4: "蒜蓉西兰花", 5: "青椒肉丝", 6: "宫保鸡丁"}
+    facts = TurnFacts(
+        turn="revision", before=dict(BEFORE), after={i: titles[i] for i in (2, 4, 5, 6)},
+        frame=frame,
+    )
+    [failure] = must_failures(_scenario(follow_up="x", expect_max_changed=3), facts, LIBRARY_TITLES)
+    assert "added" in failure
+
+
+def test_unnecessary_questions_are_counted_apart_not_failed():
+    """Ruling 3: a follow-up that ends with a question other than the empty-plan and the
+    which-dish question, while the scenario allows a change."""
+    scenario = _scenario(follow_up="x", expect_max_changed=1)
+    for ended, unnecessary in [
+        ("question", True), ("unclear", True), ("empty_plan", False), ("which_dish", False),
+        (None, False),
+    ]:
+        facts = _facts(after=(1, 2, 3), ended_with=ended)
+        assert unnecessary_question(scenario, facts) is unnecessary, ended
+        # Not a failure: the plan may stay under this scenario's keys.
+        assert _judge(facts, expect_max_changed=1) == []
+        assert must_failures(scenario, facts, LIBRARY_TITLES) == []
+    asked = _facts(after=(1, 2, 3), ended_with="question")
+    # No reasonable change: the scenario expects a question, or nothing can be done.
+    for keys in (
+        {"expect_question": True},
+        {"expect_no_question": False},
+        {"expect_unchanged": True, "expect_plan": False},
+        {"expect_any_of": [{"expect_question": True}, {"expect_unchanged": True, "expect_plan": False}]},
+    ):
+        assert not change_allowed(_scenario(follow_up="x", **keys)), keys
+        assert not unnecessary_question(_scenario(follow_up="x", **keys), asked), keys
+    # Dishes kept but the conditions changed is still a change; a first message is not a
+    # follow-up.
+    assert change_allowed(_scenario(follow_up="x", expect_unchanged=True))
+    # A message that is not about the plan allows no change.
+    assert not change_allowed(_scenario(follow_up="x", expect_route="other", expect_unchanged=True))
+    assert not change_allowed(_scenario(
+        follow_up="x", expect_any_of=[{"expect_route": "other"}, {"expect_question": True}]
+    ))
+    assert change_allowed(_scenario(
+        follow_up="x", expect_any_of=[{"expect_route": "other"}, {"expect_route": "revise"}]
+    ))
+    assert change_allowed(_scenario(follow_up="x", expect_any_of=[{"expect_question": True}, {}]))
+    assert not change_allowed(_scenario())
+    assert not unnecessary_question(_scenario(), TurnFacts(ended_with="question"))
+
+
+def test_internal_words_finds_marks_ids_and_labels():
+    assert internal_words(["LOCKED KEPT CONFLICT", "OPEN CONFLICT 的那道", "id: 7", "Diner3"]) == [
+        "LOCKED", "KEPT CONFLICT", "OPEN CONFLICT", "id: 7", "Diner3"
+    ]
+    assert internal_words(["BREAKS THIS MEAL'S WISH", "recipe_id 4"]) == [
+        "BREAKS THIS MEAL'S WISH", "recipe_id 4"
+    ]
+    assert internal_words(["已锁定", "Idaho 5", "paid 3", "locked"]) == []
+
+
+def test_summarize_reports_must_violations_questions_and_change_path_counts():
+    def run(name, ok=True, **changes):
+        return RunOutcome(name, True, True, 0, Decimal("0"), 0, 3, as_expected=ok, **changes)
+
+    runs = [
+        run("a", ok=False, must_failures=["must: x", "must: y"], change_allowed=True,
+            unnecessary_question=True, follow_up=True, reader_calls=1, picker_calls=3,
+            picker_attempts=2, frame_ignored=1),
+        run("b", change_allowed=True, follow_up=True, reader_calls=1, picker_calls=1,
+            picker_attempts=1),
+        run("c", follow_up=True, reader_calls=1),
+        # A deferred scenario: its must violations count, its question does not.
+        run("d", ok=False, deferred_to="later", must_failures=["must: z"], change_allowed=True,
+            unnecessary_question=True, follow_up=True),
+        run("e"),
+    ]
+    s = summarize(runs)
+    assert s["must_violations"] == 3 and s["must_violation_scenarios"] == 2
+    assert s["unnecessary_questions"] == 1 and s["change_allowed_follow_ups"] == 2
+    assert s["unnecessary_question_rate"] == 0.5
+    assert (s["reader_calls"], s["picker_calls"], s["picker_attempts"], s["frame_ignored"]) == (
+        3, 4, 3, 1
+    )
+    group = group_metrics(runs)
+    assert group["two_layers"] == {
+        "must_violations": 3,
+        "must_violation_scenarios": 2,
+        "unnecessary_questions": 1,
+        "change_allowed_follow_ups": 2,
+        "unnecessary_question_rate": 0.5,
+    }
+    assert group["change_path"] == {
+        "reader_calls": 3, "picker_calls": 4, "picker_attempts": 3, "frame_ignored": 1,
+    }
+    # Of nothing, zeros.
+    empty = summarize([])
+    assert empty["must_violations"] == 0 and empty["unnecessary_question_rate"] == 0.0
+
+
+def test_the_run_records_every_prompt_length(tmp_path):
+    info = _info(tmp_path)
+    lengths = info["conditions"]["prompt_lengths"]
+    assert lengths == {
+        version: len(load_prompt(kind)) for kind, version in PROMPT_VERSIONS.items()
+    }
+
+
+# ---- the runner with a stubbed _drive: no graph, no model ----
+
+
+class StubGraph:
+    """A thread's state for run_scenario without the graph: `_drive` is stubbed."""
+
+    def __init__(self):
+        self.values: dict = {"messages": [], "reply_plans": {}, "plan_versions": []}
+
+    def get_state(self, config):
+        return SimpleNamespace(values=self.values, interrupts=[])
+
+
+def _card(dishes, **extra):
+    return {
+        "recipes": [{"id": i, "title": t, "dish_type": d} for i, t, d in dishes],
+        "unmet": [], "next_actions": [], "reasons": [], "warnings": [], "passed": True,
+        "left_out_unknown_allergens": [], **extra,
+    }
+
+
+FIRST = [(1, "番茄炒蛋", "vegetable dish"), (2, "红烧茄子", "vegetable dish"),
+         (3, "青椒肉丝", "meat dish")]
+
+
+def _stub_drive(monkeypatch, factory, graph, turns):
+    """`_drive` stubbed: each message sent takes the next of `turns`, a function of
+    (thread_id, recorder) that changes the graph state and returns the note. Returns the
+    texts sent."""
+    sent: list[str] = []
+    recorder = PlanningRecorder(factory)
+    steps = list(turns)
+
+    def drive(graph_, factory_, config, scenario, text, answers, cards, questions=None):
+        sent.append(text)
+        graph.values["messages"].append(HumanMessage(text))
+        return steps.pop(0)(config["configurable"]["thread_id"], recorder)
+
+    monkeypatch.setattr(planning_module, "_drive", drive)
+    return sent
+
+
+def _reply(graph, text, card=None):
+    reply = AIMessage(text, id=f"r{len(graph.values['messages'])}")
+    graph.values["messages"].append(reply)
+    if card is not None:
+        graph.values["reply_plans"][reply.id] = card
+        graph.values["current_plan"] = card
+        graph.values["plan_versions"].append(card)
+
+
+def _first_turn(graph, card=None):
+    def turn(thread_id, recorder):
+        run_id = recorder.start(thread_id, {"parsed": {}}, [], "v", "t", False)
+        recorder.finish(run_id, 0, True, True, None)
+        _reply(graph, "这顿做三个菜。", card or _card(FIRST))
+        graph.values["run_id"] = run_id
+        return ""
+
+    return turn
+
+
+def _change_turn(graph, after, events, *, kept=False, note="", reply="去掉了红烧茄子。"):
+    def turn(thread_id, recorder):
+        run_id = recorder.start(
+            thread_id, {"parsed": {}, "revision": {"from_version": 0}}, [], "v", "t", False
+        )
+        for event in events:
+            recorder.add_event(run_id, event)
+        recorder.finish(run_id, 0, True, not kept, None)
+        graph.values["run_id"] = run_id
+        if not note:
+            _reply(graph, reply, _card(after, plan_kept=kept))
+        return note
+
+    return turn
+
+
+FRAME_EVENT = {
+    "kind": "frame",
+    "reading": {"kind": "change", "remove": [{"id": 2, "quote": "茄子", "mode": "drop"}]},
+    "breaking": [],
+    "frame": {"drops": [2], "slots": [], "choices": [], "placed": [],
+              "ignored": [{"id": 9, "reason": "not_in_plan"}]},
+}
+
+
+def test_the_runner_judges_both_layers_from_the_records(monkeypatch, eval_db):
+    """Stubbed _drive: the change turn's records give the reader, picker and frame counts,
+    and a dish the scenario does not allow to go is a must violation."""
+    graph = StubGraph()
+    events = [
+        _reader_event("change"),
+        FRAME_EVENT,
+        {"kind": "model_call", "step": "pick"},
+        {"kind": "model_call", "step": "pick"},
+        {"kind": "pick_attempt", "attempt": 0, "problems": []},
+        {"kind": "change_outcome", "recipe_ids": [3], "plan_kept": False, "unfinished": [],
+         "wish_met": None},
+    ]
+    sent = _stub_drive(monkeypatch, eval_db, graph, [
+        _first_turn(graph), _change_turn(graph, [FIRST[2]], events),
+    ])
+    scenario = _scenario(
+        "stub", inventory={}, cookware=[], follow_up="茄子不要了", expect_route="revise",
+        expect_removed=["红烧茄子"],
+    )
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert sent == ["今晚一个人吃，一个菜。", "茄子不要了"]
+    assert outcome.turn == "revision" and outcome.route_intent == "revise"
+    assert (outcome.reader_calls, outcome.picker_calls, outcome.picker_attempts,
+            outcome.frame_ignored) == (1, 2, 1, 1)
+    # 番茄炒蛋 went too: the scenario allows only 红烧茄子.
+    assert len(outcome.must_failures) == 1 and "番茄炒蛋" in outcome.must_failures[0]
+    assert outcome.must_failures[0] in outcome.failures and not outcome.as_expected
+    assert outcome.change_allowed and not outcome.unnecessary_question
+
+
+def test_the_runner_counts_an_unnecessary_question_as_expected(monkeypatch, eval_db):
+    graph = StubGraph()
+    _stub_drive(monkeypatch, eval_db, graph, [
+        _first_turn(graph), lambda thread_id, recorder: QUESTION_STOP,
+    ])
+    scenario = _scenario(
+        "asks", inventory={}, cookware=[], follow_up="随便改改", expect_max_changed=1,
+        # The plan may stay: no new version is required.
+        expect_plan=False,
+    )
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert outcome.unnecessary_question and outcome.change_allowed
+    assert outcome.must_failures == []
+    assert outcome.as_expected, outcome.failures
+
+
+def test_the_runner_counts_the_reader_of_an_other_reply(monkeypatch, eval_db):
+    """An "other" reply makes no planning run, but the reader read it (one call)."""
+    graph = StubGraph()
+
+    def other(thread_id, recorder):
+        graph.values["intent"] = "other"
+        _reply(graph, "我只能帮你安排这顿饭。")
+        return ""
+
+    _stub_drive(monkeypatch, eval_db, graph, [_first_turn(graph), other])
+    scenario = _scenario(
+        "other", inventory={}, cookware=[], follow_up="谢谢啦", expect_route="other",
+        expect_unchanged=True,
+    )
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert outcome.as_expected, outcome.failures
+    assert outcome.turn == "none" and outcome.route_intent == "other"
+    assert outcome.reader_calls == 1 and outcome.picker_calls == 0
+
+
+def test_button_before_presses_the_card_button_before_the_follow_up(monkeypatch, eval_db):
+    """A message after a button (spec 6): button_before presses the newest card's button
+    after the first message, then the follow-up is the judged turn."""
+    graph = StubGraph()
+    stopped = _card([], passed=False, next_actions=["switch_to_shopping"])
+
+    def planned(thread_id, recorder):
+        run_id = recorder.start(thread_id, {"parsed": {}, "button": "switch_to_shopping"}, [],
+                                "v", "t", False)
+        recorder.finish(run_id, 0, True, True, None)
+        _reply(graph, "可以买菜了。", _card(FIRST))
+        return ""
+
+    sent = _stub_drive(monkeypatch, eval_db, graph, [
+        _first_turn(graph, stopped), planned,
+        _change_turn(graph, FIRST[:2], [_reader_event("change")], reply="去掉了一道。"),
+    ])
+    scenario = _scenario(
+        "after_button", inventory={}, cookware=[], follow_up="青椒肉丝不要了",
+        button_before="switch_to_shopping",
+    )
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert sent == [
+        "今晚一个人吃，一个菜。", ACTION_MESSAGES["zh"]["switch_to_shopping"], "青椒肉丝不要了",
+    ]
+    assert outcome.turn == "revision"
+    # The plan before the judged follow-up is the one the button made.
+    assert outcome.changed == 1
+
+
+def test_button_before_not_offered_is_a_setup_failure(monkeypatch, eval_db):
+    graph = StubGraph()
+    sent = _stub_drive(monkeypatch, eval_db, graph, [_first_turn(graph)])
+    scenario = _scenario(
+        "no_button", inventory={}, cookware=[], follow_up="再来一个",
+        button_before="drop_time_limit",
+    )
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert sent == ["今晚一个人吃，一个菜。"]
+    assert outcome.turn == "none" and not outcome.as_expected
+    assert any("button_before" in f and "drop_time_limit" in f for f in outcome.failures)
+
+
+def test_the_loader_reads_button_before(tmp_path):
+    [s] = _load_one(tmp_path, follow_up="x", button_before="switch_to_shopping",
+                    expect_route="other")
+    assert s.button_before == "switch_to_shopping" and s.expect_route == "other"
+    for changes in (
+        {"follow_up": "x", "button_before": "skip_meal"},
+        # The button comes before a follow-up, so it needs one.
+        {"button_before": "switch_to_shopping"},
+    ):
+        with pytest.raises(ValueError):
+            _load_one(tmp_path, **changes)
+
+
+def test_the_development_set_has_no_choice_card_keys():
+    """Ruling 6: the choice card is gone; the development set no longer names it, and no
+    route can be "unsure" any more."""
+    scenarios = load_scenarios(EVAL_DIR / "scenarios_revise.yaml")
+    for scenario in scenarios:
+        assert scenario.expect_choice_card is None, scenario.name
+        assert scenario.choice_answer is None, scenario.name
+        assert scenario.expect_route != "unsure", scenario.name
+        for entry in scenario.expect_any_of:
+            assert "expect_choice_card" not in entry and entry.get("expect_route") != "unsure"
+
+
+def test_one_fault_gives_one_must_line():
+    """Fix round 1: a locked dish removed is said by the locked check only, and the
+    allowed-changes findings share one line."""
+    scenario = _scenario(follow_up="x", expect_removed=["番茄炒蛋"], expect_max_changed=1)
+    facts = _facts(after=(1, 4, 5), locked_before=frozenset({2}))
+    failures = must_failures(scenario, facts, LIBRARY_TITLES)
+    assert len(failures) == 2, failures
+    assert "locked" in failures[0] and "红烧茄子" in failures[0]
+    assert "红烧茄子" not in failures[1].split("does not allow")[-1].split(";")[0]
+    assert "清炒小白菜" in failures[1] and "allows 1" in failures[1]
+
+
+def test_a_locked_dish_breaking_only_stock_may_not_go_by_the_allowed_changes():
+    frame = {"drops": [], "slots": [], "choices": [], "placed": [], "ignored": []}
+    facts = _facts(frame=frame, breaking={2: "stock", 3: "stock"}, locked_before=frozenset({2}))
+    allowed = allowed_changes(_scenario(follow_up="x", expect_max_changed=2), facts)
+    assert allowed.may_go == frozenset({"清炒小白菜"})
+
+
+def test_a_removed_or_missing_part_excuses_the_stated_count_it_bears_on():
+    """Fix round 2: a dish removed for a rule with no replacement, or a named dish not
+    placed, lowers a count by design (spec 5.5) and the reply says so."""
+    types = {1: "vegetable dish", 2: "vegetable dish", 3: "vegetable dish"}
+    removed = _facts(
+        reading={"counts": {"dishes": 3}}, counts_after={"dishes": 2}, types_before=types,
+        change={"unfinished": [{"kind": "removed", "recipe_id": 2, "title": "红烧茄子",
+                                "why": "diner_rule"}]},
+    )
+    assert _must(**{k: getattr(removed, k) for k in (
+        "reading", "counts_after", "types_before", "change")}) == []
+    for item in (
+        # A named add not placed.
+        {"kind": "missing", "reason": "not_in_library", "name": "糖醋里脊", "replaces": None},
+        # A named replacement of a dish whose type is unknown.
+        {"kind": "missing", "reason": "not_in_library", "name": "糖醋里脊", "replaces": 9},
+    ):
+        assert _must(reading={"counts": {"dishes": 3}}, counts_after={"dishes": 2},
+                     types_before=types, change={"unfinished": [item]}) == [], item
+    # A removed vegetable dish does not bear on a stated soup count.
+    [failure] = _must(
+        reading={"counts": {"soups": 1}}, counts_after={"soups": 0}, types_before=types,
+        change={"unfinished": [{"kind": "removed", "recipe_id": 2, "why": "diner_rule"}]},
+    )
+    assert "count" in failure
+
+
+def test_expect_some_next_action_judges_whether_the_card_offers_any():
+    offered = _plan(["番茄炒蛋"], actions=["import_recipes"])
+    bare = _plan(["番茄炒蛋"])
+    assert _check(_scenario(expect_some_next_action=True), offered) == []
+    [failure] = _check(_scenario(expect_some_next_action=True), bare)
+    assert "at least one" in failure
+    assert _check(_scenario(expect_some_next_action=False), bare) == []
+    [failure] = _check(_scenario(expect_some_next_action=False), offered)
+    assert "none" in failure and "import_recipes" in failure
+    # Usable inside expect_any_of, and type-checked when loaded.
+    assert "expect_some_next_action" in ANY_OF_KEYS
+
+
+def test_the_loader_reads_expect_some_next_action(tmp_path):
+    [s] = _load_one(tmp_path, expect_some_next_action=False)
+    assert s.expect_some_next_action is False
+    with pytest.raises(ValueError):
+        _load_one(tmp_path, expect_some_next_action="yes")

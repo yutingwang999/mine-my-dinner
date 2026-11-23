@@ -32,7 +32,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from minemydinner.agent.checkpoint import open_checkpointer
 from minemydinner.agent.edits import EditError, newest_reply_id
-from minemydinner.agent.graph import CLOSEST_NOTE_EN, CLOSEST_NOTE_ZH, GraphDeps, build_graph
+from minemydinner.agent.graph import (
+    CLOSEST_NOTE_EN,
+    CLOSEST_NOTE_ZH,
+    UNCLEAR_REPLY_EN,
+    UNCLEAR_REPLY_ZH,
+    GraphDeps,
+    build_graph,
+)
 from minemydinner.agent.diners import DinerAnswer, GuestAnswer, RuleChoice
 from minemydinner.agent.labels import (
     Friend,
@@ -79,16 +86,21 @@ from minemydinner.evaluation.revise_eval import (
     asked_back,
     asked_empty,
     bring_back,
+    change_allowed,
+    change_events,
+    change_path_counts,
     check_revise_keys,
     fallback_count,
     follow_up_failures,
     hide_dishes,
     locked_of,
     locked_removed,
+    must_failures,
     plan_dishes,
     replace_first_plan,
     route_of,
     title_problems,
+    unnecessary_question,
     wish_unmet_said,
     zero_dish_texts,
 )
@@ -181,7 +193,8 @@ class RunOutcome:
     route_intent: str | None = None
     # Whether the route matched expect_route; None when the scenario states none.
     route_as_expected: bool | None = None
-    # Locked dishes a revision removed without the scenario expecting it (target 0).
+    # Locked dishes a revision removed without their quote, rule or avoidance, or the
+    # scenario expecting it (target 0; a must check since plan 3b-2).
     locked_removed: int = 0
     # Dishes of the plan before the follow-up that are gone after it.
     changed: int = 0
@@ -209,6 +222,20 @@ class RunOutcome:
     # planning_eval model calls (turn_model_calls holds the button turn's). Counted in the
     # calls per revise turn; None otherwise.
     earlier_revise_calls: int | None = None
+    # ---- plan 3b-2: the two layers (spec 6) ----
+    # What must never be wrong and was (`must_failures`); also in `failures`.
+    must_failures: list[str] = field(default_factory=list)
+    # A follow-up scenario whose keys accept a change (`change_allowed`), and whether its
+    # judged turn ended with a question although a change was reasonable (counted apart,
+    # never a failure).
+    change_allowed: bool = False
+    unnecessary_question: bool = False
+    # Over every run of the scenario's thread: reader calls, picker calls (each model call of
+    # the picker, searches' rounds included), picker attempts, and the frame's ignored parts.
+    reader_calls: int = 0
+    picker_calls: int = 0
+    picker_attempts: int = 0
+    frame_ignored: int = 0
 
 
 @dataclass(frozen=True)
@@ -225,6 +252,8 @@ class Scenario:
     # Optional expectations; each one given is checked (check_expectations).
     expect_reasons: list[str] = field(default_factory=list)  # all must be among the reasons
     expect_next_actions: list[str] = field(default_factory=list)  # all must be offered
+    # True: the shown card offers at least one next action (any kind); false: none.
+    expect_some_next_action: bool | None = None
     expect_any_code: list[str] = field(default_factory=list)  # one of these reasons or unmet
     expect_counts: dict[str, int] = field(default_factory=dict)  # category counts shown
     # Category counts shown within [low, high], both ends included ({meat_dishes: [2, 8]}).
@@ -278,7 +307,7 @@ class Scenario:
     # Database actions before the follow-up: [{confirm_allergens: {name, allergens: []}}].
     between_turns: list[dict[str, Any]] = field(default_factory=list)
     # ---- plan 3b-1: revising the plan (spec 5.6; the keys are defined in the header of
-    # scenarios_revise_heldout.yaml). Titles are library titles. ----
+    # scenarios_revise.yaml). Titles are library titles. ----
     # After the first message's turn, the newest reply's dishes become these, as a model
     # version (not edited, no locks), so the follow-up starts from a known plan.
     first_plan: list[str] = field(default_factory=list)
@@ -288,7 +317,9 @@ class Scenario:
     # The answer to the plan 3b-1 choice card, removed in plan 3b-2 Task 8: still read so an
     # older scenario file loads, and ignored.
     choice_answer: str | None = None
-    # The route result of the follow-up (plan | revise | unsure).
+    # What the follow-up was taken as (plan | revise | other; "unsure" is never met since
+    # plan 3b-2): a follow-up on a plan is read, and the reading's kind stands for the route
+    # (revise_eval.ROUTE_OF_READING); a first message keeps the route model's answer.
     expect_route: str | None = None
     # Whether the choice card appeared on the follow-up. The card was removed (plan 3b-2
     # Task 8), so only false can be met; still read so an older scenario file loads.
@@ -326,6 +357,11 @@ class Scenario:
     # Request fields that must be non-empty in the judged turn's request (its run's parsed
     # request), such as an earlier wish kept after a button.
     expect_request_kept: list[str] = field(default_factory=list)
+    # ---- plan 3b-2 (the keys are defined in the header of scenarios_revise.yaml) ----
+    # After the first message's turn, before first_plan and the follow-up, press this
+    # next-action button of the newest card with its fixed message: the follow-up is then a
+    # message after a button. The scenario is not run further when the card does not offer it.
+    button_before: str | None = None
     # The file's role, from its top-level `role:` key (never set per scenario).
     role: str | None = None
 
@@ -360,6 +396,10 @@ def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
         by_role.setdefault(r.role or "unset", []).append(r)
     count = len(runs)
     input_total = sum(r.input_tokens for r in runs)
+    # Plan 3b-2 spec 6: unnecessary questions over the rated follow-ups where a change was
+    # reasonable (threshold 20%); must violations over every run, deferred ones included.
+    changeable = [r for r in rated if r.follow_up and r.change_allowed]
+    asked = sum(r.unnecessary_question for r in changeable)
     return {
         "first_pass_rate": _ratio(sum(r.first_passed for r in plans), len(plans)),
         "final_pass_rate": _ratio(sum(r.final_passed for r in plans), len(plans)),
@@ -396,6 +436,15 @@ def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
         "buttons": f"{sum(r.as_expected for r in buttons)}/{len(buttons)}",
         "fallbacks": sum(r.fallbacks for r in runs),
         "fallback_scenarios": sum(r.fallbacks > 0 for r in runs),
+        "must_violations": sum(len(r.must_failures) for r in runs),
+        "must_violation_scenarios": sum(bool(r.must_failures) for r in runs),
+        "unnecessary_questions": asked,
+        "change_allowed_follow_ups": len(changeable),
+        "unnecessary_question_rate": _ratio(asked, len(changeable)),
+        "reader_calls": sum(r.reader_calls for r in runs),
+        "picker_calls": sum(r.picker_calls for r in runs),
+        "picker_attempts": sum(r.picker_attempts for r in runs),
+        "frame_ignored": sum(r.frame_ignored for r in runs),
     }
 
 
@@ -452,6 +501,12 @@ def check_expectations(
     missing = [a for a in scenario.expect_next_actions if a not in actions]
     if missing:
         failures.append(f"missing next action {missing}; got {actions}")
+    wanted = scenario.expect_some_next_action
+    if wanted is not None and bool(actions) != wanted:
+        failures.append(
+            f"next actions offered: {actions}, expected "
+            + ("at least one" if wanted else "none")
+        )
     if scenario.expect_any_code and not set(scenario.expect_any_code) & {*reasons, *unmet}:
         failures.append(
             f"none of {scenario.expect_any_code} among reasons {reasons} or unmet {unmet}"
@@ -570,8 +625,8 @@ def expectation_failures(
     check_plan_flag: bool = True,
 ) -> list[str]:
     """Every expectation of the judged turn: `check_expectations` on its plan, the plan 3b-1
-    follow-up keys on `facts`, `expect_any_of` (met when one entry's keys are all met), and
-    the locked dishes a revision removed without the scenario expecting it. Pure."""
+    follow-up keys on `facts`, and `expect_any_of` (met when one entry's keys are all met).
+    What must never be wrong is judged apart (`must_failures`). Pure."""
 
     def judged(s: Scenario, plan_flag: bool) -> list[str]:
         return [
@@ -591,9 +646,6 @@ def expectation_failures(
         if all(missed):
             details = "; ".join(f"[{i}] " + ", ".join(items) for i, items in enumerate(missed))
             failures.append(f"no entry of expect_any_of met: {details}")
-    removed = locked_removed(scenario, facts)
-    if removed:
-        failures.append(f"locked dishes removed without being named: {removed}")
     return failures
 
 
@@ -1388,6 +1440,57 @@ def _shown_texts(values: dict[str, Any]) -> list[str]:
     return texts
 
 
+def press_before(
+    graph,
+    factory: sessionmaker[Session],
+    config: dict[str, Any],
+    scenario: Scenario,
+    answers: list[str],
+    cards: list[dict[str, Any]],
+) -> None:
+    """Press `button_before` on the newest card with its fixed message, as the chat does.
+    Raises FollowUpSetupError when the card does not offer it or the button turn stops."""
+    action = scenario.button_before
+    offered = list((_last_card(graph.get_state(config).values) or {}).get("next_actions") or [])
+    if action not in offered:
+        raise FollowUpSetupError(f"button_before: the card did not offer {action}; offered {offered}")
+    message = ACTION_MESSAGES[scenario.locale][action]
+    note = _drive(graph, factory, config, scenario, message, answers, cards)
+    if note:
+        raise FollowUpSetupError(f"button_before {action}: {note}")
+
+
+def _rule_breaks_shown(plan: dict[str, Any] | None, turn: str) -> tuple[str, ...]:
+    """The dishes on the shown card with a diner-rule or meal-avoidance finding (H2): on a
+    revision's card, or on a new plan shown as passed (a closest attempt shows its findings
+    by design)."""
+    plan = plan or {}
+    if turn != "revision" and not plan.get("passed"):
+        return ()
+    titles = {r["id"]: r["title"] for r in plan.get("recipes", [])}
+    found = [
+        titles[u["recipe_id"]]
+        for u in plan.get("unmet") or []
+        if u.get("code") == "H2" and u.get("recipe_id") in titles
+    ]
+    return tuple(dict.fromkeys(found))
+
+
+def _ended_with(
+    values: dict[str, Any], turn: str, asked: bool, reply: str, follow_up_sent: bool
+) -> str | None:
+    """How the judged turn ended when it ended asking (TurnFacts.ended_with)."""
+    if asked:
+        return "question"
+    if turn == "revision" and asked_empty(values):
+        return "empty_plan"
+    if turn == "revision" and asked_back(values):
+        return "which_dish"
+    if follow_up_sent and reply in (UNCLEAR_REPLY_ZH, UNCLEAR_REPLY_EN):
+        return "unclear"
+    return None
+
+
 def run_scenario(
     graph,
     factory: sessionmaker[Session],
@@ -1467,6 +1570,10 @@ def run_scenario(
             # sentence naming the fixed dishes, so the follow-up's route and parse read the
             # plan the scenario set (development run 2 of plan 3b-1b).
             first_plan = graph.get_state(config).values.get("current_plan")
+            if scenario.button_before:
+                # Plan 3b-2: a message after a button. The button is pressed as the chat
+                # does, before the fixed plan and the edits; the follow-up is judged.
+                press_before(graph, factory, config, scenario, answers, cards)
             if scenario.first_plan:
                 replace_first_plan(graph, factory, config, scenario.first_plan, scenario.locale)
             run_between_turns(factory, scenario.between_turns)
@@ -1561,6 +1668,7 @@ def run_scenario(
     else:
         turn = "plan"
     route = route_of(turn_events, state) if follow_up_sent or not scenario.follow_up else None
+    frame_event, change_event = change_events(turn_events)
     reply = next(
         (
             str(m.content)
@@ -1583,18 +1691,34 @@ def run_scenario(
         "button": run_request.get("button"),
         "request": run_request.get("parsed"),
     }
+    plan = _shown_plan(state)
+    # Plan 3b-2: what the change path recorded and what the user saw, for the must checks.
+    shared.update(
+        frame=(frame_event or {}).get("frame"),
+        reading=(frame_event or {}).get("reading"),
+        breaking={int(i): str(r) for i, r in (frame_event or {}).get("breaking") or []},
+        change=change_event,
+        rule_breaks_shown=_rule_breaks_shown(plan, turn),
+        shown_texts=tuple(_shown_texts(state)),
+        ended_with=_ended_with(state, turn, asked, reply, follow_up_sent),
+        # The judged turn's own message: the follow-up (on a button turn, the offering
+        # turn's words), else the first message.
+        words=scenario.follow_up or scenario.request,
+    )
     if follow_up_sent:
         versions_now = len(state.get("plan_versions") or [])
+        after_plan = state.get("current_plan") or {}
         facts = TurnFacts(
             **shared,
             question=versions_now == versions_before and (asked or revise_asked),
             before=plan_dishes(before),
-            after=plan_dishes(state.get("current_plan")),
+            after=plan_dishes(after_plan),
             locked_before=locked_of(before),
+            counts_after=count_categories(r["dish_type"] for r in after_plan.get("recipes", [])),
+            types_before={r["id"]: r["dish_type"] for r in (before or {}).get("recipes", [])},
         )
     else:
         facts = TurnFacts(**shared, question=asked)
-    plan = _shown_plan(state)
     passed = bool(run and run.final_passed)
     first_passed = bool(run and run.first_passed)
     zero_dishes = zero_dish_texts(_shown_texts(state))
@@ -1613,10 +1737,17 @@ def run_scenario(
         check_plan_flag=not (turn == "none" and not note),
     )
     failures += diner_checks
-    if zero_dishes:
-        # Spec 5.6: "0 dishes" is never shown as the reason for a missing answer; checked on
-        # every scenario, every turn.
-        failures.append(f"a reply or unmet text says the plan has 0 dishes: {zero_dishes}")
+    # Plan 3b-2 spec 6: what must never be wrong, on every scenario ("0 dishes" among it,
+    # plan 3b-1b spec 5.6); a must failure also makes the scenario not as expected.
+    must = must_failures(scenario, facts, library_titles)
+    failures += must
+    counts = change_path_counts(r.events for r in runs)
+    if follow_up_sent and not pressed and not turn_runs and facts.before and not note.startswith(
+        "failed"
+    ):
+        # A follow-up on a plan that made no planning run (an "other" reply, contradicting
+        # counts): the reader read it, but no run recorded the call.
+        counts["reader_calls"] += 1
     if setup_failed:
         failures.append(f"follow-up not sent: {note}")
     titles = [r["title"] for r in (plan or {}).get("recipes", [])]
@@ -1675,6 +1806,10 @@ def run_scenario(
         wish_unmet_missed=scenario.expect_wish_unmet is True and not facts.wish_unmet_said,
         fallbacks=fallback_count(r.events for r in runs),
         earlier_revise_calls=earlier_revise_calls,
+        must_failures=must,
+        change_allowed=change_allowed(scenario),
+        unnecessary_question=unnecessary_question(scenario, facts),
+        **counts,
     )
 
 
@@ -1812,6 +1947,8 @@ def print_outcome(outcome: RunOutcome) -> None:
         )
     if outcome.fallbacks:
         print(f"  planner gave no answer, code picked the dishes: {outcome.fallbacks} attempts")
+    if outcome.unnecessary_question:
+        print("  asked a question although a change was reasonable (counted apart)")
     if outcome.reasons or outcome.next_actions:
         print(f"  reasons: {outcome.reasons}; next actions: {outcome.next_actions}")
     for failure in outcome.failures:
@@ -1838,12 +1975,12 @@ def print_summary(outcomes: list[RunOutcome]) -> None:
     print(f"  average latency:         {s['avg_latency_ms']} ms")
     if s["revisions"]:
         print(f"Revisions ({s['revisions']}; planning rates above are over new plans only)")
-        print(f"  pass rate:               {s['revision_pass_rate']:.2f}")
+        print(f"  new version made:        {s['revision_pass_rate']:.2f}")
         print(f"  locked dishes removed:   {s['locked_removed']}  (target 0)")
         print(f"  dishes changed (avg):    {s['avg_changed']:.2f}")
         print(
             f"  model calls per turn:    {s['avg_turn_model_calls']:.1f} avg, "
-            f"{s['max_turn_model_calls']} max"
+            f"{s['max_turn_model_calls']} max  (target at most 2.5 avg, 7 max)"
         )
     if s["route_as_expected"] != "0/0":
         print(f"  route as expected (follow-ups):      {s['route_as_expected']}")
@@ -1864,6 +2001,23 @@ def print_summary(outcomes: list[RunOutcome]) -> None:
         f"  planner fallbacks:       {s['fallbacks']} attempts in "
         f"{s['fallback_scenarios']} scenarios"
     )
+    # Plan 3b-2 spec 6: the two layers, and the change path's calls.
+    print(
+        f"  must-never-be-wrong:     {s['must_violations']} violations in "
+        f"{s['must_violation_scenarios']} scenarios  (target 0)"
+    )
+    if s["change_allowed_follow_ups"]:
+        print(
+            f"  unnecessary questions:   {s['unnecessary_questions']}/"
+            f"{s['change_allowed_follow_ups']} ({s['unnecessary_question_rate']:.2f}; "
+            "target at most 0.20)"
+        )
+    if s["reader_calls"] or s["picker_calls"]:
+        print(
+            f"  change path:             {s['reader_calls']} reader calls, "
+            f"{s['picker_calls']} picker calls in {s['picker_attempts']} attempts, "
+            f"{s['frame_ignored']} reading parts ignored"
+        )
     print(
         "  (latency is summed over each scenario's model calls; a failed run counts as not passed)"
     )
@@ -1965,7 +2119,12 @@ def run_info(
         TOOL_CALL_LIMIT,
         TOOLS_VERSION,
     )
-    from minemydinner.agent.request import PROMPT_VERSION, PROMPT_VERSIONS, prompt_files
+    from minemydinner.agent.request import (
+        PROMPT_VERSION,
+        PROMPT_VERSIONS,
+        load_prompt,
+        prompt_files,
+    )
     from minemydinner.planning import shortlist
 
     eval_task = client.config.tasks.get(EVAL_TASK)
@@ -1985,6 +2144,10 @@ def run_info(
             "prompt_versions": dict(PROMPT_VERSIONS),
             "prompt_files": {
                 path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in prompt_files()
+            },
+            # Plan 3b-2 spec 6: each prompt's length in characters, as load_prompt reads it.
+            "prompt_lengths": {
+                version: len(load_prompt(kind)) for kind, version in PROMPT_VERSIONS.items()
             },
             "tools_version": TOOLS_VERSION,
             "pick_tools_version": PICK_TOOLS_VERSION,
@@ -2061,7 +2224,21 @@ METRICS_BASIS = (
     "dishes; target 0), wish_unmet_not_said (expect_wish_unmet true but no code-written "
     "sign; target 0), buttons (as expected after a next-action button, deferred left "
     "out), fallbacks (attempts whose dishes code picked because the planner gave no "
-    "answer) and fallback_scenarios."
+    "answer) and fallback_scenarios. Plan 3b-2: a revision is a turn of the change path "
+    "(reader, frame, picker; its run records `revision`), and its pass rate is the share "
+    "that made a new version. two_layers: must_violations (what must never be wrong, over "
+    "every scenario, deferred included; target 0) and must_violation_scenarios; "
+    "unnecessary_questions over change_allowed_follow_ups (rated follow-ups whose keys "
+    "accept a change; a follow-up that ended with a question other than the empty-plan and "
+    "the which-dish question), with unnecessary_question_rate (target at most 0.2). "
+    "change_path: reader_calls, picker_calls (each picker model call), picker_attempts and "
+    "frame_ignored over every run of every scenario; an \"other\" reply's reader call, "
+    "which no run records, is counted from the turn. must_violations counts must lines "
+    "(one fault gives one line where cheap: a locked dish removed is said by the locked "
+    "check only, and the allowed-changes findings share one line); "
+    "must_violation_scenarios counts scenarios. Only the judged turn is must-checked: "
+    "with button_after, the follow-up before the button is not (its shown texts are, as "
+    "every shown text of the thread is)."
 )
 
 
@@ -2149,6 +2326,19 @@ def group_metrics(
             "max_turn_model_calls": s["max_turn_model_calls"],
             "route_as_expected": s["route_as_expected"],
             "route_first_as_expected": s["route_first_as_expected"],
+        },
+        "two_layers": {
+            "must_violations": s["must_violations"],
+            "must_violation_scenarios": s["must_violation_scenarios"],
+            "unnecessary_questions": s["unnecessary_questions"],
+            "change_allowed_follow_ups": s["change_allowed_follow_ups"],
+            "unnecessary_question_rate": s["unnecessary_question_rate"],
+        },
+        "change_path": {
+            "reader_calls": s["reader_calls"],
+            "picker_calls": s["picker_calls"],
+            "picker_attempts": s["picker_attempts"],
+            "frame_ignored": s["frame_ignored"],
         },
         "replies": {
             "zero_dishes_shown": s["zero_dishes_shown"],
