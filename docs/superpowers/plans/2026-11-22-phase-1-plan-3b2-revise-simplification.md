@@ -33,7 +33,7 @@
 2. The reader names a dish id that is not in the plan, or removes a locked dish with a quote that does not point at it: code ignores that removal and never removes the dish — Task 3.
 3. A message about something else ("再加一道") on a plan with a one-meal avoidance: the avoidance stays (the reader input shows it and the scripted reading restates it); a reading that drops it is applied as given (the withdrawal path) — Task 2 and Task 6.
 4. The picker answers a dish already in the plan, a dish of the wrong type, or more choices than allowed: rejected, retried once, never applied — Task 4.
-5. A named dish whose title differs from the library title by one character ("宫爆鸡丁" for 宫保鸡丁): matched; a name that matches two titles: not placed, the reply asks nothing and says it was not found exactly — Task 3.
+5. A named dish whose title differs from the library title by one character ("宫爆鸡丁" for 宫保鸡丁): matched; a name that matches two titles: not placed, the reply asks nothing and says it was not found exactly — Task 3. (Superseded by Task 10b: only an exact title is placed by code; any other name goes to the picker, which searches, and "not in the library" is said only when it finds nothing.)
 
 ---
 
@@ -236,8 +236,36 @@ git add backend/minemydinner/evaluation backend/eval_data/planning/scenarios_rev
 git commit -m "eval: must-never-be-wrong checks on every scenario, allowed changes from existing keys, the development set in two layers"
 ```
 
+### Task 10b: Code checks, it does not interpret (spec 5.4 amendment, user decision 2026-11-23)
+
+Added after Task 10. Four code rules made judgments that need reading language (same-type slots, title matching beyond an exact title, at least one change for a general wish, a quote that must match a locked dish's title or ingredients); each needed a new exception for each new sentence. Spec 5.2-5.5 were amended so code holds only the invariants and checks results. `follow_up_v1` and `pick_v1` have not been used by any run yet, so they are edited in place (the size budget still holds).
+
+**Files:**
+- Modify: `backend/minemydinner/agent/follow_up.py` (`wish_targets`), `backend/minemydinner/agent/frame.py`, `backend/minemydinner/agent/picker.py`, `backend/minemydinner/agent/change_step.py`, `backend/minemydinner/agent/graph.py`, `backend/minemydinner/agent/prompts/follow_up_v1.md`, `backend/minemydinner/agent/prompts/pick_v1.md`, `docs/prompt-versions.md` (new lengths)
+- Modify: `docs/planner-what-each-model-sees.md`, `docs/private/planner-what-each-model-sees.zh.md`, `docs/design.md` (7.3), `docs/planner-request-and-counts.md` and its zh copy where they describe the four rules
+- Test: `backend/tests/test_follow_up.py`, `backend/tests/test_frame.py`, `backend/tests/test_picker.py`, `backend/tests/test_agent_graph.py`
+
+**Interfaces:**
+- `FollowUpReading.wish_targets: list[int] = []` — the plan dishes a taste wish touches when the wish is not about a dish the message already changes; possibly empty. `wish_general` is removed outright, with no loader kept for it: it exists only on this branch, and no checkpoint in the real database carries it (checked 2026-11-23).
+- `build_frame`: a replace slot carries no dish type (`Slot.dish_type` is `None` for replace slots; an add keeps the reading's type). `wish_targets` become replace slots capped at `max_general_changes(unlocked)`, unlocked dishes only, the reader's order deciding which stay over the cap; an empty list changes nothing. A locked dish in `remove` is accepted when its quote is a non-empty substring of this turn's message (no title or ingredient match); a locked dish still moves for a diner rule or a one-meal avoidance, never for stock, cookware or time. A named dish: an exact title (folded) is placed; anything else becomes a slot carrying the name (`Slot.named`), and the replaced dish is kept if the picker finds nothing.
+- `picker_messages` / `apply_picks`: a replace slot shows the dish it replaces and the user's words; the picker's dish may be any type; code checks stated counts, an add's type, rules, stock, cookware, time, a must-use ingredient, and for a named slot nothing beyond those (the picker judges the name). "Not in the library" is said for a named slot only when the picker answered nothing fits.
+- `lookup_named` keeps the exact-title path only; the one-character-off match is removed.
+
+- [ ] **Step 1: Write the failing tests:** a meat dish breaking a "no meat" avoidance may be replaced by a vegetable dish; a wish whose targets are empty changes nothing and the reply says so; a wish with three targets on four unlocked dishes changes at most two; a locked dish listed with a quote from the message ("不适合的菜") is removed, and one listed with a quote not in the message is ignored; "小白菜" becomes a named slot and the picker's 清炒小白菜 is placed; a named slot the picker answers nothing for keeps the replaced dish and says not in the library; an exact title is placed with no picker call; stated counts still bind an any-type pick.
+- [ ] **Step 2: Run** the four test files — expected FAIL.
+- [ ] **Step 3: Implement**, edit both prompts in place by principle (no boundary rules; size budget), update `docs/prompt-versions.md`.
+- [ ] **Step 4: Run** the four test files, then the full backend suite — expected PASS.
+- [ ] **Step 5: Update the docs** listed above (regenerate the reader and picker example inputs with a scratchpad script on the test database).
+- [ ] **Step 6: User commit**
+
+```powershell
+git add backend/minemydinner/agent backend/tests docs/prompt-versions.md docs/planner-what-each-model-sees.md docs/planner-request-and-counts.md docs/design.md
+git commit -m "feat: code checks, it does not interpret - any-type replacements, wish targets from the reader, named dishes through the picker"
+```
+
 ### Task 11: Development runs (paid, with the user's approval)
 
+- [ ] **Step 0:** The controller reads the two regression revise sets and lists, for the user, each expectation that still conflicts with the design after Task 10b, with a proposed change; the user approves each before any edit.
 - [ ] **Step 1:** Estimate one run of `scenarios_revise.yaml` from round 10's cost; wait for approval.
 - [ ] **Step 2:** Run on the test database; read every scenario not as expected and every must violation.
 - [ ] **Step 3:** Fix code or make the next prompt version (a used prompt is never edited; the size budget holds); at most three runs, each with its estimate and approval; then list what is left and ask the user.
