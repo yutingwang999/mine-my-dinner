@@ -192,9 +192,12 @@ scenarios:
     follow_up: 能再做些更清淡的菜么
     expect_route: revise
     # plan 3b-2 Task 11, user-approved 2026-11-23: "再做些" may also mean adding lighter dishes.
+    # plan 3b-2 Task 12, user-approved 2026-11-24 (round 11): replacing both dishes that are
+    # not light (辣椒炒鸡蛋 and 酱爆鸡丁) is acceptable too.
     expect_any_of:
       - {expect_removed: [辣椒炒鸡蛋], expect_counts: {dishes: 2, soups: 1}}
       - {expect_max_changed: 0, expect_counts: {dishes: 3, soups: 1}}
+      - {expect_removed_any: [辣椒炒鸡蛋, 酱爆鸡丁], expect_max_changed: 2, expect_counts: {dishes: 2, soups: 1}}
     expect_locale_reply: zh
     expect: The chili egg dish is replaced by a lighter dish; adding a lighter dish and keeping the plan is also right.
 
@@ -308,7 +311,11 @@ scenarios:
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
     first_plan: [青椒肉丝, 红烧排骨, 清炒小白菜, 蒜蓉西兰花, 番茄蛋花汤]
     follow_up: 重新出一版吧，还是这些数量
-    expect_route: plan
+    # plan 3b-2 Task 12, user-approved 2026-11-24 (round 11): replacing every dish of the plan
+    # with the same counts (a revision) is acceptable as well as a new plan.
+    expect_any_of:
+      - {expect_route: plan}
+      - {expect_route: revise}
     expect_counts: {dishes: 4, soups: 1}
     expect_locale_reply: zh
     expect: Plans a new meal with the same counts (4 dishes and a soup).

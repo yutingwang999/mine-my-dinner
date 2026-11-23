@@ -868,7 +868,7 @@ def must_failures(
     - no dish removed or added that the scenario does not allow (`allowed_changes`);
     - the counts the message stated are met;
     - diner and one-meal rules are met;
-    - no "not in the library" for a library dish;
+    - no "not in the library" for a library dish (one the scenario hides is not one);
     - no "0 dishes";
     - an unmet wish is said;
     - no internal words shown (marks, ids, "Diner N")."""
@@ -879,7 +879,9 @@ def must_failures(
     failures += _allowed_failures(scenario, facts)
     failures += _count_failures(facts)
     failures += _rule_failures(facts)
-    missing = said_not_in_library(facts, library_titles)
+    # A dish the scenario hides (library_exclude) is not in the library for this run.
+    hidden = set(getattr(scenario, "library_exclude", None) or ())
+    missing = said_not_in_library(facts, [t for t in library_titles if t not in hidden])
     if missing:
         failures.append(f"said not in the library, but a library dish: {missing}")
     zero = zero_dish_texts(facts.shown_texts)

@@ -114,6 +114,21 @@ def test_pick_v3_is_frozen():
     )
 
 
+def test_follow_up_v4_and_pick_v4_are_frozen():
+    import hashlib
+
+    # Used by development run 5 of plan 3b-2 (one) Task 11 and by round 11 (Task 12), so
+    # they must never change; a change makes follow_up_v5 or pick_v5.
+    reader = (PROMPT_DIR / "follow_up_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "e6b676ed2bd19de9756b4dd8138a7abc2e4e7b2f31d2e1e903c704244709b274"
+    )
+    picker = (PROMPT_DIR / "pick_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "cdc3b73e48cbb1d14481801638ea667114ab96b385d1786b737abfcc81d0d9e4"
+    )
+
+
 def test_pick_v4_is_pick_v3_with_the_answer_field_renamed():
     """Task 11 fix 4: DeepSeek cut answers right after the key "wish_met"; pick_v4 is pick_v3
     with every mention of that answer field named wish_result, and nothing else."""

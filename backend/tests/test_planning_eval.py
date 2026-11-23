@@ -3118,6 +3118,18 @@ def test_must_checks_on_a_new_plan_skip_what_only_a_change_has():
     assert must_failures(scenario, renewed, LIBRARY_TITLES) == []
 
 
+def test_not_in_library_is_right_for_a_dish_the_scenario_hides():
+    """Round 11: a dish the scenario's library_exclude takes out of the library is not in the
+    library for that run, so saying so is right; the other library dishes still count."""
+    said = {"change": {"unfinished": [
+        {"kind": "missing", "reason": "not_in_library", "name": "红烧茄子"}
+    ]}}
+    hidden = _scenario(follow_up="x", library_exclude=["红烧茄子"])
+    assert _must(scenario=hidden, **said) == []
+    other = _scenario(follow_up="x", library_exclude=["青椒肉丝"])
+    assert "library" in _must(scenario=other, **said)[0]
+
+
 def test_allowed_changes_come_from_the_existing_keys():
     """Ruling 2: which dishes may change comes from expect_removed, expect_removed_any,
     expect_max_changed, expect_unchanged and expect_titles_include, and the recorded frame."""

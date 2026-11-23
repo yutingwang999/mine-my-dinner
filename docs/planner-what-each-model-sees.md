@@ -358,7 +358,7 @@ The scripted first answer chose 827 and filled slot 0 with 清炒菠菜 (854), w
 
 ```
 [human] Your previous answer had these problems. Answer again with each one fixed:
-- Choice 0 is for 豆腐, which no dish in the plan uses, but the new dish (854) does not use 豆腐. Choose a dish that uses 豆腐, or answer null for that slot when none fits.
+- Choice 0 is for 豆腐, which no dish in the plan uses, but the new dish (854) does not use 豆腐. Choose a dish that uses 豆腐, or answer 0 for that slot when none fits.
 ```
 
 The second answer (麻婆豆腐 in place of 红烧茄子) passed; the reply was "把红烧茄子换成了麻婆豆腐。" then the note.
