@@ -50,6 +50,7 @@ from minemydinner.agent.labels import (
     load_label_context,
 )
 from minemydinner.agent.edits import locked_ids, revised_card
+from minemydinner.agent.follow_up import FollowUpReading, reader_messages
 from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.plan_card import (
     build_dishes_card,
@@ -84,6 +85,7 @@ from minemydinner.agent.revise_step import (
     card_search_notes,
     carried_overrides,
     count_fix_hint,
+    current_plan_text,
     deleted_note,
     dish_facts,
     empty_plan_question,
@@ -126,7 +128,7 @@ from minemydinner.models import Diner, Recipe
 from minemydinner.planning.composition import composition_gap, count_categories, side_ranges
 from minemydinner.planning.context import MEAL_KEY, diner_codes, load_planning_context
 from minemydinner.planning.feasibility import Shortfall, check_feasibility, needed_dish_types
-from minemydinner.planning.inventory import meal_preferences
+from minemydinner.planning.inventory import MEAL_LINE_PREFIX, meal_preferences
 from minemydinner.planning.search import ExcludedRecipe, unknown_allergen_exclusions
 from minemydinner.planning.shortlist import (
     ShortlistEntry,
@@ -313,6 +315,109 @@ def _is_action_message(state: ChatState) -> bool:
         and isinstance(last, HumanMessage)
         and isinstance(last.content, str)
         and action_of(last.content) is not None
+    )
+
+
+def _has_dishes(state: ChatState) -> bool:
+    """The thread has a current plan with at least one dish. An early stop or a no-plan reply
+    is a current plan with no dishes: there is nothing to read a follow-up against."""
+    plan = state.get("current_plan")
+    return bool(plan and plan.get("recipes"))
+
+
+def _reads_follow_up(state: ChatState) -> bool:
+    """Plan 3b-2 spec 5.1: a message on a thread whose plan has dishes is read once by the
+    reader instead of the route. The fixed messages ("plan again" and the next-action
+    buttons) keep their own paths and never reach the reader. A thread created with no
+    message yet (the API's initial checkpoint) is routed."""
+    if not state.get("messages"):
+        return False
+    last = state["messages"][-1]
+    return (
+        _has_dishes(state)
+        and isinstance(last, HumanMessage)
+        and isinstance(last.content, str)
+        and not _reuses_parse(state)
+        and not _is_action_message(state)
+    )
+
+
+# The intent each reading kind continues with until the change path exists (plan 3b-2 Task
+# 7): a change and a people message take the revise path's parse; a people message then
+# always shows the diner card (`after_parse`).
+READING_INTENTS = {"change": "revise", "people": "revise", "new_meal": "plan", "other": "other"}
+
+# The count fields of a request, as the reader's conditions name them.
+_READER_COUNTS = (
+    "dishes",
+    "meat_dishes",
+    "vegetable_dishes",
+    "soups",
+    "staples",
+    "desserts",
+    "snacks",
+)
+
+
+def current_meal_avoid(plan: dict, request: dict) -> list[str]:
+    """This meal's one-meal avoidance as the plan stands: the plan card's own list (it is the
+    one a revision keeps), else the request's for a card saved before cards carried it."""
+    if "meal_avoid" in plan:
+        return list(plan.get("meal_avoid") or [])
+    return list(request.get("meal_avoid") or [])
+
+
+def reader_conditions(
+    request: dict, plan: dict, headcount: int | None, meal_avoid: list[str]
+) -> str:
+    """The meal's current conditions for the reader (spec 5.3): the counts the user stated,
+    the mode, the time limit, the named ingredients, this meal's one-meal avoidance and the
+    taste wish. A value the request leaves unstated falls back to the plan's spec."""
+    spec = plan.get("spec") or {}
+    counts = []
+    for name in _READER_COUNTS:
+        if request.get(name) is None:
+            continue
+        bound = request.get(f"{name.split('_')[0]}_bound") if name.endswith("_dishes") else None
+        counts.append(f"{name} {request[name]}" + (f" ({bound})" if bound else ""))
+    mode = request.get("mode") or spec.get("mode") or "not stated"
+    limit = request.get("time_limit_min") or spec.get("time_limit_min")
+    lines = [
+        f"Headcount: {headcount if headcount is not None else 'not stated'}",
+        "Counts the user stated: " + (", ".join(counts) or "none (the plan as shown)"),
+        f"Mode: {mode}",
+        f"Time limit: {f'{limit} minutes' if limit else 'none'}",
+        "Must use: " + (", ".join(request.get("must_use") or []) or "nothing"),
+        "Prefer using: " + (", ".join(request.get("prefer_use") or []) or "nothing"),
+        "Leave out of this meal: " + (", ".join(meal_avoid) or "nothing"),
+        f"Taste wish: {request.get('query') or 'none'}",
+    ]
+    return "Current conditions:\n" + "\n".join(f"- {line}" for line in lines)
+
+
+def live_plan(session, current: dict) -> tuple[dict, list[int]]:
+    """The current plan without the dishes deleted from the library since it was shown, and
+    the ids of those dishes."""
+    shown_ids = [r["id"] for r in current["recipes"]]
+    existing = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(shown_ids))))
+    deleted = [i for i in shown_ids if i not in existing]
+    return without_deleted(current, deleted), deleted
+
+
+def meal_avoid_ids(session, plan: dict, constraints: dict) -> list[int]:
+    """The plan's dishes that break this meal's one-meal avoidance held in `constraints`
+    (plan 3b-1b spec 5.4), in plan order."""
+    shown = [r["id"] for r in plan["recipes"]]
+    ctx = load_planning_context(session, meal_constraints({"constraints": constraints}))
+    found = validate_plan(
+        session, ctx, PlanSpec.model_validate(plan["spec"]), shown, carried_overrides(plan, shown)
+    )
+    return list(
+        dict.fromkeys(
+            v.recipe_id
+            for v in found.violations
+            if v.code == "H2" and v.detail.get("diner_key") == MEAL_KEY
+        )
     )
 
 
@@ -659,6 +764,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "asked_question": False,
             "previous_request": state.get("request"),
             "button": None,
+            "reading": None,
         }
         if _reuses_parse(state):
             # "Plan again": the previous parsed request stands as this turn's parse, with
@@ -690,8 +796,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         messages = [SystemMessage(load_route_prompt()), *state["messages"]]
         result = deps.client.invoke_structured(deps.task, messages, Intent)
         intent = result.parsed.intent
-        if intent in ("revise", "unsure") and state.get("current_plan") is None:
+        if intent == "revise" and state.get("current_plan") is None:
             # Nothing to revise yet (spec 5.1). A no-plan or early-stop reply is a plan.
+            intent = "plan"
+        elif intent == "unsure":
+            # The choice card is no longer shown (plan 3b-2 spec 5.1). A follow-up on a plan
+            # with dishes is read, not routed, so here there is no dish to revise: plan.
             intent = "plan"
         return {
             **fresh,
@@ -701,8 +811,68 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "model_calls": [_model_call_event(deps.client, "route", messages, result)],
         }
 
+    def read_follow_up(state: ChatState) -> dict:
+        """Plan 3b-2 spec 5.1, 5.3: a follow-up on a plan with dishes is read once, with no
+        route call. The reader sees the plan's lines with their marks, the diners' rules as
+        anonymous labels (Diner 1 is the user), the meal's current conditions (this meal's
+        one-meal avoidance included) and the whole conversation. Its kind picks the path
+        (`READING_INTENTS`); the reading is kept in the state and recorded with the run."""
+        fresh = {
+            "asked_question": False,
+            "previous_request": state.get("request"),
+            "button": None,
+        }
+        # The request the plan was built from: the conditions the plan meets.
+        base = state.get("plan_request") or state.get("request") or {}
+        constraints = state.get("constraints") or {
+            "diner_ids": [],
+            "guest_rules": [],
+            "unconfirmed_diners": 0,
+            "headcount": None,
+        }
+        with deps.session_factory() as session:
+            plan, _ = live_plan(session, state["current_plan"])
+            meal_avoid = current_meal_avoid(plan, base)
+            avoid_ids = meal_avoid_ids(
+                session, plan, with_meal_avoid(session, constraints, meal_avoid)
+            )
+            _, mains = dish_facts(session, [r["id"] for r in plan["recipes"]])
+            # The people's rules only: this meal's avoidance is a condition, not a diner.
+            people = with_meal_avoid(session, constraints, [])
+            ctx = load_planning_context(session, meal_constraints({"constraints": people}))
+            diner_lines = [
+                line
+                for line in meal_preferences(session, ctx, current_table())
+                if not line.startswith(MEAL_LINE_PREFIX)
+            ]
+        messages = [
+            SystemMessage(load_prompt("follow_up")),
+            *reader_messages(
+                state["messages"],
+                current_plan_text(plan, mains, avoid_ids),
+                diner_lines,
+                reader_conditions(base, plan, constraints.get("headcount"), meal_avoid),
+                state.get("locale", "en"),
+            ),
+        ]
+        result = deps.client.invoke_structured(deps.task, messages, FollowUpReading)
+        reading = result.parsed
+        return {
+            **fresh,
+            "intent": READING_INTENTS[reading.kind],
+            "reading": reading.model_dump(),
+            # A new turn starts the buffer fresh; the run records it when it starts.
+            "model_calls": [_model_call_event(deps.client, "read_follow_up", messages, result)],
+        }
+
+    def after_reading(state: ChatState) -> str:
+        """Until the change path exists (Task 7), a change takes the revise path from its
+        parse, as a people message (which then shows the diner card) and a new meal (the new
+        plan path) do; "other" gets the fixed reply with the plan left as it is."""
+        return "other" if state["intent"] == "other" else "parse_request"
+
     def other(state: ChatState) -> dict:
-        # The turn ends without planning, so its route call is not recorded anywhere.
+        # The turn ends without planning, so its route or reader call is not recorded anywhere.
         return {
             "messages": [AIMessage(other_reply(state.get("locale", "en")))],
             "model_calls": [],
@@ -712,6 +882,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # A revise turn is parsed like a new plan; after_parse then sends it to the revise
         # step. "unsure" asks first with the choice card.
         if state["intent"] == "unsure":
+            # Only an older thread's checkpoint: the route no longer answers "unsure" here.
             return "ask_revise_or_plan"
         if state["intent"] not in ("plan", "revise"):
             return "other"
@@ -796,6 +967,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # from the current plan. A change in who eats plans anew after the diner card
             # (spec 5.1); load_context then marks the turn as a plan.
             # That fallback also skips the ask-first question and plans from this parse.
+            # A reading of kind "people" always shows the card (plan 3b-2 spec 5.1).
+            if (state.get("reading") or {}).get("kind") == "people":
+                return "select_diners"
             return "select_diners" if diner_card_needed(state, parsed) else "start_revision"
         with deps.session_factory() as session:
             style = get_request_style(session)
@@ -1392,12 +1566,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         counts, the message's changes on top) and the run's record, marked with the version
         it starts from. Who eats is the current plan's (a change in who eats plans anew)."""
         index = from_version(state["current_plan"], state.get("plan_versions") or [])
-        shown_ids = [r["id"] for r in state["current_plan"]["recipes"]]
         with deps.session_factory() as session:
-            existing = set(session.scalars(select(Recipe.id).where(Recipe.id.in_(shown_ids))))
-        deleted = [i for i in shown_ids if i not in existing]
-        # A dish deleted from the library since the plan was shown leaves the revision.
-        plan = without_deleted(state["current_plan"], deleted)
+            # A dish deleted from the library since the plan was shown leaves the revision.
+            plan, deleted = live_plan(session, state["current_plan"])
         parsed = ParsedRequest.model_validate(state["request"])
         # The baseline is the request the plan was built from, not the thread's last parse: a
         # turn that left the plan as it was (failed, unclear, nothing fits) still replaced
@@ -1414,21 +1585,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         shown = [r["id"] for r in plan["recipes"]]
         with deps.session_factory() as session:
             constraints = with_meal_avoid(session, state["constraints"], meal_avoid)
-            ctx = load_planning_context(session, meal_constraints({"constraints": constraints}))
-            found = validate_plan(
-                session,
-                ctx,
-                PlanSpec.model_validate(plan["spec"]),
-                shown,
-                carried_overrides(plan, shown),
-            )
-        avoid_ids = list(
-            dict.fromkeys(
-                v.recipe_id
-                for v in found.violations
-                if v.code == "H2" and v.detail.get("diner_key") == MEAL_KEY
-            )
-        )
+            avoid_ids = meal_avoid_ids(session, plan, constraints)
         defaults_used = revision_defaults(plan.get("defaults_used") or [], plan["spec"], spec)
         texts = _current_request(state["messages"])
         # The user's words the reviser sees and its quotes are checked against. On a button
@@ -1938,6 +2095,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
     builder = StateGraph(ChatState)
     builder.add_node("route_intent", with_labels(route_intent))
+    builder.add_node("read_follow_up", with_labels(read_follow_up))
     builder.add_node("ask_revise_or_plan", with_labels(ask_revise_or_plan))
     builder.add_node("other", with_labels(other))
     # The parse output keeps labels as labels (friend_rules codes are resolved by code), so
@@ -1968,7 +2126,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         destinations=("reviser", "present_revision"),
     )
     builder.add_node("present_revision", with_labels(present_revision))
-    builder.add_edge(START, "route_intent")
+    builder.add_conditional_edges(
+        START,
+        lambda state: "read_follow_up" if _reads_follow_up(state) else "route_intent",
+        ["read_follow_up", "route_intent"],
+    )
+    builder.add_conditional_edges("read_follow_up", after_reading, ["parse_request", "other"])
     gates = [
         "ask_style",
         "ask_question",

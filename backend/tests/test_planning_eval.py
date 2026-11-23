@@ -275,7 +275,12 @@ class TitleModel(ScriptedChatModel):
     def __init__(self, factory, title, **kwargs):
         super().__init__(
             replies=[final_proposal([1])],
-            structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]},
+            structured={
+                "Intent": [{"intent": "plan"}],
+                # A follow-up on a plan is read (plan 3b-2); by default as a new meal.
+                "FollowUpReading": [{"kind": "new_meal"}],
+                "ParsedRequest": [{}],
+            },
             **kwargs,
         )
         self.factory = factory
@@ -2053,10 +2058,15 @@ class ScriptModel(ScriptedChatModel):
     """Planner and reviser replies built at call time from library titles: each entry of
     `script` is a function of a title-to-id lookup, used once and in order."""
 
-    def __init__(self, factory, script, intents, parses, **kwargs):
+    def __init__(self, factory, script, intents, parses, readings=None, **kwargs):
         super().__init__(
             replies=[final_proposal([1])],
-            structured={"Intent": list(intents), "ParsedRequest": list(parses)},
+            structured={
+                "Intent": list(intents),
+                # A follow-up on a plan is read (plan 3b-2); by default as a change.
+                "FollowUpReading": list(readings or [{"kind": "change"}]),
+                "ParsedRequest": list(parses),
+            },
             **kwargs,
         )
         self.factory = factory
@@ -2148,10 +2158,11 @@ def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
     _assert_clean(eval_db)
 
 
-def test_a_fixed_first_plan_rewrites_the_reply_the_route_reads(tmp_path, eval_db):
+def test_a_fixed_first_plan_rewrites_the_reply_the_reader_reads(tmp_path, eval_db):
     """Development run 2, item 5: first_plan replaced the dishes but the first reply still
-    named the planner's own dishes, so the follow-up's route read a plan the scenario never
-    set. The reply now names the fixed plan's dishes, as a real reply names its card's."""
+    named the planner's own dishes, so the follow-up was read against a plan the scenario
+    never set. The reply now names the fixed plan's dishes, as a real reply names its card's.
+    (The route read it before plan 3b-2; the reader reads it now.)"""
     from minemydinner.agent.request import load_prompt
     from minemydinner.evaluation.revise_eval import FIRST_PLAN_REPLY
 
@@ -2175,14 +2186,15 @@ def test_a_fixed_first_plan_rewrites_the_reply_the_route_reads(tmp_path, eval_db
         eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
     )
     assert outcome.as_expected, (outcome.failures, outcome.note)
-    route = load_prompt("route")
-    route_calls = [s for s in model.sent if s and s[0].type == "system" and s[0].content == route]
-    follow_up_route = route_calls[-1]
-    [reply] = [m for m in follow_up_route if m.type == "ai"]
-    assert reply.content == FIRST_PLAN_REPLY["zh"].format(dishes="宫保鸡丁、番茄炒蛋、红烧茄子")
-    assert "青椒肉丝" not in reply.content
-    # The card of that reply is still found by its id (the message was replaced, not added).
-    assert follow_up_route[-1].content == "茄子这道不要，换一个别的"
+    reader = load_prompt("follow_up")
+    [read] = [s for s in model.sent if s and s[0].type == "system" and s[0].content == reader]
+    text = read[-1].content
+    reply = FIRST_PLAN_REPLY["zh"].format(dishes="宫保鸡丁、番茄炒蛋、红烧茄子")
+    assert f"Assistant: {reply}" in text
+    assert "青椒肉丝" not in text
+    # The reply was replaced, not added: one reply, then the follow-up.
+    assert text.count("Assistant: ") == 1
+    assert "User: 茄子这道不要，换一个别的" in text
     _assert_clean(eval_db)
 
 
@@ -2195,43 +2207,31 @@ def test_first_plan_reply_sentence_in_both_languages():
     )
 
 
-def test_the_choice_card_is_answered_or_stops_the_turn(tmp_path, eval_db):
+def test_a_follow_up_once_given_the_choice_card_is_read_and_acted_on(tmp_path, eval_db):
+    """Plan 3b-2 spec 5.1: the choice card is no longer shown. A follow-up the route once
+    answered "unsure" is read; here the reader takes it as a new meal, and the turn plans
+    with no card (a scenario's choice_answer is then unused)."""
     model = ScriptModel(
         eval_db,
-        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _propose("宫保鸡丁", "番茄炒蛋", "红烧茄子"),
-         _propose("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
-        intents=[{"intent": "plan"}, {"intent": "unsure"}, {"intent": "plan"},
-                 {"intent": "unsure"}],
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _propose("宫保鸡丁", "番茄炒蛋", "红烧茄子")],
+        intents=[{"intent": "plan"}],
         parses=[{"dishes": 3, "mode": "shopping"}],
+        readings=[{"kind": "new_meal"}],
     )
     answered = _revise_scenario(
         "answered",
         rules=[],
         follow_up="换一下吧",
         choice_answer="plan",
-        expect_route="unsure",
-        expect_choice_card=True,
+        expect_route="plan",
+        expect_choice_card=False,
         expect_titles_exact=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
     )
-    stopped = _revise_scenario(
-        "stopped",
-        rules=[],
-        follow_up="换一下吧",
-        expect_route="unsure",
-        expect_choice_card=True,
-        expect_unchanged=True,
-    )
-    first, second = evaluate(
-        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [answered, stopped],
-        InMemorySaver(),
+    [first] = evaluate(
+        eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [answered], InMemorySaver()
     )
     assert first.as_expected, (first.failures, first.note)
-    assert first.turn == "plan" and first.route_intent == "unsure" and first.final_passed
-    assert second.as_expected, (second.failures, second.note)
-    assert second.turn == "none" and second.route_intent == "unsure"
-    # The stop is not a failure: the first turn's run stays passed.
-    [run] = second.record["planning_runs"]
-    assert run["final_passed"] is True
+    assert first.turn == "plan" and first.route_intent == "plan" and first.final_passed
     _assert_clean(eval_db)
 
 
@@ -2785,7 +2785,11 @@ class FridgeAddModel(ScriptedChatModel):
     def __init__(self, factory, intents, parses):
         super().__init__(
             replies=[final_proposal([1])],
-            structured={"Intent": list(intents), "ParsedRequest": list(parses)},
+            structured={
+                "Intent": list(intents),
+                "FollowUpReading": [{"kind": "change"}],
+                "ParsedRequest": list(parses),
+            },
         )
         self.factory = factory
 

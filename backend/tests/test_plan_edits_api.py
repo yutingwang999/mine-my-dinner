@@ -54,7 +54,12 @@ def env(client, tmp_path, session, seeded):  # noqa: F811
     pork = make_recipe(session, "红烧肉", "meat dish", [L("五花肉")])
     model = ScriptedChatModel(
         replies=[tool_call("get_recipe", {"recipe_id": veg.id}), final_proposal([veg.id])],
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]},
+        structured={
+            "Intent": [{"intent": "plan"}],
+            # A follow-up on a plan is read (plan 3b-2); by default it asks for a new meal.
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        },
     )
     embeddings = FakeEmbeddings()
     factory = rollback_session_factory(session)

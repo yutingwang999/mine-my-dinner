@@ -52,6 +52,8 @@ def env(tmp_path, session, seeded):  # noqa: F811
     model = ScriptedChatModel(
         structured={
             "Intent": [{"intent": "plan"}],
+            # A follow-up on a plan is read (plan 3b-2): by default it changes the plan.
+            "FollowUpReading": [{"kind": "change"}],
             "ParsedRequest": [{"dishes": 3, "mode": "shopping"}],
         }
     )
@@ -538,10 +540,10 @@ def test_must_use_the_revision_breaks_fails():
 
 
 def routed_revise(env: Env, text: str, replies: list, parse: dict) -> dict:
-    """A follow-up turn through the real route (scripted as revise), so route_intent keeps the
-    thread's request as `previous_request` as it does in the app."""
+    """A follow-up turn through the real graph entry (the reader, scripted as a change), so
+    the turn keeps the thread's request as `previous_request` as it does in the app."""
     env.model.replies = list(replies)
-    env.model.structured["Intent"] = [{"intent": "revise"}]
+    env.model.structured["FollowUpReading"] = [{"kind": "change"}]
     env.model.structured["ParsedRequest"] = [parse]
     return env.graph.invoke({"messages": [HumanMessage(text)], "locale": "zh"}, env.config)
 

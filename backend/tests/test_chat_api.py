@@ -73,7 +73,12 @@ def recipe(session, seeded):
 def plan_model(recipe) -> ScriptedChatModel:
     return ScriptedChatModel(
         replies=[tool_call("get_recipe", {"recipe_id": recipe.id}), final_proposal([recipe.id])],
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]},
+        structured={
+            "Intent": [{"intent": "plan"}],
+            # A follow-up on a plan is read (plan 3b-2); by default it asks for a new meal.
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        },
     )
 
 
@@ -613,9 +618,12 @@ def test_resume_card_headcount(client, tmp_path, session, recipe):
     assert values["settled_diners"]["stated_headcount"] == 2
 
 
-def test_choice_card_resumes_and_shows_in_history(client, tmp_path, session, recipe):
+def test_an_old_pending_choice_card_resumes_and_shows_in_history(
+    client, tmp_path, session, recipe
+):
+    """The choice card is no longer shown (plan 3b-2), but a thread saved while one was
+    pending still shows it and resumes from it."""
     model = plan_model(recipe)
-    model.structured["Intent"] = [{"intent": "plan"}, {"intent": "unsure"}]
     install(tmp_path, session, model, "plan_then_adjust")
     tid = new_thread(client)
     sse(post_message(client, tid, "今晚吃什么"))
@@ -625,8 +633,26 @@ def test_choice_card_resumes_and_shows_in_history(client, tmp_path, session, rec
             {"target": "general", "remove": [], "add": [], "note": "没有更辣的了。"},
         )
     ]
-    events = sse(post_message(client, tid, "来点辣的"))
-    assert of(events, "interrupt") == [{"kind": "revise_or_plan", "message": "来点辣的"}]
+    # The older thread: its route answered "unsure" and the card is waiting for an answer.
+    graph = app.dependency_overrides[get_chat_runtime]().graph
+    config = {"configurable": {"thread_id": tid}}
+    previous = graph.get_state(config).values["request"]
+    graph.update_state(
+        config,
+        {
+            "messages": [HumanMessage("来点辣的")],
+            "intent": "unsure",
+            "previous_request": previous,
+            "asked_question": False,
+            "button": None,
+            "model_calls": [],
+        },
+        as_node="route_intent",
+    )
+    out = graph.invoke(None, config)
+    assert [i.value for i in out["__interrupt__"]] == [
+        {"kind": "revise_or_plan", "message": "来点辣的"}
+    ]
     body = client.get(f"/api/chat/threads/{tid}").json()
     assert body["pending"] == {"kind": "revise_or_plan", "message": "来点辣的"}
     events = sse(post_resume(client, tid, "revise", "zh"))
@@ -652,7 +678,7 @@ def revise_env(tmp_path, session, recipe) -> tuple[ChatEnv, Any]:
     """A chat whose first message plans one dish and whose later messages revise it."""
     other = make_recipe(session, "白菜汤", "vegetable dish", [L("小白菜")], servings=2)
     model = plan_model(recipe)
-    model.structured["Intent"] = [{"intent": "plan"}, {"intent": "revise"}]
+    model.structured["FollowUpReading"] = [{"kind": "change"}]
     return install(tmp_path, session, model, "plan_then_adjust"), other
 
 

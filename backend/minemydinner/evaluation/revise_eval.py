@@ -359,16 +359,26 @@ def locked_of(plan: dict | None) -> frozenset[int]:
     return frozenset((locked_ids(plan) - open_conflict_ids(plan)) & in_plan)
 
 
+# A follow-up on a plan is read, not routed (plan 3b-2 spec 5.1): the route each reading kind
+# stands for (spec 6: change is revise, new_meal is plan). Task 10 settles the runner's keys.
+ROUTE_OF_READING = {"change": "revise", "people": "revise", "new_meal": "plan", "other": "other"}
+
+
 def route_of(turn_events: list[list[dict]], values: dict) -> str | None:
-    """The route model's answer for the turn: from the route call recorded in the turn's
-    planning runs, else (no run: a turn that stopped before planning) from the state's
-    pending events, else "other" when the turn was answered without planning. None when no
-    route call was made ("plan again" reuses the parse)."""
+    """The route model's answer for the turn, or the route a follow-up reading stands for
+    (`ROUTE_OF_READING`): from the route or reader call recorded in the turn's planning runs,
+    else (no run: a turn that stopped before planning) from the state's pending events, else
+    "other" when the turn was answered without planning. None when neither call was made
+    ("plan again" reuses the parse)."""
 
     def found(events: list[dict]) -> str | None:
         for event in events:
-            if event.get("kind") == "model_call" and event.get("step") == "route":
+            if event.get("kind") != "model_call":
+                continue
+            if event.get("step") == "route":
                 return (event.get("response") or {}).get("intent")
+            if event.get("step") == "read_follow_up":
+                return ROUTE_OF_READING.get((event.get("response") or {}).get("kind"))
         return None
 
     for events in turn_events:

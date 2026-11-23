@@ -112,7 +112,15 @@ def graph_env(tmp_path, session, seeded):
     session.execute(delete(AppPreference))
     session.flush()
     set_request_style(session, "plan_then_adjust")
-    model = ScriptedChatModel(structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]})
+    model = ScriptedChatModel(
+        structured={
+            "Intent": [{"intent": "plan"}],
+            # A follow-up on a plan is read, not routed: by default it asks for a new meal, as
+            # the route's "plan" answer did before plan 3b-2.
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        }
+    )
     factory = rollback_session_factory(session)
     client = make_llm_client(tmp_path, factory, model)
     deps = GraphDeps(factory, client, PlanningRecorder(factory))
@@ -744,7 +752,11 @@ def make_graph_env(tmp_path, session, model=None, embeddings=None, **deps_kwargs
     session.flush()
     set_request_style(session, "plan_then_adjust")
     model = model or ScriptedChatModel(
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]}
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        }
     )
     factory = rollback_session_factory(session)
     client = make_llm_client(tmp_path, factory, model, embeddings=embeddings)
@@ -1388,7 +1400,11 @@ def labelled_env(tmp_path, session, model=None, embeddings=None) -> GraphEnv:
     session.flush()
     set_request_style(session, "plan_then_adjust")
     model = model or ScriptedChatModel(
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]}
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        }
     )
     factory = rollback_session_factory(session)
     client = make_llm_client(
@@ -2135,10 +2151,14 @@ def test_plan_diners_line_without_the_user(tmp_path, session, seeded, veg):
 
 
 def route_and_parse_calls(env: GraphEnv, since: int) -> list[str]:
-    """The route and parse model calls made after the first `since` calls, by step."""
+    """The route, reader and parse model calls made after the first `since` calls, by step."""
     from minemydinner.agent.request import load_prompt
 
-    steps = {load_prompt("route"): "route", load_prompt("parse"): "parse"}
+    steps = {
+        load_prompt("route"): "route",
+        load_prompt("follow_up"): "read_follow_up",
+        load_prompt("parse"): "parse",
+    }
     return [steps[s[0].content] for s in env.model.sent[since:] if s[0].content in steps]
 
 
@@ -2179,7 +2199,7 @@ def test_replan_message_as_first_message_routes_and_parses(graph_env, veg):
     assert {"kind": "parse_reused"} not in run_record(graph_env).events
 
 
-def test_replan_message_with_more_words_routes_and_parses(tmp_path, session, seeded, veg):
+def test_replan_message_with_more_words_is_read_and_parsed(tmp_path, session, seeded, veg):
     env, _, _, _ = plan_with_alex(tmp_path, session, veg)
     since = len(env.model.sent)
     out = plan(
@@ -2189,7 +2209,8 @@ def test_replan_message_with_more_words_routes_and_parses(tmp_path, session, see
         locale="zh",
     )
     assert out["current_plan"]["passed"]
-    assert route_and_parse_calls(env, since) == ["route", "parse"]
+    # Not the fixed text: a follow-up on the plan, read (here as a new meal) and parsed.
+    assert route_and_parse_calls(env, since) == ["read_follow_up", "parse"]
     assert out["request"]["query"] == "辣"
     assert {"kind": "parse_reused"} not in run_record(env).events
 
@@ -2214,6 +2235,7 @@ def revise_env(tmp_path, session, seeded):
     model = ScriptedChatModel(
         structured={
             "Intent": [{"intent": "plan"}],
+            "FollowUpReading": [{"kind": "change"}],
             "ParsedRequest": [{"dishes": 2, "soups": 1, "mode": "shopping"}],
         }
     )
@@ -2235,9 +2257,16 @@ def dish_ids(env: ReviseEnv, *titles: str) -> list[int]:
     return [env.dishes[t].id for t in titles]
 
 
+# The reading that stands for a route answer once the thread has a plan (plan 3b-2).
+READ_AS = {"plan": "new_meal", "revise": "change", "other": "other"}
+
+
 def say(env, text: str, intent: str, parse: dict | None = None, replies=None, locale="zh"):
-    """A message whose route call answers `intent`."""
+    """A message whose route call answers `intent`; on a thread with a plan the reader answers
+    the matching kind instead (`READ_AS`)."""
     env.model.structured["Intent"] = [{"intent": intent}]
+    if intent in READ_AS:
+        env.model.structured["FollowUpReading"] = [{"kind": READ_AS[intent]}]
     if parse is not None:
         env.model.structured["ParsedRequest"] = [parse]
     if replies is not None:
@@ -2350,8 +2379,8 @@ def test_unsure_without_a_plan_plans(revise_env):
 
 
 def test_revise_goes_to_the_revise_step(revise_env):
-    """End to end through the real route: a scripted route answers "revise" after a plan, and
-    the turn becomes a revised model version."""
+    """End to end: a scripted reader answers "change" after a plan, and the turn becomes a
+    revised model version."""
     env = revise_env
     first = first_meal(env)
     cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
@@ -2368,7 +2397,7 @@ def test_revise_goes_to_the_revise_step(revise_env):
     assert len(planner_runs(env)) == planned and len(reviser_calls(env)) == 1
     record = latest_record(env)
     assert record.request["revision"] == {"from_version": 0}
-    assert [e.get("step") for e in record.events[:2]] == ["route", "parse"]
+    assert [e.get("step") for e in record.events[:2]] == ["read_follow_up", "parse"]
     plan = out["current_plan"]
     assert [r["id"] for r in plan["recipes"]] == dish_ids(env, "土豆炖牛肉", "紫菜蛋花汤", "干煸豆角")
     assert plan["passed"] and plan["revision"] == {"from_version": 0}
@@ -2380,52 +2409,276 @@ def test_revise_goes_to_the_revise_step(revise_env):
     assert parse_input[-1].content == PLAN_NOTE + (
         "2 dishes (1 meat, 1 vegetable), 1 soup: 土豆炖牛肉, 清炒小白菜, 紫菜蛋花汤"
     )
-    # The route input carries no plan line.
-    assert model_calls_by_prompt(env, "route")[-1][-1].content == "想要辣一些的"
+    # The follow-up made no route call: the route ran once, for the first meal.
+    assert len(model_calls_by_prompt(env, "route")) == 1
     assert out["previous_request"] == first["request"]
     # The plan was built from the first request; the passed revision is built from this one.
     assert first["plan_request"] == first["request"]
     assert out["plan_request"] == out["request"]
 
 
-def test_unsure_shows_the_choice_card(revise_env):
+def read(env, text: str, reading: dict, parse=None, replies=None, locale="zh") -> dict:
+    """A follow-up message on a plan, which the reader answers with `reading`."""
+    env.model.structured["FollowUpReading"] = [reading]
+    if parse is not None:
+        env.model.structured["ParsedRequest"] = [parse]
+    if replies is not None:
+        env.model.replies = list(replies)
+    return env.graph.invoke({"messages": [HumanMessage(text)], "locale": locale}, env.config)
+
+
+def reader_calls(env) -> list[list]:
+    return model_calls_by_prompt(env, "follow_up")
+
+
+def test_a_change_reading_goes_to_the_revise_path(revise_env):
+    """Plan 3b-2: a follow-up on a plan is read once, with no route call. Until the change
+    path exists (Task 7), a change reading takes the revise path of plan 3b-1."""
     env = revise_env
     first_meal(env)
-    parse = {"query": "辣", "dishes": 2, "soups": 1, "mode": "shopping"}
-    out = say(env, "来点辣的", "unsure", parse=parse)
-    (card,) = out["__interrupt__"]
-    assert card.value == {"kind": "revise_or_plan", "message": "来点辣的"}
-    # The card comes before the parse.
-    assert len(model_calls_by_prompt(env, "parse")) == 1
-    ids = dish_ids(env, "青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
-    env.model.replies = [final_proposal(ids)]
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    routes = len(model_calls_by_prompt(env, "route"))
+    reading = {"kind": "change", "wish": "辣一些的", "wish_general": True}
+    out = read(
+        env,
+        "想要辣一些的",
+        reading,
+        parse={"dishes": 2, "soups": 1, "mode": "shopping", "query": "辣一些的"},
+        replies=[revision("general", remove=[(cabbage, "")], add=[beans])],
+    )
+    assert "__interrupt__" not in out and out["intent"] == "revise"
+    assert len(reader_calls(env)) == 1
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    assert len(reviser_calls(env)) == 1 and out["current_plan"]["passed"]
+    assert out["reading"]["kind"] == "change" and out["reading"]["wish"] == "辣一些的"
+    record = latest_record(env)
+    assert record.request["revision"] == {"from_version": 0}
+    # The reading is recorded on the run like the route and parse calls were.
+    assert [e.get("step") for e in record.events[:2]] == ["read_follow_up", "parse"]
+    assert record.events[0]["kind"] == "model_call"
+    assert record.events[0]["response"]["kind"] == "change"
+
+
+def test_a_new_meal_reading_plans_a_new_meal(revise_env):
+    env = revise_env
+    first_meal(env)
+    routes = len(model_calls_by_prompt(env, "route"))
     planned = len(planner_runs(env))
-    out = env.graph.invoke(Command(resume="plan"), env.config)
+    ids = dish_ids(env, "青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
+    out = read(
+        env,
+        "明天中午也帮我配一顿",
+        {"kind": "new_meal"},
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)],
+    )
     assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert len(reader_calls(env)) == 1
+    assert len(model_calls_by_prompt(env, "route")) == routes
     assert len(planner_runs(env)) == planned + 1 and reviser_calls(env) == []
     assert "revision" not in out["current_plan"]
-    assert out["questions"][-1] == {
-        "at": len(out["messages"]) - 1,
-        "value": {"kind": "revise_or_plan", "message": "来点辣的", "choice": "plan"},
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    # Parsed as a new request: the parse input has no plan line.
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content == "明天中午也帮我配一顿"
+    record = latest_record(env)
+    assert "revision" not in record.request
+    assert [e.get("step") for e in record.events[:2]] == ["read_follow_up", "parse"]
+
+
+def test_a_people_reading_shows_the_diner_card_and_plans_anew(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    env = labelled_env(tmp_path, session)
+    out = plan(
+        env, "今晚吃什么", parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([veg.id])], locale="zh",
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    routes = len(model_calls_by_prompt(env, "route"))
+    env.model.structured["FollowUpReading"] = [{"kind": "people"}]
+    # The parse states nothing about who eats: the reading alone shows the card.
+    out = plan(env, "我以后都不吃香菜", parse={"dishes": 1}, locale="zh")
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    assert len(model_calls_by_prompt(env, "follow_up")) == 1
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    # Parsed as a follow-up on the plan: the parse input ends with the plan line.
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+    env.model.replies = [final_proposal([veg.id])]
+    planned = len(planner_requests(env))
+    out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert len(planner_requests(env)) == planned + 1
+    assert not any("RevisionProposal" in s[0].content for s in env.model.sent if s)
+    assert "revision" not in out["current_plan"]
+    assert [e.get("step") for e in run_record(env).events[:2]] == ["read_follow_up", "parse"]
+
+
+def test_an_other_reading_leaves_the_plan_alone(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    parses = len(model_calls_by_prompt(env, "parse"))
+    routes = len(model_calls_by_prompt(env, "route"))
+    runs = latest_record(env).id
+    out = read(env, "谢谢", {"kind": "other"})
+    assert out["intent"] == "other" and out["messages"][-1].content == OTHER_REPLY_ZH
+    assert len(reader_calls(env)) == 1
+    assert len(model_calls_by_prompt(env, "parse")) == parses
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    for key in ("current_plan", "request", "plan_request", "reply_plans", "plan_versions"):
+        assert out[key] == first[key], key
+    # No planning run: the turn ends with the fixed reply.
+    assert latest_record(env).id == runs
+    # The next message is read against the same plan.
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    out = read(
+        env, "白菜换掉", {"kind": "change"}, parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[revision("named", remove=[(cabbage, "白菜")], add=[beans])],
+    )
+    assert len(reader_calls(env)) == 2 and len(reviser_calls(env)) == 1
+    assert out["current_plan"]["passed"]
+    assert latest_record(env).request["revision"] == {"from_version": 0}
+
+
+def test_fixed_messages_after_a_plan_are_never_read(revise_env):
+    """"Plan again" and the next-action buttons keep their own paths: no reader call."""
+    env = revise_env
+    first = first_meal(env)
+    parses = len(model_calls_by_prompt(env, "parse"))
+    routes = len(model_calls_by_prompt(env, "route"))
+    planned = len(planner_runs(env))
+    out = env.graph.invoke(
+        {"messages": [HumanMessage(REPLAN_MESSAGE["zh"])], "locale": "zh"}, env.config
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert out["request"] == first["request"]
+    assert len(planner_runs(env)) == planned + 1
+    out = env.graph.invoke(
+        {"messages": [HumanMessage(ACTION_MESSAGES["zh"]["fewer_dishes"])], "locale": "zh"},
+        env.config,
+    )
+    assert out["button"] == "fewer_dishes"
+    assert reader_calls(env) == []
+    assert len(model_calls_by_prompt(env, "parse")) == parses
+    assert len(model_calls_by_prompt(env, "route")) == routes
+
+
+def test_a_follow_up_after_an_early_stop_is_routed(graph_env, session):
+    """An early stop has no dishes: a follow-up takes the route as before plan 3b-2, and an
+    unsure answer plans (the choice card is no longer shown)."""
+    _early_stop_env(graph_env, session)
+    out = plan(graph_env, "dinner")
+    assert out["current_plan"]["recipes"] == []
+    graph_env.model.structured["Intent"] = [{"intent": "other"}]
+    out = plan(graph_env, "hello")
+    assert out["intent"] == "other" and out["messages"][-1].content == OTHER_REPLY_EN
+    graph_env.model.structured["Intent"] = [{"intent": "unsure"}]
+    out = plan(graph_env, "something else then")
+    assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert reader_calls(graph_env) == []
+    assert len(model_calls_by_prompt(graph_env, "route")) == 3
+
+
+def test_an_old_pending_choice_card_still_resumes(revise_env):
+    """A thread saved before plan 3b-2, paused on the choice card after its route call, is
+    resumed as before: the answer "revise" revises with no reader call."""
+    env = revise_env
+    first = first_meal(env)
+    env.graph.update_state(
+        env.config,
+        {
+            "messages": [HumanMessage("来点辣的")],
+            "intent": "unsure",
+            "previous_request": first["request"],
+            "asked_question": False,
+            "button": None,
+            "model_calls": [],
+        },
+        as_node="route_intent",
+    )
+    out = env.graph.invoke(None, env.config)
+    (card,) = out["__interrupt__"]
+    assert card.value == {"kind": "revise_or_plan", "message": "来点辣的"}
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    env.model.structured["ParsedRequest"] = [{"query": "辣"}]
+    env.model.replies = [revision("general", remove=[(cabbage, "")], add=[beans])]
+    out = env.graph.invoke(Command(resume="revise"), env.config)
+    assert "__interrupt__" not in out and out["intent"] == "revise"
+    assert out["current_plan"]["passed"] and len(reviser_calls(env)) == 1
+    assert out["questions"][-1]["value"]["choice"] == "revise"
+    assert reader_calls(env) == []
+
+
+def test_an_old_thread_state_is_read_and_revised(revise_env):
+    """A thread saved before plan 3b-2 (a revision dict without the later fields, a card
+    without its turn's words, no reading) is read and revised without error."""
+    env = revise_env
+    first_meal(env)
+    env.graph.update_state(
+        env.config, {"revision": {"from_version": 0, "message": "旧的", "recipe_ids": []}}
+    )
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    out = read(
+        env, "白菜换掉", {"kind": "change"}, parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[revision("named", remove=[(cabbage, "白菜")], add=[beans])],
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert len(reader_calls(env)) == 1 and len(reviser_calls(env)) == 1
+
+
+def test_the_reader_sees_the_plan_the_diners_and_this_meals_avoidance(
+    tmp_path, session, seeded, veg
+):
+    """Spec 5.3 (Review Focus 3): the reader's input has the plan lines, the diners' rules
+    as anonymous labels (never a saved nickname), and the current conditions with this meal's
+    one-meal avoidance, so a message about something else can restate it."""
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    rule(session, wang.id, "allergy", allergen="peanut")
+    rule(session, me.id, "dislike", ingredient="猪肉")
+    env = labelled_env(tmp_path, session)
+    parse = {
+        "headcount": 2,
+        "others_mentioned": True,
+        "dishes": 1,
+        "mode": "shopping",
+        "time_limit_min": 40,
+        "meal_avoid": ["香菜"],
     }
-    # Each other answer revises; the vegetable dish is swapped each time.
-    vegetables = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
-    for answer, choice in (("revise", "revise"), (None, None), ("随便", None)):
-        out = say(env, "来点辣的", "unsure", parse={"query": "辣"})
-        (card,) = out["__interrupt__"]
-        recipes = out["current_plan"]["recipes"]
-        current = next(r["id"] for r in recipes if r["dish_type"] == "vegetable dish")
-        new = next(i for i in vegetables if i != current)
-        env.model.replies = [revision("general", remove=[(current, "")], add=[new])]
-        calls = len(reviser_calls(env))
-        # Answered by interrupt id: LangGraph ignores a bare resume of None.
-        out = env.graph.invoke(Command(resume={card.id: answer}), env.config)
-        assert "__interrupt__" not in out and out["intent"] == "revise"
-        assert len(reviser_calls(env)) == calls + 1
-        assert out["current_plan"]["passed"]
-        assert out["questions"][-1]["value"]["choice"] == choice
-        # The parse of a revise turn ends with the plan line.
-        assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+    (card,) = plan(env, "我和小王吃饭，不要香菜", parse=parse, locale="zh")["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: {"selected": [me.id, wang.id], "headcount": 2}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    env.model.structured["FollowUpReading"] = [{"kind": "other", "meal_avoid": ["香菜"]}]
+    out = plan(env, "再加一道", locale="zh")
+    (sent,) = model_calls_by_prompt(env, "follow_up")
+    assert len(sent) == 2
+    text = sent[1].content
+    assert f"- {veg.id} 清炒白菜 (vegetable dish; 小白菜)" in text
+    assert "Diner 1: dislikes 猪肉" in text
+    assert "Diner 2: allergy peanut" in text
+    assert "Leave out of this meal: 香菜" in text
+    assert "Time limit: 40 minutes" in text and "Mode: shopping" in text
+    assert "再加一道" in text and "Reply locale: zh" in text
+    # A saved nickname never reaches the reader, in the diner lines or the conversation.
+    assert "小王" not in text
+    assert out["reading"]["meal_avoid"] == ["香菜"]
+
+
+def test_the_reader_sees_which_dishes_break_this_meals_avoidance(revise_env):
+    """The plan lines keep the revise step's marks: a dish that breaks this meal's one-meal
+    avoidance (the plan card's own list) is marked, and the avoidance is a condition."""
+    env = revise_env
+    first = first_meal(env)
+    env.graph.update_state(
+        env.config, {"current_plan": {**first["current_plan"], "meal_avoid": ["牛肉"]}}
+    )
+    read(env, "谢谢", {"kind": "other", "meal_avoid": ["牛肉"]})
+    (sent,) = reader_calls(env)
+    text = sent[1].content
+    beef, cabbage = dish_ids(env, "土豆炖牛肉", "清炒小白菜")
+    assert f"- {beef} 土豆炖牛肉 (meat dish; 牛肉) BREAKS THIS MEAL'S WISH" in text
+    assert f"- {cabbage} 清炒小白菜 (vegetable dish; 小白菜)\n" in text
+    assert "Leave out of this meal: 牛肉" in text
 
 
 def test_revise_never_asks_the_ask_first_question(revise_env):
@@ -2465,11 +2718,12 @@ def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
         replies=[final_proposal([veg.id])],
     )
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    env.model.structured["Intent"] = [{"intent": "revise"}]
+    env.model.structured["FollowUpReading"] = [{"kind": "change"}]
     out = plan(env, "再加一道，Alex 也来，他对花生过敏", parse=ALEX_PARSE)
     (card,) = out["__interrupt__"]
     assert card.value["kind"] == "diners"
-    # The turn was routed as a revision: its parse input carried the plan line.
+    # The turn was read as a change: its parse input carried the plan line, and the parse's
+    # change in who eats still shows the card.
     assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
     env.model.replies = [final_proposal([veg.id])]
     chosen = {"selected": [me.id], "guests": [{"name": "Alex", "rules": [PEANUT_RULE]}]}
@@ -2498,7 +2752,7 @@ def two_for_shopping(tmp_path, session, veg):
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id, wang.id], "headcount": 2}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    env.model.structured["Intent"] = [{"intent": "revise"}]
+    env.model.structured["FollowUpReading"] = [{"kind": "change"}]
     return env, me, wang, spinach
 
 

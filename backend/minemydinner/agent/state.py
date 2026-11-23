@@ -14,6 +14,9 @@ class ChatState(TypedDict):
     # the step where the failed resume's write is still pending.
     locale: Annotated[str, _latest]
     intent: str | None
+    # This turn's follow-up reading (FollowUpReading as a dict, plan 3b-2 spec 5.2) when the
+    # thread had a plan with dishes; None on a routed turn. Never set on a thread saved before.
+    reading: dict | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
     # The thread's request before this turn's parse replaced it (plan 3b-1): a revision takes a
