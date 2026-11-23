@@ -2152,12 +2152,13 @@ def _pick(slots=(), choices=(), wish_met=None, note="选好了。"):
     )
 
 
-def _reading(remove=(), **fields):
+def _reading(remove=(), wish_targets=(), **fields):
     """A change reading by titles, resolved when the reader is called: `remove` holds
-    (title, quote, mode)."""
+    (title, quote, mode); `wish_targets` the titles a wish touches."""
     return lambda ids: {
         "kind": "change",
         "remove": [{"id": ids[t], "quote": q, "mode": m} for t, q, m in remove],
+        "wish_targets": [ids[t] for t in wish_targets],
         **fields,
     }
 
@@ -2332,11 +2333,11 @@ def test_a_nothing_fits_revision_is_not_passed_and_unchanged(tmp_path, eval_db):
         eval_db,
         [
             _propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"),
-            _pick(slots=[(0, None)], choices=[(0, ["番茄炒蛋"])], wish_met=False, note="没有更辣的。"),
+            _pick(slots=[(0, None)], wish_met=False, note="没有更辣的。"),
         ],
         intents=[{"intent": "plan"}],
         parses=[{"dishes": 3, "mode": "shopping"}],
-        readings=[_reading(wish="辣一些的", wish_general=True)],
+        readings=[_reading(wish="辣一些的", wish_targets=["番茄炒蛋"])],
     )
     scenario = _revise_scenario(
         "nothing",

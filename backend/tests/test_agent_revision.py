@@ -1,14 +1,14 @@
-"""The pure rules of a change (plan 3b-1 spec 5.2, 5.3; plan 3b-2 spec 5.4): quotes, the
-general wish's limit, the spec a change starts from and the conditions a follow-up leaves
-unstated. No model and no database. The revise step's R1-R9 checks left with it (plan 3b-2)."""
+"""The pure rules of a change (plan 3b-1 spec 5.2, 5.3; plan 3b-2 spec 5.4): the wish's
+change-size limit, the spec a change starts from and the conditions a follow-up leaves
+unstated. No model and no database. The revise step's R1-R9 checks left with it (plan 3b-2),
+and the quote match against a dish's title or ingredients left with Task 10b (code checks
+only that a locked dish's quote is in the message)."""
 
 from minemydinner.agent.revision import (
     DishFacts,
     max_general_changes,
-    quote_matches,
     revision_spec,
 )
-from minemydinner.agent.revise_step import CATEGORY_WORDS, CONFLICT_WORDS
 
 FACTS = {
     1: DishFacts("鱼香茄子", ["茄子", "猪肉"], [], "vegetable dish"),
@@ -45,14 +45,6 @@ def _plan(ids, locked=(), conflicts=(), overrides=()):
 
 def test_max_general_changes():
     assert [max_general_changes(n) for n in range(6)] == [0, 1, 1, 2, 2, 3]
-
-
-def test_quote_matches():
-    assert quote_matches("茄子这道", "鱼香茄子", [], [])
-    assert not quote_matches("土豆这道", "鱼香茄子", ["猪肉"], [])
-    assert quote_matches("那道汤", "玉米排骨汤", [], ["汤"])
-    assert quote_matches("不要猪肉", "鱼香茄子", ["猪肉"], [])
-    assert not quote_matches("", "鱼香茄子", ["猪肉"], ["汤"])
 
 
 def test_revision_spec_keeps_hand_grown_count():
@@ -155,26 +147,6 @@ def test_revision_spec_changed_side_keeps_total_and_frees_the_other():
     empty["spec"].update(dishes=3, meat_dishes=1, vegetable_dishes=2)
     spec = revision_spec(empty, {}, {"vegetable_dishes": 3})
     assert (spec.dishes, spec.vegetable_dishes, spec.meat_dishes) == (3, 3, None)
-
-
-def test_staple_quotes():
-    staple = CATEGORY_WORDS["staple food"]
-    assert quote_matches("面", "清汤面", ["面粉"], staple)
-    assert quote_matches("饭", "白米饭", ["大米"], staple)
-    assert not quote_matches("面", "番茄炒蛋", ["番茄", "鸡蛋"], [])
-    # A one-character quote that is the title's last character also matches.
-    assert quote_matches("面", "担担面", [], [])
-    assert not quote_matches("担", "担担面", [], [])
-
-
-def test_unsuitable_words_name_kept_conflict_dishes():
-    # A dish kept against a conflict carries the conflict words, so "不适合的菜" points at it
-    # and at no other dish.
-    kept = DishFacts("韭菜炒鸡蛋", ["韭菜", "鸡蛋"], list(CONFLICT_WORDS), "vegetable dish")
-    quote = "不适合的菜"
-    assert quote_matches(quote, kept.title, kept.ingredient_names, kept.category_words)
-    other = FACTS[1]
-    assert not quote_matches(quote, other.title, other.ingredient_names, other.category_words)
 
 
 def test_conflict_words_cover_conflicts_kept_and_overrides():

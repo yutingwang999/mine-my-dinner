@@ -60,6 +60,16 @@ WHICH_DISH_ZH = "你指的是哪一道菜？"
 WHICH_DISH_EN = "Which dish did you mean?"
 CHANGE_WISH_UNMET_ZH = "菜谱库里没有完全符合“{wish}”的菜。"
 CHANGE_WISH_UNMET_EN = "Nothing in your library quite fits “{wish}”."
+# A wish whose targets are empty and that guides no other new dish (spec 5.4): nothing changes
+# for it, and the reply says so.
+WISH_MATCHED_NOTHING_ZH = "方案里没有哪道菜需要为“{wish}”换掉，所以没有为它换菜。"
+WISH_MATCHED_NOTHING_EN = "No dish in the plan matched “{wish}”, so nothing was changed for it."
+# A wish whose every target is a dish the user added or kept by hand: those dishes stay.
+WISH_TARGETS_LOCKED_ZH = "“{wish}”说的是你手动加上或留下的菜，这些菜先保留，没有为它换菜。"
+WISH_TARGETS_LOCKED_EN = (
+    "The dishes “{wish}” is about were added or kept by you, so they stay and nothing was "
+    "changed for it."
+)
 # The dishes stay, but the meal's conditions changed (an avoidance taken back, a new time
 # limit no dish breaks): a new version carries them.
 CONDITIONS_ONLY_ZH = "菜不用换，方案已经按新的要求更新。"
@@ -407,13 +417,11 @@ def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[st
             if zh:
                 return f"菜谱库里没有{item['name']}，可以先导入菜谱。"
             return f"{item['name']} is not in your recipe library; you can import it first."
-        if reason == "ambiguous":
+        if reason == "not_done":
+            # The picker gave no usable answer: nothing is known about the library.
             if zh:
-                return f"{item['name']}在菜谱库里对得上不止一道菜，没有加上，告诉我完整的菜名就好。"
-            return (
-                f"{item['name']} matches more than one dish in your library, so it was not "
-                "added; tell me its full title."
-            )
+                return f"这次没能把{item['name']}加进来，可以再试一次。"
+            return f"{item['name']} could not be added this time; you can try again."
         if reason == "over_time_limit" and limit is not None:
             dish = {"title": name, "time_min": item.get("time_min")}
             return over_limit_note([dish], limit, locale)
@@ -486,6 +494,16 @@ def which_dish_question(reading: str, locale: str) -> str:
     if not reading.strip():
         return question
     return reading_sentence(reading, locale) + ("" if is_zh(locale) else " ") + question
+
+
+def wish_matched_nothing(wish: str, locale: str) -> str:
+    template = WISH_MATCHED_NOTHING_ZH if is_zh(locale) else WISH_MATCHED_NOTHING_EN
+    return template.format(wish=wish)
+
+
+def wish_targets_locked(wish: str, locale: str) -> str:
+    template = WISH_TARGETS_LOCKED_ZH if is_zh(locale) else WISH_TARGETS_LOCKED_EN
+    return template.format(wish=wish)
 
 
 def change_wish_unmet(wish: str, locale: str) -> str:

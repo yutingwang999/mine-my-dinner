@@ -1,11 +1,11 @@
 """Pure rules of a change to the current plan (plan 3b-1 spec 5.2, 5.3; plan 3b-2 spec 5.4): no
-model and no database. A quote that points at a dish, the general wish's change-size limit, the
-spec a change starts from, and the conditions a follow-up leaves unstated. The plan 3b-1 revise
+model and no database. The wish's change-size limit, the spec a change starts from, and the
+conditions a follow-up leaves unstated. (The match of a quote against a dish's title or
+ingredients left in plan 3b-2 Task 10b: code checks only that a quote is in the message.) The plan 3b-1 revise
 step's change list (`RevisionProposal`) and its R1-R9 checks are gone (plan 3b-2): the frame
 builds the change in code."""
 
 import math
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from minemydinner.agent.request import COUNT_FIELDS
@@ -15,7 +15,7 @@ from minemydinner.planning.validate import PlanSpec
 
 @dataclass(frozen=True)
 class DishFacts:
-    """What a quote is matched against, built by the caller from the database."""
+    """What the change path knows of a dish, built by the caller from the database."""
 
     title: str
     ingredient_names: list[str]
@@ -24,27 +24,10 @@ class DishFacts:
 
 
 def max_general_changes(unlocked: int) -> int:
-    """How many unlocked dishes a general wish may replace: half, rounded up, at least one."""
+    """How many unlocked dishes a wish may replace: half, rounded up, at least one."""
     if unlocked <= 0:
         return 0
     return max(1, math.ceil(unlocked / 2))
-
-
-def quote_matches(
-    quote: str, title: str, ingredient_names: Iterable[str], category_words: Iterable[str]
-) -> bool:
-    """True when the quote contains two characters in a row of the title, an ingredient name,
-    or a category word, or is one character equal to the title's last character ("面")."""
-    text = quote.casefold()
-    if not text.strip():
-        return False
-    name = title.casefold()
-    if any(name[i : i + 2] in text for i in range(len(name) - 1)):
-        return True
-    if len(text.strip()) == 1 and text.strip() == name[-1:]:
-        return True
-    words = [*ingredient_names, *category_words]
-    return any(word.strip() and word.casefold() in text for word in words)
 
 
 _REPLACED_FIELDS = ("mode", "time_limit_min", "must_use", "prefer_use", "all_use")

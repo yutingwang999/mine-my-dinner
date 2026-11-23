@@ -124,9 +124,13 @@ class FollowUpReading(BaseModel):
             "when the message states none."
         ),
     )
-    wish_general: bool = Field(
-        default=False,
-        description="True when the wish points at no particular dish.",
+    wish_targets: list[int] = Field(
+        default_factory=list,
+        description=(
+            "When the wish is about dishes of the plan rather than a dish this message already "
+            "removes or adds: the ids of the dishes it touches, most touched first. Empty when "
+            "it touches none."
+        ),
     )
     meal_avoid: list[str] = Field(
         default_factory=list,

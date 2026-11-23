@@ -36,7 +36,10 @@ def test_reading_schema_defaults():
     assert reading.kind == "other"
     assert reading.ambiguous is False
     assert reading.remove == [] and reading.add == []
-    assert reading.wish == "" and reading.wish_general is False
+    assert reading.wish == "" and reading.wish_targets == []
+    # Spec 5.2 (amended 2026-11-23): the reader names the dishes a wish touches; there is no
+    # "general wish" flag for code to interpret.
+    assert "wish_general" not in FollowUpReading.model_fields
     assert reading.counts == ReadCounts()
     assert reading.conditions == ReadConditions()
 

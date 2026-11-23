@@ -1,6 +1,6 @@
-"""The frame (plan 3b-2 spec 5.4): pure code decides which dishes keep, drop or become slots,
-and which bounded choices the picker may make. `build_frame` gets hand-built facts; only
-`lookup_named` uses the test database."""
+"""The frame (plan 3b-2 spec 5.4, amended 2026-11-23: code checks, it does not interpret): pure
+code decides which dishes keep, drop or become slots, and which bounded choices the picker may
+make. `build_frame` gets hand-built facts; only `lookup_named` uses the test database."""
 
 from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadCounts, ReadRemoval
 from minemydinner.agent.frame import (
@@ -48,7 +48,6 @@ LIBRARY = {
         status="found", recipe_id=51, title="凉拌黄瓜", blocked=None, dish_type="vegetable dish"
     ),
     "佛跳墙": NamedLookup(status="missing", recipe_id=None, title="佛跳墙", blocked=None),
-    "鸡丁": NamedLookup(status="ambiguous", recipe_id=None, title="鸡丁", blocked=None),
     "酱焖羊蝎子": NamedLookup(
         status="found",
         recipe_id=52,
@@ -98,8 +97,9 @@ def test_named_drop_and_named_replace():
         message="汤不要了，西兰花换一个",
     )
     assert frame.drops == [3]
-    assert frame.slots == [Slot(kind="replace", dish_type="vegetable dish", replaces=2)]
-    assert frame.slots[0].reason == "asked"
+    # A replace slot carries no dish type: the picker chooses what takes the dish's place.
+    assert frame.slots == [Slot(kind="replace", replaces=2, words="西兰花")]
+    assert frame.slots[0].reason == "asked" and frame.slots[0].dish_type is None
     assert frame.keep == [1, 4, 5]
     assert frame.choices == [] and frame.placed == [] and frame.missing == []
     assert frame.empty_plan is False and frame.ignored == []
@@ -124,25 +124,31 @@ def test_a_named_replacement_of_another_type_is_placed():
     assert frame.placed == [51] and frame.drops == [1] and frame.slots == []
 
 
-def test_a_named_dish_missing_ambiguous_or_over_the_time_limit_keeps_the_replaced_dish():
-    for name, reason in (
-        ("佛跳墙", "not_in_library"),
-        ("鸡丁", "ambiguous"),
-        ("酱焖羊蝎子", "over_time_limit"),
-    ):
-        frame = _frame(
-            _change(remove=[_remove(1, "replace", "宫保鸡丁", name)]),
-            message=f"把宫保鸡丁换成{name}",
-        )
-        assert frame.keep == PLAN, name
-        assert frame.drops == [] and frame.slots == [] and frame.placed == []
-        assert [(m.name, m.reason) for m in frame.missing] == [(name, reason)]
-        assert frame.missing[0].detail["replaces"] == 1
+def test_a_name_that_is_no_exact_title_becomes_a_named_slot():
+    # Spec 5.4: only an exact title is placed by code; any other name goes to the picker,
+    # which finds the dish the words mean ("小白菜" may be 清炒小白菜).
+    frame = _frame(
+        _change(remove=[_remove(1, "replace", "宫保鸡丁", "小白菜")]),
+        message="把宫保鸡丁换成小白菜",
+    )
+    assert frame.slots == [Slot(kind="replace", replaces=1, words="宫保鸡丁", named="小白菜")]
+    assert frame.keep == [2, 3, 4, 5]
+    assert frame.drops == [] and frame.placed == [] and frame.missing == []
+
+    added = _frame(_change(add=[ReadAdd(name="佛跳墙")]), message="加个佛跳墙")
+    assert added.slots == [Slot(kind="add", named="佛跳墙")]
+    assert added.missing == [] and added.keep == PLAN
+
+
+def test_an_exact_title_over_the_time_limit_keeps_the_replaced_dish():
     over = _frame(
         _change(remove=[_remove(1, "replace", "宫保鸡丁", "酱焖羊蝎子")]),
         message="把宫保鸡丁换成酱焖羊蝎子",
-    ).missing[0]
-    assert over.detail["recipe_id"] == 52 and over.detail["time_min"] == 75
+    )
+    assert over.keep == PLAN and over.slots == [] and over.drops == []
+    assert [(m.name, m.reason) for m in over.missing] == [("酱焖羊蝎子", "over_time_limit")]
+    detail = over.missing[0].detail
+    assert detail["replaces"] == 1 and detail["recipe_id"] == 52 and detail["time_min"] == 75
 
 
 def test_a_named_dish_already_in_the_plan_is_ignored():
@@ -154,17 +160,26 @@ def test_a_named_dish_already_in_the_plan_is_ignored():
     assert frame.ignored[0]["reason"] == "already_in_plan"
 
 
-def test_a_locked_dish_goes_only_with_a_quote_that_points_at_it():
+def test_a_locked_dish_goes_only_with_a_quote_from_the_message():
     allowed = _frame(
         _change(remove=[_remove(1, "drop", "宫保鸡丁")]), locked={1}, message="宫保鸡丁不要了"
     )
     assert allowed.drops == [1] and allowed.ignored == []
 
-    # The quote is not in the message.
+    # Spec 5.4 (amended): code checks only that the quote is the user's own words from this
+    # message; whether "不适合的菜" points at the dish is the reader's judgment.
+    unfit = _frame(
+        _change(remove=[_remove(1, "replace", "不适合的菜")]),
+        locked={1},
+        message="把不适合的菜换掉",
+    )
+    assert unfit.slots == [Slot(kind="replace", replaces=1, words="不适合的菜")]
+    assert unfit.ignored == []
+
+    # The quote is not in the message, or empty.
     absent = _frame(_change(remove=[_remove(1, "drop", "鸡丁")]), locked={1}, message="不要了")
-    # The quote is in the message but points at another dish.
-    other = _frame(_change(remove=[_remove(1, "drop", "汤")]), locked={1}, message="汤不要了")
-    for frame in (absent, other):
+    empty = _frame(_change(remove=[_remove(1, "drop", " ")]), locked={1}, message="不要了")
+    for frame in (absent, empty):
         assert frame.drops == [] and 1 in frame.keep
         assert frame.ignored == [
             {"id": 1, "reason": "locked_without_quote", "quote": frame.ignored[0]["quote"]}
@@ -177,16 +192,16 @@ def test_a_removal_of_a_dish_not_in_the_plan_is_ignored():
     assert frame.ignored == [{"id": 99, "reason": "not_in_plan"}]
 
 
-def test_dishes_that_break_the_new_request_become_same_type_slots_locked_included():
+def test_dishes_that_break_the_new_request_become_slots_locked_included():
     frame = _frame(
         _change(meal_avoid=["猪肉"]),
         locked={4},
         breaking={4: "meal_avoid", 2: "diner_rule", 3: "time_limit"},
     )
     assert frame.slots == [
-        Slot(kind="replace", dish_type="vegetable dish", replaces=2, reason="breaks_rule"),
-        Slot(kind="replace", dish_type="soup", replaces=3, reason="asked"),
-        Slot(kind="replace", dish_type="meat dish", replaces=4, reason="breaks_rule"),
+        Slot(kind="replace", replaces=2, reason="breaks_rule"),
+        Slot(kind="replace", replaces=3, reason="asked"),
+        Slot(kind="replace", replaces=4, reason="breaks_rule"),
     ]
     assert frame.keep == [1, 5]
 
@@ -205,7 +220,7 @@ def test_a_breaking_dish_also_named_gets_one_entry():
         message="红烧肉换一个",
     )
     assert replaced.slots == [
-        Slot(kind="replace", dish_type="meat dish", replaces=4, reason="breaks_rule")
+        Slot(kind="replace", replaces=4, reason="breaks_rule", words="红烧肉")
     ]
 
     named = _frame(
@@ -215,16 +230,16 @@ def test_a_breaking_dish_also_named_gets_one_entry():
     )
     assert named.placed == [50] and named.drops == [4] and named.slots == []
 
-    # The named dish is not found: the dish still breaks the rule, so it gets its slot.
+    # The name is no exact title: one named slot, which still breaks the rule.
     unfound = _frame(
         _change(remove=[_remove(4, "replace", "红烧肉", "佛跳墙")]),
         breaking={4: "meal_avoid"},
         message="红烧肉换成佛跳墙",
     )
     assert unfound.slots == [
-        Slot(kind="replace", dish_type="meat dish", replaces=4, reason="breaks_rule")
+        Slot(kind="replace", replaces=4, reason="breaks_rule", words="红烧肉", named="佛跳墙")
     ]
-    assert [m.reason for m in unfound.missing] == ["not_in_library"]
+    assert unfound.missing == []
 
 
 def test_a_locked_breaking_dish_named_without_a_quote_still_goes():
@@ -232,23 +247,56 @@ def test_a_locked_breaking_dish_named_without_a_quote_still_goes():
         _change(remove=[_remove(4, "replace", "")]), locked={4}, breaking={4: "diner_rule"}
     )
     assert frame.ignored == []
+    assert frame.slots == [Slot(kind="replace", replaces=4, reason="breaks_rule")]
+
+
+def test_wish_targets_become_replace_slots_within_the_limit():
+    # Spec 5.4: the reader names the dishes a wish touches; code caps them at half of the
+    # unlocked dishes, rounded up, the reader's order deciding which stay. Three targets on
+    # four unlocked dishes: at most two change.
+    frame = _frame(_change(wish="辣一些", wish_targets=[5, 2, 4]), locked={1})
+    assert max_general_changes(4) == 2
     assert frame.slots == [
-        Slot(kind="replace", dish_type="meat dish", replaces=4, reason="breaks_rule")
+        Slot(kind="replace", replaces=5, for_wish=True),
+        Slot(kind="replace", replaces=2, for_wish=True),
+    ]
+    assert frame.choices == [] and frame.keep == [1, 3, 4]
+    assert frame.ignored == [{"wish_target": 4, "reason": "over_limit"}]
+
+
+def test_wish_targets_skip_locked_dishes_unknown_ids_and_dishes_already_changing():
+    frame = _frame(
+        _change(
+            remove=[_remove(2, "replace", "西兰花")],
+            wish="清淡点",
+            wish_targets=[1, 2, 99, 5],
+        ),
+        locked={1},
+        message="西兰花换掉，清淡点",
+    )
+    assert frame.slots == [
+        Slot(kind="replace", replaces=2, words="西兰花"),
+        Slot(kind="replace", replaces=5, for_wish=True),
+    ]
+    assert frame.ignored == [
+        {"wish_target": 1, "reason": "locked"},
+        {"wish_target": 99, "reason": "not_in_plan"},
     ]
 
 
-def test_a_general_wish_gives_one_choice_over_the_unlocked_dishes():
-    frame = _frame(_change(wish="辣一些", wish_general=True), locked={1})
-    assert max_general_changes(4) == 2
+def test_a_wish_without_targets_changes_nothing():
+    frame = _frame(_change(wish="辣一些", wish_targets=[]))
+    assert frame.slots == [] and frame.choices == [] and frame.keep == PLAN
+
+
+def test_a_general_wish_choice_is_kept_only_for_an_old_kept_card():
+    # A kept card saved before cards kept their unfinished parts: the picker may replace up
+    # to half of the unlocked dishes for its wish, inside a limit code set.
+    frame = _frame(_change(wish="辣一些"), locked={1}, wish_choice=True)
     assert frame.choices == [
         Choice(dish_type=None, candidates=[2, 3, 4, 5], up_to=2, mode="replace")
     ]
     assert frame.keep == PLAN and frame.slots == []
-
-
-def test_a_wish_that_points_at_a_dish_gives_no_choice():
-    frame = _frame(_change(wish="辣一些", wish_general=False))
-    assert frame.choices == []
 
 
 def test_a_stated_lower_count_gives_a_drop_choice_of_exactly_the_difference():
@@ -259,6 +307,8 @@ def test_a_stated_lower_count_gives_a_drop_choice_of_exactly_the_difference():
     )
     assert frame.choices == [Choice(dish_type="soup", candidates=[3, 6], up_to=1, mode="drop")]
     assert frame.drops == []
+    # Stated counts are invariants: the frame records them so code checks the result.
+    assert frame.count_ranges == {"soups": [1, 1]}
 
     # One soup is locked: only the other can go, so code drops it and nothing is left to choose.
     locked = _frame(
@@ -295,6 +345,15 @@ def test_a_stated_higher_count_adds_slots():
     assert frame.slots == [Slot(kind="add", dish_type="soup", for_count=True)]
 
 
+def test_stated_side_counts_are_recorded_as_ranges():
+    frame = _frame(
+        _change(counts=ReadCounts(dishes=4, meat_dishes=2)),
+        spec=_spec(dishes=4, meat_dishes=2, vegetable_dishes=None, vegetable_bound=None),
+    )
+    assert frame.count_ranges == {"dishes": [4, 4], "meat_dishes": [2, 2]}
+    assert _frame(_change()).count_ranges == {}
+
+
 def test_a_replace_into_another_type_by_counts():
     # "把汤换成一个素菜": the soup goes and a vegetable dish comes.
     frame = _frame(
@@ -320,11 +379,10 @@ def test_adds_by_type_and_by_name():
         ),
         message="加个汤，再加凉拌黄瓜和佛跳墙",
     )
-    assert frame.slots == [Slot(kind="add", dish_type="soup")]
+    # The exact title is placed; the name that is no title is a named slot for the picker.
+    assert frame.slots == [Slot(kind="add", dish_type="soup"), Slot(kind="add", named="佛跳墙")]
     assert frame.placed == [51]
-    assert [(m.name, m.reason, m.detail["replaces"]) for m in frame.missing] == [
-        ("佛跳墙", "not_in_library", None)
-    ]
+    assert frame.missing == []
     assert frame.keep == PLAN
 
 
@@ -379,7 +437,7 @@ def test_a_button_builds_the_frame_from_the_specs_alone():
         breaking={3: "time_limit"},
     )
     assert fewer.choices == [Choice(dish_type=None, candidates=[1, 2, 4, 5], up_to=1, mode="drop")]
-    assert fewer.slots == [Slot(kind="replace", dish_type="soup", replaces=3)]
+    assert fewer.slots == [Slot(kind="replace", replaces=3)]
 
 
 def test_breaking_from_validation():
@@ -407,29 +465,19 @@ def test_breaking_from_validation():
 SHOPPING = {"mode": "shopping"}
 
 
-def test_lookup_one_character_off_is_matched_and_two_matches_are_ambiguous(session, seeded):
+def test_lookup_finds_only_an_exact_title(session, seeded):
     ctx = ctx_for(session)
     found = make_recipe(session, "宫保鸡丁", "meat dish", [L("鸡肉")])
-    result = lookup_named(session, "宫爆鸡丁", SHOPPING, ctx=ctx)
-    assert result.status == "found" and result.recipe_id == found.id
-    assert result.title == "宫保鸡丁" and result.blocked is None
-    assert result.dish_type == "meat dish" and "鸡肉" in result.ingredient_names
-
     exact = lookup_named(session, " 宫保鸡丁 ", SHOPPING, ctx=ctx)
     assert exact.status == "found" and exact.recipe_id == found.id
+    assert exact.title == "宫保鸡丁" and exact.blocked is None
+    assert exact.dish_type == "meat dish" and "鸡肉" in exact.ingredient_names
 
-    make_recipe(session, "宫保鸭丁", "meat dish", [L("鸡肉")])
-    # One character off from both titles: not placed.
-    ambiguous = lookup_named(session, "宫保鹅丁", SHOPPING, ctx=ctx)
-    assert ambiguous.status == "ambiguous" and ambiguous.recipe_id is None
-    # An exact title still wins over a near one.
-    assert lookup_named(session, "宫保鸡丁", SHOPPING, ctx=ctx).recipe_id == found.id
-
+    # Spec 5.4 (amended): a name one character off, or a part of a title, is the picker's to
+    # judge; code finds only the exact title.
+    assert lookup_named(session, "宫爆鸡丁", SHOPPING, ctx=ctx).status == "missing"
+    assert lookup_named(session, "鸡丁", SHOPPING, ctx=ctx).status == "missing"
     assert lookup_named(session, "佛跳墙", SHOPPING, ctx=ctx).status == "missing"
-    # Two characters off, or a short name one character off, is no match.
-    assert lookup_named(session, "宫爆鸭块", SHOPPING, ctx=ctx).status == "missing"
-    make_recipe(session, "鸡汤", "soup", [L("鸡肉")])
-    assert lookup_named(session, "鱼汤", SHOPPING, ctx=ctx).status == "missing"
 
 
 def test_lookup_blocked_by_a_hard_condition(session, seeded):
@@ -472,7 +520,7 @@ def test_a_locked_dish_is_never_moved_by_stock_cookware_or_the_time_limit():
 
     # An unlocked dish that breaks the time limit is still replaced.
     unlocked = _frame(_change(), breaking={4: "time_limit"})
-    assert unlocked.slots == [Slot(kind="replace", dish_type="meat dish", replaces=4)]
+    assert unlocked.slots == [Slot(kind="replace", replaces=4)]
 
 
 def test_only_the_stated_counts_bind_and_the_rest_follows_the_change_list():

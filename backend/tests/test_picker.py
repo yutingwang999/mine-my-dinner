@@ -62,7 +62,8 @@ def _answer(slots=(), choices=(), **over) -> PickerAnswer:
     )
 
 
-REPLACE_VEG = Slot(kind="replace", dish_type="vegetable dish", replaces=2)
+# A replace slot has no dish type (spec 5.4, amended 2026-11-23); an add keeps the reading's.
+REPLACE_VEG = Slot(kind="replace", replaces=2, words="西兰花")
 ADD_SOUP = Slot(kind="add", dish_type="soup")
 
 
@@ -90,7 +91,7 @@ def test_an_unfilled_replace_keeps_the_dish():
 
 
 def test_an_unfilled_breaks_rule_slot_removes_the_dish():
-    slot = Slot(kind="replace", dish_type="meat dish", replaces=4, reason="breaks_rule")
+    slot = Slot(kind="replace", replaces=4, reason="breaks_rule")
     outcome = apply_picks(PLAN, _frame(slots=[slot]), _answer([(0, None)]), FACTS)
     assert outcome.problems == []
     assert outcome.recipe_ids == [1, 2, 3, 5]
@@ -123,14 +124,14 @@ def test_a_drop_choice_drops_exactly_the_chosen_dishes():
     assert outcome.recipe_ids == [1, 2, 3, 5]
 
 
-def test_a_replace_choice_makes_slots_of_the_chosen_dishes_types():
+def test_a_replace_choice_makes_a_slot_in_place_of_each_chosen_dish():
     choice = Choice(dish_type=None, candidates=[1, 2, 4, 5], up_to=2, mode="replace")
     frame = _frame(slots=[ADD_SOUP], choices=[choice])
     answer = _answer([(0, 62), (1, 61), (2, 63)], choices=[(0, [4, 5])])
-    assert choice_slots(frame, answer, FACTS) == [
+    assert choice_slots(frame, answer) == [
         ADD_SOUP,
-        Slot(kind="replace", dish_type="meat dish", replaces=4),
-        Slot(kind="replace", dish_type="vegetable dish", replaces=5),
+        Slot(kind="replace", replaces=4),
+        Slot(kind="replace", replaces=5),
     ]
     outcome = apply_picks(PLAN, frame, answer, FACTS)
     assert outcome.problems == []
@@ -143,7 +144,7 @@ def test_an_unfilled_choice_slot_keeps_the_chosen_dish():
     outcome = apply_picks(PLAN, _frame(choices=[choice]), answer, FACTS)
     assert outcome.problems == []
     assert outcome.recipe_ids == PLAN
-    assert outcome.unfilled == [Slot(kind="replace", dish_type="meat dish", replaces=1)]
+    assert outcome.unfilled == [Slot(kind="replace", replaces=1)]
 
 
 # Problems: an answer with any problem is never applied (Review Focus 4).
@@ -168,8 +169,38 @@ def test_a_slot_filled_with_a_dish_already_in_the_plan_is_a_problem():
     _rejected(frame, _answer([(0, 50)]), "already in the plan")
 
 
-def test_a_slot_filled_with_a_dish_of_the_wrong_type_is_a_problem():
-    _rejected(_frame(slots=[REPLACE_VEG]), _answer([(0, 61)]), "meat dish", "vegetable dish")
+def test_a_replace_slot_takes_a_dish_of_any_type():
+    # "不想吃肉" may take a vegetable dish in a meat dish's place: the picker chooses the kind.
+    meat = Slot(kind="replace", replaces=4, reason="breaks_rule")
+    outcome = apply_picks(PLAN, _frame(slots=[meat]), _answer([(0, 63)]), FACTS)
+    assert outcome.problems == [] and outcome.recipe_ids == [1, 2, 3, 63, 5]
+    outcome = apply_picks(PLAN, _frame(slots=[REPLACE_VEG]), _answer([(0, 61)]), FACTS)
+    assert outcome.problems == [] and outcome.recipe_ids == [1, 61, 3, 4, 5]
+
+
+def test_an_add_slot_filled_with_a_dish_of_another_type_is_a_problem():
+    _rejected(_frame(slots=[ADD_SOUP]), _answer([(0, 61)]), "soup", "meat dish")
+
+
+def test_stated_counts_still_bind_an_any_type_pick():
+    # Two meat and two vegetable dishes stated: a meat dish in a vegetable dish's place
+    # breaks them, and code says so; a vegetable dish keeps them.
+    stated = {"dishes": [4, 4], "meat_dishes": [2, 2], "vegetable_dishes": [2, 2]}
+    frame = _frame(slots=[REPLACE_VEG], count_ranges=stated)
+    _rejected(frame, _answer([(0, 61)]), "2 vegetable dishes", "stated")
+    assert apply_picks(PLAN, frame, _answer([(0, 63)]), FACTS).problems == []
+    # Nothing fits is an answer, not a count problem: the replaced dish stays.
+    assert apply_picks(PLAN, frame, _answer([(0, None)]), FACTS).problems == []
+    # A category the user did not state is free.
+    free = _frame(slots=[REPLACE_VEG], count_ranges={"soups": [1, 1]})
+    assert apply_picks(PLAN, free, _answer([(0, 61)]), FACTS).problems == []
+
+
+def test_a_count_the_frame_could_not_meet_is_never_the_pickers_problem():
+    # The plan already has 2 meat dishes against a stated 1 (a locked dish kept it): only a
+    # pick that moves a count away from what the frame planned is a problem.
+    frame = _frame(slots=[REPLACE_VEG], count_ranges={"meat_dishes": [1, 1]})
+    assert apply_picks(PLAN, frame, _answer([(0, 63)]), FACTS).problems == []
 
 
 def test_a_slot_filled_with_an_unknown_dish_is_a_problem():
@@ -247,7 +278,7 @@ def test_picker_messages_show_slot_types_and_limits():
         "Current plan:",
         "Diner 1: no peanuts",
         "想吃点清淡的",
-        "Slot 0: a vegetable dish in place of 2",
+        '- Slot 0: in place of 2; the user\'s words: "西兰花"',
         "Slot 1: a soup, added",
         "Choice 0: drop exactly 1 of 1, 4 (meat dish)",
         "Choice 1: replace 1 to 2 of 1, 4, 5 (any type)",
@@ -263,7 +294,31 @@ def test_picker_messages_without_a_wish_or_choices():
     text = picker_messages(_frame(slots=[ADD_SOUP]), "P", "R", "", "S", "en")[0].content
     assert "The user's wish: none" in text
     assert "Choice" not in text and "numbered from" not in text
-    assert "Meal conditions" not in text
+    assert "Meal conditions" not in text and "Stated counts" not in text
+
+
+def test_picker_messages_show_named_and_wish_slots_and_the_stated_counts():
+    frame = _frame(
+        slots=[
+            Slot(kind="replace", replaces=2, words="西兰花", named="小白菜"),
+            Slot(kind="add", named="佛跳墙"),
+            Slot(kind="replace", replaces=4, for_wish=True),
+        ],
+        count_ranges={"dishes": [4, 4], "meat_dishes": [1, 2]},
+    )
+    text = picker_messages(frame, "P", "R", "清淡点", "S", "zh")[0].content
+    assert (
+        '- Slot 0: in place of 2; the user\'s words: "西兰花"; the user named "小白菜": '
+        "the library dish these words mean, or null when none is"
+    ) in text
+    assert (
+        '- Slot 1: added; the user named "佛跳墙": the library dish these words mean, or null '
+        "when none is"
+    ) in text
+    assert "- Slot 2: in place of 4, for the wish" in text
+    assert (
+        "Stated counts (code checks the result): dishes: exactly 4; meat dishes: 1 to 2"
+    ) in text
 
 
 # A must-use ingredient no dish uses (spec 5.4): a replace choice made for it.
@@ -284,7 +339,7 @@ def test_picker_messages_name_the_must_use_ingredient_and_the_conditions():
     )[0].content
     assert (
         "- Choice 0: replace 1 to 1 of 1, 2, 4, 5 (any type); each dish you choose becomes a "
-        "new slot of its own dish type; the new dish must use 豆腐, which no dish uses yet"
+        "new slot in its place; the new dish must use 豆腐, which no dish uses yet"
     ) in text
     assert (
         "Meal conditions: fridge only (new dishes use what is at home); time limit: 30 "
@@ -299,7 +354,7 @@ def test_picker_messages_name_the_must_use_ingredient_and_the_conditions():
 
 def test_a_choice_slot_carries_the_must_use_ingredient():
     answer = _answer([(0, 61)], choices=[(0, [4])])
-    [slot] = choice_slots(_frame(choices=[MUST_TOFU]), answer, FACTS)
+    [slot] = choice_slots(_frame(choices=[MUST_TOFU]), answer)
     assert slot.replaces == 4 and slot.must_use == ["豆腐"]
 
 

@@ -23,7 +23,6 @@ from minemydinner.agent.revise_step import (
     wish_unmet_actions,
     wish_unmet_entries,
 )
-from minemydinner.agent.revision import DishFacts
 from minemydinner.planning.composition import count_categories
 from minemydinner.planning.validate import PlanSpec
 
@@ -58,7 +57,7 @@ def button_reading(unfinished: dict | None, request: dict, spec: PlanSpec) -> Fo
         remove=data.get("remove") or [],
         add=data.get("add") or [],
         wish=data.get("wish") or "",
-        wish_general=bool(data.get("wish_general")),
+        wish_targets=data.get("wish_targets") or [],
         counts=ReadCounts(**counts),
     )
 
@@ -128,14 +127,14 @@ def without_picks(
     return answer.model_copy(update={"slots": slots})
 
 
-def slot_results(frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]) -> list[dict]:
+def slot_results(frame: Frame, answer: PickerAnswer) -> list[dict]:
     """Every slot (the frame's, then those the replace choices made) with the dish that fills
     it (`recipe_id`, None when nothing fits) and the picker's reason."""
     answers: dict[int, SlotAnswer] = {}
     for item in answer.slots:
         answers.setdefault(item.index, item)
     results = []
-    for index, slot in enumerate(choice_slots(frame, answer, facts)):
+    for index, slot in enumerate(choice_slots(frame, answer)):
         item = answers.get(index)
         results.append(
             {
@@ -154,7 +153,11 @@ def unfinished_items(
     breaking: dict[int, str],
     must_missed: Collection[str] | None = None,
 ) -> list[dict]:
-    """What a change could not do, in order: named dishes not placed ("missing"), then the
+    """What a change could not do, in order: named dishes not placed ("missing": an exact
+    title hidden by a hard condition, then a named slot nothing filled: "not in the library"
+    only when the picker itself answered null (`picker_null`), the real reason when the
+    picker's dish was hidden (`hidden`), else "not_done": the picker gave no usable answer,
+    so nothing is said about the library), then the
     slots nothing filled: a dish that breaks a rule is removed ("removed"), any other keeps
     its dish or adds nothing ("unfilled"; `must_use` names the must-use ingredient the slot
     was for), then a must-use choice that made no slot. `why` is why a replaced dish had to
@@ -184,7 +187,30 @@ def unfinished_items(
             }
         )
     for slot in slots:
-        if slot["recipe_id"] is not None:
+        if slot["recipe_id"] is not None or not slot.get("named"):
+            continue
+        # A named slot nothing filled: the dish the user named is not placed. Its replaced
+        # dish stays, or leaves when it breaks a rule (said as "removed" by the caller).
+        hidden = slot.get("hidden") or {}
+        blocked = hidden.get("blocked")
+        if blocked is None:
+            reason = "not_in_library" if slot.get("picker_null") else "not_done"
+        else:
+            reason = "over_time_limit" if blocked == "time_limit" else "breaks_rule"
+        items.append(
+            {
+                "kind": "missing",
+                "name": slot["named"],
+                "reason": reason,
+                "recipe_id": hidden.get("recipe_id"),
+                "title": hidden.get("title"),
+                "blocked": blocked,
+                "time_min": hidden.get("time_min"),
+                "replaces": slot["replaces"],
+            }
+        )
+    for slot in slots:
+        if slot["recipe_id"] is not None or slot.get("named"):
             continue
         replaces = slot["replaces"]
         must = list(slot.get("must_use") or [])
@@ -200,7 +226,7 @@ def unfinished_items(
             {
                 "kind": "unfilled",
                 "recipe_id": replaces,
-                "dish_type": slot["dish_type"],
+                "dish_type": slot["dish_type"] or "",
                 "title": titles.get(replaces) if replaces is not None else None,
                 "why": why,
                 # An add for a stated count: the reply says the count could not be met.
@@ -296,10 +322,11 @@ def unfinished_reading(
 ) -> dict | None:
     """The parts of a reading a button should re-run (as a FollowUpReading dump), or None: the
     removals whose dish is still in the result (a named replacement not placed, a slot
-    nothing filled), the named adds not placed, the typed adds no dish filled, and the wish
-    when it was not met or its general choice changed nothing. A removal code refused (a
-    locked dish without a quote) is not re-run."""
-    refused = {item.get("id") for item in frame.ignored}
+    nothing filled), the named adds not placed, the typed adds no dish filled, and the wish's
+    targets still to change: a target nothing replaced, and when the wish was not met the
+    dish that took a target's place (an old card's wish choice counts as targets). A removal
+    code refused (a locked dish without a quote) is not re-run."""
+    refused = {item.get("id") for item in frame.ignored if "id" in item}
     left = set(result_ids)
     remove = [
         r.model_dump() for r in reading.remove if r.id in left and r.id not in refused
@@ -307,21 +334,33 @@ def unfinished_reading(
     add = [ReadAdd(name=m.name).model_dump() for m in frame.missing if m.detail.get("replaces") is None]
     unfilled_adds: dict[str, int] = {}
     for slot in slots:
-        if slot["kind"] == "add" and slot["recipe_id"] is None:
+        if slot["kind"] != "add" or slot["recipe_id"] is not None:
+            continue
+        if slot.get("named"):
+            add.append(ReadAdd(name=slot["named"]).model_dump())
+        else:
             unfilled_adds[slot["dish_type"]] = unfilled_adds.get(slot["dish_type"], 0) + 1
     add += [ReadAdd(dish_type=t, count=n).model_dump() for t, n in unfilled_adds.items()]
-    general = reading.wish_general and bool(reading.wish.strip())
-    chose = any(c.mode == "replace" for c in frame.choices) and any(
-        s["recipe_id"] is not None for s in slots[len(frame.slots) :]
-    )
-    general_left = general and (wish_met is False or not chose)
-    if not (remove or add or general_left):
+    wished = [
+        s
+        for i, s in enumerate(slots)
+        if s.get("for_wish") or (i >= len(frame.slots) and not s.get("must_use"))
+    ]
+    targets: list[int] = []
+    if reading.wish.strip():
+        for slot in wished:
+            if slot["recipe_id"] is None:
+                targets.append(slot["replaces"])
+            elif wish_met is False:
+                targets.append(slot["recipe_id"])
+    targets = [i for i in dict.fromkeys(targets) if i in left]
+    if not (remove or add or targets):
         return None
     return {
         "remove": remove,
         "add": add,
         "wish": reading.wish,
-        "wish_general": general_left,
+        "wish_targets": targets,
     }
 
 

@@ -1,10 +1,15 @@
 """The frame of a change (plan 3b-2 spec 5.4): pure code decides, from a follow-up reading (or a
 button's request) and the current plan, which dishes keep, drop or become slots to fill, and
-which bounded choices the picker may make. The old revise step's after-the-fact rules become
-this code: a locked dish goes only with a quote that points at it, or because it breaks a rule
-(R2, R3); a replacement has the replaced dish's type unless the user named it or the counts say
-otherwise (R7); a general wish changes at most half of the unlocked dishes (R4); a change that
-leaves no dish is flagged (R9).
+which bounded choices the picker may make.
+
+Code checks, it does not interpret (spec 5.4, amended 2026-11-23): whatever needs reading
+language is a model's judgment, and code holds only the invariants. A locked dish goes only
+with a quote that is the user's own words from this message, or because it breaks a rule; a
+replace slot carries no dish type (the picker chooses the kind of dish; stated counts are
+checked on the result); the dishes a wish touches are the reader's `wish_targets`, capped at
+half of the unlocked dishes; a named dish is placed by code only when it equals a library
+title, and otherwise the picker finds the dish the words mean; a change that leaves no dish
+is flagged.
 
 `build_frame` needs no database: the caller passes the dish facts, the dishes that break the new
 request (`breaking_from` over `validate_plan`) and a lookup for named dishes (`lookup_named`)."""
@@ -17,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from minemydinner.agent.follow_up import FollowUpReading
-from minemydinner.agent.revision import DishFacts, max_general_changes, quote_matches
+from minemydinner.agent.revision import DishFacts, max_general_changes
 from minemydinner.models import Recipe
 from minemydinner.planning.composition import (
     CATEGORY_OF_DISH_TYPE,
@@ -37,17 +42,16 @@ from minemydinner.planning.validate import PlanSpec, ValidationResult
 RULE_BREAKS = ("diner_rule", "meal_avoid")
 BREAK_REASONS = (*RULE_BREAKS, "time_limit", "cookware", "stock")
 _BREAK_OF_CODE = {"H1": "stock", "H3": "cookware", "H6": "time_limit"}
-# A named dish's title may differ from the name by one character only when the name is at least
-# this long: "鱼汤" must never become "鸡汤".
-NEAR_MATCH_MIN_LENGTH = 4
 _EXACT_CATEGORIES = ("soups", "staples", "desserts", "snacks")
 
 
 class Slot(BaseModel):
-    """A new dish the picker must choose: in place of `replaces`, or added."""
+    """A new dish the picker must choose: in place of `replaces`, or added. A replace slot has
+    no dish type (the picker chooses the kind of dish); an add keeps the type the reading gave
+    it, or none for a named dish."""
 
     kind: Literal["replace", "add"]
-    dish_type: str
+    dish_type: str | None = None
     replaces: int | None = None
     # "breaks_rule": the replaced dish breaks a diner rule or a one-meal avoidance, so it is
     # removed even when no dish fills the slot (spec 5.5). Every other slot is "asked".
@@ -57,13 +61,20 @@ class Slot(BaseModel):
     for_count: bool = False
     # The must-use ingredients the new dish is for: a slot made by a must-use choice.
     must_use: list[str] = Field(default_factory=list)
+    # The user's words that point at the replaced dish (the reading's quote).
+    words: str = ""
+    # A dish the user named that is no library title, in the user's words: the picker finds
+    # the library dish the words mean, or answers that nothing fits ("not in the library").
+    named: str = ""
+    # A dish the wish touches (the reading's `wish_targets`).
+    for_wish: bool = False
 
 
 class Choice(BaseModel):
     """Which unlocked dishes go, chosen by the picker inside a limit code set. `mode` "replace":
-    up to `up_to` of `candidates` are replaced by dishes of their own type (a general wish, a
-    must-use ingredient). `mode` "drop": exactly `up_to` of `candidates` are dropped (a lower
-    count). `dish_type` None: the candidates are of more than one type."""
+    up to `up_to` of `candidates` are replaced, each by a new slot in its place (a must-use
+    ingredient, or an old kept card's wish). `mode` "drop": exactly `up_to` of `candidates` are
+    dropped (a lower count). `dish_type` None: the candidates are of more than one type."""
 
     dish_type: str | None
     candidates: list[int]
@@ -80,7 +91,7 @@ class Missing(BaseModel):
     `time_min`."""
 
     name: str
-    reason: Literal["not_in_library", "ambiguous", "over_time_limit", "breaks_rule"]
+    reason: Literal["not_in_library", "over_time_limit", "breaks_rule"]
     detail: dict = Field(default_factory=dict)
 
 
@@ -88,7 +99,7 @@ class NamedLookup(BaseModel):
     """A named dish looked up in the library. `blocked` names the hard condition that hides a
     found dish (one of `BREAK_REASONS`), or None when it can be placed."""
 
-    status: Literal["found", "missing", "ambiguous"]
+    status: Literal["found", "missing"]
     recipe_id: int | None
     title: str
     blocked: str | None
@@ -115,6 +126,9 @@ class Frame(BaseModel):
     ignored: list[dict]
     # The drops made to meet a stated count (among `drops`); every drop choice is one too.
     count_drops: list[int] = Field(default_factory=list)
+    # The counts this message (or a button) states, as [low, high] per count field ("dishes",
+    # "meat_dishes", "soups", ...): invariants code checks the picker's result against.
+    count_ranges: dict[str, list[int]] = Field(default_factory=dict)
 
 
 def _break_rank(reason: str) -> int:
@@ -150,17 +164,11 @@ def fold(text: str) -> str:
 _fold = fold
 
 
-def _one_off(title: str, name: str) -> bool:
-    """Same length and exactly one character differs ("宫爆鸡丁" for "宫保鸡丁")."""
-    if len(title) != len(name) or len(name) < NEAR_MATCH_MIN_LENGTH:
-        return False
-    return sum(a != b for a, b in zip(title, name)) == 1
-
-
-def _blocked(session: Session, recipe: Recipe, request: dict, ctx: PlanningContext) -> str | None:
+def hidden_by(session: Session, recipe: Recipe, request: dict, ctx: PlanningContext) -> str | None:
     """The first hard condition that hides the recipe: a diner rule or one-meal avoidance, the
     time limit (the rule of `over_time_limit` and H6: a stated or user-given time over it),
-    cookware, or stock in fridge-only mode."""
+    cookware, or stock in fridge-only mode. Also used on a dish the picker found for a named
+    slot, so a dish the user named gets the real reason, never "not in the library"."""
     check = check_recipes(session, ctx.rules, [recipe.id])
     if check.hard or check.blocked_by_unknown(recipe.id):
         keys = {c.diner_key for c in check.hard}
@@ -185,9 +193,9 @@ def _blocked(session: Session, recipe: Recipe, request: dict, ctx: PlanningConte
 def lookup_named(
     session: Session, name: str, request: dict, *, ctx: PlanningContext
 ) -> NamedLookup:
-    """A dish the user named, in the library: the exact title (case and spaces ignored), else a
-    title one character off the name (unique title only; two titles make it ambiguous). A
-    found dish carries the hard condition that hides it (`_blocked`). `request` gives the new
+    """A dish the user named, in the library: the exact title only (case and spaces ignored).
+    Any other name is the picker's to judge (spec 5.4): code never guesses a near title. A
+    found dish carries the hard condition that hides it (`hidden_by`). `request` gives the new
     request's `mode` and `time_limit_min` (a spec's dump works too; no mode reads as
     fridge-only, the default); `ctx` must hold the new request's diner and meal rules."""
     key = _fold(name)
@@ -196,17 +204,13 @@ def lookup_named(
     rows = session.execute(select(Recipe.id, Recipe.title).order_by(Recipe.id)).all()
     matches = [(i, t) for i, t in rows if _fold(t) == key]
     if not matches:
-        matches = [(i, t) for i, t in rows if _one_off(_fold(t), key)]
-        if len({_fold(t) for _, t in matches}) > 1:
-            return NamedLookup(status="ambiguous", recipe_id=None, title=name, blocked=None)
-    if not matches:
         return NamedLookup(status="missing", recipe_id=None, title=name, blocked=None)
     recipe = session.get(Recipe, matches[0][0])
     return NamedLookup(
         status="found",
         recipe_id=recipe.id,
         title=recipe.title,
-        blocked=_blocked(session, recipe, request, ctx),
+        blocked=hidden_by(session, recipe, request, ctx),
         dish_type=recipe.dish_type,
         time_min=recipe.time_min,
         ingredient_names=_line_names(recipe),
@@ -249,10 +253,20 @@ class _Builder:
         self.missing: list[Missing] = []
         self.ignored: list[dict] = []
         self.count_drops: list[int] = []
+        self.count_ranges: dict[str, list[int]] = {}
 
     def type_of(self, dish_id: int) -> str:
         facts = self.facts.get(dish_id)
         return facts.dish_type if facts else ""
+
+    def planned_type(self, slot: Slot) -> str:
+        """The type a slot counts as while code meets the counts: an add's own type, a replace
+        slot the replaced dish's (a replace keeps the plan's size and, until the picker
+        chooses, its balance). The picker may choose another kind; stated counts are then
+        checked on its result (`picker.apply_picks`)."""
+        if slot.dish_type:
+            return slot.dish_type
+        return self.type_of(slot.replaces) if slot.replaces is not None else ""
 
     def kept(self) -> list[int]:
         return [i for i in self.plan_ids if i not in self.handled]
@@ -261,29 +275,33 @@ class _Builder:
         self.handled.add(dish_id)
         self.drops.append(dish_id)
 
-    def replace(self, dish_id: int, reason: str) -> None:
+    def replace(
+        self, dish_id: int, reason: str, *, words: str = "", named: str = "", for_wish: bool = False
+    ) -> None:
         self.handled.add(dish_id)
         self.slots.append(
             Slot(
                 kind="replace",
-                dish_type=self.type_of(dish_id),
                 replaces=dish_id,
                 reason="breaks_rule" if reason in RULE_BREAKS else "asked",
+                words=words,
+                named=named,
+                for_wish=for_wish,
             )
         )
 
-    def place(self, name: str, lookup: NamedLookup, replaces: int | None) -> bool:
-        """Place a named dish when it is found and usable; else record why not."""
+    def place(self, name: str, lookup: NamedLookup, replaces: int | None) -> str:
+        """Place a named dish that equals a library title and is usable ("placed"). A name that
+        is no title is "not_found": the caller makes a named slot for the picker. A title
+        already in the plan, or hidden by a hard condition, is recorded and "refused"."""
         detail: dict = {"replaces": replaces}
         if lookup.status != "found" or lookup.recipe_id is None:
-            reason = "ambiguous" if lookup.status == "ambiguous" else "not_in_library"
-            self.missing.append(Missing(name=name, reason=reason, detail=detail))
-            return False
+            return "not_found"
         if lookup.recipe_id in self.plan_ids or lookup.recipe_id in self.placed:
             self.ignored.append(
                 {"name": name, "recipe_id": lookup.recipe_id, "reason": "already_in_plan"}
             )
-            return False
+            return "refused"
         if lookup.blocked is not None:
             detail.update(
                 recipe_id=lookup.recipe_id,
@@ -293,11 +311,11 @@ class _Builder:
             )
             reason = "over_time_limit" if lookup.blocked == "time_limit" else "breaks_rule"
             self.missing.append(Missing(name=name, reason=reason, detail=detail))
-            return False
+            return "refused"
         self.placed.append(lookup.recipe_id)
         self.placed_types.append(lookup.dish_type)
         self.placed_names.append(list(lookup.ingredient_names))
-        return True
+        return "placed"
 
     def candidates(self, dish_types: Iterable[str]) -> list[int]:
         """Kept unlocked dishes of these types: what a choice may touch."""
@@ -308,16 +326,21 @@ class _Builder:
         """The dish types of the plan after the decided changes (choices not applied)."""
         return [
             *(self.type_of(i) for i in self.kept()),
-            *(s.dish_type for s in self.slots),
+            *(self.planned_type(s) for s in self.slots),
             *self.placed_types,
         ]
 
     def remove_count(self, dish_types: tuple[str, ...], count: int) -> None:
         """Take `count` dishes of these types out to meet a stated count: first new dishes not
         yet chosen (add slots, then replace slots, whose dish then simply drops), then a drop
-        of unlocked dishes; code drops them itself when there is nothing to choose."""
+        of unlocked dishes; code drops them itself when there is nothing to choose. A named
+        slot is never taken: the user asked for that dish."""
         for kind in ("add", "replace"):
-            for slot in [s for s in self.slots if s.kind == kind and s.dish_type in dish_types]:
+            for slot in [
+                s
+                for s in self.slots
+                if s.kind == kind and not s.named and self.planned_type(s) in dish_types
+            ]:
                 if count == 0:
                     return
                 self.slots.remove(slot)
@@ -390,6 +413,7 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
         if not binds(category):
             continue
         dish_type = DISH_TYPE_OF_CATEGORY[category]
+        builder.count_ranges[category] = [getattr(spec, category)] * 2
         gap = present[category] - getattr(spec, category)
         if gap > 0:
             builder.remove_count((dish_type,), gap)
@@ -408,6 +432,10 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
         for side in ("meat_dishes", "vegetable_dishes")
     }
     ranges = ranges_for(total, *named["meat_dishes"], *named["vegetable_dishes"])
+    if binds("dishes"):
+        builder.count_ranges["dishes"] = [total, total]
+    for side in sides:
+        builder.count_ranges[side] = list(ranges[side])
     drop_m, drop_v, either, add_m, add_v = _side_changes(present, total, ranges)
     if drop_m:
         builder.remove_count((meat_type,), drop_m)
@@ -419,12 +447,11 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
     builder.add_count(veg_type, add_v, for_count=True)
 
 
-def _locked_quote_ok(facts: DishFacts | None, quote: str, message: str) -> bool:
-    """Today's quote rule for a locked dish (R1, R2): the quote is in the message and names
-    the dish by its title, an ingredient or its category word."""
-    if facts is None or not quote.strip() or quote not in message:
-        return False
-    return quote_matches(quote, facts.title, facts.ingredient_names, facts.category_words)
+def _locked_quote_ok(quote: str, message: str) -> bool:
+    """A locked dish the reading removes (spec 5.4): the quote must be the user's own words
+    from this message. Whether the words point at the dish is the reader's judgment, not a
+    string match against the dish's title or ingredients."""
+    return bool(quote.strip()) and quote in message
 
 
 def build_frame(
@@ -439,18 +466,22 @@ def build_frame(
     message: str,
     *,
     uncovered_must: list[str] | None = None,
+    wish_choice: bool = False,
 ) -> Frame:
     """The frame of a change (spec 5.4). `reading` is None on a button turn: the frame then
     comes from the specs alone. `spec_before` is the plan's spec (its `must_use` tells which
     must-use names are new); `spec_after` the new request's spec. `breaking` maps a plan dish
     to why it breaks the new request (`breaking_from`). `uncovered_must`, when given, is the
     must-use names no dish covers by validation's own rule; otherwise code matches the new
-    must-use names against the dishes' ingredient names.
+    must-use names against the dishes' ingredient names. `wish_choice`: only for a kept card
+    saved before cards kept their unfinished parts, whose wish names no dish: the picker may
+    replace up to half of the unlocked dishes for it, inside a choice code bounds.
 
-    Order: named removals (a locked dish only with a quote that points at it), dishes that
-    break the request (same-type replace slots; a locked dish only for a rule or avoidance), named and typed adds, the
-    counts (only the fields the message states, or all of them on a button), a general wish, an uncovered
-    must-use ingredient, and last whether any dish is left."""
+    Order: named removals (a locked dish only with a quote from this message), dishes that
+    break the request (replace slots; a locked dish only for a rule or avoidance), the wish's
+    targets (at most half of the unlocked dishes), named and typed adds, the counts (only the
+    fields the message states, or all of them on a button), an old card's wish choice, an
+    uncovered must-use ingredient, and last whether any dish is left."""
     builder = _Builder(plan_ids, locked, facts)
     in_plan = set(builder.plan_ids)
     # A locked dish goes for a rule or an avoidance only (today's rule); stock, cookware or
@@ -471,7 +502,7 @@ def build_frame(
         if (
             item.id in locked
             and item.id not in breaking
-            and not _locked_quote_ok(facts.get(item.id), item.quote, message)
+            and not _locked_quote_ok(item.quote, message)
         ):
             builder.ignored.append(
                 {"id": item.id, "reason": "locked_without_quote", "quote": item.quote}
@@ -479,21 +510,46 @@ def build_frame(
             continue
         if item.mode == "drop":
             builder.drop(item.id)
-        elif item.with_name.strip():
-            if builder.place(item.with_name, lookup(item.with_name), item.id):
-                builder.drop(item.id)
-        else:
-            builder.replace(item.id, breaking.get(item.id, ""))
+            continue
+        name = item.with_name.strip()
+        placed = builder.place(name, lookup(name), item.id) if name else "not_found"
+        if placed == "placed":
+            builder.drop(item.id)
+        elif placed == "not_found":
+            # No name, or a name that is no library title: the picker chooses (a named slot
+            # carries the user's words for it to find).
+            builder.replace(item.id, breaking.get(item.id, ""), words=item.quote, named=name)
 
     # Dishes that break the new request; a dish already handled keeps its one entry.
     for dish_id in builder.plan_ids:
         if dish_id in breaking and dish_id not in builder.handled:
             builder.replace(dish_id, breaking[dish_id])
 
-    # Adds: a named dish is placed or missing; a typed add is a slot per dish.
+    # The dishes the wish touches, as the reader names them: unlocked dishes only, at most
+    # half of them (rounded up), the reader's order deciding which stay. A dish already
+    # changing needs no slot of its own; the wish guides its replacement too.
+    if reading is not None and reading.wish.strip():
+        limit = max_general_changes(len([i for i in builder.plan_ids if i not in locked]))
+        taken = 0
+        for dish_id in dict.fromkeys(reading.wish_targets):
+            if dish_id not in in_plan:
+                builder.ignored.append({"wish_target": dish_id, "reason": "not_in_plan"})
+            elif dish_id in locked:
+                builder.ignored.append({"wish_target": dish_id, "reason": "locked"})
+            elif dish_id in builder.handled:
+                continue
+            elif taken >= limit:
+                builder.ignored.append({"wish_target": dish_id, "reason": "over_limit"})
+            else:
+                builder.replace(dish_id, "", for_wish=True)
+                taken += 1
+
+    # Adds: a library title is placed; any other name is a named slot; a typed add is a slot
+    # per dish.
     for add in reading.add if reading else []:
         if add.name.strip():
-            builder.place(add.name, lookup(add.name), None)
+            if builder.place(add.name, lookup(add.name), None) == "not_found":
+                builder.slots.append(Slot(kind="add", named=add.name.strip()))
         elif add.dish_type not in CATEGORY_OF_DISH_TYPE:
             builder.ignored.append({"add": add.model_dump(), "reason": "unknown_dish_type"})
         elif add.count < 1:
@@ -509,8 +565,9 @@ def build_frame(
         if stated:
             _meet_counts(builder, spec_after, stated)
 
-    # A general wish: the picker may replace up to half of the unlocked dishes.
-    if reading is not None and reading.wish.strip() and reading.wish_general:
+    # An old kept card's wish that names no dish: the picker may replace up to half of the
+    # unlocked dishes.
+    if wish_choice and reading is not None and reading.wish.strip():
         unlocked = len([i for i in builder.plan_ids if i not in locked])
         pool = builder.candidates(CATEGORY_OF_DISH_TYPE)
         up_to = min(max_general_changes(unlocked), len(pool))
@@ -558,4 +615,5 @@ def build_frame(
         empty_plan=left <= 0,
         ignored=builder.ignored,
         count_drops=builder.count_drops,
+        count_ranges=builder.count_ranges,
     )

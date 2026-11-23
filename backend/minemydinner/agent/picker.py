@@ -4,8 +4,13 @@ picker's answer schema, its input after the system prompt, and the code that che
 against the frame and applies it. Pure code: no model call and no database. The diner rules,
 stock, cookware and the time limit of the new dishes are checked afterwards by `validate_plan`.
 
+Code checks, it does not interpret (spec 5.4, amended 2026-11-23): a replace slot takes a dish
+of any type, so the picker chooses what kind of dish takes a dish's place; code checks an add's
+type, the stated counts (`Frame.count_ranges`), the rules and conditions, and for a named slot
+nothing beyond those (the picker judges which dish the user's words mean).
+
 Slot numbering: the frame's slots are numbered 0, 1, ... in order. A dish the picker chooses in
-a "replace" choice becomes one more slot of that dish's own type; these slots are numbered after
+a "replace" choice becomes one more slot in that dish's place; these slots are numbered after
 the frame's slots, in the order of the choices and, within a choice, of the ids the picker
 lists (`choice_slots`)."""
 
@@ -17,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from minemydinner.agent.frame import Choice, Frame, Slot, fold
 from minemydinner.agent.revision import DishFacts
+from minemydinner.planning.composition import count_categories
 from minemydinner.planning.validate import PlanSpec
 
 # A picker answer with problems is retried once with them (spec 5.7).
@@ -31,7 +37,7 @@ class ChoiceAnswer(BaseModel):
         description=(
             "Ids of the chosen dishes, all from that choice's list. A \"drop\" choice takes "
             "exactly its number; a \"replace\" choice takes 1 up to its number, and each dish "
-            "chosen becomes a new slot of its own type, numbered after the listed slots."
+            "chosen becomes a new slot in its place, numbered after the listed slots."
         )
     )
 
@@ -47,8 +53,9 @@ class SlotAnswer(BaseModel):
     )
     recipe_id: int | None = Field(
         description=(
-            "The id of a library dish of the slot's dish type, not in the current plan and "
-            "not chosen for another slot; null when nothing fits."
+            "The id of a library dish, not in the current plan and not chosen for another "
+            "slot; for an added dish of a stated type, a dish of that type; null when nothing "
+            "fits."
         )
     )
     reason: str = Field(
@@ -111,9 +118,9 @@ def _chosen(choice: Choice, answer: ChoiceAnswer | None) -> list[int]:
     return [i for i in dict.fromkeys(ids) if i in choice.candidates]
 
 
-def choice_slots(frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]) -> list[Slot]:
-    """Every slot to fill: the frame's slots, then a replace slot for each dish chosen in a
-    replace choice (its own dish type), in the order of the choices and of the chosen ids."""
+def choice_slots(frame: Frame, answer: PickerAnswer) -> list[Slot]:
+    """Every slot to fill: the frame's slots, then a replace slot (no dish type) for each dish
+    chosen in a replace choice, in the order of the choices and of the chosen ids."""
     by_index: dict[int, ChoiceAnswer] = {}
     for item in answer.choices:
         by_index.setdefault(item.index, item)
@@ -122,16 +129,7 @@ def choice_slots(frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]
         if choice.mode != "replace":
             continue
         for dish_id in _chosen(choice, by_index.get(index)):
-            facts_of = facts.get(dish_id)
-            dish_type = facts_of.dish_type if facts_of else ""
-            slots.append(
-                Slot(
-                    kind="replace",
-                    dish_type=dish_type,
-                    replaces=dish_id,
-                    must_use=list(choice.must_use),
-                )
-            )
+            slots.append(Slot(kind="replace", replaces=dish_id, must_use=list(choice.must_use)))
     return slots
 
 
@@ -227,8 +225,8 @@ def _check_slots(
     problems: list[str],
 ) -> dict[int, int | None]:
     """The dish of each slot (None: nothing fits), with a problem for a slot without an answer,
-    an unknown dish, a dish of the wrong type, a dish already in the plan, or a dish picked
-    twice."""
+    an unknown dish, an add of a stated type filled with another type, a dish already in the
+    plan, or a dish picked twice. A replace slot and a named slot take any type."""
     by_index = _first_by_index(answer.slots, len(slots), "Slot", problems)
     taken = set(plan_ids) | set(frame.placed)
     picked: set[int] = set()
@@ -245,7 +243,7 @@ def _check_slots(
         found = facts.get(recipe_id)
         if found is None:
             problems.append(f"Slot {index}: dish {recipe_id} is not in the recipe library.")
-        elif found.dish_type != slot.dish_type:
+        elif slot.dish_type and found.dish_type != slot.dish_type:
             problems.append(
                 f"Slot {index} needs {_article(slot.dish_type)}, but dish {recipe_id} is "
                 f"{_article(found.dish_type)}."
@@ -258,6 +256,63 @@ def _check_slots(
     return fills
 
 
+# A count field in the picker's words.
+_COUNT_WORDS = {
+    "dishes": "dishes (meat and vegetable dishes together)",
+    "meat_dishes": "meat dishes",
+    "vegetable_dishes": "vegetable dishes",
+    "soups": "soups",
+    "staples": "staple foods",
+    "desserts": "desserts",
+    "snacks": "snacks",
+}
+
+
+def _range_text(low: int, high: int) -> str:
+    return f"exactly {low}" if low == high else f"{low} to {high}"
+
+
+def _count_problems(
+    frame: Frame,
+    result: list[int],
+    slots: list[Slot],
+    fills: dict[int, int | None],
+    facts: dict[int, DishFacts],
+) -> list[str]:
+    """The stated counts the picker's dishes break (spec 5.4: stated counts are invariants).
+    A count is the picker's problem only when its dishes move it out of the stated range and
+    the dishes the frame planned would have kept it in (a replace slot counted as the type of
+    the dish it replaces, an add as its own type): a count the frame itself could not meet,
+    or a slot left empty, is never the picker's."""
+    if not frame.count_ranges:
+        return []
+
+    def type_of(recipe_id: int) -> str:
+        found = facts.get(recipe_id)
+        return found.dish_type if found else ""
+
+    planned_of: dict[int, str] = {}
+    for index, slot in enumerate(slots):
+        recipe_id = fills.get(index)
+        if recipe_id is None:
+            continue
+        if slot.dish_type:
+            planned_of[recipe_id] = slot.dish_type
+        elif slot.replaces is not None:
+            planned_of[recipe_id] = type_of(slot.replaces)
+    actual = count_categories(type_of(i) for i in result)
+    planned = count_categories(planned_of.get(i) or type_of(i) for i in result)
+    problems = []
+    for name, (low, high) in frame.count_ranges.items():
+        if not low <= actual[name] <= high and low <= planned[name] <= high:
+            problems.append(
+                f"The user stated {_range_text(low, high)} {_COUNT_WORDS[name]}, but with your "
+                f"dishes the plan has {actual[name]}. Keep the stated counts: choose dishes "
+                "that keep them, or null for a slot when none fits."
+            )
+    return problems
+
+
 def apply_picks(
     plan_ids: list[int], frame: Frame, answer: PickerAnswer, facts: dict[int, DishFacts]
 ) -> PickOutcome:
@@ -267,10 +322,11 @@ def apply_picks(
     The result, in plan order: a dropped dish (the frame's drops, a drop choice) leaves; a
     replaced dish gives its place to its slot's dish; an unfilled replace slot keeps its dish,
     except a "breaks_rule" slot, whose dish is removed (spec 5.5); then the placed dishes, then
-    the filled add slots. Locked dishes are never choice candidates, so they never leave here."""
+    the filled add slots. Locked dishes are never choice candidates, so they never leave here.
+    A result that breaks a stated count (`_count_problems`) is a problem too."""
     problems: list[str] = []
     chosen = _check_choices(frame, answer, problems)
-    slots = choice_slots(frame, answer, facts)
+    slots = choice_slots(frame, answer)
     fills = _check_slots(plan_ids, frame, slots, answer, facts, problems)
     if problems:
         return PickOutcome(recipe_ids=list(plan_ids), problems=problems, unfilled=[])
@@ -295,7 +351,11 @@ def apply_picks(
     result = [in_place.get(i, i) for i in plan_ids if i not in leaving]
     result += [i for i in frame.placed if i not in result]
     result += added
-    return PickOutcome(recipe_ids=list(dict.fromkeys(result)), problems=[], unfilled=unfilled)
+    result = list(dict.fromkeys(result))
+    problems = _count_problems(frame, result, slots, fills, facts)
+    if problems:
+        return PickOutcome(recipe_ids=list(plan_ids), problems=problems, unfilled=[])
+    return PickOutcome(recipe_ids=result, problems=[], unfilled=unfilled)
 
 
 def _ids(ids: list[int]) -> str:
@@ -309,7 +369,7 @@ def _choice_line(index: int, choice: Choice) -> str:
         return f"- Choice {index}: drop exactly {choice.up_to} of {dishes} ({kind})"
     line = (
         f"- Choice {index}: replace 1 to {choice.up_to} of {dishes} ({kind}); "
-        "each dish you choose becomes a new slot of its own dish type"
+        "each dish you choose becomes a new slot in its place"
     )
     if choice.must_use:
         line += f"; the new dish must use {', '.join(choice.must_use)}, which no dish uses yet"
@@ -329,8 +389,24 @@ def conditions_line(spec: PlanSpec) -> str:
 
 
 def _slot_line(index: int, slot: Slot) -> str:
-    where = f" in place of {slot.replaces}" if slot.replaces is not None else ", added"
-    line = f"- Slot {index}: {_article(slot.dish_type)}{where}"
+    """A slot in the picker's input: the dish it replaces (no dish type: the picker chooses the
+    kind) and the user's words for it, or an add's type; a named slot asks for the library
+    dish the user's words mean."""
+    if slot.replaces is not None:
+        line = f"- Slot {index}: in place of {slot.replaces}"
+        if slot.words.strip():
+            line += f'; the user\'s words: "{slot.words.strip()}"'
+        if slot.for_wish:
+            line += ", for the wish"
+    elif slot.dish_type:
+        line = f"- Slot {index}: {_article(slot.dish_type)}, added"
+    else:
+        line = f"- Slot {index}: added"
+    if slot.named:
+        line += (
+            f'; the user named "{slot.named}": the library dish these words mean, or null '
+            "when none is"
+        )
     if slot.must_use:
         line += f"; it must use {', '.join(slot.must_use)}, which no dish uses yet"
     return line
@@ -347,9 +423,10 @@ def picker_messages(
 ) -> list[BaseMessage]:
     """The picker's input after the system prompt (spec 5.5): one user message with the
     shortlist, the current plan, the diner and meal rules, the meal's conditions
-    (`conditions_line`), the user's wish (in the user's words), what code already decided,
-    the choices with their limits (a must-use choice names its ingredient), the slots with
-    their dish types and how choice slots are numbered, and the reply locale."""
+    (`conditions_line`), the counts the user stated, the user's wish (in the user's words),
+    what code already decided, the choices with their limits (a must-use choice names its
+    ingredient), the slots (the dish each replaces with the user's words, an add's type, a
+    named dish) and how choice slots are numbered, and the reply locale."""
     decided = []
     if frame.drops:
         decided.append(f"- Leaving the plan: {_ids(frame.drops)}")
@@ -358,6 +435,12 @@ def picker_messages(
     parts = [shortlist, plan_lines, rules_text]
     if conditions:
         parts.append(conditions)
+    if frame.count_ranges:
+        counts = "; ".join(
+            f"{name.replace('_', ' ')}: {_range_text(low, high)}"
+            for name, (low, high) in frame.count_ranges.items()
+        )
+        parts.append(f"Stated counts (code checks the result): {counts}")
     parts.append(f"The user's wish: {wish.strip() or 'none'}")
     if decided:
         parts.append("Already decided:\n" + "\n".join(decided))

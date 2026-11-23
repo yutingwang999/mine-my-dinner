@@ -144,8 +144,8 @@ def test_a_turn_that_left_the_plan_does_not_move_the_baseline(env):
     before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
     egg = ids_of(env, "番茄炒蛋")[0]
     out = routed_revise(
-        env, "换个辣的", {"wish": "辣的", "wish_general": True},
-        [picked(slots=[(0, None)], choices=[(0, [egg])])],
+        env, "换个辣的", {"wish": "辣的", "wish_targets": [egg]},
+        [picked(slots=[(0, None)])],
     )
     assert out["current_plan"] == before["current_plan"]
     assert out["request"]["query"] == "辣的"

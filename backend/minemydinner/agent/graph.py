@@ -78,6 +78,7 @@ from minemydinner.agent.frame import (
     breaking_from,
     build_frame,
     fold,
+    hidden_by,
     lookup_named,
 )
 from minemydinner.agent.middleware import dump_message
@@ -91,6 +92,7 @@ from minemydinner.agent.picker import (
     PICK_MAX_ATTEMPTS,
     PickerAnswer,
     apply_picks,
+    choice_slots,
     conditions_line,
     must_use_misses,
     picker_messages,
@@ -141,6 +143,8 @@ from minemydinner.agent.revise_step import (
     unchanged_note,
     unfinished_sentence,
     which_dish_question,
+    wish_matched_nothing,
+    wish_targets_locked,
     wish_unmet_actions,
     wish_unmet_entries,
     without_deleted,
@@ -1519,6 +1523,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         confirmation is not breaking). Starts the planning run, recording the frame."""
         button = state["button"] if _button_turn(state) else None
         base = state.get("plan_request") or state.get("previous_request") or {}
+        wish_choice = False
         if button is None:
             reading = FollowUpReading.model_validate(state["reading"])
             request = request_after(base, reading)
@@ -1531,8 +1536,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             unfinished = card.get(UNFINISHED)
             if UNFINISHED not in card and card.get("plan_kept") and request.get("query"):
                 # A kept card saved before cards kept their unfinished parts: its wish is
-                # what was not done.
-                unfinished = {"reading": {"wish": request["query"], "wish_general": True}}
+                # what was not done. It names no dish, so the picker chooses which dishes
+                # it touches, inside a limit code sets.
+                unfinished = {"reading": {"wish": request["query"]}}
+                wish_choice = True
             words = (unfinished or {}).get("words") or "\n".join(_offering_words(state))
         parsed = ParsedRequest.model_validate(request)
         if request_problem(parsed):
@@ -1593,6 +1600,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 lookup,
                 words,
                 uncovered_must=uncovered,
+                wish_choice=wish_choice,
             )
         prepare = deps.client.prepare_text
         record = {
@@ -1671,14 +1679,22 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def picker_shortlist(
         session, ctx, spec: PlanSpec, frame: Frame, facts: dict, request: dict, vectors: dict
     ) -> tuple[str, Any]:
-        """The shortlist for the dish types the picker may fill: the slots' types and the
-        types a replace choice may free. Returns the text and the shortlist result."""
-        types = [s.dish_type for s in frame.slots]
+        """The shortlist for the dish types the picker may fill: an add's own type; for a
+        replace slot or a replace choice, which take a dish of any type, the replaced dishes'
+        types and the meat and vegetable dishes. A named add has no type: the picker
+        searches for it. Returns the text and the shortlist result."""
+        sides = ["meat dish", "vegetable dish"]
+        types: list[str] = []
+        for slot in frame.slots:
+            if slot.dish_type:
+                types.append(slot.dish_type)
+            elif slot.replaces is not None:
+                types += [facts[slot.replaces].dish_type] if slot.replaces in facts else []
+                types += sides
         for choice in frame.choices:
             if choice.mode == "replace":
-                types += list(
-                    dict.fromkeys(facts[i].dish_type for i in choice.candidates if i in facts)
-                )
+                types += [facts[i].dish_type for i in choice.candidates if i in facts] + sides
+        types = [t for t in dict.fromkeys(types) if t]
         none = "Shortlist: none given; search the library when a slot needs a dish."
         if not deps.use_shortlist or not types:
             return none, None
@@ -1708,25 +1724,49 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         new dishes (rules, stock, cookware, time) and of a must-use choice or add (its
         ingredient, `must_use_misses`). Returns the outcome (None without an answer), the
         problems for a retry, the new dishes that broke a check (each with why, for the
-        records) and the facts."""
+        records), the facts, and the named slots whose dish a hard condition hides (slot
+        number to the dish and the condition).
+
+        A named slot's dish is the one the user named, as the picker read the words: when a
+        hard condition hides it, that is no retry problem but the slot's real reason (spec
+        5.4: "in the library, but ..." and the matching next action, never "not in the
+        library")."""
         ids = state["change"]["plan_ids"]
         if answer is None:
-            return None, ["You gave no answer. Answer with the PickerAnswer tool."], {}, {}
+            return None, ["You gave no answer. Answer with the PickerAnswer tool."], {}, {}, {}
         chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
+        hidden: dict[int, dict] = {}
         with deps.session_factory() as session:
             facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen], plan=plan)
             outcome = apply_picks(ids, frame, answer, facts)
             if outcome.problems:
-                return outcome, list(outcome.problems), {}, facts
+                return outcome, list(outcome.problems), {}, facts, {}
             new = set(outcome.recipe_ids) - set(ids) - set(frame.placed)
             ctx = load_planning_context(session, meal_constraints(state))
+            fills = {s.index: s.recipe_id for s in reversed(answer.slots)}
+            for index, slot in enumerate(choice_slots(frame, answer)):
+                recipe_id = fills.get(index)
+                if not slot.named or recipe_id not in new:
+                    continue
+                recipe = session.get(Recipe, recipe_id)
+                why = hidden_by(session, recipe, spec.model_dump(), ctx) if recipe else None
+                if why is not None:
+                    hidden[index] = {
+                        "recipe_id": recipe_id,
+                        "title": recipe.title,
+                        "blocked": why,
+                        "time_min": recipe.time_min,
+                    }
             result = validate_plan(
                 session, ctx, spec, outcome.recipe_ids,
                 carried_overrides(plan, outcome.recipe_ids),
             )
+        named_hidden = {d["recipe_id"] for d in hidden.values()}
         bad = [
             v for v in result.violations
-            if v.recipe_id in new and v.code in ("H1", "H2", "H3", "H6")
+            if v.recipe_id in new
+            and v.recipe_id not in named_hidden
+            and v.code in ("H1", "H2", "H3", "H6")
         ]
         problems = [_violation_for_model(v.model_dump(mode="json"), codes) for v in bad]
         # Only a must-use name this turn made a choice for is checked; a name the plan
@@ -1734,7 +1774,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         missed, unused = must_use_misses(frame, answer, must_unmet_names(result.violations))
         left_out = {i: MUST_USE_MISS for i in unused}
         left_out.update({v.recipe_id: "breaks a rule" for v in bad})
-        return outcome, problems + missed, left_out, facts
+        return outcome, problems + missed, left_out, facts, hidden
 
     def pick_dishes(state: ChatState) -> dict:
         try:
@@ -1779,6 +1819,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         attempts = 0
         answer = outcome = None
         bad: dict[int, str] = {}
+        hidden: dict[int, dict] = {}
         first_passed = None
         for attempt in range(PICK_MAX_ATTEMPTS):
             attempts = attempt + 1
@@ -1796,7 +1837,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             out = get_picker().invoke({"messages": messages, "run_id": run_id}, context=context)
             notes = _notes_from_searches(notes, out["messages"])
             answer = out.get("structured_response")
-            outcome, problems, bad, facts = check_pick(state, plan, frame, answer, spec, codes)
+            outcome, problems, bad, facts, hidden = check_pick(
+                state, plan, frame, answer, spec, codes
+            )
             if first_passed is None:
                 first_passed = not problems
             deps.recorder.add_event(
@@ -1817,6 +1860,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 break
         own = not problems
         used_frame = frame
+        # The slots the picker itself answered null ("nothing fits"); none when code's fallback
+        # replaced its answer. Only such a named slot is said to be not in the library.
+        picker_nulls: set[int] = set()
+        if answer is not None:
+            fills: dict[int, int | None] = {}
+            for item in answer.slots:
+                fills.setdefault(item.index, item.recipe_id)
+            picker_nulls = {i for i, recipe_id in fills.items() if recipe_id is None}
         if problems:
             if answer is not None and outcome is not None and not outcome.problems:
                 for reason in set(bad.values()):
@@ -1824,13 +1875,20 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     answer = without_picks(answer, picks, reason)
             else:
                 used_frame, answer = fallback_pick(frame)
+                hidden = {}
+                picker_nulls = set()
+        if hidden:
+            # A named dish a hard condition hides is not placed; its slot says why.
+            answer = without_picks(
+                answer, [d["recipe_id"] for d in hidden.values()], "hidden by a hard condition"
+            )
         # A stated count whose added dish was not found keeps the dishes it would have
         # dropped (spec 5.5: the plan never shrinks unasked).
         withheld, answer = withhold_count_drops(used_frame, answer)
         if withheld is not used_frame:
             # The picker's note may describe a drop code withheld.
             own = False
-        if problems or withheld is not used_frame:
+        if problems or hidden or withheld is not used_frame:
             used_frame = withheld
             with deps.session_factory() as session:
                 chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
@@ -1838,13 +1896,19 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             outcome = apply_picks(ids, used_frame, answer, facts)
         # Only this turn's wish (on a button, the offering turn's) is ever reported unmet.
         has_wish = bool((change["reading"].get("wish") or "").strip())
+        slots = slot_results(used_frame, answer)
+        for index, slot in enumerate(slots):
+            slot["picker_null"] = index in picker_nulls
+        for index, detail in hidden.items():
+            if index < len(slots):
+                slots[index]["hidden"] = detail
         result = {
             "recipe_ids": outcome.recipe_ids,
-            "slots": slot_results(used_frame, answer, facts),
+            "slots": slots,
             # A changed answer is no longer the picker's: its note and wish_met may name a
-            # dish that is not placed.
+            # dish that is not placed. A hidden named dish changes only the note.
             "wish_met": answer.wish_met if own else (False if has_wish else None),
-            "note": answer.note.strip() if own else "",
+            "note": answer.note.strip() if own and not hidden else "",
             "choices": [c.model_dump() for c in used_frame.choices],
             "withheld_drops": [i for i in frame.count_drops if i not in used_frame.drops],
         }
@@ -1976,6 +2040,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         actions = change_actions(items, spec, wish_unmet)
         unmet = change_unmet(items, sentences, limit, locale, wish_unmet)
         unmet_wish_text = change_wish_unmet(wish, locale) if wish_unmet else ""
+        # Spec 5.4: a wish that touches no dish of the plan and guides no new dish changes
+        # nothing, and the reply says so.
+        guided = frame.slots or any(c.mode == "replace" for c in frame.choices)
+        targets = list(used.wish_targets)
+        locked_targets = {
+            item.get("wish_target")
+            for item in frame.ignored
+            if item.get("reason") == "locked" and "wish_target" in item
+        }
+        nothing_text = ""
+        if wish and targets and set(targets) <= locked_targets:
+            # Every dish the wish touches was added or kept by hand: they stay.
+            nothing_text = wish_targets_locked(wish, locale)
+        elif wish and not targets and not guided and not frame.placed:
+            nothing_text = wish_matched_nothing(wish, locale)
         read_text = (
             reading_sentence(shown.reading, locale)
             if shown is not None and shown.ambiguous and shown.reading.strip()
@@ -2066,6 +2145,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 parts = [
                     done,
                     read_text,
+                    nothing_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=bool(done)),
                     unmet_wish_text,
@@ -2079,9 +2159,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 lead = failed_note(locale, bool(actions)) if items or wish_unmet else (
                     unchanged_note(locale)
                 )
+                if lead == unchanged_note(locale) and nothing_text:
+                    # The wish matched nothing: that sentence says why the plan stays.
+                    lead, nothing_text = nothing_text, ""
                 parts = [
                     lead,
                     read_text,
+                    nothing_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=False),
                     unmet_wish_text,
