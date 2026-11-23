@@ -64,9 +64,6 @@ FOLLOW_UP_KEYS = (
 # expect_* keys an expect_any_of entry may not hold: the list itself, and the diner checks,
 # which are judged once over the whole scenario.
 NOT_IN_ANY_OF = ("expect_any_of", "expect_card", "expect_rules_applied", "expect_rules_not_applied")
-# The judged turn: "plan" (planned from scratch), "revision" (the revise step ran), or "none"
-# (the follow-up made no planning run: an "other" reply).
-TURN_KINDS = ("plan", "revision", "none")
 # The tables a hidden dish's rows live in, parent first.
 _RECIPE_TABLES: tuple[Table, ...] = (
     Recipe.__table__,

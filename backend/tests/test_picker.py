@@ -21,17 +21,17 @@ from tests.recipefakes import seeded  # noqa: F401
 # The current plan: two meat dishes, two vegetable dishes and a soup; 60 to 64 are library
 # dishes the picker may choose.
 FACTS = {
-    1: DishFacts("宫保鸡丁", ["鸡肉"], ["荤菜"], "meat dish"),
-    2: DishFacts("蒜蓉西兰花", ["西兰花"], ["素菜"], "vegetable dish"),
-    3: DishFacts("番茄蛋汤", ["番茄"], ["汤"], "soup"),
-    4: DishFacts("红烧肉", ["猪肉"], ["荤菜"], "meat dish"),
-    5: DishFacts("清炒菠菜", ["菠菜"], ["素菜"], "vegetable dish"),
-    50: DishFacts("辣子鸡", ["鸡肉"], ["荤菜"], "meat dish"),
-    60: DishFacts("凉拌黄瓜", ["黄瓜"], ["素菜"], "vegetable dish"),
-    61: DishFacts("糖醋排骨", ["排骨"], ["荤菜"], "meat dish"),
-    62: DishFacts("紫菜蛋花汤", ["紫菜"], ["汤"], "soup"),
-    63: DishFacts("手撕包菜", ["包菜"], ["素菜"], "vegetable dish"),
-    64: DishFacts("水煮牛肉", ["牛肉"], ["荤菜"], "meat dish"),
+    1: DishFacts("宫保鸡丁", ["鸡肉"], "meat dish"),
+    2: DishFacts("蒜蓉西兰花", ["西兰花"], "vegetable dish"),
+    3: DishFacts("番茄蛋汤", ["番茄"], "soup"),
+    4: DishFacts("红烧肉", ["猪肉"], "meat dish"),
+    5: DishFacts("清炒菠菜", ["菠菜"], "vegetable dish"),
+    50: DishFacts("辣子鸡", ["鸡肉"], "meat dish"),
+    60: DishFacts("凉拌黄瓜", ["黄瓜"], "vegetable dish"),
+    61: DishFacts("糖醋排骨", ["排骨"], "meat dish"),
+    62: DishFacts("紫菜蛋花汤", ["紫菜"], "soup"),
+    63: DishFacts("手撕包菜", ["包菜"], "vegetable dish"),
+    64: DishFacts("水煮牛肉", ["牛肉"], "meat dish"),
 }
 PLAN = [1, 2, 3, 4, 5]
 

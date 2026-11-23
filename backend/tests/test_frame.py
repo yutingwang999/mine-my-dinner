@@ -19,11 +19,11 @@ from tests.recipefakes import seeded  # noqa: F401
 
 # The current plan: two meat dishes, two vegetable dishes and a soup.
 FACTS = {
-    1: DishFacts("宫保鸡丁", ["鸡肉", "花生"], ["荤菜"], "meat dish"),
-    2: DishFacts("蒜蓉西兰花", ["西兰花", "大蒜"], ["素菜"], "vegetable dish"),
-    3: DishFacts("番茄蛋汤", ["番茄", "鸡蛋"], ["汤"], "soup"),
-    4: DishFacts("红烧肉", ["猪肉"], ["荤菜"], "meat dish"),
-    5: DishFacts("清炒菠菜", ["菠菜"], ["素菜"], "vegetable dish"),
+    1: DishFacts("宫保鸡丁", ["鸡肉", "花生"], "meat dish"),
+    2: DishFacts("蒜蓉西兰花", ["西兰花", "大蒜"], "vegetable dish"),
+    3: DishFacts("番茄蛋汤", ["番茄", "鸡蛋"], "soup"),
+    4: DishFacts("红烧肉", ["猪肉"], "meat dish"),
+    5: DishFacts("清炒菠菜", ["菠菜"], "vegetable dish"),
 }
 PLAN = [1, 2, 3, 4, 5]
 SPEC_BEFORE = {
@@ -300,7 +300,7 @@ def test_a_general_wish_choice_is_kept_only_for_an_old_kept_card():
 
 
 def test_a_stated_lower_count_gives_a_drop_choice_of_exactly_the_difference():
-    facts = {**FACTS, 6: DishFacts("紫菜汤", ["紫菜"], ["汤"], "soup")}
+    facts = {**FACTS, 6: DishFacts("紫菜汤", ["紫菜"], "soup")}
     plan = [*PLAN, 6]
     frame = _frame(
         _change(counts=ReadCounts(soups=1)), plan=plan, facts=facts, spec=_spec(soups=1)

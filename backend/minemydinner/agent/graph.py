@@ -1580,7 +1580,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             uncovered = sorted(
                 n for n in must_unmet_names(found.violations) if fold(n) not in before
             )
-            facts, _ = dish_facts(session, ids, plan=plan)
+            facts, _ = dish_facts(session, ids)
 
             def lookup(name: str):
                 # The new request's mode, time limit and rules decide what hides a dish.
@@ -1737,7 +1737,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
         hidden: dict[int, dict] = {}
         with deps.session_factory() as session:
-            facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen], plan=plan)
+            facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen])
             outcome = apply_picks(ids, frame, answer, facts)
             if outcome.problems:
                 return outcome, list(outcome.problems), {}, facts, {}
@@ -1800,7 +1800,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         avoid = [i for i, reason in change["breaking"] if reason == "meal_avoid"]
         with deps.session_factory() as session:
             ctx = load_planning_context(session, meal_constraints(state))
-            facts, mains = dish_facts(session, ids, plan=plan)
+            facts, mains = dish_facts(session, ids)
             plan_lines = current_plan_text(plan, mains, avoid)
             rules = meal_preferences(session, ctx, current_table())
             shortlist, found = picker_shortlist(
@@ -1892,7 +1892,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             used_frame = withheld
             with deps.session_factory() as session:
                 chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
-                facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen], plan=plan)
+                facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen])
             outcome = apply_picks(ids, used_frame, answer, facts)
         # Only this turn's wish (on a button, the offering turn's) is ever reported unmet.
         has_wish = bool((change["reading"].get("wish") or "").strip())

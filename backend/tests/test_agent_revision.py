@@ -11,20 +11,20 @@ from minemydinner.agent.revision import (
 )
 
 FACTS = {
-    1: DishFacts("鱼香茄子", ["茄子", "猪肉"], [], "vegetable dish"),
-    2: DishFacts("番茄炒蛋", ["番茄", "鸡蛋"], [], "vegetable dish"),
-    3: DishFacts("韭菜炒鸡蛋", ["韭菜", "鸡蛋"], [], "vegetable dish"),
-    4: DishFacts("玉米排骨汤", ["玉米", "排骨"], ["汤"], "soup"),
-    5: DishFacts("清炒西兰花", ["西兰花"], [], "vegetable dish"),
-    6: DishFacts("红烧肉", ["五花肉"], [], "meat dish"),
-    7: DishFacts("鱼香肉丝", ["猪肉", "木耳"], [], "meat dish"),
-    8: DishFacts("冬瓜汤", ["冬瓜"], ["汤"], "soup"),
-    9: DishFacts("蒜蓉菠菜", ["菠菜"], [], "vegetable dish"),
-    10: DishFacts("醋溜白菜", ["白菜"], [], "vegetable dish"),
-    11: DishFacts("干煸四季豆", ["四季豆"], [], "vegetable dish"),
-    12: DishFacts("拍黄瓜", ["黄瓜"], [], "vegetable dish"),
-    13: DishFacts("青椒肉丝", ["青椒", "猪肉"], [], "meat dish"),
-    14: DishFacts("蒜蓉西兰花", ["西兰花", "大蒜"], [], "vegetable dish"),
+    1: DishFacts("鱼香茄子", ["茄子", "猪肉"], "vegetable dish"),
+    2: DishFacts("番茄炒蛋", ["番茄", "鸡蛋"], "vegetable dish"),
+    3: DishFacts("韭菜炒鸡蛋", ["韭菜", "鸡蛋"], "vegetable dish"),
+    4: DishFacts("玉米排骨汤", ["玉米", "排骨"], "soup"),
+    5: DishFacts("清炒西兰花", ["西兰花"], "vegetable dish"),
+    6: DishFacts("红烧肉", ["五花肉"], "meat dish"),
+    7: DishFacts("鱼香肉丝", ["猪肉", "木耳"], "meat dish"),
+    8: DishFacts("冬瓜汤", ["冬瓜"], "soup"),
+    9: DishFacts("蒜蓉菠菜", ["菠菜"], "vegetable dish"),
+    10: DishFacts("醋溜白菜", ["白菜"], "vegetable dish"),
+    11: DishFacts("干煸四季豆", ["四季豆"], "vegetable dish"),
+    12: DishFacts("拍黄瓜", ["黄瓜"], "vegetable dish"),
+    13: DishFacts("青椒肉丝", ["青椒", "猪肉"], "meat dish"),
+    14: DishFacts("蒜蓉西兰花", ["西兰花", "大蒜"], "vegetable dish"),
 }
 
 
@@ -147,30 +147,6 @@ def test_revision_spec_changed_side_keeps_total_and_frees_the_other():
     empty["spec"].update(dishes=3, meat_dishes=1, vegetable_dishes=2)
     spec = revision_spec(empty, {}, {"vegetable_dishes": 3})
     assert (spec.dishes, spec.vegetable_dishes, spec.meat_dishes) == (3, 3, None)
-
-
-def test_conflict_words_cover_conflicts_kept_and_overrides():
-    from minemydinner.agent.revise_step import conflict_words
-
-    plan = {
-        "edit": {
-            "conflicts": [{"recipe_id": 1, "ingredient_name": "鸡蛋"}],
-            "kept": [{"recipe_id": 2, "allergen": "peanut"}],
-            "overrides": [{"recipe_id": 2}, {"recipe_id": 3}],
-        }
-    }
-    words = conflict_words(plan)
-    assert set(words) == {1, 2, 3}
-    assert "不适合" in words[3] and "鸡蛋" in words[1] and "peanut" in words[2]
-    assert conflict_words(None) == {}
-
-
-def test_short_override_text_is_not_a_match_word():
-    from minemydinner.agent.revise_step import conflict_words
-
-    plan = {"edit": {"conflicts": [{"recipe_id": 1, "text": "辣", "ingredient_name": "辣椒"}]}}
-    assert "辣" not in conflict_words(plan)[1]
-    assert "辣椒" in conflict_words(plan)[1]
 
 
 # ---- a revise turn's unstated fields come from the plan's request (dev run 3 of 3b-1b) ----

@@ -15,18 +15,6 @@ from minemydinner.agent.revision import DishFacts
 from minemydinner.models import Recipe, RecipeIngredient
 from minemydinner.planning.validate import Finding, H2Override, PlanSpec
 
-# The category words a quote may use to point at a dish of each type ("那道汤").
-CATEGORY_WORDS = {
-    "meat dish": ["荤菜", "meat dish"],
-    "vegetable dish": ["素菜", "vegetable dish"],
-    "soup": ["汤", "soup"],
-    "staple food": ["主食", "面", "饭", "粥", "粉", "staple", "noodles", "rice", "porridge"],
-    "dessert": ["甜品", "甜点", "dessert"],
-    "snack": ["小吃", "snack"],
-}
-# Words that point at the dishes that do not suit ("不适合的菜拿掉", spec 5.4): added to the
-# words of every dish with an open conflict or a kept override.
-CONFLICT_WORDS = ["不适合", "不合适", "不能吃", "doesn't suit", "not suitable"]
 # The mark of a dish that breaks this meal's one-meal avoidance in the current plan the models
 # see (plan 3b-1b spec 5.4); revise_v3 and revise_v4 named it.
 BREAKS_MEAL_WISH = "BREAKS THIS MEAL'S WISH"
@@ -102,32 +90,13 @@ def open_conflict_ids(plan: dict) -> set[int]:
     return {c["recipe_id"] for c in (plan.get("edit") or {}).get("conflicts", [])}
 
 
-def conflict_words(plan: dict | None) -> dict[int, list[str]]:
-    """Per dish with an open conflict or a kept override: CONFLICT_WORDS plus the name of the
-    ingredient, allergen, or rule text it conflicts on, so "不适合的菜" or "the egg" points at
-    it, locked or not."""
-    edit = (plan or {}).get("edit") or {}
-    words: dict[int, list[str]] = {}
-    for entry in [*edit.get("conflicts", []), *edit.get("kept", []), *edit.get("overrides", [])]:
-        found = words.setdefault(entry["recipe_id"], list(CONFLICT_WORDS))
-        for key in ("ingredient_name", "allergen", "text"):
-            value = entry.get(key)
-            # A rule text shorter than two characters would match far too broadly.
-            if value and (key != "text" or len(value.strip()) >= 2):
-                found.append(value)
-    return {i: list(dict.fromkeys(w)) for i, w in words.items()}
-
-
 def dish_facts(
-    session: Session, recipe_ids: list[int], *, plan: dict | None = None
+    session: Session, recipe_ids: list[int]
 ) -> tuple[dict[int, DishFacts], dict[int, list[str]]]:
     """Per dish: the facts its quote is matched against (title; every line's name and its
-    dictionary names; the category words of its type, and for a dish of `plan` with an open
-    conflict or a kept override the conflict words), its dish type, and the main ingredients
-    shown to the model (the lines marked main, else the first required lines)."""
+    dictionary names), its dish type, and the main ingredients shown to the model (the lines marked main, else the first required lines)."""
     if not recipe_ids:
         return {}, {}
-    conflicting = conflict_words(plan)
     recipes = session.scalars(
         select(Recipe)
         .where(Recipe.id.in_(recipe_ids))
@@ -144,10 +113,6 @@ def dish_facts(
         facts[recipe.id] = DishFacts(
             title=recipe.title,
             ingredient_names=list(dict.fromkeys(names)),
-            category_words=[
-                *CATEGORY_WORDS.get(recipe.dish_type, []),
-                *conflicting.get(recipe.id, []),
-            ],
             dish_type=recipe.dish_type,
         )
         main = [line.name for line in recipe.ingredients if line.role == "main"]

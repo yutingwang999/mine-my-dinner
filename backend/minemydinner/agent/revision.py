@@ -19,7 +19,6 @@ class DishFacts:
 
     title: str
     ingredient_names: list[str]
-    category_words: list[str]
     dish_type: str = ""
 
 
