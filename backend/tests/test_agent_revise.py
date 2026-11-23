@@ -539,44 +539,53 @@ def test_must_use_the_revision_breaks_fails():
     assert split_violations([must], set(), {"玉米"}) == ([must], [])
 
 
-def routed_revise(env: Env, text: str, replies: list, parse: dict) -> dict:
-    """A follow-up turn through the real graph entry (the reader, scripted as a change), so
-    the turn keeps the thread's request as `previous_request` as it does in the app."""
+def routed_revise(env: Env, text: str, reading: dict, replies: list) -> dict:
+    """A follow-up turn through the real graph entry (the reader, scripted as a change, plan
+    3b-2), so the turn keeps the thread's request as `previous_request` as it does in the app."""
     env.model.replies = list(replies)
-    env.model.structured["FollowUpReading"] = [{"kind": "change"}]
-    env.model.structured["ParsedRequest"] = [parse]
+    env.model.structured["FollowUpReading"] = [{"kind": "change", **reading}]
     return env.graph.invoke({"messages": [HumanMessage(text)], "locale": "zh"}, env.config)
 
 
+def picked(slots=(), choices=()):
+    """The picker's answer: `slots` as (index, recipe id or None), `choices` as (index, ids)."""
+    return tool_call(
+        "PickerAnswer",
+        {
+            "choices": [{"index": i, "ids": list(ids)} for i, ids in choices],
+            "slots": [{"index": i, "recipe_id": r, "reason": ""} for i, r in slots],
+            "note": "",
+        },
+    )
+
+
 def test_a_turn_that_left_the_plan_does_not_move_the_baseline(env):
-    """The plan was made for shopping. A wish to cook from the fridge finds nothing, so the
-    plan stays; the next message still asks for the fridge, and the revision must take it."""
+    """The plan was made for shopping. A wish nothing fits keeps the plan; the next message
+    asks for the fridge, and the change must take it (the baseline is the plan's request)."""
     before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    egg = ids_of(env, "番茄炒蛋")[0]
     out = routed_revise(
-        env,
-        "只用冰箱里的，换个辣的",
-        [proposal("general", note="没有合适的。")],
-        parse={"mode": "fridge_only", "query": "辣的"},
+        env, "换个辣的", {"wish": "辣的", "wish_general": True},
+        [picked(slots=[(0, None)], choices=[(0, [egg])])],
     )
     assert out["current_plan"] == before["current_plan"]
-    assert out["request"]["mode"] == "fridge_only"
+    assert out["request"]["query"] == "辣的"
     routed_revise(
-        env,
-        "还是只用冰箱里的吧",
-        [proposal("general", note="没有合适的。")],
-        parse={"mode": "fridge_only"},
+        env, "还是只用冰箱里的吧", {"conditions": {"mode": "fridge_only"}},
+        [picked(slots=[(0, None), (1, None), (2, None)])],
     )
     assert last_record(env).request["spec"]["mode"] == "fridge_only"
 
 
 def test_a_side_count_asked_again_after_a_failed_turn_still_counts(env):
     """The plan has one meat dish. Two meat dishes fail; asking for two again must still ask
-    for two, not drop the side as a split carried over from an earlier message."""
-    before = first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
-    parse = {"meat_dishes": 2, "counts_stated_now": True}
-    out = routed_revise(env, "要两个荤菜", [proposal("general", note="没有合适的。")], parse)
-    assert out["current_plan"] == before["current_plan"]
-    routed_revise(env, "还是要两个荤菜", [proposal("general", note="没有合适的。")], parse)
+    for two, not drop the side as equal to an earlier request."""
+    first_plan(env, "鱼香茄子", "番茄炒蛋", "清炒小白菜")
+    reading = {"counts": {"meat_dishes": 2}}
+    routed_revise(env, "要两个荤菜", reading, [picked(slots=[(0, None)], choices=[(0, [ids_of(env, "番茄炒蛋")[0]])])])
+    spec = last_record(env).request["spec"]
+    assert (spec["meat_dishes"], spec["meat_bound"]) == (2, "exact")
+    routed_revise(env, "还是要两个荤菜", reading, [picked(slots=[(0, None)])])
     spec = last_record(env).request["spec"]
     assert (spec["meat_dishes"], spec["meat_bound"]) == (2, "exact")
 

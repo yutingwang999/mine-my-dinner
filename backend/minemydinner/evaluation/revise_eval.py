@@ -397,7 +397,10 @@ def asked_back(values: dict) -> bool:
     """The revise step answered "unclear" with no change: the reply asks which dish is meant
     (the graph's own rule, `asks_back`, on the state's proposal)."""
     proposal = values.get("proposal")
-    return isinstance(proposal, dict) and asks_back(proposal)
+    if isinstance(proposal, dict) and asks_back(proposal):
+        return True
+    # The change path (plan 3b-2 spec 5.6): a reference that matched no dish.
+    return (values.get("change") or {}).get("asked") == "which_dish"
 
 
 def follow_up_failures(scenario: Any, facts: TurnFacts) -> list[str]:
@@ -547,7 +550,9 @@ def asked_empty(values: dict) -> bool:
     """The revision would have left no dish and asked whether to plan a new meal (spec 5.1)
     instead; read from the state's revision of the judged run."""
     revision = values.get("revision")
-    return isinstance(revision, dict) and bool(revision.get("empty"))
+    if isinstance(revision, dict) and bool(revision.get("empty")):
+        return True
+    return (values.get("change") or {}).get("asked") == "empty_plan"
 
 
 def locked_removed(scenario: Any, facts: TurnFacts) -> list[str]:

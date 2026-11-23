@@ -73,6 +73,12 @@ class ChatState(TypedDict):
     # last attempt's `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then
     # holds the RevisionProposal dump, or None when an attempt gave no answer.
     revision: dict | None
+    # The change in progress (plan 3b-2 spec 5.4-5.6): `from_version`, `deleted`, `plan_ids`
+    # (the plan it changes), the `frame` (Frame dump), the `reading` it was built from (on a
+    # button, the one made from the offering card's unfinished parts), `words` (the user's
+    # words it is checked against), `breaking` ([id, reason] pairs), `named` (a named dish's
+    # words to the recipe id placed for it) and, after the picker, `outcome`.
+    change: dict | None
     current_plan: dict | None
     plan_versions: list[dict]
     # reply_plans is display only, never sent to a model: each plan by the id of the assistant

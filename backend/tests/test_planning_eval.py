@@ -2055,7 +2055,7 @@ REVISE_LIBRARY = [
 
 
 class ScriptModel(ScriptedChatModel):
-    """Planner and reviser replies built at call time from library titles: each entry of
+    """Planner, reviser and picker replies built at call time from library titles: each entry of
     `script` is a function of a title-to-id lookup, used once and in order."""
 
     def __init__(self, factory, script, intents, parses, readings=None, **kwargs):
@@ -2072,6 +2072,14 @@ class ScriptModel(ScriptedChatModel):
         self.factory = factory
         self.script = list(script)
         self.seen_titles: list[set[str]] = []
+
+    def with_structured_output(self, schema, include_raw=False):
+        if schema.__name__ == "FollowUpReading":
+            with self.factory() as session:
+                ids = dict(session.execute(select(Recipe.title, Recipe.id)).all())
+            readings = self.structured["FollowUpReading"]
+            self.structured["FollowUpReading"] = [r(ids) if callable(r) else r for r in readings]
+        return super().with_structured_output(schema, include_raw=include_raw)
 
     def invoke(self, messages, config=None, **kwargs):
         with self.factory() as session:
@@ -2115,17 +2123,49 @@ def _revise_sent(model):
     return [m for m in model.sent if m and "RevisionProposal" in str(m[0].content)]
 
 
+def _pick_sent(model):
+    from minemydinner.agent.request import load_prompt
+
+    prompt = load_prompt("pick")
+    return [m for m in model.sent if m and m[0].type == "system" and m[0].content == prompt]
+
+
+def _pick(slots=(), choices=(), wish_met=None, note="选好了。"):
+    """The picker's answer by titles: `slots` as (index, title or None), `choices` as
+    (index, titles)."""
+    return lambda ids: tool_call(
+        "PickerAnswer",
+        {
+            "choices": [{"index": i, "ids": [ids[t] for t in titles]} for i, titles in choices],
+            "slots": [
+                {"index": i, "recipe_id": ids[t] if t else None, "reason": ""} for i, t in slots
+            ],
+            "wish_met": wish_met,
+            "note": note,
+        },
+    )
+
+
+def _reading(remove=(), **fields):
+    """A change reading by titles, resolved when the reader is called: `remove` holds
+    (title, quote, mode)."""
+    return lambda ids: {
+        "kind": "change",
+        "remove": [{"id": ids[t], "quote": q, "mode": m} for t, q, m in remove],
+        **fields,
+    }
+
+
 def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
     """first_plan replaces the model's plan as a model version; the edits keep (the peanut
-    dish's conflict confirmed), add (locked), and remove; the revision is judged."""
+    dish's conflict confirmed), add (locked), and remove; the change is judged. The dish kept
+    against the allergy by the user's confirmation is not a dish that breaks a rule."""
     model = ScriptModel(
         eval_db,
-        [
-            _propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"),
-            _revision("named", remove=[("红烧茄子", "茄子这道")], add=["清炒小白菜"]),
-        ],
-        intents=[{"intent": "plan"}, {"intent": "revise"}],
-        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _pick(slots=[(0, "清炒小白菜")])],
+        intents=[{"intent": "plan"}],
+        parses=[{"dishes": 3, "mode": "shopping"}],
+        readings=[_reading(remove=[("红烧茄子", "茄子这道", "replace")])],
     )
     scenario = _revise_scenario(
         "fixed",
@@ -2145,13 +2185,13 @@ def test_a_fixed_first_plan_and_hand_edits_before_a_revision(tmp_path, eval_db):
     assert outcome.as_expected, (outcome.failures, outcome.note)
     assert outcome.turn == "revision" and outcome.route_intent == "revise"
     assert outcome.final_passed and outcome.changed == 1 and outcome.locked_removed == 0
-    # The revise turn's own calls (route, parse, revise) apart from the scenario's six.
-    assert outcome.model_calls == 6 and outcome.turn_model_calls == 3
-    # The revision started from the manual version (index 1) after the fixed model version.
+    # The change turn's own calls (reader, picker) apart from the first turn's three.
+    assert outcome.model_calls == 5 and outcome.turn_model_calls == 2
+    # The change started from the manual version (index 1) after the fixed model version.
     first_run, second_run = outcome.record["planning_runs"]
     assert second_run["request"]["revision"] == {"from_version": 1}
-    # The reviser saw the fixed plan's dishes after the edits, with the two locks.
-    opening = str(_revise_sent(model)[0][1].content)
+    # The picker saw the fixed plan's dishes after the edits, with the two locks.
+    opening = str(_pick_sent(model)[0][1].content)
     plan_lines = opening.split("Current plan:")[1]
     assert "红烧茄子" in plan_lines and "番茄炒蛋" not in plan_lines
     assert "宫保鸡丁" in plan_lines and plan_lines.count("LOCKED") == 2
@@ -2173,10 +2213,11 @@ def test_a_fixed_first_plan_rewrites_the_reply_the_reader_reads(tmp_path, eval_d
                 [ids[t] for t in ("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
                 note="先炒青椒肉丝，再做清炒小白菜。",
             ),
-            _revision("named", remove=[("红烧茄子", "茄子这道")], add=["清炒小白菜"]),
+            _pick(slots=[(0, "清炒小白菜")]),
         ],
-        intents=[{"intent": "plan"}, {"intent": "revise"}],
-        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+        intents=[{"intent": "plan"}],
+        parses=[{"dishes": 3, "mode": "shopping"}],
+        readings=[_reading(remove=[("红烧茄子", "茄子这道", "replace")])],
     )
     scenario = _revise_scenario(
         "reply", rules=[], first_plan=["宫保鸡丁", "番茄炒蛋", "红烧茄子"],
@@ -2283,9 +2324,13 @@ def test_hide_and_bring_back_keep_ids(eval_db):
 def test_a_nothing_fits_revision_is_not_passed_and_unchanged(tmp_path, eval_db):
     model = ScriptModel(
         eval_db,
-        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"), _revision("general", note="没有更辣的。")],
-        intents=[{"intent": "plan"}, {"intent": "revise"}],
-        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+        [
+            _propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"),
+            _pick(slots=[(0, None)], choices=[(0, ["番茄炒蛋"])], wish_met=False, note="没有更辣的。"),
+        ],
+        intents=[{"intent": "plan"}],
+        parses=[{"dishes": 3, "mode": "shopping"}],
+        readings=[_reading(wish="辣一些的", wish_general=True)],
     )
     scenario = _revise_scenario(
         "nothing",
@@ -2304,12 +2349,13 @@ def test_a_nothing_fits_revision_is_not_passed_and_unchanged(tmp_path, eval_db):
 
 
 def test_an_unclear_revision_is_a_question(tmp_path, eval_db):
+    # Plan 3b-2 spec 5.6: a reference that matches no dish keeps the plan and asks which.
     model = ScriptModel(
         eval_db,
-        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜"),
-         _revision("unclear", note="你说的是哪一道？")],
-        intents=[{"intent": "plan"}, {"intent": "revise"}],
-        parses=[{"dishes": 3, "mode": "shopping"}, {}],
+        [_propose("青椒肉丝", "番茄炒蛋", "清炒小白菜")],
+        intents=[{"intent": "plan"}],
+        parses=[{"dishes": 3, "mode": "shopping"}],
+        readings=[{"kind": "change", "ambiguous": True, "reading": "没看出是哪一道。"}],
     )
     scenario = _revise_scenario(
         "ask", rules=[], follow_up="那道不要了", expect_plan=False, expect_question=True,
@@ -2779,28 +2825,31 @@ def test_a_follow_up_revision_before_a_button_counts_as_a_revise_turn():
 
 
 class FridgeAddModel(ScriptedChatModel):
-    """The planner proposes 番茄炒蛋 and 清炒小白菜; the reviser adds nothing in fridge-only
-    mode (nothing more can be made) and adds 蒜蓉西兰花 once shopping is allowed."""
+    """The planner proposes 番茄炒蛋 and 清炒小白菜; the reader reads "再加一道" as three
+    dishes; the picker finds nothing the first time (fridge-only: nothing more can be made)
+    and adds 青椒肉丝 on the button turn, once shopping is allowed."""
 
     def __init__(self, factory, intents, parses):
         super().__init__(
             replies=[final_proposal([1])],
             structured={
                 "Intent": list(intents),
-                "FollowUpReading": [{"kind": "change"}],
+                "FollowUpReading": [{"kind": "change", "counts": {"dishes": 3}}],
                 "ParsedRequest": list(parses),
             },
         )
         self.factory = factory
+        self.picks = 0
 
     def invoke(self, messages, config=None, **kwargs):
         with self.factory() as session:
             ids = dict(session.execute(select(Recipe.title, Recipe.id)).all())
         text_sent = " ".join(str(m.content) for m in messages)
-        if messages and "RevisionProposal" in str(messages[0].content):
-            shopping = "Mode: shopping" in text_sent
-            self.replies = [_revision("add", add=["蒜蓉西兰花"] if shopping else [],
-                                      note="冰箱里没有能再做的菜了。")(ids)]
+        if "Slots (new dishes to choose)" in text_sent:
+            self.picks += 1
+            # The new dish goes to the side with fewer dishes: a meat dish here.
+            dish = "青椒肉丝" if self.picks > 1 else None
+            self.replies = [_pick(slots=[(0, dish)], note="冰箱里没有能再做的菜了。")(ids)]
         else:
             self.replies = [_propose("番茄炒蛋", "清炒小白菜")(ids)]
         return super().invoke(messages, config, **kwargs)
@@ -2824,7 +2873,7 @@ def test_a_button_after_a_failed_revision_revises_the_kept_plan(tmp_path, eval_d
         expect_no_question=True,
         expect_spec={"mode": "shopping"},
         expect_max_changed=0,
-        expect_titles_exact=["番茄炒蛋", "清炒小白菜", "蒜蓉西兰花"],
+        expect_titles_exact=["番茄炒蛋", "清炒小白菜", "青椒肉丝"],
     )
     [outcome] = evaluate(
         eval_db, _client(tmp_path, eval_db, model), REVISE_LIBRARY, [scenario], InMemorySaver()
@@ -2835,11 +2884,10 @@ def test_a_button_after_a_failed_revision_revises_the_kept_plan(tmp_path, eval_d
     assert follow_run["final_passed"] is False and follow_run["request"]["revision"]
     assert button_run["request"]["button"] == "switch_to_shopping"
     assert button_run["request"]["revision"] is not None
-    # The button turn: one revise call; the failed follow-up's revise turn: route, parse and
-    # one attempt, counted apart (an empty add that fails only the counts is "nothing fits",
-    # not retried: development run 1 of plan 3b-1b).
+    # The button turn: one picker call; the failed follow-up's change turn: the reader and
+    # one picker call, counted apart.
     assert outcome.turn_model_calls == 1
-    assert outcome.earlier_revise_calls == 2 + 1
+    assert outcome.earlier_revise_calls == 2
     _assert_clean(eval_db)
 
 

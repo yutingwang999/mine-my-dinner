@@ -69,6 +69,31 @@ UNCHANGED_NOTE_ZH = "这次没有找到可以改的地方，方案保持原样�
 EMPTY_PLAN_QUESTION_ZH = "这样就一道菜都不剩了。要重新规划一顿吗？"
 EMPTY_PLAN_QUESTION_EN = "That would leave no dish. Shall I plan a new meal?"
 
+# The change path's reply (plan 3b-2 spec 5.5, 5.6). CHANGE_PARTIAL leads the parts of a change
+# that could not be done, after what was done; READING_PREFIX leads the reader's sentence on
+# an ambiguous message; WHICH_DISH is the one question for a reference that matches no dish.
+CHANGE_PARTIAL_ZH = "有些地方没能按你说的改："
+CHANGE_PARTIAL_EN = "Some of it could not be done:"
+READING_PREFIX_ZH = "我的理解："
+READING_PREFIX_EN = "How I read it: "
+WHICH_DISH_ZH = "你指的是哪一道菜？"
+WHICH_DISH_EN = "Which dish did you mean?"
+CHANGE_WISH_UNMET_ZH = "菜谱库里没有完全符合“{wish}”的菜。"
+CHANGE_WISH_UNMET_EN = "Nothing in your library quite fits “{wish}”."
+# The dishes stay, but the meal's conditions changed (an avoidance taken back, a new time
+# limit no dish breaks): a new version carries them.
+CONDITIONS_ONLY_ZH = "菜不用换，方案已经按新的要求更新。"
+CONDITIONS_ONLY_EN = "No dish needed to change; the plan now follows the new conditions."
+# A dish type in the user's words.
+DISH_TYPE_WORDS = {
+    "meat dish": ("荤菜", "meat dish"),
+    "vegetable dish": ("素菜", "vegetable dish"),
+    "soup": ("汤", "soup"),
+    "staple food": ("主食", "staple food"),
+    "dessert": ("甜品", "dessert"),
+    "snack": ("小吃", "snack"),
+}
+
 
 def from_version(current: dict, versions: list[dict]) -> int:
     """The index in `plan_versions` of the version the current plan is. A manual version is
@@ -694,3 +719,138 @@ def card_search_notes(card: dict) -> dict:
         "left_out_details": list(card.get("left_out_details") or []),
         "semantic_paused": bool(card.get("semantic_paused", False)),
     }
+
+
+# ---- the change path's sentences (plan 3b-2 spec 5.5, 5.6) ----
+
+
+def dish_type_word(dish_type: str, locale: str) -> str:
+    words = DISH_TYPE_WORDS.get(dish_type)
+    if words is None:
+        return dish_type or ("菜" if is_zh(locale) else "dish")
+    return words[0] if is_zh(locale) else words[1]
+
+
+def change_sentences(
+    pairs: list[tuple[str, str]], dropped: list[str], added: list[str], locale: str
+) -> str:
+    """What a change did to the dishes not locked: each replacement as (old, new) title, then
+    the dishes dropped, then the dishes added, as `changed_text` words them."""
+    zh = is_zh(locale)
+    join = "、" if zh else ", "
+    parts = []
+    if pairs:
+        if zh:
+            parts.append("，".join(f"把{old}换成了{new}" for old, new in pairs) + "。")
+        else:
+            swaps = ", and ".join(f"{old} with {new}" for old, new in pairs)
+            parts.append(f"Replaced {swaps}.")
+    if dropped:
+        parts.append(f"去掉了{join.join(dropped)}。" if zh else f"Removed {join.join(dropped)}.")
+    if added:
+        parts.append(f"加了{join.join(added)}。" if zh else f"Added {join.join(added)}.")
+    return "".join(parts) if zh else " ".join(parts)
+
+
+def rule_reason(reason: str, meal_avoid: Collection[str], locale: str) -> str:
+    """Why a dish had to go, for `locked_changed_text`: this meal's avoidance or a diner's
+    rule; empty for a dish the message itself pointed at."""
+    if reason == "meal_avoid" and meal_avoid:
+        return meal_avoid_reason(list(meal_avoid), locale)
+    if reason == "diner_rule":
+        return "它不适合一起吃饭的人" if is_zh(locale) else "it does not suit someone eating"
+    return ""
+
+
+def unfinished_sentence(item: dict, limit: int | None, meal_avoid: Collection[str], locale: str) -> str:
+    """One part of a change that could not be done, in the user's words. `item["kind"]`:
+    "missing" (a named dish not placed: `reason` and, for a found dish, `title`, `blocked`,
+    `time_min`), "unfilled" (a slot no dish fits: `dish_type` and the replaced dish's
+    `title`, or None for an add) or "removed" (a dish that breaks a rule, removed with no
+    replacement: `title`, `why`)."""
+    zh = is_zh(locale)
+    kind = item["kind"]
+    if kind == "missing":
+        reason, name = item["reason"], item.get("title") or item["name"]
+        if reason == "not_in_library":
+            if zh:
+                return f"菜谱库里没有{item['name']}，可以先导入菜谱。"
+            return f"{item['name']} is not in your recipe library; you can import it first."
+        if reason == "ambiguous":
+            if zh:
+                return f"{item['name']}在菜谱库里对得上不止一道菜，没有加上，告诉我完整的菜名就好。"
+            return (
+                f"{item['name']} matches more than one dish in your library, so it was not "
+                "added; tell me its full title."
+            )
+        if reason == "over_time_limit" and limit is not None:
+            dish = {"title": name, "time_min": item.get("time_min")}
+            return over_limit_note([dish], limit, locale)
+        blocked = item.get("blocked")
+        if blocked == "stock":
+            if zh:
+                return f"{name}在你的菜谱库里，但家里的食材不够做它，允许购物就可以用它。"
+            return f"{name} is in your library, but what is at home is not enough for it; allow shopping to use it."
+        if blocked == "cookware":
+            if zh:
+                return f"{name}在你的菜谱库里，但需要家里没有的厨具。"
+            return f"{name} is in your library, but it needs cookware you do not have."
+        why = rule_reason(blocked or "", meal_avoid, locale)
+        if zh:
+            return f"{name}在你的菜谱库里，但{why or '它不符合这顿的要求'}，所以没有加上。"
+        return f"{name} is in your library, but {why or 'it does not fit this meal'}, so it was not added."
+    if kind == "unfilled":
+        word = dish_type_word(item["dish_type"], locale)
+        title = item.get("title")
+        if title:
+            if zh:
+                return f"没找到合适的{word}来换{title}，先保留了它。"
+            return f"No {word} fit in place of {title}, so it stays."
+        if item.get("for_count"):
+            # A stated count that needed this dish: no other dish was removed for it.
+            if zh:
+                return f"没找到可以加的{word}，所以没能按你说的数量改，原来的菜都留着。"
+            return (
+                f"No {word} could be added, so the counts could not be changed as you asked; "
+                "the dishes you had stay."
+            )
+        return f"没找到可以加的{word}。" if zh else f"No {word} could be added."
+    # "removed": a dish that breaks a rule leaves even with no replacement (spec 5.5).
+    why = rule_reason(item.get("why") or "", meal_avoid, locale)
+    if zh:
+        return f"{item['title']}去掉了：{why or '它不符合这顿的要求'}，也没找到可以替换的菜。"
+    return f"{item['title']} was removed: {why or 'it does not fit this meal'}, and nothing could replace it."
+
+
+def reading_sentence(reading: str, locale: str) -> str:
+    prefix = READING_PREFIX_ZH if is_zh(locale) else READING_PREFIX_EN
+    return f"{prefix}{reading.strip()}"
+
+
+def which_dish_question(reading: str, locale: str) -> str:
+    """Spec 5.6: a reference that matches no dish: how it was read, then which dish."""
+    question = WHICH_DISH_ZH if is_zh(locale) else WHICH_DISH_EN
+    if not reading.strip():
+        return question
+    return reading_sentence(reading, locale) + ("" if is_zh(locale) else " ") + question
+
+
+def change_wish_unmet(wish: str, locale: str) -> str:
+    template = CHANGE_WISH_UNMET_ZH if is_zh(locale) else CHANGE_WISH_UNMET_EN
+    return template.format(wish=wish)
+
+
+def partial_text(sentences: list[str], locale: str, lead: bool) -> str:
+    """The parts that could not be done, after CHANGE_PARTIAL when the change did something."""
+    if not sentences:
+        return ""
+    zh = is_zh(locale)
+    body = "".join(sentences) if zh else " ".join(sentences)
+    if not lead:
+        return body
+    head = CHANGE_PARTIAL_ZH if zh else CHANGE_PARTIAL_EN
+    return f"{head}{body}" if zh else f"{head} {body}"
+
+
+def conditions_only_note(locale: str) -> str:
+    return CONDITIONS_ONLY_ZH if is_zh(locale) else CONDITIONS_ONLY_EN

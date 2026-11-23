@@ -52,6 +52,9 @@ class Slot(BaseModel):
     # "breaks_rule": the replaced dish breaks a diner rule or a one-meal avoidance, so it is
     # removed even when no dish fills the slot (spec 5.5). Every other slot is "asked".
     reason: Literal["asked", "breaks_rule"] = "asked"
+    # True for an add slot made to meet a stated count: when it stays unfilled, the count
+    # drops made with it are withheld, so the plan never shrinks unasked (spec 5.5).
+    for_count: bool = False
 
 
 class Choice(BaseModel):
@@ -105,6 +108,8 @@ class Frame(BaseModel):
     missing: list[Missing]
     empty_plan: bool
     ignored: list[dict]
+    # The drops made to meet a stated count (among `drops`); every drop choice is one too.
+    count_drops: list[int] = Field(default_factory=list)
 
 
 def _break_rank(reason: str) -> int:
@@ -132,8 +137,12 @@ def breaking_from(result: ValidationResult) -> dict[int, str]:
     return found
 
 
-def _fold(text: str) -> str:
+def fold(text: str) -> str:
+    """A name compared case- and space-insensitively."""
     return "".join(text.casefold().split())
+
+
+_fold = fold
 
 
 def _one_off(title: str, name: str) -> bool:
@@ -234,6 +243,7 @@ class _Builder:
         self.placed_names: list[list[str]] = []
         self.missing: list[Missing] = []
         self.ignored: list[dict] = []
+        self.count_drops: list[int] = []
 
     def type_of(self, dish_id: int) -> str:
         facts = self.facts.get(dish_id)
@@ -308,6 +318,10 @@ class _Builder:
                 self.slots.remove(slot)
                 if slot.replaces is not None:
                     self.drops.append(slot.replaces)
+                    # A dish that breaks a diner rule or a one-meal avoidance goes for good
+                    # (spec 5.5); only an asked replacement may be withheld with the count.
+                    if slot.reason != "breaks_rule":
+                        self.count_drops.append(slot.replaces)
                 count -= 1
         if count <= 0:
             return
@@ -315,12 +329,15 @@ class _Builder:
         if len(pool) <= count:
             for dish_id in pool:
                 self.drop(dish_id)
+                self.count_drops.append(dish_id)
             return
         dish_type = dish_types[0] if len(dish_types) == 1 else None
         self.choices.append(Choice(dish_type=dish_type, candidates=pool, up_to=count, mode="drop"))
 
-    def add_count(self, dish_type: str, count: int) -> None:
-        self.slots.extend(Slot(kind="add", dish_type=dish_type) for _ in range(count))
+    def add_count(self, dish_type: str, count: int, for_count: bool = False) -> None:
+        self.slots.extend(
+            Slot(kind="add", dish_type=dish_type, for_count=for_count) for _ in range(count)
+        )
 
 
 def _side_changes(
@@ -372,7 +389,7 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
         if gap > 0:
             builder.remove_count((dish_type,), gap)
         elif gap < 0:
-            builder.add_count(dish_type, -gap)
+            builder.add_count(dish_type, -gap, for_count=True)
     meat_type = DISH_TYPE_OF_CATEGORY["meat_dishes"]
     veg_type = DISH_TYPE_OF_CATEGORY["vegetable_dishes"]
     sides = [s for s in ("meat_dishes", "vegetable_dishes") if binds(s)]
@@ -393,8 +410,8 @@ def _meet_counts(builder: _Builder, spec: PlanSpec, stated: set[str] | None) -> 
         builder.remove_count((veg_type,), drop_v)
     if either:
         builder.remove_count((meat_type, veg_type), either)
-    builder.add_count(meat_type, add_m)
-    builder.add_count(veg_type, add_v)
+    builder.add_count(meat_type, add_m, for_count=True)
+    builder.add_count(veg_type, add_v, for_count=True)
 
 
 def _locked_quote_ok(facts: DishFacts | None, quote: str, message: str) -> bool:
@@ -526,4 +543,5 @@ def build_frame(
         missing=builder.missing,
         empty_plan=left <= 0,
         ignored=builder.ignored,
+        count_drops=builder.count_drops,
     )

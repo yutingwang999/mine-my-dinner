@@ -58,6 +58,10 @@ def test_request_after_no_counts_keeps_the_group():
     new = request_after(_request(), FollowUpReading(kind="change"))
     assert new["dishes"] == 3 and new["meat_dishes"] == 2
     assert new["counts_stated_now"] is False
+    # The flag says whether THIS message states counts: an earlier turn's true never carries,
+    # or a later button would aim at that turn's stale counts instead of the plan shown.
+    carried = request_after(_request(counts_stated_now=True), FollowUpReading(kind="change"))
+    assert carried["dishes"] == 3 and carried["counts_stated_now"] is False
 
 
 def test_request_after_meal_avoid_is_the_whole_list():

@@ -44,6 +44,11 @@ NODE_STEPS = {
     "start_revision": "context",
     "check_revised": "check",
     "present_revision": "present",
+    # The change path (plan 3b-2): the frame, the picker (its searches report "search"),
+    # then the reply.
+    "build_change": "context",
+    "pick_dishes": "check",
+    "present_change": "present",
 }
 # The nodes whose update carries `retries` when they send the run back for another attempt.
 RETRY_NODES = ("validate_plan", "check_revised")

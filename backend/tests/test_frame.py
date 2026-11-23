@@ -292,7 +292,7 @@ def test_a_lower_total_with_no_side_lets_the_picker_choose_the_type():
 
 def test_a_stated_higher_count_adds_slots():
     frame = _frame(_change(counts=ReadCounts(soups=2)), spec=_spec(soups=2))
-    assert frame.slots == [Slot(kind="add", dish_type="soup")]
+    assert frame.slots == [Slot(kind="add", dish_type="soup", for_count=True)]
 
 
 def test_a_replace_into_another_type_by_counts():
@@ -306,7 +306,7 @@ def test_a_replace_into_another_type_by_counts():
         message="把汤换成一个素菜",
     )
     assert frame.drops == [3]
-    assert frame.slots == [Slot(kind="add", dish_type="vegetable dish")]
+    assert frame.slots == [Slot(kind="add", dish_type="vegetable dish", for_count=True)]
 
 
 def test_adds_by_type_and_by_name():

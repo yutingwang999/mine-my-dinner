@@ -174,16 +174,21 @@ def reader_messages(
 
 def request_after(request: dict, reading: FollowUpReading) -> dict:
     """The request after a `change` reading. Stated counts replace the whole count group of the
-    old request (as `carry_unstated` treats it) and set `counts_stated_now`; conditions replace
-    their own fields; `meal_avoid` is the reading's whole list; a stated wish replaces the
-    query. Everything else is carried."""
+    old request (as `carry_unstated` treats it); conditions replace their own fields;
+    `meal_avoid` is the reading's whole list; a stated wish replaces the query. Everything
+    else is carried.
+
+    `counts_stated_now` says whether this message states counts, never an earlier turn's: the
+    change path then meets the stated counts, and otherwise keeps the plan's own (a hand-grown
+    plan keeps its size). A button pressed later on this turn's card reads it the same way
+    (`on_plan_counts` rebases an unstated request on the plan shown)."""
     new = dict(request)
     stated = {k: v for k, v in reading.counts.model_dump().items() if v is not None}
+    new["counts_stated_now"] = bool(stated)
     if stated:
         for name in _COUNT_GROUP:
             new[name] = [] if name == "range_fields" else None
         new.update(stated)
-        new["counts_stated_now"] = True
     cond = reading.conditions
     if cond.mode is not None:
         new["mode"] = cond.mode

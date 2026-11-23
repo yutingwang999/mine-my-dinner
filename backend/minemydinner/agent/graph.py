@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
 from minemydinner.agent.actions import action_of, apply_action, on_plan_counts, spec_changes
@@ -49,8 +49,36 @@ from minemydinner.agent.labels import (
     labels_scope,
     load_label_context,
 )
+from minemydinner.agent.change_step import (
+    UNFINISHED,
+    button_reading,
+    change_actions,
+    change_unmet,
+    conditions_changed,
+    fallback_pick,
+    needs_picker,
+    result_spec,
+    slot_results,
+    unfinished_items,
+    unfinished_reading,
+    withhold_count_drops,
+    without_picks,
+)
 from minemydinner.agent.edits import locked_ids, revised_card
-from minemydinner.agent.follow_up import FollowUpReading, reader_messages
+from minemydinner.agent.follow_up import (
+    FollowUpReading,
+    ReadConditions,
+    reader_messages,
+    request_after,
+)
+from minemydinner.agent.frame import (
+    RULE_BREAKS,
+    Frame,
+    breaking_from,
+    build_frame,
+    fold,
+    lookup_named,
+)
 from minemydinner.agent.middleware import dump_message
 from minemydinner.agent.plan_card import (
     build_dishes_card,
@@ -58,16 +86,25 @@ from minemydinner.agent.plan_card import (
     meal_constraints,
     with_meal_avoid,
 )
+from minemydinner.agent.picker import (
+    PICK_MAX_ATTEMPTS,
+    PickerAnswer,
+    apply_picks,
+    picker_messages,
+)
 from minemydinner.agent.planner import (
+    PICK_TOOLS_VERSION,
     REVISE_TOOLS_VERSION,
     TOOLS_VERSION,
     PlanProposal,
+    build_picker,
     build_planner,
     build_reviser,
 )
 from minemydinner.agent.questions import parse_messages
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import (
+    COUNT_FIELDS,
     PROMPT_VERSION,
     REPLAN_MESSAGE,
     REQUEST_STYLES,
@@ -84,6 +121,9 @@ from minemydinner.agent.revise_step import (
     attempt_spec,
     card_search_notes,
     carried_overrides,
+    change_sentences,
+    change_wish_unmet,
+    conditions_only_note,
     count_fix_hint,
     current_plan_text,
     deleted_note,
@@ -92,20 +132,26 @@ from minemydinner.agent.revise_step import (
     failed_note,
     from_version,
     kept_locked,
+    locked_changed_text,
     must_unmet_names,
     open_conflict_ids,
     over_limit_note,
     pairing_detail,
+    partial_text,
+    reading_sentence,
     replaceable_dishes,
     reply_text,
     revision_actions,
     revision_defaults,
     revision_opening,
+    rule_reason,
     split_violations,
     unchanged_card,
     unchanged_note,
+    unfinished_sentence,
     unmet_entries,
     untouched_locked,
+    which_dish_question,
     wish_unmet_actions,
     with_over_limit,
     without_deleted,
@@ -342,9 +388,9 @@ def _reads_follow_up(state: ChatState) -> bool:
     )
 
 
-# The intent each reading kind continues with until the change path exists (plan 3b-2 Task
-# 7): a change and a people message take the revise path's parse; a people message then
-# always shows the diner card (`after_parse`).
+# The intent each reading kind continues with: a change takes the change path (no parse); a
+# people message takes the revise path's parse and always shows the diner card
+# (`after_parse`); a new meal plans anew.
 READING_INTENTS = {"change": "revise", "people": "revise", "new_meal": "plan", "other": "other"}
 
 # The count fields of a request, as the reader's conditions name them.
@@ -757,6 +803,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             reviser_agent = build_reviser(deps)
         return reviser_agent
 
+    picker_agent: CompiledStateGraph | None = None
+
+    def get_picker() -> CompiledStateGraph:
+        nonlocal picker_agent
+        if picker_agent is None:
+            picker_agent = build_picker(deps)
+        return picker_agent
+
     def route_intent(state: ChatState) -> dict:
         # Each new message is a new request, which may be asked about once. The thread's
         # request is kept before this turn's parse replaces it: a revision compares the two.
@@ -779,7 +833,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # card that kept the plan the turn revises the current plan again; on any other
             # card it plans from scratch.
             action = action_of(state["messages"][-1].content)
-            revises = bool(card.get("plan_kept")) and state.get("current_plan") is not None
+            # A card whose change was done only in part (plan 3b-2 spec 5.5) revises too: the
+            # button re-runs the unfinished parts against the version it shows.
+            unfinished = (card.get(UNFINISHED) or {}).get("reading")
+            revises = bool(card.get("plan_kept") or unfinished) and (
+                state.get("current_plan") is not None
+            )
             base = card["request"]
             if revises and not base.get("counts_stated_now"):
                 # The card's turn stated no count: the counts are the plan the user sees
@@ -866,9 +925,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
 
     def after_reading(state: ChatState) -> str:
-        """Until the change path exists (Task 7), a change takes the revise path from its
-        parse, as a people message (which then shows the diner card) and a new meal (the new
-        plan path) do; "other" gets the fixed reply with the plan left as it is."""
+        """A change goes straight to the change path, with no parse call (spec 5.1); a people
+        message (which then shows the diner card) and a new meal take the parse; "other" gets
+        the fixed reply with the plan left as it is."""
+        kind = (state.get("reading") or {}).get("kind")
+        if kind == "change":
+            return "build_change"
         return "other" if state["intent"] == "other" else "parse_request"
 
     def other(state: ChatState) -> dict:
@@ -890,7 +952,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # The request is complete: no parse and no question (spec 5.5). Who eats is the
             # card's, so the diner card shows only when a settled friend was deleted since.
             if _revises(state):
-                return "start_revision"
+                # Plan 3b-2: a button that revises builds its frame from its request.
+                return "build_change"
             return "select_diners" if friend_deleted_since(state) else "load_context"
         return after_parse(state) if _reuses_parse(state) else "parse_request"
 
@@ -1173,6 +1236,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             },
             "planner_opening": None,
             "shortlist_ids": [],
+            "change": None,
         }
 
     def feasibility_step(state: ChatState) -> Command:
@@ -1635,6 +1699,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "search_notes": _empty_search_notes(),
             "planner_opening": None,
             "shortlist_ids": [],
+            "change": None,
             "revision": {
                 "from_version": index,
                 "message": "\n".join(texts),
@@ -2067,6 +2132,608 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "messages": [AIMessage(note, id=reply_id)],
         }
 
+    # ---- the change path (plan 3b-2 spec 5.4-5.6) ----
+
+    def build_change(state: ChatState, config: RunnableConfig) -> Command:
+        """The frame of a change, in code (spec 5.4). On a reader turn the new request is the
+        plan's request after the reading (`request_after`); on a button turn it is the
+        button's request, and the reading is the offering card's unfinished parts
+        (`button_reading`). The dishes that break the new request come from `validate_plan`
+        on the kept plan (overrides carried, so a dish kept against a rule by the user's
+        confirmation is not breaking). Starts the planning run, recording the frame."""
+        button = state["button"] if _button_turn(state) else None
+        base = state.get("plan_request") or state.get("previous_request") or {}
+        if button is None:
+            reading = FollowUpReading.model_validate(state["reading"])
+            request = request_after(base, reading)
+            words = "\n".join(_current_request(state["messages"]))
+            unfinished = None
+        else:
+            reading = None
+            request = state["request"]
+            card = _button_card(state) or {}
+            unfinished = card.get(UNFINISHED)
+            if UNFINISHED not in card and card.get("plan_kept") and request.get("query"):
+                # A kept card saved before cards kept their unfinished parts: its wish is
+                # what was not done.
+                unfinished = {"reading": {"wish": request["query"], "wish_general": True}}
+            words = (unfinished or {}).get("words") or "\n".join(_offering_words(state))
+        parsed = ParsedRequest.model_validate(request)
+        if request_problem(parsed):
+            # Stated counts that contradict each other: nothing changes (no question, spec
+            # 5.6); the reply asks for the counts again.
+            return Command(update={"model_calls": []}, goto="unclear")
+        index = from_version(state["current_plan"], state.get("plan_versions") or [])
+        with deps.session_factory() as session:
+            plan, deleted = live_plan(session, state["current_plan"])
+        # A reading's counts are this message's own (request_after clears the count group),
+        # so a side it states counts even when it equals the plan's request ("还是要两个荤菜"
+        # after a turn that could not add one); the other fields still compare with it.
+        previous = base if button is not None else {
+            k: v for k, v in base.items() if k not in COUNT_FIELDS
+        }
+        try:
+            spec = revision_spec(plan, previous, request)
+        except ValidationError:
+            return Command(update={"model_calls": []}, goto="unclear")
+        if button is not None:
+            spec = spec.model_copy(update=spec_changes(request, button))
+            meal_avoid = revision_meal_avoid(plan, base, request)
+            used = button_reading(unfinished, request, spec)
+        else:
+            if reading.conditions.clear_time_limit:
+                spec = spec.model_copy(update={"time_limit_min": None})
+            # The reading's whole list: a withdrawn avoidance is simply missing.
+            meal_avoid = list(request.get("meal_avoid") or [])
+            used = reading
+        ids = [r["id"] for r in plan["recipes"]]
+        named: dict[str, int] = {}
+        with deps.session_factory() as session:
+            constraints = with_meal_avoid(session, state["constraints"], meal_avoid)
+            ctx = load_planning_context(session, meal_constraints({"constraints": constraints}))
+            found = validate_plan(session, ctx, spec, ids, carried_overrides(plan, ids))
+            breaking = breaking_from(found)
+            before = {fold(n) for n in PlanSpec.model_validate(plan["spec"]).must_use}
+            uncovered = sorted(
+                n for n in must_unmet_names(found.violations) if fold(n) not in before
+            )
+            facts, _ = dish_facts(session, ids, plan=plan)
+
+            def lookup(name: str):
+                # The new request's mode, time limit and rules decide what hides a dish.
+                result = lookup_named(session, name, spec.model_dump(), ctx=ctx)
+                if result.status == "found" and result.blocked is None:
+                    named[name] = result.recipe_id
+                return result
+
+            frame = build_frame(
+                ids,
+                locked_ids(plan) - open_conflict_ids(plan),
+                facts,
+                plan["spec"],
+                spec,
+                used,
+                breaking,
+                lookup,
+                words,
+                uncovered_must=uncovered,
+            )
+        prepare = deps.client.prepare_text
+        record = {
+            "messages": [prepare(t) for t in _current_request(state["messages"])],
+            "parsed": map_strings(request, prepare),
+            "spec": map_strings(spec.model_dump(), prepare),
+            "headcount": constraints["headcount"],
+            "locale": state.get("locale", "en"),
+            "revision": {"from_version": index},
+            "reading": map_strings(state["reading"], prepare) if button is None else None,
+        }
+        if button is not None:
+            record["button"] = button
+        settled_data = state.get("settled_diners")
+        settled = SettledDiners.from_state(settled_data) if settled_data else None
+        defaults_used = revision_defaults(plan.get("defaults_used") or [], plan["spec"], spec)
+        run_id = deps.recorder.start(
+            thread_id=config["configurable"]["thread_id"],
+            request=record,
+            defaults_used=defaults_used,
+            prompt_version=PROMPT_VERSION,
+            tools_version=PICK_TOOLS_VERSION,
+            has_temporary_guests=bool(parsed.guests or (settled and settled.guest_names)),
+        )
+        for stale in [r for r in deps.run_query_vectors if r != run_id]:
+            del deps.run_query_vectors[stale]
+        for event in state.get("model_calls") or []:
+            deps.recorder.add_event(run_id, event)
+        pairs = [[i, reason] for i, reason in breaking.items()]
+        deps.recorder.add_event(
+            run_id,
+            {
+                "kind": "frame",
+                "reading": map_strings(used.model_dump(), prepare),
+                "breaking": pairs,
+                "uncovered_must": map_strings(uncovered, prepare),
+                "frame": map_strings(frame.model_dump(), prepare),
+            },
+        )
+        change = {
+            "from_version": index,
+            "deleted": deleted,
+            "plan_ids": ids,
+            "frame": frame.model_dump(),
+            "reading": used.model_dump(),
+            "words": words,
+            "breaking": pairs,
+            "named": named,
+            "outcome": None,
+        }
+        update = {
+            "request": request,
+            "model_calls": [],
+            "spec": spec.model_dump(),
+            "constraints": constraints,
+            "defaults_used": defaults_used,
+            "run_id": run_id,
+            "retries": 0,
+            "proposal": None,
+            "validation": None,
+            "first_passed": None,
+            "best": None,
+            "blocked_codes": [],
+            "blocked_h2_keys": [],
+            "shortfalls": [],
+            "search_notes": _empty_search_notes(),
+            "planner_opening": None,
+            "shortlist_ids": [],
+            # The old revise step's state is never read on this path (an evaluation run
+            # reads a turn's question from it).
+            "revision": None,
+            "change": change,
+        }
+        goto = "pick_dishes" if needs_picker(frame) and not frame.empty_plan else "present_change"
+        return Command(update=update, goto=goto)
+
+    def picker_shortlist(
+        session, ctx, spec: PlanSpec, frame: Frame, facts: dict, request: dict, vectors: dict
+    ) -> tuple[str, Any]:
+        """The shortlist for the dish types the picker may fill: the slots' types and the
+        types a replace choice may free. Returns the text and the shortlist result."""
+        types = [s.dish_type for s in frame.slots]
+        for choice in frame.choices:
+            if choice.mode == "replace":
+                types += list(
+                    dict.fromkeys(facts[i].dish_type for i in choice.candidates if i in facts)
+                )
+        none = "Shortlist: none given; search the library when a slot needs a dish."
+        if not deps.use_shortlist or not types:
+            return none, None
+        counts = count_categories(dict.fromkeys(types))
+        try:
+            wanted = PlanSpec.model_validate(
+                {**spec.model_dump(), **counts, "meat_bound": "exact", "vegetable_bound": "exact"}
+            )
+        except ValidationError:
+            return none, None
+        found = build_shortlist_result(
+            session, deps.client, ctx, wanted, ParsedRequest.model_validate(request), vectors
+        )
+        return f"{SHORTLIST_HEADER}\n{shortlist_json(found.entries, found.complete)}", found
+
+    def picker_wish(state: ChatState, change: dict) -> str:
+        """The wish the picker reads, in the user's words: the reading's, else the request's
+        taste wish; on a button turn with the offering turn's words as its context."""
+        wish = (change["reading"].get("wish") or "").strip() or state["request"].get("query") or ""
+        if not _button_turn(state) or not change.get("words"):
+            return wish
+        earlier = f"the user's earlier message: {change['words']}"
+        return f"{wish} ({earlier})" if wish else earlier
+
+    def check_pick(state: ChatState, plan: dict, frame: Frame, answer, spec: PlanSpec, codes):
+        """The picker's answer against the frame (`apply_picks`), then the hard checks of its
+        new dishes (rules, stock, cookware, time). Returns the outcome (None without an
+        answer), the problems for a retry, the new dishes that broke a check and the facts."""
+        ids = state["change"]["plan_ids"]
+        if answer is None:
+            return None, ["You gave no answer. Answer with the PickerAnswer tool."], set(), {}
+        chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
+        with deps.session_factory() as session:
+            facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen], plan=plan)
+            outcome = apply_picks(ids, frame, answer, facts)
+            if outcome.problems:
+                return outcome, list(outcome.problems), set(), facts
+            new = set(outcome.recipe_ids) - set(ids) - set(frame.placed)
+            ctx = load_planning_context(session, meal_constraints(state))
+            result = validate_plan(
+                session, ctx, spec, outcome.recipe_ids,
+                carried_overrides(plan, outcome.recipe_ids),
+            )
+        bad = [
+            v for v in result.violations
+            if v.recipe_id in new and v.code in ("H1", "H2", "H3", "H6")
+        ]
+        problems = [_violation_for_model(v.model_dump(mode="json"), codes) for v in bad]
+        return outcome, problems, {v.recipe_id for v in bad}, facts
+
+    def pick_dishes(state: ChatState) -> dict:
+        try:
+            return pick_attempts(state)
+        except BaseException:
+            deps.run_query_vectors.pop(state["run_id"], None)
+            raise
+
+    def pick_attempts(state: ChatState) -> dict:
+        """The picker fills the frame's slots and makes its choices (spec 5.5, 5.7): at most
+        PICK_MAX_ATTEMPTS attempts, each a separate call built from fresh messages; a retry
+        adds the previous attempt's problems as text. When the last attempt still has
+        problems, its dishes that broke a hard check are left out, or (no usable answer) code
+        makes only the drop choices (`fallback_pick`)."""
+        change = state["change"]
+        frame = Frame.model_validate(change["frame"])
+        spec = PlanSpec.model_validate(state["spec"])
+        plan = without_deleted(state["current_plan"], change["deleted"])
+        ids = change["plan_ids"]
+        locale = state.get("locale", "en")
+        run_id = state["run_id"]
+        vectors = deps.run_query_vectors.setdefault(run_id, {})
+        avoid = [i for i, reason in change["breaking"] if reason == "meal_avoid"]
+        with deps.session_factory() as session:
+            ctx = load_planning_context(session, meal_constraints(state))
+            facts, mains = dish_facts(session, ids, plan=plan)
+            plan_lines = current_plan_text(plan, mains, avoid)
+            rules = meal_preferences(session, ctx, current_table())
+            shortlist, found = picker_shortlist(
+                session, ctx, spec, frame, facts, state["request"], vectors
+            )
+        notes = state.get("search_notes")
+        if found is not None:
+            notes = _merge_notes(notes, [], found.semantic_paused, found.left_out_unknown_allergens)
+        rules_text = "Diner and meal rules:\n" + "\n".join(
+            f"- {line}" for line in rules or ["none recorded"]
+        )
+        wish = picker_wish(state, change)
+        codes = diner_codes(meal_constraints(state), current_table())
+        context = planner_context(state, spec, vectors)
+        problems: list[str] = []
+        attempts = 0
+        answer = outcome = None
+        bad: set[int] = set()
+        first_passed = None
+        for attempt in range(PICK_MAX_ATTEMPTS):
+            attempts = attempt + 1
+            # Fresh messages every attempt: never the previous attempt's tool results.
+            messages = picker_messages(frame, plan_lines, rules_text, wish, shortlist, locale)
+            if problems:
+                messages.append(
+                    HumanMessage(
+                        "Your previous answer had these problems. Answer again with each "
+                        "one fixed:\n" + "\n".join(f"- {p}" for p in problems)
+                    )
+                )
+            out = get_picker().invoke({"messages": messages, "run_id": run_id}, context=context)
+            notes = _notes_from_searches(notes, out["messages"])
+            answer = out.get("structured_response")
+            outcome, problems, bad, facts = check_pick(state, plan, frame, answer, spec, codes)
+            if first_passed is None:
+                first_passed = not problems
+            deps.recorder.add_event(
+                run_id,
+                {
+                    "kind": "pick_attempt",
+                    "attempt": attempt,
+                    "answer": (
+                        map_strings(answer.model_dump(), deps.client.prepare_text)
+                        if answer is not None
+                        else None
+                    ),
+                    "problems": map_strings(problems, deps.client.prepare_text),
+                    "recipe_ids": outcome.recipe_ids if outcome and not problems else None,
+                },
+            )
+            if not problems:
+                break
+        own = not problems
+        used_frame = frame
+        if problems:
+            if answer is not None and outcome is not None and not outcome.problems:
+                answer = without_picks(answer, bad)
+            else:
+                used_frame, answer = fallback_pick(frame)
+        # A stated count whose added dish was not found keeps the dishes it would have
+        # dropped (spec 5.5: the plan never shrinks unasked).
+        withheld, answer = withhold_count_drops(used_frame, answer)
+        if withheld is not used_frame:
+            # The picker's note may describe a drop code withheld.
+            own = False
+        if problems or withheld is not used_frame:
+            used_frame = withheld
+            with deps.session_factory() as session:
+                chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
+                facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen], plan=plan)
+            outcome = apply_picks(ids, used_frame, answer, facts)
+        # Only this turn's wish (on a button, the offering turn's) is ever reported unmet.
+        has_wish = bool((change["reading"].get("wish") or "").strip())
+        result = {
+            "recipe_ids": outcome.recipe_ids,
+            "slots": slot_results(used_frame, answer, facts),
+            # A changed answer is no longer the picker's: its note and wish_met may name a
+            # dish that is not placed.
+            "wish_met": answer.wish_met if own else (False if has_wish else None),
+            "note": answer.note.strip() if own else "",
+            "choices": [c.model_dump() for c in used_frame.choices],
+            "withheld_drops": [i for i in frame.count_drops if i not in used_frame.drops],
+        }
+        return {
+            "change": {**change, "outcome": result},
+            "retries": attempts - 1,
+            "first_passed": first_passed,
+            "search_notes": _merge_notes(notes, [], False),
+        }
+
+    def change_done_text(
+        live: dict,
+        result_ids: list[int],
+        change: dict,
+        slots: list[dict],
+        titles: dict[int, str],
+        breaking: dict[int, str],
+        meal_avoid: list[str],
+        locale: str,
+        removed: Collection[int] = (),
+    ) -> str:
+        """What the change did, written by code (spec 5.6): replacements, drops and adds of
+        unlocked dishes, then one sentence per locked dish that changed, with its reason (this
+        meal's avoidance, a diner's rule, or the user's words). A dish removed for a rule with
+        no replacement is said with what could not be done."""
+        before = [r["id"] for r in live["recipes"]]
+        kept = set(result_ids)
+        gone = [i for i in before if i not in kept]
+        pairs: dict[int, int] = {}
+        for slot in slots:
+            if slot["replaces"] is not None and slot["recipe_id"] in kept:
+                pairs[slot["replaces"]] = slot["recipe_id"]
+        for item in change["reading"].get("remove") or []:
+            new = change["named"].get(item.get("with_name") or "")
+            if item["id"] in gone and new in kept:
+                pairs[item["id"]] = new
+        ruled_out = {
+            s["replaces"] for s in slots
+            if s["recipe_id"] is None and s["replaces"] is not None and s["reason"] == "breaks_rule"
+        } | set(removed)
+        locked = locked_ids(live) - open_conflict_ids(live)
+        hand = set(live.get("locked") or [])
+        taken = set(pairs.values())
+        swaps = [(titles[i], titles[pairs[i]]) for i in gone if i in pairs and i not in locked]
+        dropped = [
+            titles[i] for i in gone if i not in pairs and i not in locked and i not in ruled_out
+        ]
+        added = [titles[i] for i in result_ids if i not in before and i not in taken]
+        parts = [change_sentences(swaps, dropped, added, locale)]
+        for i in gone:
+            if i in locked and i not in ruled_out:
+                replacement = titles.get(pairs[i]) if i in pairs else None
+                reason = rule_reason(breaking.get(i, ""), meal_avoid, locale)
+                parts.append(locked_changed_text([(titles[i], replacement, i in hand)], locale, reason))
+        return ("" if is_zh(locale) else " ").join(p for p in parts if p)
+
+    def present_change(state: ChatState) -> dict:
+        """The change's result (spec 5.5, 5.6): a new version when the dishes or the meal's
+        conditions changed, else the kept plan; partial results apply what could be done. The
+        reply: code's change sentences, the reading sentence on an ambiguous message, the
+        picker's note, what could not be done, and the unmet wish. The card offers next
+        actions for the unfinished parts only and keeps them (`UNFINISHED`) for a button. A
+        change that leaves no dish asks the empty-plan question; an ambiguous reference that
+        matches no dish asks which dish was meant; neither has a card."""
+        locale = state.get("locale", "en")
+        change = state["change"]
+        frame = Frame.model_validate(change["frame"])
+        current = state["current_plan"]
+        versions = list(state.get("plan_versions") or [])
+        deleted = change["deleted"]
+        live = without_deleted(current, deleted)
+        ids = change["plan_ids"]
+        used = FollowUpReading.model_validate(change["reading"])
+        button = _button_turn(state)
+        shown = None if button else FollowUpReading.model_validate(state["reading"])
+        breaking = {i: reason for i, reason in change["breaking"]}
+        outcome = change.get("outcome")
+        if outcome is None:
+            # Nothing to choose: the frame's drops and named dishes alone.
+            done = apply_picks(ids, frame, PickerAnswer(), {})
+            outcome = {"recipe_ids": done.recipe_ids, "slots": [], "wish_met": None, "note": ""}
+        result_ids = outcome["recipe_ids"]
+        spec = state["spec"]
+        meal_avoid = list(state["constraints"].get("meal_avoid") or [])
+        with deps.session_factory() as session:
+            titles = dict(
+                session.execute(
+                    select(Recipe.id, Recipe.title).where(Recipe.id.in_({*ids, *result_ids}))
+                ).all()
+            )
+        titles.update({r["id"]: r["title"] for r in live["recipes"]})
+        items = unfinished_items(frame, outcome["slots"], titles, breaking)
+        said = {i["recipe_id"] for i in items if i["kind"] == "removed"}
+        paired = {s["replaces"] for s in outcome["slots"] if s["recipe_id"] is not None}
+        named_gone = {
+            r["id"] for r in change["reading"].get("remove") or []
+            if change["named"].get(r.get("with_name") or "") in result_ids
+        }
+        for dish_id in ids:
+            if (
+                dish_id not in result_ids
+                and breaking.get(dish_id) in RULE_BREAKS
+                and dish_id not in said | paired | named_gone
+            ):
+                items.append(
+                    {
+                        "kind": "removed",
+                        "recipe_id": dish_id,
+                        "title": titles.get(dish_id, ""),
+                        "why": breaking[dish_id],
+                    }
+                )
+        # The wish that guided this turn's picks: the reading's, or on a button the offering
+        # turn's unfinished wish; an older turn's wish is never reported unmet here.
+        wish = used.wish.strip()
+        wish_unmet = bool(wish) and outcome["wish_met"] is False
+        limit = spec.get("time_limit_min")
+        sentences = [unfinished_sentence(i, limit, meal_avoid, locale) for i in items]
+        actions = change_actions(items, spec, wish_unmet)
+        unmet = change_unmet(items, sentences, limit, locale, wish_unmet)
+        unmet_wish_text = change_wish_unmet(wish, locale) if wish_unmet else ""
+        read_text = (
+            reading_sentence(shown.reading, locale)
+            if shown is not None and shown.ambiguous and shown.reading.strip()
+            else ""
+        )
+        dishes_changed = result_ids != [r["id"] for r in live["recipes"]]
+        new_conditions = conditions_changed(live, spec, meal_avoid)
+        frame_empty = not (
+            frame.drops or frame.slots or frame.choices or frame.placed or frame.missing
+        )
+        asks_which = (
+            shown is not None
+            and shown.ambiguous
+            and frame_empty
+            and not shown.add
+            and not shown.wish.strip()
+            and not any(v is not None for v in shown.counts.model_dump().values())
+            and shown.conditions == ReadConditions()
+            and not new_conditions
+        )
+        update: dict[str, Any] = {}
+        shows_card = True
+        plan_kept = True
+        with deps.session_factory() as session:
+            if frame.empty_plan or not result_ids:
+                card = unchanged_card(current, [], [])
+                note = empty_plan_question(locale)
+                shows_card = False
+            elif asks_which:
+                card = unchanged_card(live, [], [])
+                note = which_dish_question(shown.reading, locale)
+                shows_card = False
+            elif dishes_changed or new_conditions:
+                ctx = load_planning_context(session, meal_constraints(state))
+                checked = PlanSpec.model_validate(spec)
+                overrides = carried_overrides(live, result_ids)
+                found = validate_plan(session, ctx, checked, result_ids, overrides)
+                if any(v.code == "H4" for v in found.violations):
+                    # The counts follow the change list, so the version's counts match it.
+                    types = dict(
+                        session.execute(
+                            select(Recipe.id, Recipe.dish_type).where(Recipe.id.in_(result_ids))
+                        ).all()
+                    )
+                    checked = result_spec(checked, [types[i] for i in result_ids])
+                    found = validate_plan(session, ctx, checked, result_ids, overrides)
+                card_spec = checked.model_dump()
+                card = revised_card(
+                    session,
+                    ctx,
+                    {**state, "spec": card_spec},
+                    recipe_ids=result_ids,
+                    result=found,
+                    overrides=overrides,
+                    locked=kept_locked(live, result_ids),
+                    index=len(versions),
+                    locale=locale,
+                )
+                card["revision"] = {"from_version": change["from_version"]}
+                card["notes"] = deleted_note(current, deleted)
+                card["unmet"] = [*card["unmet"], *unmet]
+                card["next_actions"] = actions
+                done = change_done_text(
+                    live, result_ids, change, outcome["slots"], titles, breaking, meal_avoid,
+                    locale, removed=[i["recipe_id"] for i in items if i["kind"] == "removed"],
+                )
+                if not done and not dishes_changed:
+                    done = conditions_only_note(locale)
+                parts = [
+                    done,
+                    read_text,
+                    outcome["note"],
+                    partial_text(sentences, locale, lead=bool(done)),
+                    unmet_wish_text,
+                ]
+                note = "\n\n".join(p for p in parts if p)
+                plan_kept = False
+                update.update(plan_request=state["request"], spec=card_spec)
+            else:
+                card = unchanged_card(live, unmet, actions)
+                card["notes"] = deleted_note(current, deleted)
+                lead = failed_note(locale, bool(actions)) if items or wish_unmet else (
+                    unchanged_note(locale)
+                )
+                parts = [
+                    lead,
+                    read_text,
+                    outcome["note"],
+                    partial_text(sentences, locale, lead=False),
+                    unmet_wish_text,
+                ]
+                note = "\n\n".join(p for p in parts if p)
+        if plan_kept:
+            # The plan stays; `request` keeps this turn's (a button on its card starts from
+            # it), and the spec and the meal's avoidance go back to the plan's own.
+            with deps.session_factory() as session:
+                constraints = with_meal_avoid(
+                    session, state["constraints"], current.get("meal_avoid") or []
+                )
+            update.update(
+                spec=current["spec"],
+                constraints=constraints,
+                defaults_used=current.get("defaults_used") or [],
+                search_notes=card_search_notes(current),
+            )
+        words = change.get("words") or ""
+        card = _reply_card(card, state["request"], plan_kept=plan_kept, words=words)
+        left = (
+            unfinished_reading(used, frame, outcome["slots"], outcome["wish_met"], result_ids)
+            if shows_card
+            else None
+        )
+        if shows_card:
+            card[UNFINISHED] = {"reading": left, "words": words}
+        if not plan_kept:
+            update.update(current_plan=card, plan_versions=[*versions, card])
+        prepare = deps.client.prepare_text
+        deps.recorder.add_event(
+            state["run_id"],
+            {
+                "kind": "change_outcome",
+                "recipe_ids": result_ids,
+                "plan_kept": plan_kept,
+                "empty_plan": bool(frame.empty_plan or not result_ids),
+                "asks_which_dish": bool(asks_which),
+                "slots": map_strings(outcome["slots"], prepare),
+                "wish_met": outcome["wish_met"],
+                "unfinished": map_strings(items, prepare),
+            },
+        )
+        deps.run_query_vectors.pop(state["run_id"], None)
+        deps.recorder.finish(
+            state["run_id"],
+            retries=state.get("retries") or 0,
+            first_passed=state.get("first_passed") is not False,
+            final_passed=not plan_kept,
+            final_plan=map_strings(card, prepare),
+        )
+        reply_id = str(uuid.uuid4())
+        reply_plans = dict(state.get("reply_plans") or {})
+        if shows_card:
+            reply_plans[reply_id] = card
+        # Which question the reply asks, if any, for evaluation and debugging.
+        if frame.empty_plan or not result_ids:
+            asked = "empty_plan"
+        else:
+            asked = "which_dish" if asks_which else None
+        return {
+            **update,
+            "change": {**change, "outcome": outcome, "asked": asked},
+            "reply_plans": reply_plans,
+            "messages": [AIMessage(note, id=reply_id)],
+        }
+
     def with_labels(node: Callable, restore: bool = True) -> Callable:
         """Run `node` with the conversation's label table as the current label context, so
         the client hooks replace saved nicknames in every model call the node makes. The
@@ -2126,12 +2793,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         destinations=("reviser", "present_revision"),
     )
     builder.add_node("present_revision", with_labels(present_revision))
+    builder.add_node(
+        "build_change",
+        with_labels(build_change),
+        destinations=("pick_dishes", "present_change", "unclear"),
+    )
+    builder.add_node("pick_dishes", with_labels(pick_dishes))
+    builder.add_node("present_change", with_labels(present_change))
     builder.add_conditional_edges(
         START,
         lambda state: "read_follow_up" if _reads_follow_up(state) else "route_intent",
         ["read_follow_up", "route_intent"],
     )
-    builder.add_conditional_edges("read_follow_up", after_reading, ["parse_request", "other"])
+    builder.add_conditional_edges(
+        "read_follow_up", after_reading, ["build_change", "parse_request", "other"]
+    )
     gates = [
         "ask_style",
         "ask_question",
@@ -2141,8 +2817,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         "start_revision",
     ]
     builder.add_conditional_edges(
-        "route_intent", choose, ["parse_request", "other", "ask_revise_or_plan", *gates]
+        "route_intent",
+        choose,
+        ["parse_request", "other", "ask_revise_or_plan", "build_change", *gates],
     )
+    builder.add_edge("pick_dishes", "present_change")
+    builder.add_edge("present_change", END)
     builder.add_edge("ask_revise_or_plan", "parse_request")
     builder.add_edge("start_revision", "reviser")
     builder.add_edge("reviser", "check_revised")
