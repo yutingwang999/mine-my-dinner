@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -39,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v5"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -222,11 +224,11 @@ def test_follow_up_v2_states_the_task_11_principles():
 
 def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
     assert PROMPT_VERSIONS["follow_up"] == "follow_up_v4"
-    assert PROMPT_VERSIONS["pick"] == "pick_v4"
+    # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); this test
+    # keeps pick_v4's own numbers.
     reader = load_prompt("follow_up")
-    picker = load_prompt("pick")
+    picker = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
     assert reader == (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
-    assert picker == (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
     assert len(reader) == 5499
     assert len(picker) == 4268
     revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
@@ -597,8 +599,50 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
     assert "Do not count or list" in v5 and "one sentence" in v5
 
 
+def _pick_v4_and_v5() -> tuple[str, str]:
+    v4 = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
+    v5 = (PROMPT_DIR / "pick_v5.md").read_text(encoding="utf-8")
+    return v4, v5
+
+
+def test_pick_v5_differs_from_pick_v4_only_in_the_wish_and_asked_add_principles():
+    """Plan 3b-2 change fixes Task 2 (spec 5.3, 5.4): pick_v5 is pick_v4 with the wish_result
+    principle reworded (it judges the dishes chosen), one new principle (an add the user asked
+    for is filled whenever a usable dish exists), and examples in the new slot-line formats."""
+    v4, v5 = _pick_v4_and_v5()
+    assert PROMPT_VERSIONS["pick"] == "pick_v5"
+    assert load_prompt("pick") == v5
+    head4 = v4.split("Examples:", 1)[0].splitlines()
+    head5 = v5.split("Examples:", 1)[0].splitlines()
+    wish_lines = [line for line in head4 if "wish_result is" in line]
+    assert len(wish_lines) == 1
+    missing = [line for line in head4 if line not in head5 and line not in wish_lines]
+    assert missing == []
+    assert wish_lines[0] not in head5
+    # "yes" is about the dishes chosen.
+    yes_lines = [line for line in head5 if '"yes"' in line]
+    assert yes_lines and any(re.search(r"\bchos(e|en)\b", line) for line in yes_lines)
+    # An add the user asked for is not left empty for the meal's balance.
+    assert any("asked for" in line and "balance" in line for line in head5)
+    # The examples use the picker's slot-line formats (picker._slot_line).
+    examples = v5.split("Examples:", 1)[1]
+    assert "which goes because of the user's words" in examples
+    assert "in place of 12, the user's words" not in examples
+    assert "Slot 0, in place of" not in examples
+
+
+def test_pick_v5_size():
+    v4, v5 = _pick_v4_and_v5()
+    follow_up_v4 = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
+    assert len(v5) <= len(v4) + 600
+    # The 3b-2 design's bound: the reader and the picker together stay shorter than
+    # route_v6 plus revise_v4 (12817 characters).
+    assert len(follow_up_v4) + len(v5) < 12817
+    assert 'never use ids, the plan\'s marks (LOCKED and the others) or "Diner N"' in v5
+
+
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v5"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
