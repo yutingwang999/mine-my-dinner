@@ -41,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v5"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -113,6 +113,17 @@ def test_pick_v3_is_frozen():
     picker = (PROMPT_DIR / "pick_v3.md").read_bytes().replace(b"\r\n", b"\n")
     assert hashlib.sha256(picker).hexdigest() == (
         "0d0f73bfceefc52eb3f090e8314873b6de8540b3d8a99532e5973ff8a0a0c116"
+    )
+
+
+def test_pick_v5_is_frozen():
+    import hashlib
+
+    # Used by the change-fixes development runs and round 12, so it must never change; the
+    # picker's next change is pick_v6.
+    picker = (PROMPT_DIR / "pick_v5.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "9075b47fbd3f0aed4b3c7228b7c17cbde69c1a83236a22c3742499940e5696db"
     )
 
 
@@ -610,8 +621,6 @@ def test_pick_v5_differs_from_pick_v4_only_in_the_wish_and_asked_add_principles(
     principle reworded (it judges the dishes chosen), one new principle (an add the user asked
     for is filled whenever a usable dish exists), and examples in the new slot-line formats."""
     v4, v5 = _pick_v4_and_v5()
-    assert PROMPT_VERSIONS["pick"] == "pick_v5"
-    assert load_prompt("pick") == v5
     head4 = v4.split("Examples:", 1)[0].splitlines()
     head5 = v5.split("Examples:", 1)[0].splitlines()
     wish_lines = [line for line in head4 if "wish_result is" in line]
@@ -641,8 +650,79 @@ def test_pick_v5_size():
     assert 'never use ids, the plan\'s marks (LOCKED and the others) or "Diner N"' in v5
 
 
+def _pick_v5_and_v6() -> tuple[str, str]:
+    v5 = (PROMPT_DIR / "pick_v5.md").read_text(encoding="utf-8")
+    v6 = (PROMPT_DIR / "pick_v6.md").read_text(encoding="utf-8")
+    return v5, v6
+
+
+def test_pick_v6_differs_from_pick_v5_in_four_points():
+    """Plan 3b-2 change fixes Task 8: pick_v6 is pick_v5 with the asked-add principle for add
+    slots only, a new principle that a replacement keeps the replaced dish's kind or answers
+    0 (the dish stays), the shortlist's "main" field named, and examples in Task 7's slot-line
+    formats."""
+    v5, v6 = _pick_v5_and_v6()
+    assert PROMPT_VERSIONS["pick"] == "pick_v6"
+    assert load_prompt("pick") == v6
+    head5 = v5.split("Examples:", 1)[0].splitlines()
+    head6 = v6.split("Examples:", 1)[0].splitlines()
+    # 1. The asked-add principle names add slots ("one more ... the user asked for").
+    asked5 = [line for line in head5 if "asked for" in line and "balance" in line]
+    asked6 = [line for line in head6 if "asked for" in line and "balance" in line]
+    assert len(asked5) == 1 and len(asked6) == 1
+    assert asked6[0] != asked5[0]
+    assert "one more" in asked6[0] and "add" in asked6[0]
+    # 2. A replacement keeps the replaced dish's kind; with none of that kind usable, 0.
+    kind_lines = [line for line in head6 if "a soup for a soup" in line]
+    assert len(kind_lines) == 1
+    assert "kind" in kind_lines[0] and "0" in kind_lines[0] and "in place of" in kind_lines[0]
+    assert "a staple for a staple" in kind_lines[0]
+    assert "meat or vegetable dish for either" in kind_lines[0]
+    assert "stays" in kind_lines[0]
+    # An unfilled breaks_rule slot removes its dish (picker.apply_picks), so 0 keeps only
+    # a dish that breaks no rule.
+    assert "the dish stays unless it breaks a rule" in kind_lines[0]
+    # 3. The input description names the shortlist's main field.
+    description = next(line for line in head6 if line.startswith("You get a shortlist"))
+    assert "main" in description
+    assert "main" not in next(line for line in head5 if line.startswith("You get a shortlist"))
+    # The two lines that let a wish change a replacement's kind, and that allowed 0 for no
+    # other reason, are scoped to the new principle: the wish's yield is between meat and
+    # vegetable dishes, and a slot in place of a dish is 0 when none of its kind fits.
+    assert "When only a meat dish or only a vegetable dish meets the wish" in v6
+    assert "When only a dish of another kind meets the wish, take that kind" not in v6
+    assert "of any dish type" not in v6
+    assert "only when no dish fits them (in place of a dish, none of its kind)" in v6
+    # Every other line before the examples is kept.
+    changed5 = [line for line in head5 if line not in head6]
+    assert len(changed5) == 5
+    assert asked5[0] in changed5
+    added6 = [line for line in head6 if line not in head5]
+    assert kind_lines[0] in added6 and asked6[0] in added6 and description in added6
+    # 4. The examples follow picker._slot_line's formats.
+    examples = v6.split("Examples:", 1)[1]
+    assert "in place of 11 (" not in examples
+    assert "or 0 when none is" in examples
+    assert ": the library dish these words mean, by its title or by its main ingredients, or 0" in (
+        examples
+    )
+    assert "which goes because of the user's words" in examples
+    assert len([line for line in examples.splitlines() if line.startswith("- ")]) <= 5
+
+
+def test_pick_v6_size():
+    v5, v6 = _pick_v5_and_v6()
+    follow_up_v4 = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
+    assert len(v6) <= len(v5) + 400
+    # The 3b-2 design's bound: the reader and the picker together stay shorter than
+    # route_v6 plus revise_v4 (12817 characters).
+    assert len(follow_up_v4) + len(v6) < 12817
+    assert "never use ids, the plan's marks (LOCKED and the others) or \"Diner N\"" in v6
+    assert "The wish is not a requirement." in v6
+
+
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v5"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 

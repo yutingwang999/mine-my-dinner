@@ -6,7 +6,7 @@ This document follows one user message through the planning conversation: which 
 
 ## How to read this document
 
-The document describes the code **as of Phase 1 plan 3b-2 (one)**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v5` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
+The document describes the code **as of Phase 1 plan 3b-2 (one)**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v6` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
 
 Three labels separate what the code does now from what it did before:
 
@@ -154,7 +154,7 @@ flowchart TD
     RR["A change reading<br/>(or a button: the card's unfinished parts, button_reading)"] --> RA["request_after (code only)<br/>the plan's request + stated counts / conditions<br/>+ the whole meal_avoid + a stated wish"]
     RA --> BC["build_change (code only)<br/>revision_spec: the counts are the current plan's own<br/>validate_plan finds the dishes that break the new request (breaking)<br/>build_frame builds the frame; a frame event<br/>a new planning_runs record (from_version)"]
     BC -->|"the stated counts contradict each other"| UN["unclear: did not understand"]
-    BC -->|"the frame has a slot or a choice,<br/>and some dish is left"| PK["pick_dishes<br/>(model call 2+: pick_v5,<br/>search tool only, at most 2 searches and 3 model calls per attempt,<br/>answers PickerAnswer)"]
+    BC -->|"the frame has a slot or a choice,<br/>and some dish is left"| PK["pick_dishes<br/>(model call 2+: pick_v6,<br/>search tool only, at most 2 searches and 3 model calls per attempt,<br/>answers PickerAnswer)"]
     BC -->|"nothing to choose, or no dish would be left"| PC
     PK -->|"no answer, or an answer cut short<br/>(a cut answer whose slots closed is salvaged)"| RE["asked again at once<br/>(uses no attempt; bounded by the turn budget)"] --> PK
     PK --> CK{"check_pick (code only)<br/>1. apply_picks: against the frame<br/>2. validate_plan: H1/H2/H3/H6 of the new dishes<br/>3. must-use choices and adds use their ingredient (must_use_misses)"}
@@ -257,7 +257,7 @@ The retry message: `Your previous answer had these problems. Answer again with e
 
 Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
 
-### The picker's answer (`PickerAnswer`, `pick_v5`)
+### The picker's answer (`PickerAnswer`, `pick_v6`)
 
 No nullable field, in this order:
 

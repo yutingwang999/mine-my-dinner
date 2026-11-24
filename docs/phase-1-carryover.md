@@ -36,8 +36,8 @@ Counts per section (2026-11-24):
 | Deferred from Phase 1 plan 3b-1 | 9 | 0 | 14 |
 | Deferred from Phase 1 plan 3b-1b | 11 | 0 | 15 |
 | Deferred from Phase 1 plan 3b-2 (one) | 19 | 0 | 8 |
-| Deferred from Phase 1 plan 3b-2 change fixes | 7 | 0 | 1 |
-| **Total** | **156** | **18** | **69** |
+| Deferred from Phase 1 plan 3b-2 change fixes | 8 | 0 | 1 |
+| **Total** | **157** | **18** | **69** |
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -667,3 +667,4 @@ Findings judged safe to defer during the change-fixes plan's task reviews. Each 
 
 </details>
 - `Open` **Untyped adds and the runner's unmet check (Task 7 review) (→ code health, any step).** (1) The "untyped, unnamed add" predicate lives in two places, `Builder.untyped_adds` (`agent/frame.py`) and `_untyped_add` (`agent/picker.py`); one shared helper would keep them from drifting apart. (2) `wish_unmet_said` now also counts the capped-targets sentence, including a turn where the dishes changed met the wish and only the cap kept the rest; its docstring should say so. (3) The new runner test sits in `tests/test_planning_eval.py`, next to the other `wish_unmet_said` tests (fine, noted for finding it).
+- `Open` **`pick_v6` notes (Task 8 review) (→ code health; the examples → the next picker version).** (1) The module docstring of `agent/picker.py` ("the picker chooses what kind of dish takes a dish's place") and the "Why" of `docs/planner-what-each-model-sees.md` §11 overstate the picker's freedom: code still allows any kind, but `pick_v6` keeps a replacement's kind unless the words or the wish point elsewhere. (2) Example 4 fills a for-wish slot with a dish that misses the wish and answers `wish_result` "no", a pick code then empties; the example teaches a fill that never lands. (3) No example shows a named replacement of another kind; watch whether the picker answers 0 for one. `pick_v6` sits exactly at the size bound its own test sets (`pick_v5` + 400).
