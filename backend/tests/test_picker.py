@@ -313,12 +313,13 @@ def test_picker_messages_show_named_and_wish_slots_and_the_stated_counts():
     text = picker_messages(frame, "P", "R", "清淡点", "S", "zh")[0].content
     assert (
         '- Slot 0: in place of 2, which goes because of the user\'s words "西兰花"; '
-        'the user named "小白菜": the library dish these words mean, or 0 when none is'
+        'the user named "小白菜": the library dish these words mean, by its title or by its '
+        "main ingredients, or 0 when none is"
     ) in text
     assert (
         "- Slot 1: one more dish the user asked for, of any type; "
-        'the user named "佛跳墙": the library dish these words mean, or 0 '
-        "when none is"
+        'the user named "佛跳墙": the library dish these words mean, by its title or by its '
+        "main ingredients, or 0 when none is"
     ) in text
     assert "- Slot 2: in place of 4, for the wish" in text
     assert (
@@ -635,9 +636,41 @@ def test_slot_line_for_an_asked_add():
     assert _slot_line(0, Slot(kind="add", dish_type="meat dish")) == (
         "- Slot 0: one more meat dish the user asked for"
     )
-    assert _slot_line(0, Slot(kind="add")) == (
-        "- Slot 0: one more dish the user asked for, of any type"
-    )
     assert _slot_line(0, Slot(kind="add", dish_type="soup", for_wish=True)).endswith(
         ", for the wish"
     )
+
+
+def test_slot_line_for_an_untyped_add_names_meat_or_vegetable():
+    # An add with no type counts toward the dish total (3b-2 design 5.4): a meat or a
+    # vegetable dish, the picker choosing which.
+    assert _slot_line(0, Slot(kind="add")) == (
+        "- Slot 0: one more meat or vegetable dish the user asked for, either kind"
+    )
+    # A named add keeps any type: the user's words decide the dish.
+    assert _slot_line(0, Slot(kind="add", named="佛跳墙")).startswith(
+        "- Slot 0: one more dish the user asked for, of any type; "
+    )
+
+
+def test_named_clause_allows_main_ingredients():
+    line = _slot_line(0, Slot(kind="replace", replaces=42, named="萝卜"))
+    assert "by its title or by its main ingredients" in line
+    assert line.endswith(
+        '; the user named "萝卜": the library dish these words mean, by its title or by its '
+        "main ingredients, or 0 when none is"
+    )
+
+
+def test_an_untyped_add_filled_with_a_staple_is_a_problem():
+    facts = {**FACTS, 70: DishFacts("白粥", ["大米"], "staple food")}
+    untyped = Slot(kind="add")
+    outcome = apply_picks(PLAN, _frame(slots=[untyped]), _answer([(0, 70)]), facts)
+    assert "Slot 0 must be a meat or vegetable dish." in outcome.problems
+    assert outcome.recipe_ids == PLAN
+    outcome = apply_picks(PLAN, _frame(slots=[untyped]), _answer([(0, 63)]), facts)
+    assert outcome.problems == [] and outcome.recipe_ids == [*PLAN, 63]
+    # A named add takes any type: the user's words decide.
+    named = Slot(kind="add", named="白粥")
+    outcome = apply_picks(PLAN, _frame(slots=[named]), _answer([(0, 70)]), facts)
+    assert outcome.problems == [] and outcome.recipe_ids == [*PLAN, 70]

@@ -2560,6 +2560,14 @@ def test_wish_unmet_said_reads_code_written_signs_only():
     assert not wish_unmet_said(failed, "", "plan")
 
 
+def test_capped_sentence_counts_as_the_wish_unmet_said():
+    from minemydinner.agent.revise_step import wish_targets_capped
+
+    for locale in ("zh", "en"):
+        reply = "换好了。\n\n" + wish_targets_capped(locale)
+        assert wish_unmet_said({"unmet": []}, reply, "revision"), locale
+
+
 def test_fallback_count_counts_code_picked_attempts():
     runs = [
         [{"kind": "validation", "fallback": True}, {"kind": "validation"}],

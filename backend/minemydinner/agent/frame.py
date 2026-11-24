@@ -507,7 +507,9 @@ def build_frame(
         i: reason for i, reason in breaking.items() if i not in locked or reason in RULE_BREAKS
     }
 
-    # Named removals.
+    # Named removals. A dish replaced only to meet the wish (`for_wish`) counts toward the
+    # wish's cap below; such a removal is itself never capped.
+    wish_removals: list[int] = []
     for item in reading.remove if reading else []:
         if item.id not in in_plan:
             builder.ignored.append({"id": item.id, "reason": "not_in_plan"})
@@ -541,6 +543,9 @@ def build_frame(
                 named=name,
                 for_wish=item.for_wish,
             )
+        if item.for_wish and item.id not in locked and placed in ("placed", "not_found"):
+            # A dish that leaves for the wish (a name hidden by a condition keeps the dish).
+            wish_removals.append(item.id)
 
     # Dishes that break the new request; a dish already handled keeps its one entry.
     for dish_id in builder.plan_ids:
@@ -548,14 +553,15 @@ def build_frame(
             builder.replace(dish_id, breaking[dish_id])
 
     # The dishes the wish touches, as the reader names them: unlocked dishes only, at most
-    # half of them (rounded up), the reader's order deciding which stay. A dish already
-    # changing needs no slot of its own; the wish guides its replacement too. The targets left
-    # out are kept by reason (locked, over the cap) for the reply.
+    # half of them (rounded up), the reader's order deciding which stay. The reading's
+    # removals for the wish (`wish_removals`) are among them, so they count first. A dish
+    # already changing needs no slot of its own; the wish guides its replacement too. The
+    # targets left out are kept by reason (locked, over the cap) for the reply.
     locked_targets: list[int] = []
     capped_targets: list[int] = []
     if reading is not None and reading.wish.strip():
         limit = max_general_changes(len([i for i in builder.plan_ids if i not in locked]))
-        taken = 0
+        taken = len(wish_removals)
         for dish_id in dict.fromkeys(reading.wish_targets):
             if dish_id not in in_plan:
                 builder.ignored.append({"wish_target": dish_id, "reason": "not_in_plan"})

@@ -36,8 +36,8 @@ Counts per section (2026-11-24):
 | Deferred from Phase 1 plan 3b-1 | 9 | 0 | 14 |
 | Deferred from Phase 1 plan 3b-1b | 11 | 0 | 15 |
 | Deferred from Phase 1 plan 3b-2 (one) | 19 | 0 | 8 |
-| Deferred from Phase 1 plan 3b-2 change fixes | 6 | 0 | 1 |
-| **Total** | **155** | **18** | **69** |
+| Deferred from Phase 1 plan 3b-2 change fixes | 7 | 0 | 1 |
+| **Total** | **156** | **18** | **69** |
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -666,3 +666,4 @@ Findings judged safe to defer during the change-fixes plan's task reviews. Each 
   - Status (2026-11-24): the user chose to correct the set-up: the scenario's fridge gains 蒜 and 香菜 (the first plan's vegetable dishes and 凉拌黄瓜 need them); the expectation is unchanged.
 
 </details>
+- `Open` **Untyped adds and the runner's unmet check (Task 7 review) (→ code health, any step).** (1) The "untyped, unnamed add" predicate lives in two places, `Builder.untyped_adds` (`agent/frame.py`) and `_untyped_add` (`agent/picker.py`); one shared helper would keep them from drifting apart. (2) `wish_unmet_said` now also counts the capped-targets sentence, including a turn where the dishes changed met the wish and only the cap kept the rest; its docstring should say so. (3) The new runner test sits in `tests/test_planning_eval.py`, next to the other `wish_unmet_said` tests (fine, noted for finding it).

@@ -4450,7 +4450,8 @@ def test_a_name_that_is_no_title_goes_to_the_picker_which_places_the_dish(revise
     assert (
         f'- Slot 0: in place of {beans}, which goes because of the user\'s words "豆角"; '
         'the user named "小白菜": '
-        "the library dish these words mean, or 0 when none is"
+        "the library dish these words mean, by its title or by its main ingredients, "
+        "or 0 when none is"
     ) in picker_input(env)
     plan = out["current_plan"]
     assert ids_of_plan(plan) == [beef, cabbage, soup] and plan["passed"]
@@ -4636,12 +4637,33 @@ def test_an_add_with_no_dish_type_reaches_the_picker_as_any_type(revise_env):
     reading = {"kind": "change", "add": [{"dish_type": None, "count": 1}]}
     out = read(env, "再添一道", reading, replies=[pick(slots=[(0, beans)])])
     text = picker_input(env)
-    assert "- Slot 0: one more dish the user asked for, of any type" in text
+    assert "- Slot 0: one more meat or vegetable dish the user asked for, either kind" in text
     shortlist = json.loads(text.split("\n")[1])
     assert {"meat dish", "vegetable dish"} <= set(shortlist)
     assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
     [frame] = change_events(env, "frame")
     assert frame["frame"]["ignored"] == []
+
+
+def test_an_untyped_add_filled_with_a_staple_is_asked_again(revise_env):
+    """Fix round A, Task 7: an add with no type counts toward the dish total (3b-2 design
+    5.4), so a staple in its slot is a problem the picker is told about; its second answer,
+    a vegetable dish, is placed."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    congee = make_recipe(env.session, "白粥", "staple food", [L("大米")])
+    reading = {"kind": "change", "add": [{"dish_type": None, "count": 1}]}
+    out = read(
+        env,
+        "再添一道",
+        reading,
+        replies=[pick(slots=[(0, congee.id)]), pick(slots=[(0, beans)])],
+    )
+    assert len(picker_calls(env)) == 2
+    assert "Slot 0 must be a meat or vegetable dish." in picker_calls(env)[1][-1].content
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
 
 
 def test_a_side_count_add_nothing_fills_offers_relax_split_which_adds_any_dish(revise_env):
@@ -4667,7 +4689,9 @@ def test_a_side_count_add_nothing_fills_offers_relax_split_which_adds_any_dish(r
     assert spec["dishes"] == 3
     assert spec["meat_dishes"] is None and spec["vegetable_dishes"] is None
     # The unfinished add is re-run as a dish of any type.
-    assert "- Slot 0: one more dish the user asked for, of any type" in picker_input(env)
+    assert (
+        "- Slot 0: one more meat or vegetable dish the user asked for, either kind"
+    ) in picker_input(env)
     assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
     assert out["current_plan"]["passed"]
 
@@ -4739,7 +4763,9 @@ def test_any_mix_on_a_typed_add_without_a_stated_count_grows_the_plan(revise_env
     shown = ids_of_plan(card)
     out = press(env, "relax_split", replies=[pick(slots=[(0, beans)])])
     assert "__interrupt__" not in out
-    assert "- Slot 0: one more dish the user asked for, of any type" in picker_input(env)
+    assert (
+        "- Slot 0: one more meat or vegetable dish the user asked for, either kind"
+    ) in picker_input(env)
     plan = out["current_plan"]
     assert len(ids_of_plan(plan)) == len(shown) + 1
     assert ids_of_plan(plan) == [beef, cabbage, soup, beans] and plan["passed"]

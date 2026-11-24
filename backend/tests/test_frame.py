@@ -301,6 +301,31 @@ def test_wish_targets_over_the_cap_are_listed_as_capped():
     ]
 
 
+def test_wish_removals_count_toward_the_wish_cap():
+    # Four unlocked dishes: at most two change for the wish. A dish the reading replaces
+    # only to meet the wish (for_wish) is one of them, so of the targets A, B, C only B gets
+    # a slot of its own and C is capped. The removal itself is never capped.
+    a, b, c = 2, 4, 5
+    removal = ReadRemoval(id=a, mode="replace", quote="西兰花", for_wish=True)
+    frame = _frame(
+        _change(remove=[removal], wish="辣一些", wish_targets=[a, b, c]),
+        locked={1},
+        message="西兰花换掉，辣一些",
+    )
+    assert [s.replaces for s in frame.slots] == [a, b]
+    assert frame.capped_wish_targets == [c]
+
+    # A removal not marked for_wish does not count toward the cap.
+    plain = ReadRemoval(id=a, mode="replace", quote="西兰花")
+    frame = _frame(
+        _change(remove=[plain], wish="辣一些", wish_targets=[b, c, 3]),
+        locked={1},
+        message="西兰花换掉，辣一些",
+    )
+    assert [s.replaces for s in frame.slots] == [a, b, c]
+    assert frame.capped_wish_targets == [3]
+
+
 def test_locked_wish_targets_are_listed():
     frame = _frame(_change(wish="清淡点", wish_targets=[1, 5]), locked={1})
     assert frame.locked_wish_targets == [1]
