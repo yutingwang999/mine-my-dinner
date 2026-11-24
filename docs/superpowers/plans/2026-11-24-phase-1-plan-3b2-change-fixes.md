@@ -185,3 +185,60 @@ Slot-line formats (spec 5.1, 5.4); everything after these prefixes (`, for the w
 - [ ] **Step 3: Judge against spec 6:** must-never-be-wrong 0; the six target scenarios as expected; development ≥ 90%; revise sets ≥ round 11 rescored (heldout3 14/15, heldout 15/17, heldout2 17/20) with every miss explained; calls per change turn average ≤ 2.5, none over 7; unnecessary questions ≤ 20%; new-plan sets no regression. A regression expectation changes only with the user's approval.
 - [ ] **Step 4: Record** round 12 in the history doc (tables as round 11; `heldout3` listed as a regression set from now on), retag round 11's six misses in the carryover, and add round 12's misses.
 - [ ] **Step 5: Commit** (user) — `eval: round 12 - plan 3b-2 change fixes`
+
+---
+
+## Fix round A (after round 12; user decision 2026-11-24)
+
+Round 12 missed its thresholds (`docs/planning-evaluation-history.md`, round 12). The user chose fix round A: the causes that are code, picker input, the runner, or picker kind-keeping. Reader readings (`follow_up_v4`) stay for plan two. The `any_mix_button_after_one_more_meat` expectation is the user's decision (carryover, `Check`). The Global Constraints above still bind, in particular: code checks, it does not interpret.
+
+### Task 7: Untyped adds, the named clause, the wish cap, and the runner's unmet check
+
+**Files:**
+- Modify: `backend/minemydinner/agent/picker.py` (`_slot_line`; the answer checks)
+- Modify: `backend/minemydinner/agent/frame.py` (the wish-target loop)
+- Modify: `backend/minemydinner/evaluation/revise_eval.py` (`wish_unmet_said`)
+- Test: `backend/tests/test_picker.py`, `backend/tests/test_frame.py`, `backend/tests/test_agent_graph.py`, `backend/tests/test_revise_eval.py` (or the runner's existing test file)
+
+**Interfaces:**
+- Produces: slot-line formats Task 8's examples copy:
+  - add with no `dish_type`: `- Slot {i}: one more meat or vegetable dish the user asked for, either kind`
+  - the named clause (replace or add): `; the user named "{named}": the library dish these words mean, by its title or by its main ingredients, or 0 when none is`
+- Produces: a picker answer problem for an untyped add filled with a dish that is not a meat or vegetable dish: `Slot {k} must be a meat or vegetable dish.` (an untyped add counts toward the dish total, 3b-2 design 5.4; a structural check).
+
+- [ ] **Step 1: Write the failing tests:**
+  - `test_slot_line_for_an_untyped_add_names_meat_or_vegetable`: `Slot(kind="add")` → `- Slot 0: one more meat or vegetable dish the user asked for, either kind`.
+  - `test_named_clause_allows_main_ingredients`: `Slot(kind="replace", replaces=42, named="萝卜")` → contains `by its title or by its main ingredients`.
+  - `test_an_untyped_add_filled_with_a_staple_is_a_problem` (`apply_picks`): facts where the chosen id is a staple food → problems contain `Slot 0 must be a meat or vegetable dish.`; a vegetable dish → no problem.
+  - `test_frame` — `test_wish_removals_count_toward_the_wish_cap`: 4 unlocked dishes; reading `remove=[{id: A, mode: replace, for_wish: True}]`, `wish_targets=[A, B, C]` → slots for A and B only, `capped_wish_targets == [C]`. And a removal not marked `for_wish` does not count toward the cap.
+  - runner — `test_capped_sentence_counts_as_the_wish_unmet_said`: a reply containing `wish_targets_capped("zh")` (and the en copy) → `wish_unmet_said(...)` is True.
+- [ ] **Step 2: Run to see them fail.**
+- [ ] **Step 3: Implement** the two slot-line changes, the untyped-add check in the picker's answer checks (next to the typed-add type check), the cap count in `build_frame` (count the reading's `remove` entries with `mode == "replace"` and `for_wish` on unlocked dishes toward `limit` before taking wish targets; such a removal is never itself capped), and the capped sentence in `wish_unmet_said` (a fixed-template match like `_WISH_UNMET_NOTES`).
+- [ ] **Step 4: Run** the picker, frame, graph and runner test files, then the full suite once.
+- [ ] **Step 5: Docs** — `docs/planner-what-each-model-sees.md`, `docs/planner-chat-flow.md` (slot lines, the cap), Chinese copies.
+- [ ] **Step 6: Commit** (user) — `fix: an untyped add is a meat or vegetable dish; a named slot may name an ingredient; the wish cap counts the reading's wish removals; the runner counts the capped sentence`
+
+### Task 8: `pick_v6` — kind-keeping for replacements
+
+**Files:**
+- Create: `backend/minemydinner/agent/prompts/pick_v6.md` (from `pick_v5.md`, which is frozen once Task 8 lands: add `pick_v5` to the frozen-hash test)
+- Modify: `backend/minemydinner/agent/request.py` (`PROMPT_VERSIONS["pick"] = "pick_v6"`)
+- Test: `backend/tests/test_agent_request.py`
+
+`pick_v6` differs from `pick_v5` in exactly these points:
+1. The asked-add principle applies to add slots only ("one more … the user asked for").
+2. A new principle for a replacement: keep the replaced dish's kind (a soup for a soup, a staple for a staple; a meat or vegetable dish for either) unless the user's words or the wish point to another kind; when no usable dish of that kind fits, answer 0 and the dish stays.
+3. The input description names the shortlist's `main` field.
+4. The examples follow Task 7's slot-line formats.
+
+- [ ] **Step 1: Failing tests:** the run label ends `+pick_v6`; `pick_v5.md` is pinned by hash; `pick_v6.md` contains a line with `kind` and `0` for replacements and `main` in the input description; `len(follow_up_v4) + len(pick_v6) < 12817`.
+- [ ] **Step 2: Run to see them fail.** **Step 3: Write `pick_v6.md`**, switch the version. **Step 4: Run** the request, picker and graph tests.
+- [ ] **Step 5: Docs** — `docs/prompt-versions.md` (a `pick_v6` row), version names in the planner docs and Chinese copies.
+- [ ] **Step 6: Commit** (user) — `feat: pick_v6 - a replacement keeps its kind or stays; the asked-add rule is for adds only`
+
+### Task 9: Development run 3 and round 13 (paid, user gates)
+
+- [ ] **Step 1:** Development run 3 (same command as Task 5), after the user's approval. Read the target scenarios of the development set and `change_the_soups`, `too_many_eggs`, `one_soup_is_enough`.
+- [ ] **Step 2:** Round 13 (same ten sets and flags as round 12), after the user's approval. Judge against design 6 as Task 6 did; the targets add `too_many_eggs`, `add_one_everything_else_has_egg` and `too_many_tomatoes_english` (no must violation, as expected).
+- [ ] **Step 3:** Record the development run and round 13 in the history doc, retag the carryover.
+- [ ] **Step 4: Commit** (user).
