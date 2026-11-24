@@ -590,7 +590,7 @@ Run 2 used the same code as run 1, to tell variance from cause.
   - `change_the_soups` (in both runs): "把汤换一换" left both soup slots empty in run 1. In run 2 one soup was replaced with the only other soup and the other with a staple (清汤面). The picker changes the kind of dish when no dish of the same kind is left.
 - **Decision (user, 2026-11-24):** go to round 12 without a `pick_v6`.
 
-### Round 12 — plan 3b-2 change fixes (pick_v5) (2026-11-24) — results of record until the next round
+### Round 12 — plan 3b-2 change fixes (pick_v5) (2026-11-24) — results of record until round 13
 
 - **Changed since round 11:** the change-fixes plan (above). The reader `follow_up_v4` and the planner are unchanged. The planner's shortlist does not change; only the picker's shortlist gains `main`.
 - **Scenario sets:** the same ten as round 11. `scenarios_revise_heldout3.yaml` is a regression set from this round on, like the two revise sets before it.
@@ -647,3 +647,64 @@ Run 2 used the same code as run 1, to tell variance from cause.
 - **Cost:** the round's ten runs cost $0.165 cache-aware and $0.959 uncached. The two development runs added $0.102 cache-aware.
 - **Decision (user, 2026-11-24):** fix round A. Address the untyped-add slot line, the named-slot clause, the wish cap counting the reading's wish removals, the runner's unmet-wish check, and picker kind-keeping (`pick_v6`). Then development run 3 and the next round. 
   - Taken (user-approved, 2026-11-24): the set-up of `any_mix_button_after_one_more_meat` (heldout2) is corrected: its fridge gains 蒜 and 香菜, which the first plan's vegetable dishes and 凉拌黄瓜 need; the expectation is unchanged. A comment at the scenario says so.
+
+### Fix round A development run (2026-11-24) — not a round
+
+Fix round A (plan Tasks 7-8) changes four things:
+- an untyped add is a meat or vegetable dish (its slot line says so, and code rejects a staple or a soup in it);
+- a named slot may name an ingredient ("by its title or by its main ingredients");
+- the wish cap counts the reading's own removals for the wish;
+- the runner counts the capped-targets sentence as saying the wish was not fully met.
+
+`pick_v6` keeps a replacement's kind: a soup for a soup, a staple for a staple, and a meat or vegetable dish for either. With no usable dish of that kind it answers 0, and the dish stays unless it breaks a rule. Its asked-add rule is for adds only.
+
+Development set at `cc67559` (`route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6`), with embeddings: run 3 `20261124T101839Z`, 40/42, must-never-be-wrong 1, unnecessary questions 0/30, calls per change turn 2.3 / 6, buttons 5/6, no cut answer (0 / 46), $0.0479 / $0.2625.
+
+- **Passed:**
+  - Fix round A's development scenarios: `change_the_soups` (soup for soup), `too_many_eggs` and `one_soup_is_enough`.
+  - The earlier targets: `meal_avoid_covers_hand_added` and `general_lighter_or_added`.
+- **Not as expected:** both misses came from the reader.
+  - `button_shopping_after_seafood_wish` (must): the reader's wish target was 番茄炒蛋, as in the two runs before.
+  - `add_a_soup`: the reader wrote the add's dish type in Chinese ("汤") instead of `soup`. The type is a free string in `FollowUpReading`, so the frame ignored the add as an unknown type.
+
+### Round 13 — plan 3b-2 change fixes, fix round A (pick_v6) (2026-11-24) — results of record
+
+- **Changed since round 12:** fix round A (above). `follow_up_v4`, `route_v6`, `parse_v8` and the planner are unchanged.
+- **Scenario sets:** the same ten as round 12. `any_mix_button_after_one_more_meat` (heldout2) runs with its corrected fridge: 蒜 and 香菜 were added, with the user's approval in round 12.
+- **Runs** at `cc67559` (`route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6`), test database, deepseek-flash. The revise sets ran with embeddings and the older sets without, as in rounds 11 and 12.
+
+  | Set | Run | Scenarios | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Locked removed | Follow-up route | Buttons | Wish not said | Cost (cache-aware) | Cost (uncached) | Largest call | Avg latency |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | development (`scenarios_revise.yaml`) | 20261124T104023Z | 42 | **42/42** | 0 | 0/30 | 2.1 / 4 | 0 | 31/31 | 6/6 | 0 | $0.0490 | $0.2658 | 6777 | 6.4 s |
+  | regression (`scenarios_revise_heldout3.yaml`) | 20261124T104557Z | 16 (1 deferred) | 14/15 | 0 | 0/11 | 2.3 / 5 | 0 | 11/11 | — | 0 | $0.0182 | $0.1018 | 6780 | 6.3 s |
+  | regression (`scenarios_revise_heldout.yaml`) | 20261124T104831Z | 18 (1 deferred) | **17/17** | 0 | 0/16 | 2.1 / 4 | 0 | 15/15 | — | 0 | $0.0212 | $0.1149 | 7304 | 6.3 s |
+  | regression (`scenarios_revise_heldout2.yaml`) | 20261124T105111Z | 20 | **19/20** | 0 | 0/19 | 2.2 / 4 | 0 | 16/16 | 2/2 | 0 | $0.0262 | $0.1397 | 6772 | 7.3 s |
+  | baseline | 20261124T105430Z | 7 | 7/7 | 0 | — | — | — | — | — | 0 | $0.0034 | $0.0235 | 6707 | 3.5 s |
+  | plan 2a | 20261124T105501Z | 19 (18 scored) | 18/18 | 0 | — | — | — | — | — | 0 | $0.0087 | $0.0598 | 6704 | 3.5 s |
+  | counts | 20261124T105613Z | 10 | 10/10 | 0 | 0/2 | — | — | — | — | 0 | $0.0060 | $0.0367 | 6705 | 3.6 s |
+  | diners | 20261124T105656Z | 17 | 16/17 | 0 | 0/1 | — | — | — | — | 0 | $0.0114 | $0.0731 | 6724 | 4.1 s |
+  | held-out diners (`scenarios_heldout.yaml`) | 20261124T105818Z | 14 | 13/14 | 0 | — | — | — | — | — | 0 | $0.0082 | $0.0560 | 6739 | 4.3 s |
+  | held-out one diner (`scenarios_heldout_core.yaml`) | 20261124T105933Z | 22 | 21/22 | 0 | 0/1 | — | — | — | — | 0 | $0.0122 | $0.0780 | 6722 | 4.0 s |
+
+- **Against the thresholds (design 6):** met.
+
+  | Criterion | Required | Result | Verdict |
+  |---|---|---|---|
+  | Must never be wrong | 0 over every run | 0 in every set | **Met** |
+  | Target scenarios | all six as expected | all six, and fix round A's three (`too_many_eggs`, `add_one_everything_else_has_egg`, `too_many_tomatoes_english`) | **Met** |
+  | Development set | ≥ 90% | 42/42 | **Met** |
+  | Revise regression sets | no fewer than round 11 rescored | heldout3 14/15 (14/15), heldout 17/17 (15/17), heldout2 19/20 (17/20); every miss explained below | **Met** |
+  | Calls per change turn | average ≤ 2.5, none over 7 | 2.1-2.3 average, at most 5 | **Met** |
+  | Unnecessary questions | ≤ 20% | 0 in every set | **Met** |
+  | Older new-plan sets | no regression | baseline 7/7, plan 2a 18/18, counts 10/10, held-out diners 13/14, held-out one diner 21/22. Diners was 16/17: one call-count warning in a path this plan did not change (below) | **Met** (controller ruling) |
+
+- **Not as expected:**
+  - `any_mix_typed` (heldout3): recorded since round 11 (a typed message lifting a split; the reader has no field for it, → plan two).
+  - `friend_joins_and_two_more_dishes` (heldout, deferred to plan two).
+  - `no_rice_today_english` (heldout2): the change was right; the English reply named Chinese ingredients (→ T1.10, as `no_meat_today_english` before).
+  - `unmatched_people_unsure` (diners): a valid plan in 6 model calls against the warning bound of 5. The planner and the new-plan path are unchanged since round 11, so this is planner variance; the controller rules it no regression.
+  - `core_two_dishes_one_staple` (held-out one diner): `route_v6` (unchanged) routed the first message as `other`, so nothing was planned.
+  - `diners_three_people_one_no_lamb` (held-out diners): the same first-turn parse cause as rounds 11 and 12.
+- **Picker answers cut by DeepSeek:** none (0 of 97 picker calls).
+- **Cost:** the round's ten runs cost $0.165 cache-aware and $0.949 uncached. The plan's development runs (four) added $0.150 cache-aware.
+- **Results of record:** this round replaces round 12 as the results of record.
