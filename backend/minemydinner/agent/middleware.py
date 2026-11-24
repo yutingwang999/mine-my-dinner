@@ -49,6 +49,21 @@ def dump_message(message: BaseMessage) -> dict[str, Any]:
     return item
 
 
+def _response(reply: AIMessage | None) -> dict[str, Any]:
+    """The recorded reply: its text and tool calls, and any tool call whose arguments could
+    not be read (kept only when there is one, so an empty-looking reply shows why)."""
+    item: dict[str, Any] = {
+        "content": reply.content if reply else None,
+        "tool_calls": _tool_calls(reply) if reply else [],
+    }
+    if reply is not None and reply.invalid_tool_calls:
+        item["invalid_tool_calls"] = [
+            {"name": c.get("name"), "args": c.get("args"), "error": c.get("error")}
+            for c in reply.invalid_tool_calls
+        ]
+    return item
+
+
 def _usage(response: ModelResponse) -> dict[str, int] | None:
     for message in reversed(response.result):
         if isinstance(message, AIMessage):
@@ -122,10 +137,7 @@ class CallLayerMiddleware(AgentMiddleware):
                     # The model name the provider reports having served, if it reports one.
                     "served_model": served_model_name(reply),
                     "messages": [dump_message(m) for m in sent],
-                    "response": {
-                        "content": reply.content if reply else None,
-                        "tool_calls": _tool_calls(reply) if reply else [],
-                    },
+                    "response": _response(reply),
                 },
             )
         return self._restore(response)

@@ -40,13 +40,14 @@ NODE_STEPS = {
     "check_feasibility": "context",
     "validate_plan": "check",
     "present_plan": "present",
-    # The revise step (plan 3b-1) reuses the planner's steps.
-    "start_revision": "context",
-    "check_revised": "check",
-    "present_revision": "present",
+    # The change path (plan 3b-2): the frame, the picker (its searches report "search"),
+    # then the reply.
+    "build_change": "context",
+    "pick_dishes": "check",
+    "present_change": "present",
 }
 # The nodes whose update carries `retries` when they send the run back for another attempt.
-RETRY_NODES = ("validate_plan", "check_revised")
+RETRY_NODES = ("validate_plan",)
 # Planner tool names and the step each one reports.
 TOOL_STEPS = {
     "get_inventory": "context",

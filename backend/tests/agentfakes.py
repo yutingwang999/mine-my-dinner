@@ -60,6 +60,7 @@ class ScriptedChatModel:
         return AIMessage(
             content=reply.content,
             tool_calls=calls,
+            invalid_tool_calls=reply.invalid_tool_calls,
             usage_metadata=usage,
             response_metadata=reply.response_metadata,
         )

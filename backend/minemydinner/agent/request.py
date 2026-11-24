@@ -14,13 +14,16 @@ from minemydinner.planning.composition import Bound, ranges_for
 from minemydinner.planning.context import MealConstraints
 from minemydinner.planning.validate import MAX_TOTAL_COUNT, PlanSpec
 
-# One version per prompt, so route, parse, planner, and revise change independently. A version
-# any record has used is never edited; a change makes the next version of that prompt.
+# One version per prompt in use, so route, parse, planner, the follow-up reader and the dish
+# picker change independently. A version any record has used is never edited; a change makes
+# the next version of that prompt. The revise prompts (revise_v1..revise_v4) stay as files,
+# the record of earlier runs; no step loads them since plan 3b-2.
 PROMPT_VERSIONS = {
     "route": "route_v6",
     "parse": "parse_v8",
     "planner": "planner_v5",
-    "revise": "revise_v4",
+    "follow_up": "follow_up_v4",
+    "pick": "pick_v4",
 }
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
@@ -72,7 +75,9 @@ def prompt_files() -> list[Path]:
     return [PROMPT_DIR / f"{version}.md" for version in PROMPT_VERSIONS.values()]
 
 
-def load_prompt(kind: Literal["route", "parse", "planner", "revise"]) -> str:
+def load_prompt(
+    kind: Literal["route", "parse", "planner", "follow_up", "pick"],
+) -> str:
     """The current version of one prompt."""
     return (PROMPT_DIR / f"{PROMPT_VERSIONS[kind]}.md").read_text(encoding="utf-8")
 

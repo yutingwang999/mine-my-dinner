@@ -36,14 +36,210 @@ def test_default_composition(n, expected):
 
 
 def test_prompt_versions_name_existing_files():
-    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "revise"]
+    # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
+    assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
         assert load_prompt(kind)
     assert [p.name for p in prompt_files()] == [f"{v}.md" for v in PROMPT_VERSIONS.values()]
+
+
+def test_route_v6_and_revise_v4_are_frozen():
+    import hashlib
+
+    # Both were used by plan 3b-1b development runs and round 10, so they must never change;
+    # follow-ups move to follow_up and pick (plan 3b-2 spec 5.8).
+    route = (PROMPT_DIR / "route_v6.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(route).hexdigest() == (
+        "7354e2bc93e9999996a644693fad67e7e15555459ab0dce89ec71d4ab74d96f4"
+    )
+    revise = (PROMPT_DIR / "revise_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(revise).hexdigest() == (
+        "cf2d42fd50b493cf7720b572b64657624c4f55965411236f6211b10c24112296"
+    )
+
+
+def test_follow_up_v1_and_pick_v1_are_frozen():
+    import hashlib
+
+    # Both were used by development run 1 of plan 3b-2 (one) Task 11, so they must never
+    # change; the reader's next change is follow_up_v2.
+    reader = (PROMPT_DIR / "follow_up_v1.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "40a4baf9a651feacbdb949df863d17a41f3df368adc0d5bb14805f5d3efd5ff4"
+    )
+    picker = (PROMPT_DIR / "pick_v1.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "303e3eb9f66d68e22096734f6679f40ec211b535374d498649a9c198490e02ff"
+    )
+
+
+def test_follow_up_v2_is_frozen():
+    import hashlib
+
+    # Used by development run 2 of plan 3b-2 (one) Task 11, so it must never change; the
+    # reader's next change is follow_up_v3.
+    reader = (PROMPT_DIR / "follow_up_v2.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "f100e08e5f98392df224e4429f1280f9ff47f0fbc868a125c9e8bf1ead7b9dbf"
+    )
+
+
+def test_follow_up_v3_and_pick_v2_are_frozen():
+    import hashlib
+
+    # Both were used by development run 3 of plan 3b-2 (one) Task 11, so they must never
+    # change; the picker's next change is pick_v3.
+    reader = (PROMPT_DIR / "follow_up_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "30cc49a5984fcd99f9e16f851d8b29733edb15d2fc9168a88b7a50100a9e982d"
+    )
+    picker = (PROMPT_DIR / "pick_v2.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "965c927154ff948a0147bca40dc9e2357e7fb230ae912dfb952103ae3f303432"
+    )
+
+
+def test_pick_v3_is_frozen():
+    import hashlib
+
+    # Used by development run 4 of plan 3b-2 (one) Task 11, so it must never change; the
+    # picker's next change is pick_v4. follow_up_v3 (run 4 too) is pinned above.
+    picker = (PROMPT_DIR / "pick_v3.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "0d0f73bfceefc52eb3f090e8314873b6de8540b3d8a99532e5973ff8a0a0c116"
+    )
+
+
+def test_follow_up_v4_and_pick_v4_are_frozen():
+    import hashlib
+
+    # Used by development run 5 of plan 3b-2 (one) Task 11 and by round 11 (Task 12), so
+    # they must never change; a change makes follow_up_v5 or pick_v5.
+    reader = (PROMPT_DIR / "follow_up_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "e6b676ed2bd19de9756b4dd8138a7abc2e4e7b2f31d2e1e903c704244709b274"
+    )
+    picker = (PROMPT_DIR / "pick_v4.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(picker).hexdigest() == (
+        "cdc3b73e48cbb1d14481801638ea667114ab96b385d1786b737abfcc81d0d9e4"
+    )
+
+
+def test_pick_v4_is_pick_v3_with_the_answer_field_renamed():
+    """Task 11 fix 4: DeepSeek cut answers right after the key "wish_met"; pick_v4 is pick_v3
+    with every mention of that answer field named wish_result, and nothing else."""
+    v3 = (PROMPT_DIR / "pick_v3.md").read_text(encoding="utf-8")
+    v4 = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
+    assert "wish_met" not in v4 and "wish_met" in v3
+    assert v4 == v3.replace("wish_met", "wish_result")
+
+
+def test_follow_up_v4_changes_two_principles_of_follow_up_v3():
+    """Task 11 fix 4: a dish that breaks a rule or this meal's avoidance is dropped only when
+    the message says not to replace it, and wish_targets lists only dishes the wish is about
+    (a wish for something the plan lacks goes to add or remove). No new example."""
+    v3 = (PROMPT_DIR / "follow_up_v3.md").read_text(encoding="utf-8")
+    v4 = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
+    old, new = v3.splitlines(), v4.splitlines()
+    assert len(old) == len(new)
+    changed = [(a, b) for a, b in zip(old, new, strict=True) if a != b]
+    assert len(changed) == 2
+    assert changed[0][0].startswith("- For each dish in remove, copy the words")
+    assert changed[1][0].startswith("- wish is in the user's words. It guides")
+    assert "list it with drop only when the message says not to replace it" in v4
+    assert "(no other dish wanted, or fewer dishes)" in v4
+    assert "or when it fits no dish of the plan" not in v4
+    assert "wish_targets lists only dishes the wish is about" in v4
+    assert "a wish for something the plan lacks goes to add or remove (replace) instead" in v4
+    # The example that leaves out a rule-breaking dish keeps remove empty.
+    assert '- "这顿不想吃排骨了": change; remove empty (code replaces the soup)' in v4
+    assert v3.split("Examples", 1)[1] == v4.split("Examples", 1)[1]
+
+
+def test_pick_v3_is_pick_v2_with_the_new_answer_fields():
+    """Task 11 fix 3: pick_v3 is pick_v2 with its wording moved to the answer schema with no
+    nullable field (recipe id 0 when nothing fits; wish_met "yes", "no" or "no_wish"); no
+    line is added or removed and no null is left."""
+    v2 = (PROMPT_DIR / "pick_v2.md").read_text(encoding="utf-8")
+    v3 = (PROMPT_DIR / "pick_v3.md").read_text(encoding="utf-8")
+    assert len(v3.splitlines()) == len(v2.splitlines())
+    assert "null" not in v3 and "null" in v2
+    assert "with one recipe id, or 0 when nothing fits" in v3
+    assert 'wish_met is "yes" when the new dishes meet the wish, and "no_wish" when there' in v3
+    changed = [(a, b) for a, b in zip(v2.splitlines(), v3.splitlines(), strict=True) if a != b]
+    assert len(changed) == 8
+    for old, _ in changed:
+        assert "null" in old or "wish_met" in old
+
+
+def test_follow_up_v3_and_pick_v2_add_one_principle_each():
+    """Task 11 fix 2, items 4 and 5: each new version is its frozen predecessor plus its own
+    lines, with no new example."""
+    reader = (PROMPT_DIR / "follow_up_v3.md").read_text(encoding="utf-8")
+    v2 = (PROMPT_DIR / "follow_up_v2.md").read_text(encoding="utf-8")
+    assert "A dish in remove is never also in wish_targets" in reader
+    assert "only that dish changes" in reader
+    assert "by hand after it was proposed, a line after the plan says what" in reader
+    assert "since the last reply" not in reader
+    assert [line for line in v2.splitlines() if line not in reader.splitlines()] == [
+        line for line in v2.splitlines() if line.startswith("You get the current plan")
+    ]
+    added = [line for line in reader.splitlines() if line not in v2.splitlines()]
+    assert len(added) == 2 and added[1].startswith("- Apply each request of the message once.")
+    picker = (PROMPT_DIR / "pick_v2.md").read_text(encoding="utf-8")
+    v1 = (PROMPT_DIR / "pick_v1.md").read_text(encoding="utf-8")
+    assert "When only a dish of another kind meets the wish, take that kind" in picker
+    assert "The rules, the stated counts and an added slot's dish type never yield." in picker
+    assert '"dishes" counts meat and vegetable dishes, never soups' in picker
+    added = [line for line in picker.splitlines() if line not in v1.splitlines()]
+    assert len(added) == 2
+    for prompt in (reader, picker):
+        examples = prompt.split("Examples", 1)[1].splitlines()[1:]
+        assert len([line for line in examples if line.startswith("- ")]) <= 5
+
+
+def test_follow_up_v2_states_the_task_11_principles():
+    reader = (PROMPT_DIR / "follow_up_v2.md").read_text(encoding="utf-8")
+    # Task 11 fix 1: a wish for something the plan lacks changes the plan, and a message that
+    # changes who eats is people even when it asks for another change too.
+    assert "A wish for something the plan lacks still changes the plan" in reader
+    assert "A message that changes who eats is people, even when it also asks" in reader
+    # Review fix 2: an add or a replace only for the wish is marked, and the example shows it.
+    assert "Mark an add or a replace with for_wish when it is there only to meet the wish." in reader
+    assert "add 1 vegetable dish, for_wish true." in reader
+    # Everything else of follow_up_v1 is kept.
+    v1 = (PROMPT_DIR / "follow_up_v1.md").read_text(encoding="utf-8")
+    kept = [line for line in v1.splitlines() if line not in reader.splitlines()]
+    assert kept == ['- "我先生以后都不吃羊肉" is people; "明天中午也帮我配一顿" is new_meal.']
+    # Invented examples only, at most five.
+    examples = reader.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 5
+
+
+def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v4"
+    assert PROMPT_VERSIONS["pick"] == "pick_v4"
+    reader = load_prompt("follow_up")
+    picker = load_prompt("pick")
+    assert reader == (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
+    assert picker == (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
+    assert len(reader) == 5499
+    assert len(picker) == 4268
+    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    replaced = len(load_prompt("route")) + len(revise_v4)
+    # Spec 5.8a: the reader stays under half of route_v6 plus revise_v4; spec 6: the reader
+    # and the picker together are shorter than the two prompts they replace.
+    assert len(reader) < replaced / 2
+    assert len(reader) + len(picker) < replaced
+    # Spec 5.8: neither prompt lets internal words reach the user.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in reader
+    assert 'never use ids, the plan\'s marks (LOCKED and the others) or "Diner N"' in picker
+    # Spec 5.5: a taste wish guides the picker but is not a requirement.
+    assert "The wish is not a requirement." in picker
 
 
 def test_package_data_glob_matches_every_prompt_file():
@@ -402,12 +598,12 @@ def test_planner_v3_and_v4_are_frozen_and_planner_v5_is_current():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+revise_v4"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
 
-def test_revise_v1_v2_v3_are_frozen_and_revise_v4_is_current():
+def test_revise_v1_v2_v3_are_frozen_and_revise_v4_keeps_its_rules():
     import hashlib
 
     v1 = (PROMPT_DIR / "revise_v1.md").read_bytes().replace(b"\r\n", b"\n")
@@ -424,9 +620,10 @@ def test_revise_v1_v2_v3_are_frozen_and_revise_v4_is_current():
     assert hashlib.sha256(frozen).hexdigest() == (
         "2168b11130c1be2a936030552a7b9513548549951b1eb806c2493e1deed777d8"
     )
-    assert PROMPT_VERSIONS["revise"] == "revise_v4"
-    v3 = load_prompt("revise")
-    assert v3 == (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    # revise_v4, the last revise prompt, is no longer loaded (plan 3b-2); it stays as the
+    # record of the runs that used it.
+    assert "revise" not in PROMPT_VERSIONS
+    v3 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
     # Development run 1: a replaced dish is never dropped; a dish over the time limit is
     # never "not in the library".
     assert "A dish the words want replaced is never dropped" in v3

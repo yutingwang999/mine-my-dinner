@@ -4,14 +4,14 @@ Before the planner calls a model, code asks one question: **can this request be 
 
 It describes the behaviour after Phase 1 plan 2a (`backend/minemydinner/planning/feasibility.py`, wired in `backend/minemydinner/agent/graph.py`). The design is in `docs/superpowers/specs/2026-11-14-phase-1-plan-2a-planner-efficiency-design.md`, Sections 5.2 and 5.3. Related: `docs/planner-stock-rules.md` (what "makeable" and "in stock" mean) and `docs/planner-shortlist-and-ranking.md` (the candidate list built when planning goes ahead).
 
-What each model (route, parse, planner, revise) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
+What each model (route, parse, planner, reader, picker) receives and never receives, with complete example inputs: `docs/planner-what-each-model-sees.md`.
 
 ## 1. When it runs
 
 - After the request is parsed and its defaults applied, **before the first planner model call**.
 - Again **before every retry**, so a request that turns out impossible does not keep retrying. Within one planning run its inputs do not change today, so this second check always repeats the first; it is kept for when stock can change during a run (an inventory-changing planner tool). Plan 2b's diner card settles the diners before the run starts, so they do not change within it either. See `docs/phase-1-carryover.md`.
 
-A revision run (plan 3b-1, changing the current plan) does not run it: `start_revision` goes straight to the revise step. A plan that cannot be changed ends as a failed revision with the plan unchanged.
+A change to the current plan (plan 3b-2: a follow-up the reader reads as a change, or a next-action button on a card whose plan was kept or was changed only in part) does not run it. The frame replaces a dish that breaks the new request (in fridge-only mode, one that is missing something), a locked dish only for a diner rule or this meal's avoidance; a slot nothing fills keeps its dish, and when nothing at all can be done the plan stays as it was and the card offers next actions (`docs/planner-what-each-model-sees.md`, Sections 10 and 11).
 
 It only reads the database and computes; it calls no model. On the chat page it shows as the step "Checking the fridge and dietary rules".
 

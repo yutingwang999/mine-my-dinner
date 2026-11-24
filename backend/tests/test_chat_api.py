@@ -73,7 +73,12 @@ def recipe(session, seeded):
 def plan_model(recipe) -> ScriptedChatModel:
     return ScriptedChatModel(
         replies=[tool_call("get_recipe", {"recipe_id": recipe.id}), final_proposal([recipe.id])],
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]},
+        structured={
+            "Intent": [{"intent": "plan"}],
+            # A follow-up on a plan is read (plan 3b-2); by default it asks for a new meal.
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        },
     )
 
 
@@ -613,46 +618,25 @@ def test_resume_card_headcount(client, tmp_path, session, recipe):
     assert values["settled_diners"]["stated_headcount"] == 2
 
 
-def test_choice_card_resumes_and_shows_in_history(client, tmp_path, session, recipe):
-    model = plan_model(recipe)
-    model.structured["Intent"] = [{"intent": "plan"}, {"intent": "unsure"}]
-    install(tmp_path, session, model, "plan_then_adjust")
-    tid = new_thread(client)
-    sse(post_message(client, tid, "今晚吃什么"))
-    model.replies = [
-        tool_call(
-            "RevisionProposal",
-            {"target": "general", "remove": [], "add": [], "note": "没有更辣的了。"},
-        )
-    ]
-    events = sse(post_message(client, tid, "来点辣的"))
-    assert of(events, "interrupt") == [{"kind": "revise_or_plan", "message": "来点辣的"}]
-    body = client.get(f"/api/chat/threads/{tid}").json()
-    assert body["pending"] == {"kind": "revise_or_plan", "message": "来点辣的"}
-    events = sse(post_resume(client, tid, "revise", "zh"))
-    assert "interrupt" not in names(events)
-    assert any("RevisionProposal" in str(sent[0].content) for sent in model.sent if sent)
-    items = items_of(client, tid)
-    assert [i["type"] for i in items] == ["user", "assistant", "user", "question", "assistant"]
-    assert items[3]["value"] == {
-        "kind": "revise_or_plan",
-        "message": "来点辣的",
-        "choice": "revise",
-    }
-
-
-def revision_reply(target: str, remove=(), add=(), note: str = "") -> AIMessage:
-    removed = [{"id": i, "quote": q} for i, q in remove]
+def picker_reply(slots=(), choices=(), wish_met=None, note: str = "") -> AIMessage:
     return tool_call(
-        "RevisionProposal", {"target": target, "remove": removed, "add": list(add), "note": note}
+        "PickerAnswer",
+        {
+            "choices": [{"index": i, "ids": list(ids)} for i, ids in choices],
+            "slots": [{"index": i, "recipe_id": r or 0, "reason": ""} for i, r in slots],
+            "note": note,
+            "wish_result": {True: "yes", False: "no", None: "no_wish"}[wish_met],
+        },
     )
 
 
 def revise_env(tmp_path, session, recipe) -> tuple[ChatEnv, Any]:
-    """A chat whose first message plans one dish and whose later messages revise it."""
+    """A chat whose first message plans one dish and whose later messages change it: the
+    reader reads "清炒白菜这道换掉吧" as replacing that dish (plan 3b-2)."""
     other = make_recipe(session, "白菜汤", "vegetable dish", [L("小白菜")], servings=2)
     model = plan_model(recipe)
-    model.structured["Intent"] = [{"intent": "plan"}, {"intent": "revise"}]
+    swap = {"id": recipe.id, "mode": "replace", "quote": "清炒白菜这道"}
+    model.structured["FollowUpReading"] = [{"kind": "change", "remove": [swap]}]
     return install(tmp_path, session, model, "plan_then_adjust"), other
 
 
@@ -666,23 +650,29 @@ def plan_then(client, env: ChatEnv, replies: list) -> list:
 
 def test_nothing_fits_revision_streams_its_card(client, tmp_path, session, recipe):
     env, _ = revise_env(tmp_path, session, recipe)
-    events = plan_then(client, env, [revision_reply("general", note="没有更合适的了。")])
+    events = plan_then(client, env, [picker_reply(slots=[(0, None)], note="没有更合适的了。")])
     [card] = of(events, "plan")
     assert [r["id"] for r in card["recipes"]] == [recipe.id]
     assert card["passed"] is False
-    assert [u["code"] for u in card["unmet"]] == ["wish_unmet"]
+    assert [u["code"] for u in card["unmet"]] == ["unfilled"]
     assert "import_recipes" in card["next_actions"]
+    assert "unfinished" not in card and "plan_kept" not in card
     # The card follows its reply, so the client puts it on that reply.
     assert names(events).index("plan") == names(events).index("message") + 1
 
 
-def test_unclear_revision_streams_the_unchanged_card(client, tmp_path, session, recipe):
+def test_unclear_revision_asks_which_dish_without_a_card(client, tmp_path, session, recipe):
+    # Plan 3b-2 spec 5.6: a reference that matches no dish keeps the plan and asks which.
+    from minemydinner.agent.revise_step import READING_PREFIX_ZH, WHICH_DISH_ZH
+
     env, _ = revise_env(tmp_path, session, recipe)
-    events = plan_then(client, env, [revision_reply("unclear", note="是哪一道？")])
-    [card] = of(events, "plan")
-    assert [r["id"] for r in card["recipes"]] == [recipe.id]
-    assert card["unmet"] == [] and card["next_actions"] == []
-    assert of(events, "message") == [{"role": "assistant", "text": "是哪一道？"}]
+    env.model.structured["FollowUpReading"] = [
+        {"kind": "change", "ambiguous": True, "reading": "方案里没有鱼。"}
+    ]
+    events = plan_then(client, env, [picker_reply()])
+    assert of(events, "plan") == []
+    text = f"{READING_PREFIX_ZH}方案里没有鱼。{WHICH_DISH_ZH}"
+    assert of(events, "message") == [{"role": "assistant", "text": text}]
 
 
 def test_passed_revision_streams_one_card_and_its_steps(client, tmp_path, session, recipe):
@@ -691,18 +681,18 @@ def test_passed_revision_streams_one_card_and_its_steps(client, tmp_path, sessio
         client,
         env,
         [
-            # The first answer adds a dish already in the plan, so the check retries.
-            revision_reply("named", remove=[(recipe.id, "清炒白菜")], add=[recipe.id]),
-            revision_reply("named", remove=[(recipe.id, "清炒白菜")], add=[other.id]),
+            # The first answer picks the dish already in the plan, so the picker retries.
+            picker_reply(slots=[(0, recipe.id)]),
+            picker_reply(slots=[(0, other.id)]),
         ],
     )
     [card] = of(events, "plan")
     assert [r["id"] for r in card["recipes"]] == [other.id]
     assert card["passed"] is True
     steps = [e["step"] for e in of(events, "progress")]
-    assert steps[0] == "parse" and steps[-1] == "present"
-    assert {"context", "check", "retry"} <= set(steps)
-    assert steps.index("retry") > steps.index("check")
+    # No parse on a change: the frame (context), the picker (check), then the reply.
+    assert steps[0] == "context" and steps[-1] == "present"
+    assert "check" in steps and "parse" not in steps
 
 
 def test_friend_rule_code_never_reaches_the_client(client, tmp_path, session, recipe):

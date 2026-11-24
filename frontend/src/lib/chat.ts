@@ -169,7 +169,6 @@ export type DinerSummary = { self?: boolean; names: string[]; others: number };
 
 export type Pending =
   | { kind: "request_style" }
-  | { kind: "revise_or_plan"; message: string }
   | DinersPending
   | {
       kind: "question";
@@ -197,9 +196,10 @@ export type ThreadItem =
 
 /** A question as the history records it; the diner card keeps only a summary (null when skipped). */
 export type AskedQuestion =
-  | Exclude<Pending, { kind: "diners" | "revise_or_plan" }>
-  | { kind: "revise_or_plan"; message: string; choice?: "revise" | "plan" | null }
-  | { kind: "diners"; summary: DinerSummary | null };
+  | Exclude<Pending, { kind: "diners" }>
+  | { kind: "diners"; summary: DinerSummary | null }
+  // History only: the answered choice card of threads saved by plans 3b-1 and 3b-1b.
+  | { kind: "revise_or_plan"; message?: string; choice?: "revise" | "plan" | null };
 
 export type ThreadState = {
   items: ThreadItem[];

@@ -31,5 +31,6 @@ Chinese is allowed only where the product's business scenarios require it:
 - Chinese UI translations
 - Chinese names and aliases in ingredient and cookware dictionaries
 - Chinese recipe text, and the expected results for that text, in tests and prompt examples
+- The Chinese copy of the README (`README.zh-CN.md`), which must match `README.md`
 
 Conversations with the user are not covered by this rule.

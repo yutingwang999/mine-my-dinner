@@ -228,13 +228,17 @@ def build_shortlist_result(
     spec: "PlanSpec",
     parsed: "ParsedRequest",
     query_vectors: dict[str, list[float]],
+    *,
+    exclude_ids: Sequence[int] = (),
 ) -> ShortlistResult:
     """Candidates per needed dish type, keyed by dish type, each list in rank order.
 
     Uses the request's query, time limit, and exclude_recent_days as search does; the
     query ranks and never empties a type. all_use keeps only recipes using every named
     ingredient; must_use and prefer_use rank. In fridge-only mode only makeable recipes (no
-    missing required line) are fetched; in shopping mode every safe recipe is makeable."""
+    missing required line) are fetched; in shopping mode every safe recipe is makeable.
+    `exclude_ids` are never listed (the picker's shortlist leaves out the dishes already in
+    the plan, which it may not choose); the planner passes none."""
     needed = needed_by_dish_type(spec)
     if not needed:
         return ShortlistResult({})
@@ -249,6 +253,7 @@ def build_shortlist_result(
         exclude_recent_days=parsed.exclude_recent_days,
         limit=None,
         dish_types=list(needed),
+        exclude_ids=exclude_ids,
         query_vectors=query_vectors,
         prefer_use=ranking_names,
         keep_unmatched=True,

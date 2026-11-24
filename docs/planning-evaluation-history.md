@@ -14,11 +14,12 @@ Every scenario file under `backend/eval_data/planning/`, with its role. Each fil
 | `scenarios_diners.yaml` | `library_diners.yaml` | 17 | Claude | Plan 2b: the diner card, friends and guests, nicknames, ask-first answers, plan again | Regression | Development in plan 2b; regression since plan 3b-1 |
 | `scenarios_heldout.yaml` | `library_diners.yaml` | 14 | User (requests), Claude (set-up) | Plan 2b: requests with several diners | Regression | Held-out in plan 2b (round 8); its results were read, so a regression set since plan 3b-1 (round 9) |
 | `scenarios_heldout_core.yaml` | `library_diners.yaml` | 22 | User (requests), Claude (set-up) | Plan 2b: one-diner requests | Regression | Held-out in plan 2b (round 8); a regression set since plan 3b-1 (round 9) |
-| `scenarios_revise.yaml` | `library_revise.yaml` | 37 (19 from plan 3b-1, 18 added in plan 3b-1b) | Claude | Plan 3b-1: follow-ups that revise the plan, the choice card, hand edits between turns. Plan 3b-1b: drops, replacements, add-only, one-meal avoidances, a lasting rule, a staple quote, a dish not in the library, the empty-plan question, buttons after a failed revision and after an early stop, an unmeetable wish | Development | Development in plan 3b-1; development again in plan 3b-1b |
-| `scenarios_revise_heldout.yaml` | `library_revise.yaml` | 18 (1 deferred to 3b-2) | User (sentences), Claude (set-up) | Plan 3b-1: revision sentences | Regression | Held-out in plan 3b-1 (round 9); a regression set since plan 3b-1b (decided 2026-11-21; no expectation changed) |
-| `scenarios_revise_heldout2.yaml` | `library_revise2.yaml` | 20 | User (sentences), Claude (set-up) | Plan 3b-1b: drops, replacements, one-meal wishes, a lasting rule, add-only, buttons, unmeetable wishes, new plans | Held-out | Written for plan 3b-1b (2026-11-21); run once in round 10 (2026-11-22), so its results have now been read |
+| `scenarios_revise.yaml` | `library_revise.yaml` | 42 (rewritten in plan 3b-2; 37 in plan 3b-1b) | Claude | Plan 3b-1: follow-ups that revise the plan, the choice card, hand edits between turns. Plan 3b-1b: drops, replacements, add-only, one-meal avoidances, a lasting rule, a staple quote, a dish not in the library, the empty-plan question, buttons after a failed revision and after an early stop, an unmeetable wish. Plan 3b-2: rewritten to two layers of expectations, 42 scenarios | Development | Development in plan 3b-1; development again in plan 3b-1b and plan 3b-2 |
+| `scenarios_revise_heldout.yaml` | `library_revise.yaml` | 18 (1 deferred to 3b-2) | User (sentences), Claude (set-up) | Plan 3b-1: revision sentences | Regression | Held-out in plan 3b-1 (round 9); a regression set since plan 3b-1b (decided 2026-11-21). Plan 3b-2 Task 1 (user-approved, 2026-11-22): one expectation added (`expect_plan: false` on the dish-not-in-the-library scenario), and the deferred scenario now points to plan 3b-2 plan two. Plan 3b-2 Task 12 (user-approved, 2026-11-24): two scenarios accept a second outcome (see round 11) |
+| `scenarios_revise_heldout2.yaml` | `library_revise2.yaml` | 20 | User (sentences), Claude (set-up) | Plan 3b-1b: drops, replacements, one-meal wishes, a lasting rule, add-only, buttons, unmeetable wishes, new plans | Regression | Written for plan 3b-1b (2026-11-21); held-out in round 10 (2026-11-22); a regression set since plan 3b-2. Plan 3b-2 Task 1 (user-approved, 2026-11-22): the first turn's diner card is expected in the English no-rice scenario (only the follow-up's card is checked), `expect_plan: false` on the all-allergic seafood scenario, and the named-dish swap is no longer deferred. Plan 3b-2 Task 12 (user-approved, 2026-11-24): two scenarios accept a second outcome (see round 11) |
+| `scenarios_revise_heldout3.yaml` | `library_revise3.yaml` | 16 (1 deferred to plan 3b-2 plan two) | User (sentences), Claude (set-up) | Plan 3b-2: replacements and removals, a dish not in the library, adding when nothing fits, wishes, an unmeetable wish, typed next steps after a failed plan, a person joining, a message not about the plan, a reference that matches no dish, plan again | Held-out | Written for plan 3b-2 (2026-11-23); run once in round 11 |
 
-`library_revise2.yaml` is `library_revise.yaml` unchanged plus eight dishes the plan 3b-1b sentences need; `library_revise.yaml` stays frozen so the regression set compares across rounds.
+`library_revise2.yaml` is `library_revise.yaml` unchanged plus eight dishes the plan 3b-1b sentences need; `library_revise.yaml` stays frozen so the regression set compares across rounds. `library_revise3.yaml` is `library_revise2.yaml` unchanged plus five dishes the plan 3b-2 sentences need.
 
 ## How to add a round
 
@@ -67,7 +68,8 @@ Columns: first pass and calls are over the 6 scenarios that expect a plan; cost,
 | 8 (parse_v4) | 20261118T070858Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0032 | $0.0182 | 0.93 | 5166 | 3.4 s | 5.3 s |
 | 8 | 20261118T074847Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0035 | $0.0185 | 0.92 | 5206 | 3.5 s | 5.9 s |
 | 9 | 20261120T102629Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0039 | $0.0211 | 0.93 | 5984 | 4.0 s | 6.2 s |
-| **10** | 20261122T073916Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0045 | $0.0238 | 0.92 | 6707 | 3.4 s | 4.3 s |
+| 10 | 20261122T073916Z | no | 7/7 | 6/6 | 3.00 | 3 | $0.0045 | $0.0238 | 0.92 | 6707 | 3.4 s | 4.3 s |
+| **11** | 20261123T171223Z | no | 7/7 | 6/6 | 2.86 | 3 | $0.0033 | $0.0234 | 0.95 | 6707 | 3.2 s | 4.9 s |
 
 ## Comparison: plan 2a set (18 scored scenarios, 12 expect a plan, plus 1 check-only)
 
@@ -93,7 +95,8 @@ Same columns. "Over 5" names the scenarios that used more than 5 calls.
 | 8 (parse_v4) | 20261118T070934Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0080 | $0.0464 | 0.93 | 5163 | 3.3 s | 6.2 s | — |
 | 8 | 20261118T074917Z | no | 18/18 | 12/12 | 3.17 | 5 | $0.0082 | $0.0466 | 0.92 | 5203 | 3.3 s | 6.4 s | — |
 | 9 | 20261120T102702Z | no | 18/18 | 12/12 | 3.08 | 4 | $0.0095 | $0.0524 | 0.94 | 5981 | 3.7 s | 5.6 s | — |
-| **10** | 20261122T073945Z | no | 18/18 | 12/12 | 3.17 | 4 | $0.0106 | $0.0602 | 0.93 | 6704 | 3.1 s | 5.6 s | — |
+| 10 | 20261122T073945Z | no | 18/18 | 12/12 | 3.17 | 4 | $0.0106 | $0.0602 | 0.93 | 6704 | 3.1 s | 5.6 s | — |
+| **11** | 20261123T171251Z | no | 18/18 | 12/12 | 2.72 | 4 | $0.0085 | $0.0587 | 0.95 | 6704 | 3.0 s | 5.2 s | — |
 
 Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient_dominates`) passed in every plan 2a run.
 
@@ -111,7 +114,8 @@ Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient
 | 8 | 20261118T075026Z | no | 10/10 | 7/8 | 3.75 | 5 | $0.0060 | $0.0323 | 0.92 | 5223 | 4.5 s | 7.6 s | — (one scenario passed on the second attempt) |
 | 9 | 20261120T102816Z | no | 8/10 | 4/6 | 4.88 | 15 | $0.0084 | $0.0492 | 0.93 | 6017 | 5.5 s | 21.7 s | relax_split_button (the button message was routed `revise`: 13 calls in that turn, 15 in all, no plan); relax_named_button (routed `unsure`, stopped at the choice card). First pass is over the 6 scenarios that made a new plan; two of them passed on the second attempt |
 | 9 (button fix) | 20261121T073929Z | no | 10/10 | 7/8 | 3.38 | 4 | $0.0074 | $0.0354 | 0.91 | 6001 | 4.0 s | 6.3 s | — (three_dishes_at_most_one_vegetable_shopping passed on the second attempt; each button scenario 4 calls over two turns) |
-| **10** | 20261122T074050Z | no | 10/10 | 8/8 | 3.00 | 3 | $0.0062 | $0.0339 | 0.92 | 6705 | 3.3 s | 4.9 s | — (each button scenario 3 calls over two turns: since plan 3b-1b a button changes the request in code, with no parse call) |
+| 10 | 20261122T074050Z | no | 10/10 | 8/8 | 3.00 | 3 | $0.0062 | $0.0339 | 0.92 | 6705 | 3.3 s | 4.9 s | — (each button scenario 3 calls over two turns: since plan 3b-1b a button changes the request in code, with no parse call) |
+| **11** | 20261123T171353Z | no | 10/10 | 8/8 | 2.90 | 4 | $0.0059 | $0.0355 | 0.95 | 6705 | 3.5 s | 5.1 s | — |
 
 ## Comparison: diners development set (17 scenarios, all expect a plan)
 
@@ -123,7 +127,8 @@ Round 1 ran the baseline set only. The check-only scenario (`one_main_ingredient
 | 8 | 20261118T072512Z | parse_v5 | 16/17 | 17/17 | 3.59 | 9 | $0.0125 | $0.0616 | 0.90 | 5245 | 4.6 s | 12.7 s | plan_again_after_confirmation (the re-plan's parse dropped the previous query, so 香煎鸡腿 was not chosen) |
 | 8 | 20261118T074711Z | parse_v5, plan again in code | 17/17 | 17/17 | 3.12 | 4 | $0.0092 | $0.0521 | 0.93 | 5223 | 3.9 s | 5.3 s | — |
 | 9 | 20261120T102921Z | route_v3, parse_v6 | 16/17 | 17/17 | 3.59 | 10 | $0.0142 | $0.0699 | 0.90 | 6001 | 5.2 s | 16.1 s | unmatched_people_none (card others 1, expected 2). The 10 calls are `plan_again_after_confirmation` over its turns, as expected |
-| **10** | 20261122T074130Z | route_v6, parse_v8 | 17/17 | 17/17 | 3.35 | 6 | $0.0131 | $0.0710 | 0.92 | 6724 | 3.8 s | 8.5 s | — (`unmatched_people_none`, round 9's miss, passed) |
+| 10 | 20261122T074130Z | route_v6, parse_v8 | 17/17 | 17/17 | 3.35 | 6 | $0.0131 | $0.0710 | 0.92 | 6724 | 3.8 s | 8.5 s | — (`unmatched_people_none`, round 9's miss, passed) |
+| **11** | 20261123T171434Z | route_v6, parse_v8 | 17/17 | 17/17 | 3.24 | 5 | $0.0103 | $0.0684 | 0.95 | 6724 | 3.4 s | 6.9 s | — |
 
 ## Comparison: held-out sets
 
@@ -135,8 +140,10 @@ The requests were written by the user (2026-11-17); Claude added stock, friends,
 | 8 | `scenarios_heldout_core.yaml` (one diner) | 20261118T075247Z | 22 (20 expect a plan) | 19/22 | 19/20 | 3.05 | 5 | $0.0128 | $0.0607 | 5221 | 6.1 s | core_one_dessert, core_en_dinner_with_fish, core_en_spicy_shopping (see round 8) |
 | 9 | `scenarios_heldout.yaml` (diners) | 20261120T103101Z | 14 (all expect a plan) | 13/14 | 14/14 | 3.14 | 4 | $0.0090 | $0.0492 | 6016 | 6.9 s | diners_friend_cannot_eat_nuts (see round 9) |
 | 9 | `scenarios_heldout_core.yaml` (one diner) | 20261120T103213Z | 22 (20 expect a plan) | 20/22 | 19/19 | 3.35 | 7 | $0.0142 | $0.0773 | 6015 | 6.6 s | core_en_dinner_with_fish, core_en_spicy_shopping (see round 9). First pass is over the 19 new plans; `core_two_meat_one_vegetable_then_one_dish` was judged on a revision turn, which passed |
-| **10** | `scenarios_heldout.yaml` (diners) | 20261122T074247Z | 14 (all expect a plan) | 13/14 | 14/14 | 3.07 | 4 | $0.0098 | $0.0530 | 6739 | 4.9 s | diners_five_with_vegetarian (see round 10; round 9's miss passed) |
-| **10** | `scenarios_heldout_core.yaml` (one diner) | 20261122T074350Z | 22 (20 expect a plan) | 20/22 | 19/19 | 3.20 | 5 | $0.0152 | $0.0834 | 6738 | 6.3 s | core_en_dinner_with_fish, core_en_spicy_shopping (see round 10). First pass is over the 19 new plans |
+| 10 | `scenarios_heldout.yaml` (diners) | 20261122T074247Z | 14 (all expect a plan) | 13/14 | 14/14 | 3.07 | 4 | $0.0098 | $0.0530 | 6739 | 4.9 s | diners_five_with_vegetarian (see round 10; round 9's miss passed) |
+| 10 | `scenarios_heldout_core.yaml` (one diner) | 20261122T074350Z | 22 (20 expect a plan) | 20/22 | 19/19 | 3.20 | 5 | $0.0152 | $0.0834 | 6738 | 6.3 s | core_en_dinner_with_fish, core_en_spicy_shopping (see round 10). First pass is over the 19 new plans |
+| **11** | `scenarios_heldout.yaml` (diners) | 20261123T171544Z | 14 (all expect a plan) | 12/14 | 13/14 | 3.14 | 4 | $0.0078 | $0.0546 | 6739 | 5.3 s | diners_three_people_one_no_lamb, diners_five_with_vegetarian (see round 11) |
+| **11** | `scenarios_heldout_core.yaml` (one diner) | 20261123T171644Z | 22 (20 expect a plan) | 21/22 | 20/20 | 3.05 | 5 | $0.0119 | $0.0807 | 6738 | 5.0 s | core_en_spicy_shopping (see round 11) |
 
 ## Comparison: revise sets (plans 3b-1 and 3b-1b)
 
@@ -157,9 +164,11 @@ Columns: "Revisions passed" counts judged turns that ran the revise step and end
 | 10 (dev 2) | development | 20261122T055623Z | route_v4, parse_v7, planner_v5, revise_v4 | 30/37 | 21/26 | **1** | 3.3 / 7 | 24/26 | 3/3 | 6.08 | 10 | $0.0521 | $0.3037 | 6905 | 14.1 s | 0 / 0 / 5/7 | seven scenarios (see round 10) |
 | 10 (dev 3) | development | 20261122T063117Z | route_v5, parse_v8, planner_v5, revise_v4 | 35/37 | 21/24 | 0 | 3.4 / 7 | 25/26 | 3/3 | 6.27 | 12 | $0.0478 | $0.3189 | 6815 | 13.9 s | 0 / 0 / 7/7 | replace_eggplant_same_type, drop_every_dish_asks |
 | 10 (dev 4) | development | 20261122T071211Z | route_v6, parse_v8, planner_v5, revise_v4 | 35/37 | 22/26 | 0 | 3.6 / 8 | 26/26 | 3/3 | 6.32 | 12 | $0.0471 | $0.3273 | 6869 | 15.6 s | 0 / 0 / 6/7 | meal_avoid_meat_zh, button_relax_split_after_failed_add |
-| **10** | development | 20261122T072758Z | route_v6, parse_v8, planner_v5, revise_v4 | 33/37 | 20/26 | 0 | 3.4 / 6 | 26/26 | 3/3 | 6.27 | 11 | $0.0505 | $0.3215 | 6790 | 13.7 s | 0 / 0 / 5/7 | add_only_one_vegetable, meal_avoid_meat_zh, button_fewer_after_failed_add, button_relax_split_after_failed_add |
-| **10** | held-out (`scenarios_revise_heldout2.yaml`) | 20261122T073303Z | route_v6, parse_v8, planner_v5, revise_v4 | 14/19, deferred 0/1 | 13/16 | 0 | 4.6 / 12 | 16/16 | — | 7.50 | 15 | $0.0329 | $0.2245 | 6900 | 20.3 s | 0 / 1 / 1/2 | five scenarios (see round 10) |
-| **10** | regression (`scenarios_revise_heldout.yaml`) | 20261122T073630Z | route_v6, parse_v8, planner_v5, revise_v4 | 11/17, deferred 0/1 | 12/15 | 0 | 4.2 / 12 | 14/15 | — | 7.00 | 15 | $0.0273 | $0.1823 | 6828 | 18.9 s | 0 / 0 / — | six scenarios (see round 10) |
+| 10 | development | 20261122T072758Z | route_v6, parse_v8, planner_v5, revise_v4 | 33/37 | 20/26 | 0 | 3.4 / 6 | 26/26 | 3/3 | 6.27 | 11 | $0.0505 | $0.3215 | 6790 | 13.7 s | 0 / 0 / 5/7 | add_only_one_vegetable, meal_avoid_meat_zh, button_fewer_after_failed_add, button_relax_split_after_failed_add |
+| 10 | held-out (`scenarios_revise_heldout2.yaml`) | 20261122T073303Z | route_v6, parse_v8, planner_v5, revise_v4 | 14/19, deferred 0/1 | 13/16 | 0 | 4.6 / 12 | 16/16 | — | 7.50 | 15 | $0.0329 | $0.2245 | 6900 | 20.3 s | 0 / 1 / 1/2 | five scenarios (see round 10) |
+| 10 | regression (`scenarios_revise_heldout.yaml`) | 20261122T073630Z | route_v6, parse_v8, planner_v5, revise_v4 | 11/17, deferred 0/1 | 12/15 | 0 | 4.2 / 12 | 14/15 | — | 7.00 | 15 | $0.0273 | $0.1823 | 6828 | 18.9 s | 0 / 0 / — | six scenarios (see round 10) |
+
+From round 11 (plan 3b-2) the revise sets run on a different structure (one reader, a frame in code, a picker) with different measures (must-never-be-wrong, unnecessary questions, calls per change turn), so their rows are in round 11's own table, under "Rounds".
 
 ## Rounds
 
@@ -313,7 +322,7 @@ Gemini models showed little or no cache hits (gemini-3.5-flash-lite 0.00 in ever
 - **Decision (user, 2026-11-21):** record the round as it is; fix the button regression and rerun the counts set (done); merge plan 3b-1 after its final review; fix the causes above in a follow-up plan 3b-1b on a new branch, with a new held-out batch from the user, because this batch has now been seen. In 3b-1b a named removal without a number drops the dish (the plan gets smaller), and only "换 / 换成 / 换一个" replaces it. The items are in `docs/phase-1-carryover.md`, "Deferred from Phase 1 plan 3b-1".
 - **Results of record:** this round ran every set on the final prompt versions, so its runs replace round 8's as the results of record. For the counts set the rerun at `e870121` holds them; the button fix changed only the path of the fixed button messages, which no scenario of the other sets sends.
 
-### Round 10 — plan 3b-1b: revision fixes (route_v6, parse_v8, planner_v5, revise_v4), a new held-out batch (2026-11-22) — results of record
+### Round 10 — plan 3b-1b: revision fixes (route_v6, parse_v8, planner_v5, revise_v4), a new held-out batch (2026-11-22) — results of record until round 11
 
 - **Changed since round 9:** plan 3b-1b (design `2026-11-21-phase-1-plan-3b1b-revise-fixes-design.md`). Each removed dish is a drop or a replacement: a bare named removal ("玉米的不要") drops the dish and the plan gets smaller, and only "换 / 换成 / 换一个" replaces it; a named replacement dish carries its own quote (`replace_with`); an add-only kind changes no other dish; a replacement takes the type of the dish it replaces (R7) unless the user names the replacement, a one-meal avoidance covers the replaced dish, or the message states a count, and the H4 retry names the dishes of the right type; staple foods have category words; conflict words ("不适合的菜") name the dishes with a kept conflict; a one-meal avoidance (`meal_avoid`, `parse_v7`) is this meal's hard rule and brings no diner card; a nothing-fits answer ends the turn without a retry when the failures are only count ones; a change that would leave no dish asks whether to plan a new meal; next-action buttons change the request in code (no route or parse call), and on a failed revision's card revise the kept plan again; the quiet count note reads the card's own request; `planner_v5` says when a taste wish is not met, and an attempt with no answer falls back to the shortlist. The evaluation runner gained the reply checks ("0 dishes", unmet wish not said, after a button), file roles with each role's rate apart, and keys for buttons, the follow-up diner card, the kept request and the expected unmet wish (Task 9). A Task 9 ruling, recorded here: `expect_wish_unmet` reads only code-written signs, so a revision that passes with a partial change and says so only in the model's note counts as not said, and any failed or nothing-fits revision that kept the plan with an unmet entry counts as said.
 - **Scenario sets:** `scenarios_revise.yaml` grew to 37 (18 added by Claude with new sentences); `scenarios_revise_heldout.yaml` became a regression set; `scenarios_revise_heldout2.yaml` (20 sentences from the user, set up by Claude in Task 1, one scenario deferred by the user's decision) is the new held-out set, with `library_revise2.yaml`. See "Scenario sets".
@@ -374,3 +383,182 @@ Gemini models showed little or no cache hits (gemini-3.5-flash-lite 0.00 in ever
 Against the criteria, on the round 6 runs: first pass 6/6, 12/12 and 8/8; average calls 3.0-3.5 per plan scenario; every infeasible scenario stopped within 2 calls with the expected reasons and next actions; uncached cost $0.0146 on the baseline set against $0.064, and model time 3.4-3.5 s against 11.3 s; largest call 3,658 tokens against the 32,000 budget; every scenario of all three sets as expected, with no scenario over 5 calls in this round. The call limits (`MODEL_CALL_LIMIT` 6, `TOOL_CALL_LIMIT` 10 per attempt) were never reached in any round: the most planner calls in one attempt was 5 (round 4).
 
 Known pattern to watch: when the shortlist is complete but the model is unhappy with it (no meat dish to balance the meal, egg dishes as the only "vegetable dishes"), it sometimes ignores the instruction not to search. It costs calls, not correctness.
+
+### Spike: one reader for follow-up turns (2026-11-22) — an experiment, not a round
+
+**Question.** Before the plan 3b-2 design (diner changes, together with simplifying the revise turn), the user asked whether giving the model more of the work would fix the follow-up misses of round 10. A throwaway spike (branch `spike/one-reader`, commit `97c4c50`, not merged; its prompt `one_reader_v0.md` is saved in each run folder's `prompts/`) replaced the route, parse and revise calls of a follow-up turn with **one** model call that read everything at once: the whole conversation (labels for saved nicknames), the current plan with its marks, the confirmed diner card summary, the request's conditions and the revise shortlist, with a search tool capped at 3 calls. It answered one of `plan` (the full new dish list and a note), `question`, `new_meal` or `nothing_fits`. Code kept only the hard checks (diner rules, stock, cookware, time), with one retry; locked dishes and counts were recorded, not enforced. The first turn and buttons stayed as in round 10. Development set only (`scenarios_revise.yaml`, 37 scenarios), test database.
+
+| Run | Reader model | As expected | Calls per follow-up turn (avg / max) | Locked dishes removed | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|
+| 20261122T095944Z | deepseek-flash | 25/37 | 1.4 / 4 | 1 | $0.0342 | 6.0 s |
+| 20261122T100355Z | deepseek-flash | 26/37 | 1.4 / 3 | 1 | $0.0350 | 5.6 s |
+| 20261122T100754Z | deepseek-v4-pro | 24/37 | 1.6 / 5 | 0 | $0.0917 | 9.8 s |
+| 20261122T101428Z | deepseek-v4-pro | 24/37 | 1.6 / 5 | 1 | $0.0634 | 7.1 s |
+| Round 10 and development runs 3-4 (today's structure, for comparison) | deepseek-flash | 33-35/37 | 3.4 / 6-8 | 0 | about $0.05 | about 7 s |
+
+Total cost of the spike: $0.224.
+
+**Misses, by kind.**
+- *Not built in the spike* (not a reading error): no diner card from follow-up words (`revise_with_new_guest`, `lasting_rule_for_a_friend_while_revising`), and the request changes of button turns were not modelled (three or four `button_*` scenarios).
+- *Mapping* (not a reading error): a reader's `question` was counted as route `unsure`, while `which_soup_asks` and `drop_every_dish_asks` expect a revision that asks.
+- *Real misreadings*, about 5-6 per run against 2-4 in today's structure: a new meal read as a revision (`new_plan_four_dishes`, `new_plan_after_hand_add`, both models, every run); wrong counts (the stronger model kept 3 dishes where 4 were expected in `named_swap_eggplant_after_hand_add` and `scope_all_but_corn`, and asked instead of trimming in `fewer_dishes_on_hand_grown_plan`); a locked dish removed under a general wish (3 of 4 runs; today's structure blocks this in code); `meal_avoid_meat_zh` in every run; `choice_card_answered_revise` once.
+
+**Conclusion.**
+- One reader with the same model did not read follow-ups better: the errors from split information went away, but new ones came (new meal versus revision, counts), and without the code guards locked dishes were removed.
+- The stronger model did not help (no better, 2-3 times the cost, slower), so the limit is the structure and the code guards, not model power.
+- The clear gain was fewer calls: about 1.5 per follow-up turn instead of 3.4, and faster turns.
+- This supports, for the plan 3b-2 design: one model reads the whole context once and answers **what the message wants** in a structured form; code decides which dishes and people that touches and keeps the guards (locked dishes, counts, rules); a model chooses concrete dishes only within that narrow frame.
+
+### Plan 3b-2 (one) development runs (2026-11-23) — not a round
+
+The new follow-up structure (reader `follow_up_v1`, frame in code, picker `pick_v1`; Tasks 2-10b) on the rewritten development set (`scenarios_revise.yaml`, 42 scenarios, `library_revise.yaml`), test database, deepseek-flash, **with embeddings** (`--with-embeddings`; round 10 ran without, so its search fell back to text matching while the tool said "matched by meaning" — see the carryover on `semantic_paused`). Results of record come from Task 12's round.
+
+**The five runs side by side** (the tables after it give each run with its misses):
+
+| | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Target |
+|---|---|---|---|---|---|---|
+| Run folder | 20261123T112836Z | 20261123T125329Z | 20261123T135719Z | 20261123T153538Z | 20261123T164312Z | |
+| Commit | `e770385` | `af1a940` | `e807d2c` | `294198a` | `896d17c` | |
+| Reader / picker prompt | follow_up_v1 / pick_v1 | follow_up_v2 / pick_v1 | follow_up_v3 / pick_v2 | follow_up_v3 / pick_v3 | follow_up_v4 / pick_v4 | |
+| As expected (development set) | 36/42 | 38/42 | 40/42 | 40/42 | **41/42** | ≥ 90% (38) |
+| Must-never-be-wrong | 1 | 3 | 0 | 1 (runner false positive) | **0** | 0 |
+| Unnecessary questions | 0/30 | 0/30 | 0/30 | 0/30 | 0/30 | ≤ 20% |
+| Calls per change turn (avg / max) | 2.2 / 4 | 2.1 / 5 | 2.4 / 5 | 2.2 / 6 | 2.1 / 4 | ≤ 2.5 / ≤ 7 |
+| Locked dishes removed | 0 | 0 | 0 | 0 | 0 | 0 |
+| After a button, as expected | 4/7 | 5/6 | 5/6 | 6/6 | 6/6 | |
+| Picker answers cut by DeepSeek (of picker calls) | 3 empty / 37 | 4 / 43 | 10 / 47 | 3 / 45 | **0 / 41** | |
+| Reader asked again | — | — | — | 0 | 0 | |
+| Cost (cache-aware) | $0.0493 | $0.0513 | $0.0490 | $0.0484 | $0.0496 | |
+| Avg latency | 6.2 s | 6.0 s | 6.7 s | 6.5 s | 6.5 s | |
+
+Run 1's three "empty" picker replies were cut answers recorded before `invalid_tool_calls` was kept; the cut answers are traced in `docs/investigations/2026-11-24-deepseek-picker-tool-call-cut.md`. The reader re-ask exists from run 4 on.
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T112836Z (run 1) | follow_up_v1, pick_v1 | 36/42 | 1 (1 scenario) | 0/30 | 2.2 / 4 | $0.0493 | 6.2 s |
+| Round 10, development set (old structure, 37 scenarios, no embeddings, for comparison) | route_v6, parse_v8, revise_v4 | 33-35/37 | — | — | 3.4 / 6-8 | about $0.05 | about 7 s |
+
+**Run 1 misses and what was done** (all fixed before run 2, with the user's approval):
+- `button_fewer_after_failed_add`: an add the reader gave with no dish type was dropped by code as an unknown type, so nothing was added and no button offered. Code now reads a missing type as any type. The scenario itself assumed all-or-nothing; under spec 5.5 the dish that can be made is added at once, so it was rewritten (new sentence).
+- `fridge_only_spicy_unmet` (the must violation): no spicy dish could be made, and the picker still swapped a dish for a non-spicy one with `wish_met: false`. A slot that exists only for the wish is now left unfilled when the wish is not met (user decision); the reader marks an add or a replacement made only for the wish (`for_wish`, `follow_up_v2`), so the same rule covers it.
+- `button_relax_split_after_failed_add`: a stated side count that could not be met offered no `relax_split`; it does now, and the button re-runs the unfinished add as any type.
+- `meal_avoid_shrimp_en`, `new_guest_brings_the_card`: the picker returned empty replies (3 of about 40 calls; most likely tool-call arguments that could not be parsed); an empty reply is now asked again at once, within a turn-wide budget of 6 picker calls, so a change turn stays at 7 calls or fewer.
+- `button_shopping_after_seafood_wish`: "a wish for something the plan lacks" was read as a wish alone, so nothing changed; `follow_up_v2` turns such a wish into an add or a replacement.
+- `new_guest_brings_the_card`: a new diner plus "one more dish" was read as a change; `follow_up_v2` reads any change in who eats as `people`.
+- Also: the picker's shortlist no longer lists dishes already in the plan.
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T125329Z (run 2) | follow_up_v2, pick_v1 | 38/42 | 3 (3 scenarios) | 0/30 | 2.1 / 5 | $0.0513 | 6.0 s |
+
+**Run 2 misses and what was done** (fixed before run 3, with the user's approval, 2026-11-24): five of run 1's six misses passed.
+- `start_over_with_four` (must: stated count): the plan had 3 meat/vegetable dishes and a soup; the picker read "dishes: exactly 4" as already met, counting the soup. The picker's input now shows each stated count next to the plan's current number and says that dishes exclude soups.
+- `button_relax_split_after_failed_add` (must: stated count): on the relax_split button the picker was given the offering turn's words ("荤菜再来一个吧") as the wish, searched only meat dishes and left the any-type slot empty. No button turn passes the earlier words any more; the structured reading kept on the card carries the wish (a legacy card without it still uses the words).
+- `too_many_eggs` (must: more dishes changed than allowed): the reader both dropped one egg dish and listed all three as wish targets, against its own reading sentence. `follow_up_v3`: a request is applied once.
+- `general_lighter_or_added`: the picker looked only at meat dishes for a lighter dish. `pick_v2`: the plan's balance yields to the wish.
+- Also: the reader's input now says what the user changed by hand since the last reply (edits add no message, so the conversation named the plan before them).
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T135719Z (run 3, the last development run Task 11 allows) | follow_up_v3, pick_v2 | 40/42 | 0 | 0/30 | 2.4 / 5 | $0.0490 | 6.7 s |
+
+**Run 3 misses** (left for the user's decision; no change made after run 3):
+- `message_after_shopping_button`: all four picker answers came back as tool calls whose arguments were cut off at the same place (`{"choices": [], "slots": [{"index": 0, "recipe_id": …}], "wish_met"`), recorded as invalid tool calls; the model billed about 105 output tokens each, no output limit is set and thinking is disabled, so the cut is on the provider's side or in parsing, not a token limit. The add stayed empty and the reply said no vegetable dish was found, although the picker had chosen one every time.
+- `button_shopping_after_seafood_wish`: "这顿想吃点水产的" was again read as a wish with no add, no removal and no wish targets (its own reading sentence said "replace one dish with a seafood dish"), so nothing changed and no button was offered; `follow_up_v3`'s principle that a wish always becomes a change did not hold here (run 1 the same, run 2 passed).
+
+**After run 3** (user-approved, 2026-11-24): the picker's cut answers were traced to DeepSeek itself — a replay of one cut input straight to the HTTP API returned HTTP 200, `finish_reason: "tool_calls"`, 110 completion tokens and arguments already cut after `"wish_met"`; 17 picker calls over the three runs (none from any other model, in any run folder) had it. `pick_v3` sends a schema with no nullable field (`wish_met` "yes" / "no" / "no_wish" after the note; `recipe_id` 0 for nothing fits), and code salvages an answer cut after its slots closed; a replay of run 3's cut inputs with `pick_v3` (15 calls) returned 12 answers, none cut. The reader is asked again once when a change reading with a wish changes nothing (`button_shopping_after_seafood_wish`).
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T153538Z (run 4, an extra run the user approved) | follow_up_v3, pick_v3 | 40/42 | 1 (a false positive of the runner, fixed) | 0/30 | 2.2 / 6 | $0.0484 | 6.5 s |
+
+**Run 4.** Every button scenario passed (6/6). The picker's answer was still cut 3 times of 45 (7%), always after `"wish_met"` though it is no longer nullable; one answer was salvaged and two were set aside and asked again, and all three scenarios passed. The full account of the cut answers, with every occurrence, the raw HTTP evidence and a field-name experiment (`wish_met` 5 cut of 21, `wish_result` 0 of 19), is in `docs/investigations/2026-11-24-deepseek-picker-tool-call-cut.md`. Misses:
+- `button_fewer_after_failed_add`: the behaviour was right (one of the two dishes could be made at home and was added; the card offered shopping), but the runner reported "stated counts not met" because an unfilled add with no dish type did not count as touching the stated total. The runner was fixed.
+- `meal_avoid_beef`: "这顿别放牛肉" was read as a one-meal avoidance **and** a drop of the beef dish, so code dropped it instead of replacing it and the plan shrank to two dishes; the reply also said no replacement had been found, though none was searched. Left for the user's decision (code must not override the reader's reading; a clearer reader principle in a next version, and an honest reply).
+
+| Run | Prompts | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Cost (cache-aware) | Avg latency |
+|---|---|---|---|---|---|---|---|
+| 20261123T164312Z (run 5, an extra run the user approved) | follow_up_v4, pick_v4 | 41/42 | 0 | 0/30 | 2.1 / 4 | $0.0496 | 6.5 s |
+
+**Run 5.** No picker answer was cut (0 of 41 picker calls, `tool_call_cut scan`), no reader was asked again, every button scenario passed (6/6), and `meal_avoid_beef` passed. The one miss, `change_the_soups` ("把汤换一换" on two dishes and two soups): the reader rightly listed both soups for replacement; the picker, choosing any type, filled one soup's slot with a vegetable dish (清炒菠菜) though the message was about soups, so the meal became three dishes and one soup. No count was stated, so code did not check it; it is a picker judgement against `pick_v4`'s "keep the plan's balance unless the user's words point to another kind" (carryover). This is the last development run of Task 11.
+
+### Round 11 — plan 3b-2 (one): one reader, a frame in code, a picker (follow_up_v4, pick_v4) (2026-11-23) — results of record
+
+- **Changed since round 10:** plan 3b-2 (one) (design `2026-11-22-phase-1-plan-3b2-revise-simplification-design.md`). A follow-up after a plan is read once by one reader (`follow_up_v4`). The reader gives:
+  - the kind of message (a change, a new meal or something else);
+  - the dishes to remove, each to drop or to replace, with the user's quote;
+  - the dishes to add and the stated counts;
+  - the wish and the dishes it targets;
+  - the one-meal avoidances and conditions;
+  - one sentence saying how it read the message.
+
+  Code turns the reading into a frame: which dishes stay and which slots need a new dish. Locks, rules, avoidances and the count rules belong to code. One picker call (`pick_v4`, with a search tool) fills the slots. `route_v6` and `revise_v4` no longer run on a follow-up after a plan; a new meal still runs the first-turn path (`route_v6`, `parse_v8`, `planner_v5`). The development set was rewritten to the two layers of expectations (spec 6) and grew to 42 scenarios. The runner checks "must never be wrong" in code on every scenario and counts unnecessary questions apart. Five development runs came before the round (see "Plan 3b-2 (one) development runs" above).
+- **Scenario sets:**
+  - `scenarios_revise_heldout3.yaml` is the new held-out set, with `library_revise3.yaml`: 16 sentences from the user, set up by Claude, one deferred to plan two.
+  - `scenarios_revise_heldout.yaml` and `scenarios_revise_heldout2.yaml` are regression sets. The user approved changes to their expectations in Task 1 and in this task (below).
+- **Runs** at `a260411` (`route_v6+parse_v8+planner_v5+follow_up_v4+pick_v4`), test database, deepseek-flash. The four revise sets ran **with embeddings**, as the development runs did. The six older sets ran **without**, as in round 10, so they compare across rounds (user decision, 2026-11-24):
+
+  | Set | Run | Scenarios | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Locked removed | Follow-up route | Buttons | Wish not said | Cost (cache-aware) | Cost (uncached) | Largest call (tokens) | Wall p95 |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | development (`scenarios_revise.yaml`) | 20261123T165815Z | 42 | 40/42 | 0 | 0/30 | 2.12 / 4 | 0 | 31/31 | 6/6 | 0 | $0.0490 | $0.2590 | 6777 | 11.1 s |
+  | held-out (`scenarios_revise_heldout3.yaml`) | 20261123T170353Z | 16 (1 deferred) | 13/15 (rescored 14/15), deferred 1/1 | 1 (a runner false positive; rescored 0) | 0/11 | 2.15 / 4 | 0 | 11/11 | — | 0 | $0.0199 | $0.0978 | 6780 | 11.6 s |
+  | regression (`scenarios_revise_heldout.yaml`) | 20261123T170630Z | 18 (1 deferred) | 13/17 (rescored 15/17), deferred 0/1 | 0 | 0/16 | 2.27 / 4 | 0 | 15/15 | — | 0 | $0.0235 | $0.1170 | 6767 | 10.8 s |
+  | regression (`scenarios_revise_heldout2.yaml`) | 20261123T170918Z | 20 | 15/20 (rescored 17/20) | 1 (rescored 0) | 0/19 | 2.26 / 4 | 0 | 16/17 | 0/2 | 1 | $0.0260 | $0.1310 | 6772 | 9.8 s |
+  | baseline | 20261123T171223Z | 7 | 7/7 | 0 | — | — | — | — | — | 0 | $0.0033 | $0.0234 | 6707 | 4.9 s |
+  | plan 2a | 20261123T171251Z | 19 (18 scored) | 18/18 | 0 | — | — | — | — | — | 0 | $0.0085 | $0.0587 | 6704 | 5.2 s |
+  | counts | 20261123T171353Z | 10 | 10/10 | 0 | 0/2 | — | — | — | — | 0 | $0.0059 | $0.0355 | 6705 | 5.1 s |
+  | diners | 20261123T171434Z | 17 | 17/17 | 0 | 0/1 | — | — | — | — | 0 | $0.0103 | $0.0684 | 6724 | 6.9 s |
+  | held-out diners (`scenarios_heldout.yaml`) | 20261123T171544Z | 14 | 12/14 | 0 | — | — | — | — | — | 0 | $0.0078 | $0.0546 | 6739 | 5.3 s |
+  | held-out one diner (`scenarios_heldout_core.yaml`) | 20261123T171644Z | 22 | 21/22 | 0 | 0/1 | — | — | — | — | 0 | $0.0119 | $0.0807 | 6738 | 5.0 s |
+
+  "Rescored" means the same run, read again by hand after the changes below; the runs were not repeated. The changes: the runner's false positive was fixed, and four regression expectations were widened. The user approved the wider expectations after reading the model's outcomes. Both numbers are kept; the first is what the runner reported at `a260411`.
+- **Changes after reading the round** (no product code or prompt changed):
+  - **Runner fix.** The check "said not in the library, but a library dish" now leaves out the dishes a scenario hides (`library_exclude`). In `named_dish_not_in_library_fridge` (held-out) the named dish is hidden for that run, so saying it is not in the library was right.
+  - **Four regression expectations widened** (user-approved 2026-11-24: "the four outcomes are acceptable"). Each file has a comment at the scenario.
+    - `lighter_please` (heldout2): replacing both dishes that are not light, 辣椒炒鸡蛋 and 酱爆鸡丁, is also accepted.
+    - `another_version_same_counts` (heldout2): a revision that replaces every dish and keeps the counts is accepted, as well as a new plan.
+    - `remove_what_does_not_suit_after_a_kept_egg_dish` (heldout): replacing the egg dish with a dish that suits, keeping the other three, is accepted, as well as dropping it.
+    - `wants_mushroom` (heldout): adding the mushroom dish and keeping the plan is accepted, as well as replacing one dish with it.
+- **Against the thresholds (spec 6).** On the rescored numbers every threshold is met. On the runner's numbers at `a260411`, three are missed: "must never be wrong" and both regression sets.
+
+  | Threshold | Required | Result | Verdict |
+  |---|---|---|---|
+  | Must never be wrong | 0 over every run | 2 reported, 0 rescored. One was a runner false positive (fixed). The other was `lighter_please`: a dish was removed that the scenario did not allow, and that expectation was widened with the user's approval | **Met** rescored (missed as reported) |
+  | Development set as expected | ≥ 90% | 40/42 (95%) | **Met** |
+  | New held-out set as expected | ≥ 80% | 13/15 (87%) reported, 14/15 (93%) rescored; the deferred scenario passed | **Met** |
+  | 3b-1 set (regression) | ≥ 80%, every miss explained | 13/17 (76%) reported, 15/17 (88%) rescored; every miss explained below | **Met** rescored (missed as reported) |
+  | 3b-1b set (regression) | ≥ 80%, every miss explained | 15/20 (75%) reported, 17/20 (85%) rescored; every miss explained below | **Met** rescored (missed as reported) |
+  | Model calls per revise turn | average ≤ 2.5, no turn over 7 | average 2.12-2.27 in the four revise sets; at most 4 in one turn (round 10: 3.4-4.6 and 12) | **Met** |
+  | Unnecessary questions | ≤ 20% | 0 in every set | **Met** |
+  | Older new-plan sets | no regression | baseline 7/7, plan 2a 18/18, counts 10/10, diners 17/17, held-out one diner 21/22 (round 10: 20/22), held-out diners 12/14 (round 10: 13/14; the new miss is a first-turn reading, see below) | **Met** (the held-out diners miss is first-turn variance; this plan did not change the first turn) |
+  | Prompt size | `follow_up_v4` + `pick_v4` shorter than `route_v6` + `revise_v4` | 9,767 characters against 12,817 | **Met** |
+
+- **Development set, not as expected:**
+  - `general_lighter_or_added`: the reader listed the three heavy dishes. The picker chose 清蒸鲈鱼 and 清炒菠菜 for two of them, and its own note said the meal was no longer heavy. Yet it answered `wish_result: "no"`, most likely because the third target (the soup) was not replaced. Code then left both slots unfilled, since a slot made only for the wish stays empty when the wish is not met, and the plan stayed as it was. A picker judgement.
+  - `meal_avoid_covers_hand_added`: the reader rightly replaced both chicken dishes, quoting "鸡肉". The picker sees a removal's quote as "the user's words", which reads to it as what the user wants. So it searched "鸡肉", chose 香煎鸡腿, and refused to replace the locked chicken dish. A picker-input cause.
+- **New held-out set, not as expected** (recorded, not fixed; the sentences are not repeated here):
+  - `named_dish_not_in_library_fridge`: the runner's false positive above; the behaviour was right.
+  - `any_mix_typed`: the plan could not meet the stated meat/vegetable split, and a typed message then lifted the split. The reader read it as a wish that changes nothing; asked again, it kept the plan. The request kept its split, so the plan did not pass. The typed form of the `relax_split` button has no path, because the reader has no field for lifting a stated split.
+  - The deferred scenario passed.
+- **Regression set (3b-1), not as expected:**
+  - `friend_joins_and_two_more_dishes` (deferred to plan two): 青椒肉丝 was not among the shown titles.
+  - `swap_for_a_daikon_dish` ("辣椒炒肉不要，换成萝卜"): the picker searched "萝卜" but excluded the shortlist dishes it had already been shown. 家常烧肉 (with 白萝卜) was one of them. The shortlist lines show no main ingredients, so the picker could not tell, and it answered that the library has no daikon dish. A picker-input cause (the shortlist).
+  - `no_meat_today_english`: the change was right. The English reply named Chinese ingredients, which the reply-locale check counts as not English (as in round 10's `core_en_*` scenarios).
+  - `remove_what_does_not_suit_after_a_kept_egg_dish` and `wants_mushroom`: passed after the expectation changes above.
+- **Regression set (3b-1b), not as expected:**
+  - `allow_shopping_button_after_add_one`: after the shopping button, the picker refused the untyped add, so the plan kept 4 dishes instead of 5. A picker judgement.
+  - `any_mix_button_after_one_more_meat`: the typed add "再加一个肉菜" had a dish type but no stated count. When no meat dish could be made, code offered no `relax_split` button; the card offered only shopping and import. A code gap: a typed add that cannot be met should offer `relax_split`, as a stated side count does.
+  - `all_four_spicy`: only some dishes could be made spicy. Code capped the wish targets without saying so, so the reply did not say the rest could not be changed. This is the one "wish not said". A code gap.
+  - `lighter_please` and `another_version_same_counts`: passed after the expectation changes above.
+- **Other sets, not as expected:**
+  - Held-out diners:
+    - `diners_three_people_one_no_lamb`: the first-turn parse made two others and no guest who avoids lamb. It passed in rounds 8-10, and this plan did not change the first turn, so this is `parse_v8` variance.
+    - `diners_five_with_vegetarian`: the same miss as in round 10.
+  - Held-out one diner `core_en_spicy_shopping`: the same English-reply cause as in round 10. `core_en_dinner_with_fish` passed.
+- **Picker answers cut by DeepSeek:** none in the round (`tool_call_cut scan`); `pick_v4`'s field rename holds.
+- **Cost:** the round's ten runs cost $0.166 cache-aware and $0.926 uncached (summed from the runs' `summary.json`), within the approved estimate. The five development runs added $0.248 cache-aware.
+- **Largest call:** about 6,780 tokens (round 10: about 6,900).
+- **Decision:**
+  - Taken (user-approved, 2026-11-24): the expectation changes and the runner fix above.
+  - Taken (user, 2026-11-24): the picker-input, picker-judgement and code causes are recorded now and fixed in a small plan before plan two (`meal_avoid_covers_hand_added`, `swap_for_a_daikon_dish`, `general_lighter_or_added`, `allow_shopping_button_after_add_one`, `any_mix_button_after_one_more_meat`, `all_four_spicy`, `any_mix_typed`, the held-out one a record only). They are in `docs/phase-1-carryover.md`.
+- **Results of record:** this round ran every set on the final prompt versions, so its runs replace round 10's as the results of record.

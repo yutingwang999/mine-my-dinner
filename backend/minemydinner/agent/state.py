@@ -14,6 +14,9 @@ class ChatState(TypedDict):
     # the step where the failed resume's write is still pending.
     locale: Annotated[str, _latest]
     intent: str | None
+    # This turn's follow-up reading (FollowUpReading as a dict, plan 3b-2 spec 5.2) when the
+    # thread had a plan with dishes; None on a routed turn. Never set on a thread saved before.
+    reading: dict | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
     # The thread's request before this turn's parse replaced it (plan 3b-1): a revision takes a
@@ -43,6 +46,8 @@ class ChatState(TypedDict):
     # written when it starts, then cleared.
     model_calls: list[dict]
     run_id: int | None
+    # The planner's last proposal (PlanProposal dump). A thread saved during plan 3b-1 may
+    # hold a revise step's RevisionProposal dump here; nothing reads it now.
     proposal: dict | None
     validation: dict | None
     first_passed: bool | None
@@ -64,12 +69,16 @@ class ChatState(TypedDict):
     # The recipe ids the shortlist offered, in opening order, for the retry message.
     shortlist_ids: list[int]
     retries: int
-    # The revision in progress (plan 3b-1): `from_version` (the plan_versions index of the plan
-    # it changes), `message` (this turn's words), `earlier` (on a button revision, the words
-    # of the turn whose card offered the button; quotes are checked against both), and the
-    # last attempt's `recipe_ids` and `problems` (RevisionProblem dumps). `proposal` then
-    # holds the RevisionProposal dump, or None when an attempt gave no answer.
+    # The plan 3b-1 revise step's state, kept so threads saved before plan 3b-2 load: its
+    # `message` and `earlier` (the words of a revise turn) still give a button pressed on that
+    # turn's card its offering words (`graph._offering_words`). The change path sets it to None.
     revision: dict | None
+    # The change in progress (plan 3b-2 spec 5.4-5.6): `from_version`, `deleted`, `plan_ids`
+    # (the plan it changes), the `frame` (Frame dump), the `reading` it was built from (on a
+    # button, the one made from the offering card's unfinished parts), `words` (the user's
+    # words it is checked against), `breaking` ([id, reason] pairs), `named` (a named dish's
+    # words to the recipe id placed for it) and, after the picker, `outcome`.
+    change: dict | None
     current_plan: dict | None
     plan_versions: list[dict]
     # reply_plans is display only, never sent to a model: each plan by the id of the assistant

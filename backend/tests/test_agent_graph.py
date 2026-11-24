@@ -112,7 +112,15 @@ def graph_env(tmp_path, session, seeded):
     session.execute(delete(AppPreference))
     session.flush()
     set_request_style(session, "plan_then_adjust")
-    model = ScriptedChatModel(structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]})
+    model = ScriptedChatModel(
+        structured={
+            "Intent": [{"intent": "plan"}],
+            # A follow-up on a plan is read, not routed: by default it asks for a new meal, as
+            # the route's "plan" answer did before plan 3b-2.
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        }
+    )
     factory = rollback_session_factory(session)
     client = make_llm_client(tmp_path, factory, model)
     deps = GraphDeps(factory, client, PlanningRecorder(factory))
@@ -744,7 +752,11 @@ def make_graph_env(tmp_path, session, model=None, embeddings=None, **deps_kwargs
     session.flush()
     set_request_style(session, "plan_then_adjust")
     model = model or ScriptedChatModel(
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]}
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        }
     )
     factory = rollback_session_factory(session)
     client = make_llm_client(tmp_path, factory, model, embeddings=embeddings)
@@ -1388,7 +1400,11 @@ def labelled_env(tmp_path, session, model=None, embeddings=None) -> GraphEnv:
     session.flush()
     set_request_style(session, "plan_then_adjust")
     model = model or ScriptedChatModel(
-        structured={"Intent": [{"intent": "plan"}], "ParsedRequest": [{}]}
+        structured={
+            "Intent": [{"intent": "plan"}],
+            "FollowUpReading": [{"kind": "new_meal"}],
+            "ParsedRequest": [{}],
+        }
     )
     factory = rollback_session_factory(session)
     client = make_llm_client(
@@ -2135,10 +2151,14 @@ def test_plan_diners_line_without_the_user(tmp_path, session, seeded, veg):
 
 
 def route_and_parse_calls(env: GraphEnv, since: int) -> list[str]:
-    """The route and parse model calls made after the first `since` calls, by step."""
+    """The route, reader and parse model calls made after the first `since` calls, by step."""
     from minemydinner.agent.request import load_prompt
 
-    steps = {load_prompt("route"): "route", load_prompt("parse"): "parse"}
+    steps = {
+        load_prompt("route"): "route",
+        load_prompt("follow_up"): "read_follow_up",
+        load_prompt("parse"): "parse",
+    }
     return [steps[s[0].content] for s in env.model.sent[since:] if s[0].content in steps]
 
 
@@ -2179,7 +2199,7 @@ def test_replan_message_as_first_message_routes_and_parses(graph_env, veg):
     assert {"kind": "parse_reused"} not in run_record(graph_env).events
 
 
-def test_replan_message_with_more_words_routes_and_parses(tmp_path, session, seeded, veg):
+def test_replan_message_with_more_words_is_read_and_parsed(tmp_path, session, seeded, veg):
     env, _, _, _ = plan_with_alex(tmp_path, session, veg)
     since = len(env.model.sent)
     out = plan(
@@ -2189,7 +2209,8 @@ def test_replan_message_with_more_words_routes_and_parses(tmp_path, session, see
         locale="zh",
     )
     assert out["current_plan"]["passed"]
-    assert route_and_parse_calls(env, since) == ["route", "parse"]
+    # Not the fixed text: a follow-up on the plan, read (here as a new meal) and parsed.
+    assert route_and_parse_calls(env, since) == ["read_follow_up", "parse"]
     assert out["request"]["query"] == "辣"
     assert {"kind": "parse_reused"} not in run_record(env).events
 
@@ -2214,6 +2235,7 @@ def revise_env(tmp_path, session, seeded):
     model = ScriptedChatModel(
         structured={
             "Intent": [{"intent": "plan"}],
+            "FollowUpReading": [{"kind": "change"}],
             "ParsedRequest": [{"dishes": 2, "soups": 1, "mode": "shopping"}],
         }
     )
@@ -2235,9 +2257,16 @@ def dish_ids(env: ReviseEnv, *titles: str) -> list[int]:
     return [env.dishes[t].id for t in titles]
 
 
+# The reading that stands for a route answer once the thread has a plan (plan 3b-2).
+READ_AS = {"plan": "new_meal", "revise": "change", "other": "other"}
+
+
 def say(env, text: str, intent: str, parse: dict | None = None, replies=None, locale="zh"):
-    """A message whose route call answers `intent`."""
+    """A message whose route call answers `intent`; on a thread with a plan the reader answers
+    the matching kind instead (`READ_AS`)."""
     env.model.structured["Intent"] = [{"intent": intent}]
+    if intent in READ_AS:
+        env.model.structured["FollowUpReading"] = [{"kind": READ_AS[intent]}]
     if parse is not None:
         env.model.structured["ParsedRequest"] = [parse]
     if replies is not None:
@@ -2262,24 +2291,11 @@ def first_meal(env: ReviseEnv, titles=MEAL, parse: dict | None = None) -> dict:
     return out
 
 
-def revision(target: str, remove=(), add=(), note: str = ""):
-    removed = [{"id": i, "quote": q} for i, q in remove]
-    args = {"target": target, "remove": removed, "add": list(add), "note": note}
-    return tool_call("RevisionProposal", args)
-
-
 def model_calls_by_prompt(env, kind: str) -> list[list]:
     from minemydinner.agent.request import load_prompt
 
     prompt = load_prompt(kind)
     return [s for s in env.model.sent if s and s[0].type == "system" and s[0].content == prompt]
-
-
-def reviser_calls(env) -> list[list]:
-    return [
-        s for s in env.model.sent
-        if s and s[0].type == "system" and "RevisionProposal" in s[0].content
-    ]
 
 
 def planner_runs(env) -> list[list]:
@@ -2337,7 +2353,7 @@ def test_revise_without_a_plan_plans(revise_env):
     out = say(env, "想要辣一些的", "revise", replies=[final_proposal(ids)])
     assert out["intent"] == "plan"
     assert out["current_plan"]["passed"] and "revision" not in out["current_plan"]
-    assert len(planner_runs(env)) == 1 and reviser_calls(env) == []
+    assert len(planner_runs(env)) == 1
     # No plan yet: the parse input has no plan line.
     assert model_calls_by_prompt(env, "parse")[-1][-1].content == "想要辣一些的"
 
@@ -2346,86 +2362,319 @@ def test_unsure_without_a_plan_plans(revise_env):
     env = revise_env
     out = say(env, "今晚吃什么", "unsure", replies=[final_proposal(dish_ids(env, *MEAL))])
     assert "__interrupt__" not in out and out["intent"] == "plan"
-    assert out["current_plan"]["passed"] and reviser_calls(env) == []
+    assert out["current_plan"]["passed"]
 
 
-def test_revise_goes_to_the_revise_step(revise_env):
-    """End to end through the real route: a scripted route answers "revise" after a plan, and
-    the turn becomes a revised model version."""
+def test_revise_goes_to_the_change_path(revise_env):
+    """End to end: a scripted reader answers "change" after a plan, and the turn becomes a
+    revised model version through the frame and the picker, with no parse call (plan 3b-2)."""
     env = revise_env
     first = first_meal(env)
-    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
     planned = len(planner_runs(env))
-    out = say(
+    parses = len(model_calls_by_prompt(env, "parse"))
+    out = read(
         env,
         "想要辣一些的",
-        "revise",
-        parse={"dishes": 2, "soups": 1, "mode": "shopping", "query": "辣一些的"},
-        replies=[revision("general", remove=[(cabbage, "")], add=[beans], note="加了点辣。")],
+        {"kind": "change", "wish": "辣一些的", "wish_targets": [cabbage]},
+        replies=[pick(slots=[(0, beans)], note="加了点辣。")],
     )
     assert out["intent"] == "revise"
-    # No load_context: the planner did not run again and the run is a revision.
-    assert len(planner_runs(env)) == planned and len(reviser_calls(env)) == 1
+    # No load_context and no parse: the planner did not run again and the run is a revision.
+    assert len(planner_runs(env)) == planned
+    assert len(model_calls_by_prompt(env, "parse")) == parses
     record = latest_record(env)
     assert record.request["revision"] == {"from_version": 0}
-    assert [e.get("step") for e in record.events[:2]] == ["route", "parse"]
+    assert [e.get("step") for e in record.events[:1]] == ["read_follow_up"]
     plan = out["current_plan"]
-    assert [r["id"] for r in plan["recipes"]] == dish_ids(env, "土豆炖牛肉", "紫菜蛋花汤", "干煸豆角")
+    assert [r["id"] for r in plan["recipes"]] == [beef, beans, soup]
     assert plan["passed"] and plan["revision"] == {"from_version": 0}
     assert len(out["plan_versions"]) == len(first["plan_versions"]) + 1
     assert out["messages"][-1].content.startswith("把清炒小白菜换成了干煸豆角。")
-    # The parse input ends with the current plan's line, after the user's message.
-    parse_input = model_calls_by_prompt(env, "parse")[-1]
-    assert parse_input[-2].content == "想要辣一些的"
-    assert parse_input[-1].content == PLAN_NOTE + (
-        "2 dishes (1 meat, 1 vegetable), 1 soup: 土豆炖牛肉, 清炒小白菜, 紫菜蛋花汤"
-    )
-    # The route input carries no plan line.
-    assert model_calls_by_prompt(env, "route")[-1][-1].content == "想要辣一些的"
+    # The follow-up made no route call: the route ran once, for the first meal.
+    assert len(model_calls_by_prompt(env, "route")) == 1
     assert out["previous_request"] == first["request"]
     # The plan was built from the first request; the passed revision is built from this one.
     assert first["plan_request"] == first["request"]
-    assert out["plan_request"] == out["request"]
+    assert out["plan_request"] == out["request"] and out["request"]["query"] == "辣一些的"
 
 
-def test_unsure_shows_the_choice_card(revise_env):
+def read(env, text: str, reading: dict, parse=None, replies=None, locale="zh") -> dict:
+    """A follow-up message on a plan, which the reader answers with `reading`."""
+    env.model.structured["FollowUpReading"] = [reading]
+    if parse is not None:
+        env.model.structured["ParsedRequest"] = [parse]
+    if replies is not None:
+        env.model.replies = list(replies)
+    return env.graph.invoke({"messages": [HumanMessage(text)], "locale": locale}, env.config)
+
+
+def reader_calls(env) -> list[list]:
+    return model_calls_by_prompt(env, "follow_up")
+
+
+def test_a_change_reading_goes_to_the_change_path(revise_env):
+    """Plan 3b-2: a follow-up on a plan is read once, with no route and no parse call; a
+    change reading goes straight to the frame."""
     env = revise_env
     first_meal(env)
-    parse = {"query": "辣", "dishes": 2, "soups": 1, "mode": "shopping"}
-    out = say(env, "来点辣的", "unsure", parse=parse)
-    (card,) = out["__interrupt__"]
-    assert card.value == {"kind": "revise_or_plan", "message": "来点辣的"}
-    # The card comes before the parse.
-    assert len(model_calls_by_prompt(env, "parse")) == 1
-    ids = dish_ids(env, "青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
-    env.model.replies = [final_proposal(ids)]
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    routes = len(model_calls_by_prompt(env, "route"))
+    reading = {"kind": "change", "wish": "辣一些的", "wish_targets": [cabbage]}
+    out = read(env, "想要辣一些的", reading, replies=[pick(slots=[(0, beans)])])
+    assert "__interrupt__" not in out and out["intent"] == "revise"
+    assert len(reader_calls(env)) == 1
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    assert len(picker_calls(env)) == 1 and out["current_plan"]["passed"]
+    assert out["reading"]["kind"] == "change" and out["reading"]["wish"] == "辣一些的"
+    record = latest_record(env)
+    assert record.request["revision"] == {"from_version": 0}
+    # The reading is recorded on the run as its first event, then the frame.
+    assert [e.get("step") for e in record.events[:1]] == ["read_follow_up"]
+    assert record.events[0]["kind"] == "model_call"
+    assert record.events[0]["response"]["kind"] == "change"
+    assert record.events[1]["kind"] == "frame"
+
+
+def test_a_new_meal_reading_plans_a_new_meal(revise_env):
+    env = revise_env
+    first_meal(env)
+    routes = len(model_calls_by_prompt(env, "route"))
     planned = len(planner_runs(env))
-    out = env.graph.invoke(Command(resume="plan"), env.config)
+    ids = dish_ids(env, "青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
+    out = read(
+        env,
+        "明天中午也帮我配一顿",
+        {"kind": "new_meal"},
+        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
+        replies=[final_proposal(ids)],
+    )
     assert "__interrupt__" not in out and out["intent"] == "plan"
-    assert len(planner_runs(env)) == planned + 1 and reviser_calls(env) == []
+    assert len(reader_calls(env)) == 1
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    assert len(planner_runs(env)) == planned + 1
     assert "revision" not in out["current_plan"]
-    assert out["questions"][-1] == {
-        "at": len(out["messages"]) - 1,
-        "value": {"kind": "revise_or_plan", "message": "来点辣的", "choice": "plan"},
+    assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
+    # Parsed as a new request: the parse input has no plan line.
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content == "明天中午也帮我配一顿"
+    record = latest_record(env)
+    assert "revision" not in record.request
+    assert [e.get("step") for e in record.events[:2]] == ["read_follow_up", "parse"]
+
+
+def test_a_people_reading_shows_the_diner_card_and_plans_anew(tmp_path, session, seeded, veg):
+    me = self_diner(session)
+    env = labelled_env(tmp_path, session)
+    out = plan(
+        env, "今晚吃什么", parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([veg.id])], locale="zh",
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    routes = len(model_calls_by_prompt(env, "route"))
+    env.model.structured["FollowUpReading"] = [{"kind": "people"}]
+    # The parse states nothing about who eats: the reading alone shows the card.
+    out = plan(env, "我以后都不吃香菜", parse={"dishes": 1}, locale="zh")
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    assert len(model_calls_by_prompt(env, "follow_up")) == 1
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    # Parsed as a follow-up on the plan: the parse input ends with the plan line.
+    assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+    env.model.replies = [final_proposal([veg.id])]
+    planned = len(planner_requests(env))
+    out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert len(planner_requests(env)) == planned + 1
+    assert "revision" not in out["current_plan"]
+    assert [e.get("step") for e in run_record(env).events[:2]] == ["read_follow_up", "parse"]
+
+
+def test_an_other_reading_leaves_the_plan_alone(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    parses = len(model_calls_by_prompt(env, "parse"))
+    routes = len(model_calls_by_prompt(env, "route"))
+    runs = latest_record(env).id
+    out = read(env, "谢谢", {"kind": "other"})
+    assert out["intent"] == "other" and out["messages"][-1].content == OTHER_REPLY_ZH
+    assert len(reader_calls(env)) == 1
+    assert len(model_calls_by_prompt(env, "parse")) == parses
+    assert len(model_calls_by_prompt(env, "route")) == routes
+    for key in ("current_plan", "request", "plan_request", "reply_plans", "plan_versions"):
+        assert out[key] == first[key], key
+    # No planning run: the turn ends with the fixed reply.
+    assert latest_record(env).id == runs
+    # The next message is read against the same plan.
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    swap = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", swap, replies=[pick(slots=[(0, beans)])])
+    assert len(reader_calls(env)) == 2 and len(picker_calls(env)) == 1
+    assert out["current_plan"]["passed"] and beans in ids_of_plan(out["current_plan"])
+    assert latest_record(env).request["revision"] == {"from_version": 0}
+
+
+def test_fixed_messages_after_a_plan_are_never_read(revise_env):
+    """"Plan again" and the next-action buttons keep their own paths: no reader call."""
+    env = revise_env
+    first = first_meal(env)
+    parses = len(model_calls_by_prompt(env, "parse"))
+    routes = len(model_calls_by_prompt(env, "route"))
+    planned = len(planner_runs(env))
+    out = env.graph.invoke(
+        {"messages": [HumanMessage(REPLAN_MESSAGE["zh"])], "locale": "zh"}, env.config
+    )
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert out["request"] == first["request"]
+    assert len(planner_runs(env)) == planned + 1
+    out = env.graph.invoke(
+        {"messages": [HumanMessage(ACTION_MESSAGES["zh"]["fewer_dishes"])], "locale": "zh"},
+        env.config,
+    )
+    assert out["button"] == "fewer_dishes"
+    assert reader_calls(env) == []
+    assert len(model_calls_by_prompt(env, "parse")) == parses
+    assert len(model_calls_by_prompt(env, "route")) == routes
+
+
+def test_a_revise_answer_after_an_early_stop_keeps_the_plans_conditions(graph_env, session):
+    """An early stop has no dishes, so the route still runs; a "revise" answer is parsed as a
+    follow-up of that reply: the plan line is in the parse input, the plan's conditions fill
+    what the parse leaves unstated (`carry_unstated`), and no ask-first question is asked."""
+    _early_stop_env(graph_env, session)
+    out = plan(graph_env, "dinner from the fridge", parse={"mode": "fridge_only", "dishes": 1})
+    assert out["current_plan"]["recipes"] == []
+    set_request_style(session, "ask_first")
+    graph_env.model.structured["Intent"] = [{"intent": "revise"}]
+    out = plan(graph_env, "something lighter then", parse={"query": "light"})
+    assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert out["request"]["mode"] == "fridge_only" and out["request"]["query"] == "light"
+    parse_input = model_calls_by_prompt(graph_env, "parse")[-1]
+    assert parse_input[-1].content.startswith(PLAN_NOTE)
+    assert reader_calls(graph_env) == []
+
+
+def test_a_follow_up_after_an_early_stop_is_routed(graph_env, session):
+    """An early stop has no dishes: a follow-up takes the route as before plan 3b-2, and an
+    unsure answer plans (the choice card is no longer shown)."""
+    _early_stop_env(graph_env, session)
+    out = plan(graph_env, "dinner")
+    assert out["current_plan"]["recipes"] == []
+    graph_env.model.structured["Intent"] = [{"intent": "other"}]
+    out = plan(graph_env, "hello")
+    assert out["intent"] == "other" and out["messages"][-1].content == OTHER_REPLY_EN
+    graph_env.model.structured["Intent"] = [{"intent": "unsure"}]
+    out = plan(graph_env, "something else then")
+    assert "__interrupt__" not in out and out["intent"] == "plan"
+    assert reader_calls(graph_env) == []
+    assert len(model_calls_by_prompt(graph_env, "route")) == 3
+
+
+def test_an_old_revise_turn_paused_on_a_question_is_read_after_the_answer(revise_env):
+    """A thread saved before plan 3b-2 in a revise turn, paused on the contradiction question:
+    after the answer the parse runs as before, then the reader reads the turn (no revise
+    step)."""
+    env = revise_env
+    first = first_meal(env)
+    env.graph.update_state(
+        env.config,
+        {
+            "messages": [HumanMessage("两个菜，三个荤菜")],
+            "intent": "revise",
+            "reading": None,
+            "previous_request": first["request"],
+            "asked_question": False,
+            "button": None,
+            "model_calls": [],
+        },
+        as_node="route_intent",
+    )
+    env.model.structured["ParsedRequest"] = [{"dishes": 2, "meat_dishes": 3}]
+    out = env.graph.invoke(None, env.config)
+    (question,) = out["__interrupt__"]
+    assert question.value["kind"] == "question"
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    env.model.structured["ParsedRequest"] = [{"query": "辣"}]
+    env.model.structured["FollowUpReading"] = [
+        {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    ]
+    env.model.replies = [pick(slots=[(0, beans)])]
+    out = env.graph.invoke(Command(resume="白菜换成辣的"), env.config)
+    assert "__interrupt__" not in out
+    assert beans in ids_of_plan(out["current_plan"]) and len(reader_calls(env)) == 1
+    # The turn keeps the request before its parse, not the parse it already made.
+    assert out["previous_request"] == first["request"]
+
+
+def test_an_old_thread_state_is_read_and_revised(revise_env):
+    """A thread saved before plan 3b-2 (a revision dict without the later fields, a card
+    without its turn's words, no reading) is read and revised without error."""
+    env = revise_env
+    first_meal(env)
+    env.graph.update_state(
+        env.config, {"revision": {"from_version": 0, "message": "旧的", "recipe_ids": []}}
+    )
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    swap = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", swap, replies=[pick(slots=[(0, beans)])])
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert len(reader_calls(env)) == 1 and len(picker_calls(env)) == 1
+
+
+def test_the_reader_sees_the_plan_the_diners_and_this_meals_avoidance(
+    tmp_path, session, seeded, veg
+):
+    """Spec 5.3 (Review Focus 3): the reader's input has the plan lines, the diners' rules
+    as anonymous labels (never a saved nickname), and the current conditions with this meal's
+    one-meal avoidance, so a message about something else can restate it."""
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    rule(session, wang.id, "allergy", allergen="peanut")
+    rule(session, me.id, "dislike", ingredient="猪肉")
+    env = labelled_env(tmp_path, session)
+    parse = {
+        "headcount": 2,
+        "others_mentioned": True,
+        "dishes": 1,
+        "mode": "shopping",
+        "time_limit_min": 40,
+        "meal_avoid": ["香菜"],
     }
-    # Each other answer revises; the vegetable dish is swapped each time.
-    vegetables = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
-    for answer, choice in (("revise", "revise"), (None, None), ("随便", None)):
-        out = say(env, "来点辣的", "unsure", parse={"query": "辣"})
-        (card,) = out["__interrupt__"]
-        recipes = out["current_plan"]["recipes"]
-        current = next(r["id"] for r in recipes if r["dish_type"] == "vegetable dish")
-        new = next(i for i in vegetables if i != current)
-        env.model.replies = [revision("general", remove=[(current, "")], add=[new])]
-        calls = len(reviser_calls(env))
-        # Answered by interrupt id: LangGraph ignores a bare resume of None.
-        out = env.graph.invoke(Command(resume={card.id: answer}), env.config)
-        assert "__interrupt__" not in out and out["intent"] == "revise"
-        assert len(reviser_calls(env)) == calls + 1
-        assert out["current_plan"]["passed"]
-        assert out["questions"][-1]["value"]["choice"] == choice
-        # The parse of a revise turn ends with the plan line.
-        assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+    (card,) = plan(env, "我和小王吃饭，不要香菜", parse=parse, locale="zh")["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: {"selected": [me.id, wang.id], "headcount": 2}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    env.model.structured["FollowUpReading"] = [{"kind": "other", "meal_avoid": ["香菜"]}]
+    out = plan(env, "再加一道", locale="zh")
+    (sent,) = model_calls_by_prompt(env, "follow_up")
+    assert len(sent) == 2
+    text = sent[1].content
+    assert f"- {veg.id} 清炒白菜 (vegetable dish; 小白菜)" in text
+    assert "Diner 1: dislikes 猪肉" in text
+    assert "Diner 2: allergy peanut" in text
+    assert "Leave out of this meal: 香菜" in text
+    assert "Time limit: 40 minutes" in text and "Mode: shopping" in text
+    assert "再加一道" in text and "Reply locale: zh" in text
+    # A saved nickname never reaches the reader, in the diner lines or the conversation.
+    assert "小王" not in text
+    assert out["reading"]["meal_avoid"] == ["香菜"]
+
+
+def test_the_reader_sees_which_dishes_break_this_meals_avoidance(revise_env):
+    """The plan lines keep the revise step's marks: a dish that breaks this meal's one-meal
+    avoidance (the plan card's own list) is marked, and the avoidance is a condition."""
+    env = revise_env
+    first = first_meal(env)
+    env.graph.update_state(
+        env.config, {"current_plan": {**first["current_plan"], "meal_avoid": ["牛肉"]}}
+    )
+    read(env, "谢谢", {"kind": "other", "meal_avoid": ["牛肉"]})
+    (sent,) = reader_calls(env)
+    text = sent[1].content
+    beef, cabbage = dish_ids(env, "土豆炖牛肉", "清炒小白菜")
+    assert f"- {beef} 土豆炖牛肉 (meat dish; 牛肉) BREAKS THIS MEAL'S WISH" in text
+    assert f"- {cabbage} 清炒小白菜 (vegetable dish; 小白菜)\n" in text
+    assert "Leave out of this meal: 牛肉" in text
 
 
 def test_revise_never_asks_the_ask_first_question(revise_env):
@@ -2433,28 +2682,20 @@ def test_revise_never_asks_the_ask_first_question(revise_env):
     set_request_style(env.session, "ask_first")
     first_meal(env)
     cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
-    out = say(
-        env, "想要辣一些的", "revise", parse={"query": "辣一些的"},
-        replies=[revision("general", remove=[(cabbage, "")], add=[beans])],
+    out = read(
+        env, "想要辣一些的", {"kind": "change", "wish": "辣一些的", "wish_targets": [cabbage]},
+        replies=[pick(slots=[(0, beans)])],
     )
     assert "__interrupt__" not in out
-    assert out["current_plan"]["passed"] and len(reviser_calls(env)) == 1
-    # A contradiction is still asked about on a revise turn.
-    contradiction = {"dishes": 2, "meat_dishes": 3, "meat_bound": "exact"}
-    out = say(env, "两个菜，三个荤菜", "revise", parse=contradiction)
-    (question,) = out["__interrupt__"]
-    assert question.value["kind"] == "question" and question.value["problem"]
-    # The answer is parsed again (with the plan line) and the turn revises.
-    env.model.structured["ParsedRequest"] = [
-        {"dishes": 2, "meat_dishes": 1, "meat_bound": "exact"}
-    ]
-    current = [r["id"] for r in out["current_plan"]["recipes"]]
-    env.model.replies = [revision("general")]
-    calls = len(reviser_calls(env))
-    out = env.graph.invoke(Command(resume="一荤一素"), env.config)
-    assert "__interrupt__" not in out and len(reviser_calls(env)) == calls + 1
-    assert [r["id"] for r in out["current_plan"]["recipes"]] == current
-    assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
+    assert out["current_plan"]["passed"] and len(picker_calls(env)) == 1
+    # Plan 3b-2 spec 5.6: a contradiction in the stated counts is no longer a question on a
+    # change; the plan stays and the reply asks for the counts again.
+    from minemydinner.agent.graph import UNCLEAR_REPLY_ZH
+
+    current = out["current_plan"]
+    out = read(env, "两个菜，三个荤菜", {"kind": "change", "counts": {"dishes": 2, "meat_dishes": 3}})
+    assert "__interrupt__" not in out and out["messages"][-1].content == UNCLEAR_REPLY_ZH
+    assert out["current_plan"] == current
 
 
 def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
@@ -2465,11 +2706,12 @@ def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
         replies=[final_proposal([veg.id])],
     )
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    env.model.structured["Intent"] = [{"intent": "revise"}]
+    # Plan 3b-2: a change in who eats is read as people (a change reading takes no parse).
+    env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     out = plan(env, "再加一道，Alex 也来，他对花生过敏", parse=ALEX_PARSE)
     (card,) = out["__interrupt__"]
     assert card.value["kind"] == "diners"
-    # The turn was routed as a revision: its parse input carried the plan line.
+    # The turn was read as people: its parse input carried the plan line, and the card shows.
     assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
     env.model.replies = [final_proposal([veg.id])]
     chosen = {"selected": [me.id], "guests": [{"name": "Alex", "rules": [PEANUT_RULE]}]}
@@ -2478,7 +2720,6 @@ def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
     # Planned from scratch: the planner ran, the reviser never did.
     assert len(planner_requests(env)) == planned + 1
-    assert not any("RevisionProposal" in s[0].content for s in env.model.sent if s)
     assert "revision" not in out["current_plan"]
     assert "revision" not in run_record(env).request
     assert out["constraints"]["guest_rules"] == [GUEST_PEANUT]
@@ -2498,23 +2739,20 @@ def two_for_shopping(tmp_path, session, veg):
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id, wang.id], "headcount": 2}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    env.model.structured["Intent"] = [{"intent": "revise"}]
+    env.model.structured["FollowUpReading"] = [{"kind": "change"}]
     return env, me, wang, spinach
 
 
 def test_revise_with_nothing_said_about_who_eats_revises(tmp_path, session, seeded, veg):
-    """Development run 3: the parse of "白菜那道换个别的" gave no headcount and no mode. A
-    null is not "only me": the plan's request fills it, so no card shows and the turn revises
-    with the plan's shopping mode."""
+    """Development run 3 (3b-1b), on the change path: a change reading carries everything it
+    does not state from the plan's request, so who eats and the shopping mode stay, no card
+    shows and the turn revises."""
     env, _, _, spinach = two_for_shopping(tmp_path, session, veg)
-    swap = tool_call(
-        "RevisionProposal",
-        {"target": "named", "remove": [{"id": veg.id, "quote": "白菜那道"}],
-         "add": [spinach.id], "note": ""},
-    )
-    out = plan(env, "白菜那道换个别的", parse={"dishes": 1}, replies=[swap], locale="zh")
+    swap = {"kind": "change", "remove": [{"id": veg.id, "mode": "replace", "quote": "白菜那道"}]}
+    env.model.structured["FollowUpReading"] = [swap]
+    out = plan(env, "白菜那道换个别的", replies=[pick(slots=[(0, spinach.id)])], locale="zh")
     assert "__interrupt__" not in out
-    assert len(reviser_calls(env)) == 1
+    assert len(picker_calls(env)) == 1
     assert out["request"]["headcount"] == 2 and out["request"]["mode"] == "shopping"
     record = run_record(env)
     assert record.request["revision"]["from_version"] == 0
@@ -2529,6 +2767,7 @@ def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
     """A lasting rule in a follow-up shows the card and plans anew (spec 5.4); the new plan
     keeps the conditions of the plan's request that the parse does not state."""
     env, me, wang, _ = two_for_shopping(tmp_path, session, veg)
+    env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     parse = {"dishes": 1, "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}]}
     out = plan(env, "小王对花生过敏，白菜那道换个别的", parse=parse, locale="zh")
     (card,) = out["__interrupt__"]
@@ -2537,7 +2776,6 @@ def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
     chosen = {"selected": [me.id, wang.id], "stated": {wang.id: [PEANUT_RULE]}, "headcount": 2}
     out = resume(env, {card.id: chosen})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert reviser_calls(env) == []
     record = run_record(env)
     assert "revision" not in record.request
     assert record.request["spec"]["mode"] == "shopping"
@@ -2549,13 +2787,13 @@ def test_revise_saying_only_me_still_shows_the_card(tmp_path, session, seeded, v
     """A stated headcount of 1 after a set of two is a change in who eats (decided by the
     user, 2026-11-19): the card shows, and the new plan keeps the plan's shopping mode."""
     env, me, _, _ = two_for_shopping(tmp_path, session, veg)
+    env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     out = plan(env, "就我自己吃", parse={"headcount": 1, "dishes": 1}, locale="zh")
     (card,) = out["__interrupt__"]
     assert card.value["kind"] == "diners" and card.value["headcount"] == 1
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert reviser_calls(env) == []
     assert run_record(env).request["spec"]["mode"] == "shopping"
     assert out["constraints"]["headcount"] == 1
 
@@ -2567,7 +2805,7 @@ def test_plan_again_still_plans_from_scratch(revise_env):
     ids = dish_ids(env, "青椒炒肉", "干煸豆角", "紫菜蛋花汤")
     out = say(env, REPLAN_MESSAGE["zh"], "revise", replies=[final_proposal(ids)])
     assert route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == [] and len(planner_runs(env)) == 2
+    assert len(planner_runs(env)) == 2
     assert out["request"] == first["request"]
     assert [r["id"] for r in out["current_plan"]["recipes"]] == ids
     assert "revision" not in out["current_plan"]
@@ -2591,7 +2829,6 @@ def test_action_message_after_a_no_plan_reply_plans_from_scratch(revise_env, loc
     out = say(env, f" {text} ", "revise", replies=[final_proposal([])], locale=locale)
     assert "__interrupt__" not in out
     assert route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == []
     assert out["intent"] == "plan" and "revision" not in out["current_plan"]
     assert out["request"] == apply_action(card["request"], key, card["spec"])
     record = latest_record(env)
@@ -2608,7 +2845,7 @@ def test_action_message_after_a_plan_plans_from_scratch(revise_env, locale, key,
     assert "__interrupt__" not in out
     assert route_and_parse_calls(env, since) == []
     # Planned anew (fewer_dishes retries the scripted three dishes against its new total).
-    assert reviser_calls(env) == [] and len(planner_runs(env)) >= 2
+    assert len(planner_runs(env)) >= 2
     assert out["request"] == apply_action(first["request"], key, first["current_plan"]["spec"])
     assert "revision" not in out["current_plan"]
 
@@ -2627,51 +2864,11 @@ def test_action_message_as_first_message_takes_the_normal_path(revise_env):
 # ---- plan 3b-1b Task 6: next-action buttons in code (spec 5.5) ----
 
 
-def test_named_dish_over_the_time_limit_offers_to_drop_it(revise_env):
-    """Development run 1 (design 5.2, 2026-11-22): the named dish is in the library but over
-    the time limit. The search lists it apart; the nothing-fits card offers drop_time_limit
-    and says how long it takes, never that it is not in the library; the button then lets the
-    revision bring it in."""
-    env = revise_env
-    slow = make_recipe(
-        env.session, "酱焖羊蝎子", "meat dish", [L("羊肉", "main")],
-        time_min=75, time_source="stated",
-    )
-    limited = {"dishes": 2, "soups": 1, "mode": "shopping", "time_limit_min": 30}
-    first_meal(env, parse=limited)
-    [beef] = dish_ids(env, "土豆炖牛肉")
-    failed = say(
-        env, "土豆炖牛肉换成酱焖羊蝎子", "revise",
-        parse={**limited, "counts_stated_now": False},
-        replies=[
-            tool_call("search_recipes", {"query": "酱焖羊蝎子"}),
-            revision("named", note="菜谱库里没有酱焖羊蝎子，可以导入。"),
-        ],
-    )
-    assert failed["retries"] == 0
-    card = failed["reply_plans"][failed["messages"][-1].id]
-    assert card["plan_kept"] is True and card["passed"] is False
-    assert "drop_time_limit" in card["next_actions"]
-    assert "import_recipes" not in card["next_actions"]
-    assert [(u["code"], u["recipe_id"]) for u in card["unmet"]] == [("H6", slow.id)]
-    assert card["unmet"][0]["text"] == "酱焖羊蝎子：需要 75 分钟，超过 30 分钟的限制"
-    reply = failed["messages"][-1].content
-    assert "酱焖羊蝎子在你的菜谱库里，但需要 75 分钟" in reply and "30 分钟" in reply
-    assert "没有" not in reply and "导入" not in reply
-    out = say(
-        env, ACTION_MESSAGES["zh"]["drop_time_limit"], "plan",
-        replies=[revision("general", remove=[(beef, "")], add=[slow.id])],
-    )
-    plan = out["current_plan"]
-    assert plan["passed"] and slow.id in [r["id"] for r in plan["recipes"]]
-    assert plan["spec"]["time_limit_min"] is None
-
-
 def test_button_revision_quotes_the_offering_turns_words(revise_env):
-    """Follow-up 1 to development run 1: on a button pressed on a failed revision's card, the
-    earlier wish is still the user's words. A named re-attempt that quotes it passes the
-    quote check (R1), and the reviser's message line shows both; the record keeps the button
-    and the turn's own message."""
+    """Follow-up 1 to development run 1, on the change path: a locked dish the offering turn
+    named goes only with its quote. On the button turn the quote is checked against that
+    turn's words (kept on its card), so the unfinished named replacement now passes; the
+    record keeps the button and the turn's own message."""
     env = revise_env
     slow = make_recipe(
         env.session, "酱焖羊蝎子", "meat dish", [L("羊肉", "main")],
@@ -2679,75 +2876,56 @@ def test_button_revision_quotes_the_offering_turns_words(revise_env):
     )
     limited = {"dishes": 2, "soups": 1, "mode": "shopping", "time_limit_min": 30}
     first_meal(env, parse=limited)
-    [beef] = dish_ids(env, "土豆炖牛肉")
-    say(
-        env, "土豆炖牛肉换成酱焖羊蝎子", "revise",
-        parse={**limited, "counts_stated_now": False},
-        replies=[
-            tool_call("search_recipes", {"query": "酱焖羊蝎子"}),
-            revision("named", note="要 75 分钟。"),
-        ],
-    )
-    named = tool_call(
-        "RevisionProposal",
-        {
-            "target": "named",
-            "remove": [
-                {
-                    "id": beef, "quote": "土豆炖牛肉", "mode": "replace",
-                    "replace_with": slow.id, "replace_with_quote": "酱焖羊蝎子",
-                }
-            ],
-            "add": [slow.id],
-            "note": "",
-        },
-    )
-    out = say(env, ACTION_MESSAGES["zh"]["drop_time_limit"], "plan", replies=[named])
-    assert out["retries"] == 0
+    [pepper] = dish_ids(env, "青椒炒肉")
+    _hand_add(env, pepper)
+    message = "青椒炒肉换成酱焖羊蝎子"
+    named = {"id": pepper, "mode": "replace", "quote": "青椒炒肉", "with_name": "酱焖羊蝎子"}
+    failed = read(env, message, {"kind": "change", "remove": [named]})
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["plan_kept"] is True and card["next_actions"] == ["drop_time_limit"]
+    assert card["unfinished"]["words"] == message
+    out = press(env, "drop_time_limit")
     plan = out["current_plan"]
-    ids = [r["id"] for r in plan["recipes"]]
-    assert plan["passed"] and slow.id in ids and beef not in ids
-    opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
-    assert opening.endswith(
-        "The user's message:\nEarlier wish: 土豆炖牛肉换成酱焖羊蝎子\n"
-        "Then the user pressed: 不限时间 (the request above already includes this change)"
-    )
+    ids = ids_of_plan(plan)
+    assert plan["passed"] and slow.id in ids and pepper not in ids
+    assert "青椒炒肉是你手动加的，按你这次的话换成了酱焖羊蝎子。" in out["messages"][-1].content
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["ignored"] == [] and frame["frame"]["placed"] == [slow.id]
     record = latest_record(env)
     assert record.request["button"] == "drop_time_limit"
     assert record.request["messages"] == ["不限时间"]
+    assert picker_calls(env) == []
 
 
 def test_fewer_dishes_after_a_failed_add_shows_the_button_apart(revise_env):
-    """Development run 2, item 7: after a count wish that failed, the fewer_dishes button's
-    text and the earlier wish reached the reviser as one message ("…再多做两个菜\n少做几道菜")
-    and read as a contradiction. The reviser now sees them on two labelled lines; the quote
-    check still accepts both; a revision that adds what the new counts ask for passes."""
+    """Development run 2, item 7, on the change path: after a count wish nothing could fill,
+    fewer_dishes re-runs the unfinished adds against its own lower count. Since Task 11 fix 2
+    the picker reads the offering turn's structured reading, not its words (this one stated no
+    wish), and sees the current count next to the stated one."""
     env = revise_env
     first_meal(env)
-    beans, cucumber = dish_ids(env, "干煸豆角", "凉拌黄瓜")
+    [cucumber] = dish_ids(env, "凉拌黄瓜")
     wish = "冰箱里的东西再多做两个菜"
-    failed = say(
-        env, wish, "revise",
-        parse={"dishes": 4, "soups": 1, "mode": "shopping", "counts_stated_now": True},
-        replies=[revision("general", add=[beans])],
+    failed = read(
+        env, wish, {"kind": "change", "counts": {"dishes": 4}},
+        replies=[pick(slots=[(0, None), (1, None)])],
     )
     card = failed["reply_plans"][failed["messages"][-1].id]
-    assert card["plan_kept"] is True and "fewer_dishes" in card["next_actions"]
-    since = len(reviser_calls(env))
-    out = say(
-        env, ACTION_MESSAGES["zh"]["fewer_dishes"], "plan",
-        replies=[revision("general", add=[cucumber])],
-    )
-    assert len(reviser_calls(env)) == since + 1
+    assert card["plan_kept"] is True and card["request"]["counts_stated_now"] is True
+    since = len(picker_calls(env))
+    out = press(env, "fewer_dishes", replies=[pick(slots=[(0, cucumber)])])
+    assert len(picker_calls(env)) == since + 1
     plan = out["current_plan"]
-    assert plan["passed"] and cucumber in [r["id"] for r in plan["recipes"]]
+    assert plan["passed"] and cucumber in ids_of_plan(plan) and len(ids_of_plan(plan)) == 4
     assert latest_record(env).request["spec"]["dishes"] == 3
-    opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
-    assert f"The user's message: {wish}\n少做几道菜" not in opening
-    assert opening.endswith(
-        f"Earlier wish: {wish}\n"
-        "Then the user pressed: 少做几道菜 (the request above already includes this change)"
-    )
+    text = picker_input(env)
+    assert wish not in text and "The user's wish: none" in text
+    assert "soups: 1 in the plan after what is already decided, exactly 1 stated" in text
+    assert (
+        "dishes (meat and vegetable dishes, soups not included): 2 in the plan after what is "
+        "already decided, exactly 3 stated"
+    ) in text
+    assert "- Slot 0: a vegetable dish, added" in text and "Slot 1" not in text
     assert latest_record(env).request["messages"] == ["少做几道菜"]
 
 
@@ -2767,50 +2945,21 @@ def test_over_time_limit_sentence_in_both_languages():
 
 def test_button_on_failed_revision_revises_again(revise_env):
     env = revise_env
-    for name in ("牛肉", "小白菜", "紫菜", "豆角", "辣椒"):
-        stock(env.session, name, level="plenty")
-    first = first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "fridge_only"})
-    cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
-    _hand_add(env, beans)
-    # Nothing in the library fits the wish: the plan stays and the card offers shopping.
-    failed = say(
-        env, "想吃点海鲜", "revise",
-        parse={
-            "dishes": 2, "soups": 1, "mode": "fridge_only", "query": "海鲜",
-            "counts_stated_now": False,
-        },
-        replies=[revision("general", note="冰箱里没有海鲜。")],
-    )
+    cabbage, beans, cucumber = _failed_seafood_wish(env)
+    failed = env.graph.get_state(env.config).values
     card = failed["reply_plans"][failed["messages"][-1].id]
     assert card["next_actions"] == ["switch_to_shopping", "import_recipes"]
     assert card["request"]["query"] == "海鲜" and card["plan_kept"] is True
-    assert failed["plan_request"] == first["request"]
-    since = len(env.model.sent)
-    revisions = len(reviser_calls(env))
-    out = say(
-        env, "允许购物", "plan",
-        replies=[revision("general", remove=[(cabbage, "")], add=[cucumber])],
-    )
-    assert "__interrupt__" not in out
-    # No route, no parse: the request is the card's, changed in code.
-    assert route_and_parse_calls(env, since) == []
-    assert len(reviser_calls(env)) == revisions + 1
-    assert out["intent"] == "revise"
-    assert out["request"]["mode"] == "shopping" and out["request"]["query"] == "海鲜"
+    assert failed["plan_request"]["query"] is None
+    out = _press_shopping_on_kept_plan(env, cabbage, beans, cucumber)
     record = latest_record(env)
-    assert record.request["button"] == "switch_to_shopping"
     assert "from_version" in record.request["revision"]
     assert record.request["spec"]["mode"] == "shopping"
     assert record.request["messages"] == ["允许购物"]
-    # The revision ran on the current plan: the hand-added dish stays, still locked.
     plan = out["current_plan"]
-    assert plan["passed"] and plan["spec"]["mode"] == "shopping"
-    ids = [r["id"] for r in plan["recipes"]]
-    assert beans in ids and cucumber in ids and cabbage not in ids and len(ids) == 4
-    assert beans in plan["locked"]
-    # The wish reached the reviser through the request summary.
-    [opening] = [m for m in reviser_calls(env)[-1] if m.type == "human"][:1]
-    assert "The user feels like: 海鲜" in opening.content
+    assert plan["spec"]["mode"] == "shopping" and len(ids_of_plan(plan)) == 4
+    # The wish reached the picker.
+    assert "The user's wish: 海鲜" in picker_input(env)
 
 
 FRIDGE_TWO_AND_SOUP = {"dishes": 2, "soups": 1, "mode": "fridge_only", "counts_stated_now": False}
@@ -2825,10 +2974,9 @@ def _failed_seafood_wish(env: ReviseEnv) -> tuple[int, int, int]:
     first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "fridge_only"})
     cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
     _hand_add(env, beans)
-    failed = say(
-        env, "想吃点海鲜", "revise",
-        parse={**FRIDGE_TWO_AND_SOUP, "query": "海鲜"},
-        replies=[revision("general", note="冰箱里没有海鲜。")],
+    failed = read(
+        env, "想吃点海鲜", {"kind": "change", "wish": "海鲜", "wish_targets": [cabbage]},
+        replies=[pick(slots=[(0, None)], wish_met=False)],
     )
     card = failed["reply_plans"][failed["messages"][-1].id]
     assert card["plan_kept"] is True and "switch_to_shopping" in card["next_actions"]
@@ -2836,26 +2984,30 @@ def _failed_seafood_wish(env: ReviseEnv) -> tuple[int, int, int]:
 
 
 def _press_shopping_on_kept_plan(env: ReviseEnv, cabbage: int, beans: int, cucumber: int):
-    """Press 允许购物 and check the turn revised the kept plan: no route or parse, the
-    hand-added dish kept and still locked, the failed turn's wish as the earlier wish."""
+    """Press 允许购物 and check the turn revised the kept plan through the frame: no reader,
+    route or parse call, the hand-added dish kept and still locked, the failed turn's words
+    as the picker's wish context."""
     since = len(env.model.sent)
-    revisions = len(reviser_calls(env))
-    out = say(
-        env, "允许购物", "plan",
-        replies=[revision("general", remove=[(cabbage, "")], add=[cucumber])],
+    picks = len(picker_calls(env))
+    readers = len(reader_calls(env))
+    out = press(
+        env, "switch_to_shopping",
+        replies=[pick(slots=[(0, cucumber)], wish_met=True)],
     )
     assert "__interrupt__" not in out
-    assert route_and_parse_calls(env, since) == []
-    assert len(reviser_calls(env)) == revisions + 1
+    assert route_and_parse_calls(env, since) == [] and len(reader_calls(env)) == readers
+    assert len(picker_calls(env)) == picks + 1
     assert out["intent"] == "revise"
     assert out["request"]["mode"] == "shopping" and out["request"]["query"] == "海鲜"
     assert latest_record(env).request["button"] == "switch_to_shopping"
     plan = out["current_plan"]
-    ids = [r["id"] for r in plan["recipes"]]
+    ids = ids_of_plan(plan)
     assert plan["passed"] and beans in ids and cucumber in ids and cabbage not in ids
     assert beans in plan["locked"]
-    opening = [m for m in reviser_calls(env)[-1] if m.type == "human"][0].content
-    assert opening.endswith(f"Earlier wish: 想吃点海鲜\n{SHOPPING_PRESSED}")
+    # Task 11 fix 2, item 1: the offering reading's wish reaches the picker, not its words.
+    text = picker_input(env)
+    assert "The user's wish: 海鲜\n" in text
+    assert "想吃点海鲜" not in text and "earlier message" not in text
     return out
 
 
@@ -2871,66 +3023,67 @@ def test_button_on_a_kept_card_after_a_reply_without_a_card(revise_env):
 
 
 def test_button_after_the_empty_plan_question_uses_the_failed_turns_wish(revise_env):
-    """Final review I-1: an empty-plan question (R9, no card) between the failed revision and
-    the button leaves its own words in the state's revision. The reviser's earlier wish is
-    still the failed turn's, kept on its card."""
+    """Final review I-1, on the change path: an empty-plan question (no card) between the
+    failed change and the button. The button still re-runs the failed turn's unfinished wish,
+    with that turn's words kept on its card."""
     from minemydinner.agent.revise_step import EMPTY_PLAN_QUESTION_ZH
 
     env = revise_env
     dishes = _failed_seafood_wish(env)
     shown = [r["id"] for r in env.graph.get_state(env.config).values["current_plan"]["recipes"]]
-    message = "全都不要了"
-    empty = say(
-        env, message, "revise",
-        parse=FRIDGE_TWO_AND_SOUP,
-        replies=[
-            tool_call(
-                "RevisionProposal",
-                {
-                    "target": "scope",
-                    "remove": [{"id": i, "quote": "", "mode": "drop"} for i in shown],
-                    "add": [],
-                    "note": "好的。",
-                    "scope_quote": message,
-                },
-            )
-        ],
-    )
+    # The dish added by hand is locked: it goes only with words that point at it.
+    message = "全都不要了，豆角也不要"
+    beans = dishes[1]
+    remove = [
+        {"id": i, "mode": "drop", "quote": "豆角" if i == beans else "全都不要了"} for i in shown
+    ]
+    empty = read(env, message, {"kind": "change", "remove": remove})
     assert empty["messages"][-1].content == EMPTY_PLAN_QUESTION_ZH
     assert empty["messages"][-1].id not in empty["reply_plans"]
-    assert empty["revision"]["message"] == message
+    assert empty["change"]["words"] == message
     _press_shopping_on_kept_plan(env, *dishes)
 
 
 @pytest.mark.parametrize("between", [False, True])
 def test_button_on_a_kept_card_saved_before_its_words_were_kept(revise_env, between):
-    """A failed revision's card saved before cards kept their turn's words: the earlier wish
-    comes from the state's revision when the card is the newest reply, else from the user's
-    messages before the card's reply."""
+    """A kept card saved before cards kept their unfinished parts and words: the button
+    re-runs the card's wish as a general wish, with the user's messages before the card's
+    reply as its words."""
     env = revise_env
     dishes = _failed_seafood_wish(env)
     values = env.graph.get_state(env.config).values
     reply_plans = {
-        key: {k: v for k, v in card.items() if k != "wish_words"}
+        key: {k: v for k, v in card.items() if k not in ("wish_words", "unfinished")}
         for key, card in values["reply_plans"].items()
     }
     env.graph.update_state(env.config, {"reply_plans": reply_plans}, as_node="present_plan")
     if between:
         say(env, "你好", "other")
-    _press_shopping_on_kept_plan(env, *dishes)
+    cabbage, beans, cucumber = dishes
+    env.model.replies = [pick(choices=[(0, [cabbage])], slots=[(0, cucumber)], wish_met=True)]
+    out = press(env, "switch_to_shopping")
+    assert out["intent"] == "revise"
+    [frame] = change_events(env, "frame")
+    assert [c["mode"] for c in frame["frame"]["choices"]] == ["replace"]
+    ids = ids_of_plan(out["current_plan"])
+    assert beans in ids and cucumber in ids and cabbage not in ids
+    assert "the user's earlier message: 想吃点海鲜" in picker_input(env)
 
 
 def test_kept_card_keeps_its_turns_words_for_the_server_only(revise_env):
     from minemydinner.agent.plan_card import SERVER_ONLY_CARD_FIELDS, client_card
 
     env = revise_env
-    _failed_seafood_wish(env)
+    cabbage, _, _ = _failed_seafood_wish(env)
     values = env.graph.get_state(env.config).values
     card = values["reply_plans"][values["messages"][-1].id]
     assert card["wish_words"] == "想吃点海鲜"
-    assert "wish_words" in SERVER_ONLY_CARD_FIELDS
-    assert "wish_words" not in client_card(card)
-    assert "meal_avoid" in card and "meal_avoid" not in client_card(card)
+    assert card["unfinished"]["words"] == "想吃点海鲜"
+    # The wish's target nothing replaced is kept for a button.
+    assert card["unfinished"]["reading"]["wish_targets"] == [cabbage]
+    for field in ("wish_words", "meal_avoid", "unfinished"):
+        assert field in card and field in SERVER_ONLY_CARD_FIELDS
+        assert field not in client_card(card)
 
 
 def _hand_grown_failed_wish(env: ReviseEnv) -> None:
@@ -2942,46 +3095,45 @@ def _hand_grown_failed_wish(env: ReviseEnv) -> None:
     from minemydinner.planning.context import load_planning_context
 
     first_meal(env, (*THREE, "紫菜蛋花汤"), parse={"dishes": 3, "soups": 1, "mode": "shopping"})
-    beans, soup = dish_ids(env, "干煸豆角", "紫菜蛋花汤")
+    beans, soup, cabbage = dish_ids(env, "干煸豆角", "紫菜蛋花汤", "清炒小白菜")
     _hand_add(env, beans)
     values = env.graph.get_state(env.config).values
     ctx = load_planning_context(env.session, meal_constraints(values))
     outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=soup), "zh")
     assert outcome.plan is not None
     env.graph.update_state(env.config, update, as_node="present_plan")
-    failed = say(
-        env, "想吃点海鲜", "revise",
-        parse={
-            "dishes": 3, "soups": 1, "mode": "shopping", "query": "海鲜",
-            "counts_stated_now": False,
-        },
-        replies=[revision("general", note="没有海鲜菜。")],
+    failed = read(
+        env, "想吃点海鲜", {"kind": "change", "wish": "海鲜", "wish_targets": [cabbage]},
+        replies=[pick(slots=[(0, None)], wish_met=False)],
     )
     card = failed["reply_plans"][failed["messages"][-1].id]
     assert card["plan_kept"] and len(failed["current_plan"]["recipes"]) == 4
+    assert (card["request"]["dishes"], card["request"]["soups"]) == (3, 1)
 
 
 def test_fewer_dishes_after_a_failed_wish_counts_from_the_plan_shown(revise_env):
     # Fix round 1: "one fewer" is one fewer than the 4 dishes shown, not the stale request's
-    # 3, and the soup removed by hand does not come back.
+    # 3, and the soup removed by hand does not come back. On the change path the unfinished
+    # wish's target is a replace slot again, and the lower count takes it first.
     env = revise_env
     _hand_grown_failed_wish(env)
-    cabbage, soup = dish_ids(env, "清炒小白菜", "紫菜蛋花汤")
+    beef, cabbage, soup = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤")
     since = len(env.model.sent)
-    out = say(env, "少做几道菜", "plan", replies=[revision("general", remove=[(cabbage, "")])])
+    out = press(env, "fewer_dishes", replies=[pick(slots=[(0, None)])])
     assert "__interrupt__" not in out and route_and_parse_calls(env, since) == []
     record = latest_record(env)
     assert record.request["button"] == "fewer_dishes"
     assert (record.request["spec"]["dishes"], record.request["spec"]["soups"]) == (3, 0)
     plan = out["current_plan"]
-    ids = [r["id"] for r in plan["recipes"]]
+    ids = ids_of_plan(plan)
     assert plan["passed"] and len(ids) == 3 and cabbage not in ids and soup not in ids
 
 
 def test_relax_split_after_a_failed_wish_keeps_the_plan_shown(revise_env):
     env = revise_env
     _hand_grown_failed_wish(env)
-    out = say(env, "荤素都行", "plan", replies=[revision("general")])
+    [beef] = dish_ids(env, "土豆炖牛肉")
+    out = press(env, "relax_split", replies=[pick(slots=[(0, None)])])
     assert "__interrupt__" not in out
     spec = latest_record(env).request["spec"]
     assert (spec["dishes"], spec["soups"]) == (4, 0)
@@ -3042,7 +3194,7 @@ def test_button_on_a_new_plan_card_plans_from_scratch(revise_env):
     )
     assert "__interrupt__" not in out
     assert route_and_parse_calls(env, since) == []
-    assert reviser_calls(env) == [] and len(planner_runs(env)) == 1
+    assert len(planner_runs(env)) == 1
     assert out["request"]["meat_dishes"] is None and out["request"]["meat_bound"] is None
     assert out["request"]["dishes"] == 2 and out["request"]["mode"] is None
     record = latest_record(env)
@@ -3085,57 +3237,98 @@ def _hand_add(env: ReviseEnv, recipe_id: int) -> None:
     env.graph.update_state(env.config, update, as_node="present_plan")
 
 
+def _hand_remove(env: ReviseEnv, recipe_id: int) -> None:
+    from minemydinner.agent.edits import Remove, apply_edit
+    from minemydinner.agent.plan_card import meal_constraints
+    from minemydinner.planning.context import load_planning_context
+
+    values = env.graph.get_state(env.config).values
+    ctx = load_planning_context(env.session, meal_constraints(values))
+    outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=recipe_id), "zh")
+    assert outcome.plan is not None
+    env.graph.update_state(env.config, update, as_node="present_plan")
+
+
+def reader_input(env, call: int = -1) -> str:
+    return [m for m in reader_calls(env)[call] if m.type == "human"][0].content
+
+
+def test_the_reader_sees_what_the_user_changed_by_hand(revise_env):
+    """Task 11 fix 2, item 3: hand edits add no message, so a reply before them names the plan
+    as it was. The reader's input says what the user changed by hand on this plan, in order,
+    by title; with no edit there is no such line. An "other" reply keeps the plan and its
+    edit log, so the line must stay true after it (fix round 1): it says the edits came after
+    the plan was proposed, never "since the last reply", and lists each edit once."""
+    env = revise_env
+    first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    say(env, "谢谢", "other")
+    assert "by hand" not in reader_input(env)
+    _hand_add(env, beans)
+    _hand_remove(env, cabbage)
+    line = (
+        "The user changed this plan by hand after it was proposed: added 干煸豆角; removed "
+        "清炒小白菜."
+    )
+    say(env, "你好", "other")
+    text = reader_input(env)
+    assert line in text
+    assert text.index("Current plan") < text.index(line) < text.index("Diners:")
+    # A third message, after an "other" reply that came after the edits.
+    say(env, "在吗", "other")
+    text = reader_input(env)
+    assert text.count(line) == 1 and "since the last reply" not in text.lower()
+    assert text.count("by hand") == 1
+
+
 THREE = ("土豆炖牛肉", "清炒小白菜", "青椒炒肉")
 
 
 def test_hand_grown_plan_keeps_its_size_when_the_parse_repeats_the_count(revise_env):
-    # Spec 5.2: asked for 3 dishes, a 4th added by hand; "想要辣一些的" keeps 4 even though
-    # the parse repeats the first turn's dishes: 3.
+    # Spec 5.2 (3b-1): asked for 3 dishes, a 4th added by hand; "想要辣一些的" keeps 4. On the
+    # change path the reading states no count, so the plan's own counts stand.
     env = revise_env
     first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
     cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
     _hand_add(env, beans)
-    out = say(
-        env, "想要辣一些的", "revise",
-        parse={"dishes": 3, "mode": "shopping", "query": "辣一些的"},
-        replies=[revision("general", remove=[(cabbage, "")], add=[cucumber])],
+    out = read(
+        env, "想要辣一些的", {"kind": "change", "wish": "辣一些的", "wish_targets": [cabbage]},
+        replies=[pick(slots=[(0, cucumber)])],
     )
     assert latest_record(env).request["spec"]["dishes"] == 4
     assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 4
 
 
 def test_add_one_more_takes_the_new_count(revise_env):
-    # "再加一道吧" parsed as dishes 4 against the previous 3, on a 3-dish plan: 4.
+    # "再加一道吧" read as dishes 4 on a 3-dish plan: one dish is added.
     env = revise_env
     first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
     beans = dish_ids(env, "干煸豆角")[0]
-    out = say(
-        env, "再加一道吧", "revise",
-        parse={"dishes": 4, "mode": "shopping"},
-        replies=[revision("general", add=[beans])],
+    out = read(
+        env, "再加一道吧", {"kind": "change", "counts": {"dishes": 4}},
+        replies=[pick(slots=[(0, beans)])],
     )
     assert latest_record(env).request["spec"]["dishes"] == 4
     assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 4
 
 
 def test_add_one_more_to_a_hand_grown_plan(revise_env):
-    # "再加一道吧" on a hand-grown plan of 4 (asked 3): the parse says 5 against the previous 3.
+    # "再加一道吧" on a hand-grown plan of 4 (asked 3): read as 5 on the plan as shown.
     env = revise_env
     first_meal(env, THREE, parse={"dishes": 3, "mode": "shopping"})
     beans, cucumber = dish_ids(env, "干煸豆角", "凉拌黄瓜")
     _hand_add(env, beans)
-    out = say(
-        env, "再加一道吧", "revise",
-        parse={"dishes": 5, "mode": "shopping"},
-        replies=[revision("general", add=[cucumber])],
+    out = read(
+        env, "再加一道吧", {"kind": "change", "counts": {"dishes": 5}},
+        replies=[pick(slots=[(0, cucumber)])],
     )
     assert latest_record(env).request["spec"]["dishes"] == 5
     assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 5
 
 
 def test_add_one_more_to_a_hand_trimmed_plan(revise_env):
-    # Asked 3, one removed by hand (plan 2); "再加一道吧" is parsed from the app note as 3,
-    # equal to the previous request's 3. The message stated a count, so the plan grows to 3.
+    # Asked 3, one removed by hand (plan 2); "再加一道吧" read as 3 on the plan as shown,
+    # equal to the first request's 3: the message states it, so the plan grows to 3.
     from minemydinner.agent.edits import Remove, apply_edit
     from minemydinner.agent.plan_card import meal_constraints
     from minemydinner.planning.context import load_planning_context
@@ -3148,26 +3341,20 @@ def test_add_one_more_to_a_hand_trimmed_plan(revise_env):
     outcome, update = apply_edit(env.session, ctx, values, Remove(recipe_id=pepper), "zh")
     assert outcome.plan is not None
     env.graph.update_state(env.config, update, as_node="present_plan")
-    out = say(
-        env, "再加一道吧", "revise",
-        parse={"dishes": 3, "mode": "shopping", "counts_stated_now": True},
-        replies=[revision("general", add=[beans])],
+    parses = len(model_calls_by_prompt(env, "parse"))
+    out = read(
+        env, "再加一道吧", {"kind": "change", "counts": {"dishes": 3}},
+        replies=[pick(slots=[(0, beans)])],
     )
     assert latest_record(env).request["spec"]["dishes"] == 3
     assert out["current_plan"]["passed"] and len(out["current_plan"]["recipes"]) == 3
-    # The parse ran with the current parse prompt, and its input still ends with the app note.
-    from minemydinner.agent.request import PROMPT_DIR, PROMPT_VERSIONS
-
-    (parse_input,) = model_calls_by_prompt(env, "parse")[-1:]
-    current = PROMPT_DIR / f"{PROMPT_VERSIONS['parse']}.md"
-    assert parse_input[0].content == current.read_text(encoding="utf-8")
-    assert parse_input[-2].content == "再加一道吧"
-    assert parse_input[-1].content == PLAN_NOTE + "2 dishes (1 meat, 1 vegetable): 土豆炖牛肉, 清炒小白菜"
+    # No parse on a change: the reader's counts are the statement.
+    assert len(model_calls_by_prompt(env, "parse")) == parses
 
 
 def test_revise_under_ask_first_keeps_fridge_only(revise_env):
-    # Spec 5.3: a field the revise turn's parse leaves unstated comes from the current plan,
-    # never from defaults, and nothing is asked.
+    # Spec 5.3: what a change does not state comes from the current plan, never from
+    # defaults, and nothing is asked.
     env = revise_env
     set_request_style(env.session, "ask_first")
     for name in ("牛肉", "小白菜", "紫菜", "豆角", "辣椒"):
@@ -3175,11 +3362,11 @@ def test_revise_under_ask_first_keeps_fridge_only(revise_env):
     first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "fridge_only"})
     assert latest_record(env).request["spec"]["mode"] == "fridge_only"
     cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
-    out = say(
-        env, "想要辣一些的", "revise", parse={"query": "辣一些的"},
-        replies=[revision("general", remove=[(cabbage, "")], add=[beans])],
+    out = read(
+        env, "想要辣一些的", {"kind": "change", "wish": "辣一些的", "wish_targets": [cabbage]},
+        replies=[pick(slots=[(0, beans)])],
     )
-    assert "__interrupt__" not in out and len(reviser_calls(env)) == 1
+    assert "__interrupt__" not in out and len(picker_calls(env)) == 1
     record = latest_record(env)
     assert record.request["revision"] == {"from_version": 0}
     assert record.request["spec"]["mode"] == "fridge_only"
@@ -3200,18 +3387,15 @@ def _rule_count(session) -> int:
 def test_meal_avoid_is_not_a_rule(revise_env):
     env = revise_env
     first_meal(env)
-    beef, beans = dish_ids(env, "土豆炖牛肉", "干煸豆角")
+    beef, cabbage, soup = dish_ids(env, *MEAL)
     rules = _rule_count(env.session)
-    out = say(
-        env,
-        "今天不想吃肉",
-        "revise",
-        parse={"dishes": 2, "soups": 1, "mode": "shopping", "meal_avoid": ["肉"]},
-        replies=[revision("general", remove=[(beef, "")], add=[beans])],
-    )
-    # No diner card: the revise step ran on the current plan.
+    # The beef dish breaks this meal's wish; no meat dish fits it, so it is removed (spec 5.5).
+    out = read(env, "今天不想吃肉", {"kind": "change", "meal_avoid": ["肉"]}, replies=[pick(slots=[(0, None)])])
+    # No diner card: the change ran on the current plan.
     assert "__interrupt__" not in out
-    assert len(reviser_calls(env)) == 1 and out["current_plan"]["passed"]
+    assert len(picker_calls(env)) == 1 and out["current_plan"]["passed"]
+    assert ids_of_plan(out["current_plan"]) == [cabbage, soup]
+    assert "土豆炖牛肉去掉了：这顿不吃肉，也没找到可以替换的菜。" in out["messages"][-1].content
     assert out["request"]["meal_avoid"] == ["肉"]
     # The wish is this meal's own rule, never a person's, and never saved.
     # "肉" is a group word: one ingredient rule per meat entry of the dictionary.
@@ -3228,10 +3412,11 @@ def test_meal_avoid_is_not_a_rule(revise_env):
 def test_lasting_rule_still_shows_the_card(revise_env):
     env = revise_env
     first_meal(env)
-    out = say(
+    # Plan 3b-2: a lasting rule about someone is read as people, which shows the card.
+    env.model.structured["FollowUpReading"] = [{"kind": "people"}]
+    out = plan(
         env,
         "我不吃肉",
-        "revise",
         parse={
             "dishes": 2,
             "soups": 1,
@@ -3246,7 +3431,7 @@ def test_lasting_rule_still_shows_the_card(revise_env):
     out = resume(env, {card.id: None})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
     # Planned anew (3b-1 behaviour), not revised.
-    assert len(planner_runs(env)) == planned + 1 and not reviser_calls(env)
+    assert len(planner_runs(env)) == planned + 1
     assert "revision" not in out["current_plan"]
 
 
@@ -3488,3 +3673,1639 @@ def test_a_fallback_failing_every_attempt_ends_as_the_closest_plan(
     assert [u["code"] for u in current["unmet"]] == ["H1", "wish_unmet"]
     assert current["next_actions"] == ["switch_to_shopping", "update_inventory", "import_recipes"]
     assert run_record(graph_env).first_passed is False
+
+
+# ---- plan 3b-2 Task 7: the change path (spec 5.4-5.6) ----
+
+
+# The picker's words for wish_met True, False and None (Task 11 fix 3), sent as wish_result
+# since pick_v4 (Task 11 fix 4).
+WISH_WORD = {True: "yes", False: "no", None: "no_wish"}
+
+
+def pick(slots=(), choices=(), wish_met=None, note: str = "") -> AIMessage:
+    """The picker's answer: `slots` as (index, recipe id or None), `choices` as (index, ids),
+    sent as pick_v4 sends it (None as recipe id 0, the wish answer as a word in wish_result)."""
+    return tool_call(
+        "PickerAnswer",
+        {
+            "choices": [{"index": i, "ids": list(ids)} for i, ids in choices],
+            "slots": [
+                {"index": i, "recipe_id": r or 0, "reason": "" if r else "没有合适的"}
+                for i, r in slots
+            ],
+            "note": note,
+            "wish_result": WISH_WORD[wish_met],
+        },
+    )
+
+
+def picker_calls(env) -> list[list]:
+    return model_calls_by_prompt(env, "pick")
+
+
+def picker_input(env, call: int = -1) -> str:
+    return [m for m in picker_calls(env)[call] if m.type == "human"][0].content
+
+
+def ids_of_plan(plan: dict) -> list[int]:
+    return [r["id"] for r in plan["recipes"]]
+
+
+def change_events(env, kind: str) -> list[dict]:
+    return [e for e in latest_record(env).events if e.get("kind") == kind]
+
+
+def press(env, key: str, replies=None) -> dict:
+    if replies is not None:
+        env.model.replies = list(replies)
+    return env.graph.invoke(
+        {"messages": [HumanMessage(ACTION_MESSAGES["zh"][key])], "locale": "zh"}, env.config
+    )
+
+
+def test_a_named_drop_makes_one_reader_call_and_no_picker_call(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "change", "remove": [{"id": soup, "mode": "drop", "quote": "汤"}]}
+    out = read(env, "汤不要了", reading)
+    assert "__interrupt__" not in out and out["intent"] == "revise"
+    assert len(reader_calls(env)) == 1 and picker_calls(env) == []
+    # No parse, no reviser and no planner on a change.
+    assert len(model_calls_by_prompt(env, "parse")) == 1
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage]
+    assert plan["passed"] and plan["revision"] == {"from_version": 0}
+    assert len(out["plan_versions"]) == len(first["plan_versions"]) + 1
+    assert out["messages"][-1].content == "去掉了紫菜蛋花汤。"
+    assert out["plan_request"] == out["request"]
+    record = latest_record(env)
+    assert record.request["revision"] == {"from_version": 0}
+    assert record.request["reading"]["remove"][0]["id"] == soup
+    assert record.final_passed is True
+    assert [e.get("step") for e in record.events[:1]] == ["read_follow_up"]
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["drops"] == [soup] and frame["frame"]["ignored"] == []
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["recipe_ids"] == [beef, cabbage]
+
+
+def test_a_named_replace_makes_one_reader_and_one_picker_call(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", reading, replies=[pick(slots=[(0, beans)], note="干煸豆角下饭。")])
+    assert len(reader_calls(env)) == 1 and len(picker_calls(env)) == 1
+    plan = out["current_plan"]
+    # The new dish takes the replaced dish's place.
+    assert ids_of_plan(plan) == [beef, beans, soup] and plan["passed"]
+    assert out["messages"][-1].content == "把清炒小白菜换成了干煸豆角。\n\n干煸豆角下饭。"
+    text = picker_input(env)
+    assert f'- Slot 0: in place of {cabbage}; the user\'s words: "白菜"' in text
+    assert "Shortlist" in text and "Reply locale: zh" in text
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["attempt"] == 0 and attempt["problems"] == []
+    assert any(e.get("step") == "pick" for e in latest_record(env).events)
+
+
+def test_wish_targets_change_only_unlocked_dishes_within_the_limit(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    _hand_add(env, pepper)
+    reading = {"kind": "change", "wish": "辣一些的", "wish_targets": [pepper, cabbage]}
+    out = read(
+        env, "想要辣一些的", reading, replies=[pick(slots=[(0, beans)], wish_met=True)]
+    )
+    # The locked dish is never a wish target; the other is a slot for the wish.
+    text = picker_input(env)
+    assert f"- Slot 0: in place of {cabbage}, for the wish" in text and "Slot 1" not in text
+    assert "The user's wish: 辣一些的" in text
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["ignored"] == [{"wish_target": pepper, "reason": "locked"}]
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, beans, soup, pepper] and pepper in plan["locked"]
+    assert out["messages"][-1].content.startswith("把清炒小白菜换成了干煸豆角。")
+    assert out["request"]["query"] == "辣一些的"
+
+
+def test_a_new_one_meal_avoidance_replaces_a_locked_dish_and_says_so(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    _hand_add(env, pepper)
+    reading = {"kind": "change", "meal_avoid": ["猪肉"]}
+    out = read(env, "今天不想吃猪肉", reading, replies=[pick(slots=[(0, chicken.id)])])
+    assert f"- Slot 0: in place of {pepper}" in picker_input(env)
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage, soup, chicken.id]
+    assert plan["meal_avoid"] == ["猪肉"] and out["request"]["meal_avoid"] == ["猪肉"]
+    assert "青椒炒肉是你手动加的，因为这顿不吃猪肉，换成了红烧鸡块。" in out["messages"][-1].content
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["slots"][0]["reason"] == "breaks_rule"
+
+
+def test_drop_the_soup_and_add_a_dish_not_in_the_library(revise_env):
+    from minemydinner.agent.revise_step import CHANGE_PARTIAL_ZH
+
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {
+        "kind": "change",
+        "remove": [{"id": soup, "mode": "drop", "quote": "去掉汤"}],
+        "add": [{"name": "鱼香肉丝"}],
+    }
+    out = read(env, "去掉汤，加个鱼香肉丝", reading, replies=[pick(slots=[(0, None)])])
+    # Spec 5.4: a name that is no exact title is the picker's to find; it answered none.
+    assert len(picker_calls(env)) == 1
+    assert '- Slot 0: added; the user named "鱼香肉丝"' in picker_input(env)
+    plan = out["current_plan"]
+    # Partial: the drop is done and makes a new version; the missing dish is said.
+    assert ids_of_plan(plan) == [beef, cabbage] and plan["revision"] == {"from_version": 0}
+    reply = out["messages"][-1].content
+    assert reply.startswith("去掉了紫菜蛋花汤。")
+    assert CHANGE_PARTIAL_ZH in reply and "菜谱库里没有鱼香肉丝" in reply
+    assert plan["next_actions"] == ["import_recipes"]
+    assert [u["code"] for u in plan["unmet"]] == ["not_in_library"]
+
+
+def test_an_unfilled_replace_keeps_the_dish(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", reading, replies=[pick(slots=[(0, None)])])
+    assert out["current_plan"] == first["current_plan"]
+    assert out["plan_versions"] == first["plan_versions"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True and ids_of_plan(card) == [beef, cabbage, soup]
+    assert "没找到合适的菜来换清炒小白菜" in out["messages"][-1].content
+    assert card["next_actions"] == ["import_recipes"]
+    assert latest_record(env).final_passed is False
+
+
+def test_a_change_that_leaves_no_dish_asks_the_empty_plan_question(revise_env):
+    from minemydinner.agent.revise_step import EMPTY_PLAN_QUESTION_ZH
+
+    env = revise_env
+    first = first_meal(env)
+    remove = [{"id": i, "mode": "drop", "quote": "都不要"} for i in dish_ids(env, *MEAL)]
+    out = read(env, "都不要了", {"kind": "change", "remove": remove})
+    assert out["messages"][-1].content == EMPTY_PLAN_QUESTION_ZH
+    assert out["messages"][-1].id not in out["reply_plans"]
+    assert out["current_plan"] == first["current_plan"] and picker_calls(env) == []
+
+
+def test_an_ambiguous_reading_says_how_it_was_read(revise_env):
+    from minemydinner.agent.revise_step import READING_PREFIX_ZH
+
+    env = revise_env
+    first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    reading = {
+        "kind": "change",
+        "ambiguous": True,
+        "reading": "我理解为把清炒小白菜换成别的素菜。",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "菜"}],
+    }
+    out = read(env, "那个菜换一下", reading, replies=[pick(slots=[(0, beans)], note="很下饭。")])
+    # Spec 5.6: code's change sentence, then the reading sentence, then the picker's note.
+    assert out["messages"][-1].content == (
+        f"把清炒小白菜换成了干煸豆角。\n\n{READING_PREFIX_ZH}我理解为把清炒小白菜换成别的素菜。"
+        "\n\n很下饭。"
+    )
+
+
+def test_an_ambiguous_reference_that_matches_no_dish_asks_which(revise_env):
+    from minemydinner.agent.revise_step import READING_PREFIX_ZH, WHICH_DISH_ZH
+
+    env = revise_env
+    first = first_meal(env)
+    reading = {"kind": "change", "ambiguous": True, "reading": "方案里没有鱼。"}
+    out = read(env, "鱼换掉", reading)
+    assert out["messages"][-1].content == f"{READING_PREFIX_ZH}方案里没有鱼。{WHICH_DISH_ZH}"
+    assert out["messages"][-1].id not in out["reply_plans"]
+    assert out["current_plan"] == first["current_plan"]
+
+
+def test_an_unmet_wish_is_said(revise_env):
+    from minemydinner.agent.revise_step import WISH_UNMET
+
+    # Task 11 fix 1 (user decision): a slot made only for the wish is never filled with a
+    # dish that does not meet it. The picker's dish is not placed, the target stays, and the
+    # reply says the wish was not met, with its next actions.
+    env = revise_env
+    first = first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    reading = {"kind": "change", "wish": "海鲜", "wish_targets": [cabbage]}
+    out = read(
+        env, "想吃点海鲜", reading,
+        replies=[pick(slots=[(0, beans)], wish_met=False, note="干煸豆角也下饭。")],
+    )
+    assert len(picker_calls(env)) == 1
+    assert out["current_plan"] == first["current_plan"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True
+    reply = out["messages"][-1].content
+    assert "“海鲜”" in reply
+    # Neither the dish that was not placed nor a second "nothing fits" sentence is said.
+    assert "干煸豆角" not in reply and "没找到合适的" not in reply
+    assert [u["code"] for u in card["unmet"]] == [WISH_UNMET]
+    assert card["next_actions"] == ["import_recipes"]
+    # A button re-runs the wish on the dish it touches.
+    assert card["unfinished"]["reading"]["wish_targets"] == [cabbage]
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["slots"][0]["recipe_id"] is None and outcome["wish_met"] is False
+
+
+def test_an_unmet_wish_still_fills_a_slot_that_breaks_a_rule(revise_env):
+    """Only a slot whose one reason is the wish stays unfilled when the wish is not met: a
+    dish that breaks this meal's avoidance still gets the picker's dish."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    reading = {"kind": "change", "wish": "海鲜", "meal_avoid": ["牛肉"]}
+    out = read(env, "今天不吃牛肉，想吃海鲜", reading,
+               replies=[pick(slots=[(0, pepper)], wish_met=False)])
+    assert ids_of_plan(out["current_plan"]) == [pepper, cabbage, soup]
+    assert "“海鲜”" in out["messages"][-1].content
+
+
+def _kept_seafood_wish(env) -> dict:
+    """A wish nothing fits: the picker answers no dish, so the plan stays (a kept card)."""
+    first_meal(env)
+    cabbage = dish_ids(env, "清炒小白菜")[0]
+    reading = {"kind": "change", "wish": "海鲜", "wish_targets": [cabbage]}
+    out = read(env, "想吃点海鲜", reading, replies=[pick(slots=[(0, None)], wish_met=False)])
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True
+    return out
+
+
+@pytest.mark.parametrize("key", list(ACTION_MESSAGES["zh"]))
+def test_each_button_on_a_kept_plan_revises_through_the_frame(revise_env, key):
+    env = revise_env
+    _kept_seafood_wish(env)
+    since = len(env.model.sent)
+    out = press(env, key)
+    assert "__interrupt__" not in out and out["button"] == key
+    # No reader, route, parse or reviser call: the frame comes from the button's request.
+    assert len(reader_calls(env)) == 1 and route_and_parse_calls(env, since) == []
+    assert out["intent"] == "revise"
+    record = latest_record(env)
+    assert record.request["button"] == key and "revision" in record.request
+    [frame] = change_events(env, "frame")
+    # The offering turn's unfinished wish is re-run, with its target nothing replaced.
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    assert frame["reading"]["wish"] == "海鲜" and frame["reading"]["wish_targets"] == [cabbage]
+
+
+def test_a_button_on_a_kept_plan_re_runs_the_unfinished_wish(revise_env):
+    env = revise_env
+    _kept_seafood_wish(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    out = press(env, "switch_to_shopping", replies=[pick(slots=[(0, beans)], wish_met=True)])
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, beans, soup] and plan["spec"]["mode"] == "shopping"
+    # The offering turn's reading carries the wish to the picker; its words do not (Task 11
+    # fix 2, item 1).
+    text = picker_input(env)
+    assert "The user's wish: 海鲜\n" in text and "想吃点海鲜" not in text
+    assert out["request"]["query"] == "海鲜"
+
+
+def test_a_button_that_lifts_the_time_limit_places_the_named_dish(revise_env):
+    env = revise_env
+    slow = make_recipe(
+        env.session, "酱焖羊蝎子", "meat dish", [L("羊肉", "main")],
+        time_min=75, time_source="stated",
+    )
+    limited = {"dishes": 2, "soups": 1, "mode": "shopping", "time_limit_min": 30}
+    first = first_meal(env, parse=limited)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {
+        "kind": "change",
+        "remove": [
+            {"id": beef, "mode": "replace", "quote": "土豆炖牛肉", "with_name": "酱焖羊蝎子"}
+        ],
+    }
+    failed = read(env, "土豆炖牛肉换成酱焖羊蝎子", reading)
+    assert failed["current_plan"] == first["current_plan"]
+    card = failed["reply_plans"][failed["messages"][-1].id]
+    assert card["plan_kept"] is True and card["next_actions"] == ["drop_time_limit"]
+    assert card["passed"] is False
+    reply = failed["messages"][-1].content
+    assert "酱焖羊蝎子在你的菜谱库里，但需要 75 分钟" in reply and "30 分钟" in reply
+    # Never "not in the library", and no import offered: the dish is there.
+    assert "没有" not in reply and "导入" not in reply
+    assert [(u["code"], u["recipe_id"]) for u in card["unmet"]] == [("H6", slow.id)]
+    assert card["unmet"][0]["text"] == "酱焖羊蝎子：需要 75 分钟，超过 30 分钟的限制"
+    out = press(env, "drop_time_limit")
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [cabbage, soup, slow.id]
+    assert plan["spec"]["time_limit_min"] is None
+    assert out["messages"][-1].content == "把土豆炖牛肉换成了酱焖羊蝎子。"
+    assert picker_calls(env) == [] and len(reader_calls(env)) == 1
+    assert latest_record(env).request["button"] == "drop_time_limit"
+
+
+def test_a_change_reading_keeps_or_withdraws_this_meals_avoidance(revise_env):
+    env = revise_env
+    first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "shopping", "meal_avoid": ["香菜"]})
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    # A change that restates the avoidance keeps it.
+    kept = read(
+        env, "汤不要了",
+        {
+            "kind": "change",
+            "meal_avoid": ["香菜"],
+            "remove": [{"id": soup, "mode": "drop", "quote": "汤"}],
+        },
+    )
+    assert kept["request"]["meal_avoid"] == ["香菜"]
+    assert kept["current_plan"]["meal_avoid"] == ["香菜"]
+    # A change that drops it withdraws it: the request's list is the reading's.
+    out = read(env, "香菜其实放点也行", {"kind": "change", "meal_avoid": []})
+    assert out["request"]["meal_avoid"] == []
+    assert out["current_plan"]["meal_avoid"] == []
+    assert out["constraints"]["meal_avoid"] == []
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage]
+
+
+def test_a_picker_retry_starts_from_fresh_messages_with_the_problems(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(
+        env, "白菜换掉", reading,
+        replies=[pick(slots=[(0, beef)]), pick(slots=[(0, beans)])],
+    )
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    first_try, second_try = picker_calls(env)
+    assert [m.type for m in second_try] == ["system", "human", "human"]
+    assert not any(m.type == "tool" for m in second_try)
+    assert f"Slot 0: dish {beef} is already in the plan" in second_try[-1].content
+    attempts = change_events(env, "pick_attempt")
+    assert [a["attempt"] for a in attempts] == [0, 1]
+    assert attempts[0]["problems"] and attempts[1]["problems"] == []
+    assert latest_record(env).retries == 1
+
+
+def test_a_picked_dish_that_breaks_a_rule_is_never_placed(revise_env):
+    env = revise_env
+    first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "shopping", "meal_avoid": ["辣椒"]})
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "meal_avoid": ["辣椒"],
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}],
+    }
+    # Both attempts pick 干煸豆角, which has 辣椒: the slot stays unfilled and the dish stays.
+    out = read(env, "白菜换掉", reading, replies=[pick(slots=[(0, beans)])])
+    assert len(picker_calls(env)) == 2
+    assert "left out of this meal" in picker_calls(env)[1][-1].content
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup]
+
+
+def test_contradictory_stated_counts_get_the_unclear_reply(revise_env):
+    from minemydinner.agent.graph import UNCLEAR_REPLY_ZH
+
+    env = revise_env
+    first = first_meal(env)
+    reading = {"kind": "change", "counts": {"dishes": 2, "meat_dishes": 3}}
+    out = read(env, "两个菜，三个荤菜", reading)
+    assert "__interrupt__" not in out and out["messages"][-1].content == UNCLEAR_REPLY_ZH
+    assert out["current_plan"] == first["current_plan"] and picker_calls(env) == []
+
+
+def test_the_change_path_never_shows_a_diner_label(tmp_path, session, seeded, veg):
+    from minemydinner.agent.plan_card import client_card
+
+    env, me, wang, spinach = two_for_shopping(tmp_path, session, veg)
+    reading = {
+        "kind": "change",
+        "ambiguous": True,
+        "reading": "按 Diner 2 的口味把清炒白菜换掉。",
+        "remove": [{"id": veg.id, "mode": "replace", "quote": "白菜"}],
+    }
+    env.model.structured["FollowUpReading"] = [reading]
+    env.model.replies = [pick(slots=[(0, spinach.id)], note="Diner 2 会喜欢清炒菠菜。")]
+    out = plan(env, "小王不爱吃白菜，换一个", locale="zh")
+    assert "__interrupt__" not in out
+    assert ids_of_plan(out["current_plan"]) == [spinach.id]
+    reply = out["messages"][-1].content
+    assert "Diner" not in reply and "小王" in reply
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert "Diner " not in json.dumps(client_card(card), ensure_ascii=False)
+    assert "小王" not in sent_text(env)
+
+
+def _one_meat_two_vegetables(env) -> tuple[int, int, int]:
+    titles = ("土豆炖牛肉", "清炒小白菜", "凉拌黄瓜")
+    first_meal(env, titles, parse={"dishes": 3, "mode": "shopping"})
+    return tuple(dish_ids(env, *titles))
+
+
+def test_a_stated_side_count_never_shrinks_the_plan_when_its_add_fails(revise_env):
+    """Fix round 1: "两个荤菜" on 1 meat / 2 vegetables keeps the total, so the frame drops a
+    vegetable dish and adds a meat dish. With no meat dish found the drop is withheld: the
+    plan stays and the reply says the count could not be met."""
+    env = revise_env
+    beef, cabbage, cucumber = _one_meat_two_vegetables(env)
+    reading = {"kind": "change", "counts": {"meat_dishes": 2}}
+    out = read(
+        env, "要两个荤菜", reading,
+        replies=[pick(choices=[(0, [cucumber])], slots=[(0, None)])],
+    )
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["choices"][0]["mode"] == "drop"
+    assert frame["frame"]["slots"][0]["for_count"] is True
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, cucumber]
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True
+    assert "没能按你说的数量改，原来的菜都留着" in out["messages"][-1].content
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["recipe_ids"] == [beef, cabbage, cucumber]
+
+
+def test_a_stated_side_count_never_shrinks_the_plan_without_a_picker_answer(revise_env):
+    env = revise_env
+    beef, cabbage, cucumber = _one_meat_two_vegetables(env)
+    reading = {"kind": "change", "counts": {"meat_dishes": 2}}
+    # The picker only searches and never answers: code's fallback must not drop a dish.
+    out = read(
+        env, "要两个荤菜", reading, replies=[tool_call("search_recipes", {"query": "荤菜"})]
+    )
+    # The first attempt and its re-ask use the turn's six picker calls (Task 11 fix round 1
+    # review): no second attempt starts.
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["empty_replies"] == 1 and len(picker_calls(env)) == 6
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, cucumber]
+    assert "没能按你说的数量改" in out["messages"][-1].content
+
+
+def test_a_dropped_dish_the_user_asked_for_still_goes_when_an_add_fails(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {
+        "kind": "change",
+        "remove": [{"id": soup, "mode": "drop", "quote": "汤"}],
+        "add": [{"dish_type": "vegetable dish", "count": 1}],
+    }
+    out = read(env, "汤不要了，加个素菜", reading, replies=[pick(slots=[(0, None)])])
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage]
+    assert "没找到可以加的素菜。" in out["messages"][-1].content
+
+
+def test_an_earlier_wish_is_never_reported_unmet_on_a_named_change(revise_env):
+    """Fix round 1: the request still carries an earlier turn's wish; a named replace whose
+    picker says wish_met false must not say that old wish was not met."""
+    env = revise_env
+    first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "shopping", "query": "辣的"})
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", reading, replies=[pick(slots=[(0, beans)], wish_met=False)])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    assert "辣的" not in out["messages"][-1].content
+    assert out["current_plan"]["unmet"] == []
+
+
+def test_a_new_kept_card_with_nothing_unfinished_never_re_runs_an_old_wish(revise_env):
+    """Fix round 1: only a kept card saved before cards kept their unfinished parts falls
+    back to its request's wish; a new one with nothing unfinished re-runs nothing."""
+    env = revise_env
+    first = first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "shopping", "query": "辣的"})
+    out = read(env, "嗯，就这样吧", {"kind": "change"})
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True and card["unfinished"]["reading"] is None
+    assert out["current_plan"] == first["current_plan"]
+    out = press(env, "switch_to_shopping")
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["choices"] == [] and frame["frame"]["slots"] == []
+    assert picker_calls(env) == []
+
+
+def test_a_rule_breaking_dish_a_count_absorbed_stays_removed(revise_env):
+    """Fix round 2: the stated counts absorb the replace slot of a dish that breaks the new
+    one-meal avoidance, and the count's add finds nothing. The count's drops are withheld,
+    but the rule-breaking dish never comes back (spec 5.5); the reply names it."""
+    env = revise_env
+    titles = ("土豆炖牛肉", "青椒炒肉", "清炒小白菜")
+    first_meal(env, titles, parse={"dishes": 3, "mode": "shopping"})
+    beef, pepper, cabbage = dish_ids(env, *titles)
+    reading = {
+        "kind": "change",
+        "meal_avoid": ["猪肉"],
+        "counts": {"meat_dishes": 1, "vegetable_dishes": 2},
+    }
+    out = read(env, "今天不吃猪肉，一荤两素", reading, replies=[pick(slots=[(0, None)])])
+    [frame] = change_events(env, "frame")
+    assert pepper in frame["frame"]["drops"] and pepper not in frame["frame"]["count_drops"]
+    assert [s["for_count"] for s in frame["frame"]["slots"]] == [True]
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage]
+    reply = out["messages"][-1].content
+    assert "青椒炒肉去掉了：这顿不吃猪肉，也没找到可以替换的菜。" in reply
+    assert "没能按你说的数量改" in reply
+    assert "去掉了青椒炒肉。" not in reply
+
+
+def test_a_withheld_count_drop_drops_the_pickers_note(revise_env):
+    env = revise_env
+    beef, cabbage, cucumber = _one_meat_two_vegetables(env)
+    out = read(
+        env, "要两个荤菜", {"kind": "change", "counts": {"meat_dishes": 2}},
+        replies=[pick(choices=[(0, [cucumber])], slots=[(0, None)], note="去掉了凉拌黄瓜。")],
+    )
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, cucumber]
+    assert "去掉了凉拌黄瓜" not in out["messages"][-1].content
+
+
+# ---- fix between Tasks 9 and 10: the picker is told a must-use ingredient ----
+
+MUST_PORK = {"kind": "change", "conditions": {"must_use": ["猪肉"]}}
+
+
+def test_the_picker_input_names_a_new_must_use_ingredient(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    out = read(
+        env, "要用上猪肉", MUST_PORK,
+        replies=[pick(choices=[(0, [beef])], slots=[(0, pepper)], note="青椒炒肉用上了猪肉。")],
+    )
+    text = picker_input(env)
+    assert (
+        f"- Choice 0: replace 1 to 1 of {beef}, {cabbage}, {soup} (any type); each dish you "
+        "choose becomes a new slot in its place; the new dish must use 猪肉, which no dish "
+        "uses yet"
+    ) in text
+    assert "must use in at least one dish: 猪肉" in text
+    assert len(picker_calls(env)) == 1
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [pepper, cabbage, soup] and plan["passed"]
+
+
+def test_a_pick_that_ignores_the_must_use_ingredient_is_retried_with_the_reason(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    out = read(
+        env, "要用上猪肉", MUST_PORK,
+        replies=[
+            pick(choices=[(0, [cabbage])], slots=[(0, beans)]),
+            pick(choices=[(0, [beef])], slots=[(0, pepper)]),
+        ],
+    )
+    first_try, second_try = picker_calls(env)
+    retry = second_try[-1].content
+    assert "Choice 0" in retry and "猪肉" in retry and str(beans) in retry
+    attempts = change_events(env, "pick_attempt")
+    assert attempts[0]["problems"] and attempts[1]["problems"] == []
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [pepper, cabbage, soup] and plan["passed"]
+    assert out["messages"][-1].content.startswith("把土豆炖牛肉换成了青椒炒肉。")
+
+
+def test_two_picks_that_ignore_the_must_use_ingredient_keep_the_plan_and_say_so(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    out = read(
+        env, "要用上猪肉", MUST_PORK,
+        replies=[pick(choices=[(0, [cabbage])], slots=[(0, beans)], note="干煸豆角很香。")],
+    )
+    assert len(picker_calls(env)) == 2
+    # The plan never shrinks unasked: the chosen dish stays, and nothing else changed.
+    assert out["current_plan"] == first["current_plan"]
+    assert out["plan_versions"] == first["plan_versions"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True and ids_of_plan(card) == [beef, cabbage, soup]
+    reply = out["messages"][-1].content
+    assert "没找到用猪肉做的菜来换清炒小白菜，这次没用上猪肉，清炒小白菜先留着。" in reply
+    assert "干煸豆角" not in reply
+    assert card["next_actions"] == ["import_recipes"]
+    assert [u["code"] for u in card["unmet"]] == ["unfilled"]
+
+
+def test_no_usable_pick_for_a_must_use_ingredient_keeps_the_plan_and_says_so(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    # Both answers choose a dish that is not a candidate: code's fallback makes no replace.
+    out = read(env, "要用上猪肉", MUST_PORK, replies=[pick(choices=[(0, [pepper])])])
+    assert len(picker_calls(env)) == 2
+    assert out["current_plan"] == first["current_plan"]
+    # Task 11 fix 3: no usable answer, so nothing was tried: "this time", not "not found".
+    assert "这次没能选出用猪肉做的菜，没用上猪肉，可以再试一次。" in out["messages"][-1].content
+    assert "没找到" not in out["messages"][-1].content
+
+
+def test_an_empty_must_use_slot_is_not_said_when_another_new_dish_uses_it(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    reading = {**MUST_PORK, "wish": "辣一些的", "wish_targets": [beef]}
+    # The wish slot's new dish uses 猪肉; the must-use choice's own slot finds nothing.
+    out = read(
+        env, "要用上猪肉，辣一些的", reading,
+        replies=[pick(choices=[(0, [cabbage])], slots=[(0, pepper), (1, None)])],
+    )
+    assert len(picker_calls(env)) == 1
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [pepper, cabbage, soup] and plan["passed"]
+    assert plan["spec"]["must_use"] == ["猪肉"]
+    reply = out["messages"][-1].content
+    assert "没用上" not in reply and "清炒小白菜" not in reply.split("。", 1)[1]
+    assert plan["unmet"] == []
+
+
+def test_an_add_takes_the_must_use_ingredients_place_and_is_held_to_it(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    reading = {**MUST_PORK, "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(
+        env, "加个荤菜，要用上猪肉", reading,
+        replies=[pick(slots=[(0, chicken.id)]), pick(slots=[(0, pepper)])],
+    )
+    first_try, second_try = picker_calls(env)
+    text = [m for m in first_try if m.type == "human"][0].content
+    assert "- Slot 0: a meat dish, added; it must use 猪肉, which no dish uses yet" in text
+    assert "Choice" not in text
+    assert "Slot 0 is for 猪肉" in second_try[-1].content
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage, soup, pepper] and plan["passed"]
+
+
+def test_an_add_that_misses_the_must_use_ingredient_twice_adds_nothing_and_says_so(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    reading = {**MUST_PORK, "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(env, "加个荤菜，要用上猪肉", reading, replies=[pick(slots=[(0, chicken.id)])])
+    assert len(picker_calls(env)) == 2
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert "没找到用猪肉做的荤菜，这次没用上猪肉。" in reply and "红烧鸡块" not in reply
+    [outcome] = change_events(env, "change_outcome")
+    [slot] = outcome["slots"]
+    assert slot["recipe_id"] is None and slot["why"] == "does not use the must-use ingredient"
+
+
+def test_a_partial_change_says_an_unused_must_use_ingredient_once(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {**MUST_PORK, "remove": [{"id": soup, "mode": "drop", "quote": "汤"}]}
+    out = read(
+        env, "汤不要了，要用上猪肉", reading,
+        replies=[pick(choices=[(0, [cabbage])], slots=[(0, beans)])],
+    )
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage] and plan["revision"] == {"from_version": 0}
+    reply = out["messages"][-1].content
+    assert reply.startswith("去掉了紫菜蛋花汤。")
+    assert reply.count("没用上猪肉") == 1
+    # Said once: the version neither carries the name nor shows it again as an H7 finding.
+    assert [u["code"] for u in plan["unmet"]] == ["unfilled"]
+    assert not any(w["code"] == "H7" for w in plan["warnings"])
+    assert plan["spec"]["must_use"] == [] and out["plan_request"]["must_use"] == []
+    # The request keeps it, so a button on this card tries it again.
+    assert out["request"]["must_use"] == ["猪肉"]
+
+
+# ---- plan 3b-2 Task 10b: code checks, it does not interpret (spec 5.4 amendment) ----
+
+
+def test_a_meat_dish_breaking_a_no_meat_avoidance_may_take_a_vegetable_dish(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "meal_avoid": ["牛肉"]}
+    out = read(env, "这顿不想吃牛肉", reading, replies=[pick(slots=[(0, beans)])])
+    # The slot carries no dish type: a vegetable dish takes the meat dish's place.
+    text = picker_input(env)
+    assert f"- Slot 0: in place of {beef}" in text and "a meat dish in place" not in text
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beans, cabbage, soup] and plan["passed"]
+    assert out["messages"][-1].content.startswith("把土豆炖牛肉换成了干煸豆角。")
+    assert len(change_events(env, "pick_attempt")) == 1
+
+
+def test_a_wish_that_touches_no_dish_changes_nothing_and_says_so(revise_env):
+    from minemydinner.agent.revise_step import WISH_MATCHED_NOTHING_ZH
+
+    env = revise_env
+    first = first_meal(env)
+    reading = {"kind": "change", "wish": "少放点香菜", "wish_targets": []}
+    out = read(env, "少放点香菜", reading)
+    assert picker_calls(env) == []
+    assert out["current_plan"] == first["current_plan"]
+    assert WISH_MATCHED_NOTHING_ZH.format(wish="少放点香菜") in out["messages"][-1].content
+    # The wish still lasts for later turns, like any stated wish.
+    assert out["request"]["query"] == "少放点香菜"
+
+
+def _cabbage_swap(env):
+    titles = ("土豆炖牛肉", "干煸豆角", "紫菜蛋花汤")
+    first = first_meal(env, titles)
+    beef, beans, soup = dish_ids(env, *titles)
+    reading = {
+        "kind": "change",
+        "remove": [{"id": beans, "mode": "replace", "quote": "豆角", "with_name": "小白菜"}],
+    }
+    return first, (beef, beans, soup), reading
+
+
+def test_a_name_that_is_no_title_goes_to_the_picker_which_places_the_dish(revise_env):
+    env = revise_env
+    _, (beef, beans, soup), reading = _cabbage_swap(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    out = read(env, "豆角换成小白菜", reading, replies=[pick(slots=[(0, cabbage)])])
+    assert len(picker_calls(env)) == 1
+    assert (
+        f'- Slot 0: in place of {beans}; the user\'s words: "豆角"; the user named "小白菜": '
+        "the library dish these words mean, or 0 when none is"
+    ) in picker_input(env)
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage, soup] and plan["passed"]
+    assert out["messages"][-1].content.startswith("把干煸豆角换成了清炒小白菜。")
+    assert "菜谱库里没有" not in out["messages"][-1].content
+
+
+def test_a_named_slot_the_picker_fills_with_nothing_keeps_the_dish(revise_env):
+    env = revise_env
+    first, (beef, beans, soup), reading = _cabbage_swap(env)
+    out = read(env, "豆角换成小白菜", reading, replies=[pick(slots=[(0, None)])])
+    assert out["current_plan"] == first["current_plan"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True and ids_of_plan(card) == [beef, beans, soup]
+    assert "菜谱库里没有小白菜" in out["messages"][-1].content
+    assert card["next_actions"] == ["import_recipes"]
+    assert [u["code"] for u in card["unmet"]] == ["not_in_library"]
+
+
+def test_a_named_dish_the_picker_finds_over_the_time_limit_says_the_real_reason(revise_env):
+    env = revise_env
+    slow = make_recipe(
+        env.session, "酱焖羊蝎子", "meat dish", [L("羊肉", "main")],
+        time_min=75, time_source="stated",
+    )
+    limited = {"dishes": 2, "soups": 1, "mode": "shopping", "time_limit_min": 30}
+    first = first_meal(env, parse=limited)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {
+        "kind": "change",
+        "remove": [{"id": beef, "mode": "replace", "quote": "牛肉", "with_name": "羊蝎子"}],
+    }
+    out = read(env, "牛肉换成羊蝎子", reading, replies=[pick(slots=[(0, slow.id)])])
+    # The picker found the dish the words mean; the time limit hides it, and the reply says so.
+    assert len(picker_calls(env)) == 1
+    assert out["current_plan"] == first["current_plan"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    reply = out["messages"][-1].content
+    assert "酱焖羊蝎子在你的菜谱库里，但需要 75 分钟" in reply and "导入" not in reply
+    assert card["next_actions"] == ["drop_time_limit"]
+    assert [(u["code"], u["recipe_id"]) for u in card["unmet"]] == [("H6", slow.id)]
+
+
+def test_an_exact_title_is_placed_with_no_picker_call(revise_env):
+    env = revise_env
+    _, (beef, beans, soup), reading = _cabbage_swap(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    reading["remove"][0]["with_name"] = "清炒小白菜"
+    out = read(env, "豆角换成清炒小白菜", reading)
+    assert picker_calls(env) == []
+    assert ids_of_plan(out["current_plan"]) == [beef, soup, cabbage]
+    assert out["messages"][-1].content == "把干煸豆角换成了清炒小白菜。"
+
+
+def test_stated_counts_bind_an_any_type_pick(revise_env):
+    env = revise_env
+    titles = ("土豆炖牛肉", "清炒小白菜", "凉拌黄瓜")
+    first_meal(env, titles, parse={"dishes": 3, "mode": "shopping"})
+    beef, cabbage, cucumber = dish_ids(env, *titles)
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    reading = {
+        "kind": "change",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}],
+        "counts": {"meat_dishes": 1, "vegetable_dishes": 2},
+    }
+    out = read(
+        env, "白菜换掉，还是一荤两素", reading,
+        replies=[pick(slots=[(0, pepper)]), pick(slots=[(0, beans)])],
+    )
+    first_try, second_try = picker_calls(env)
+    assert "vegetable dishes" in second_try[-1].content and "stated" in second_try[-1].content
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, cucumber]
+
+
+# ---- Task 10b fix round 1 ----
+
+
+def test_a_named_slot_emptied_by_codes_fallback_is_never_said_not_in_the_library(revise_env):
+    """The picker found 清炒小白菜 for "小白菜", but each answer also named a slot that does
+    not exist, so no answer was usable and code's fallback filled nothing. Only the picker's
+    own null may say "not in the library"; here the reply says it could not be done."""
+    env = revise_env
+    first, (beef, beans, soup), reading = _cabbage_swap(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    out = read(env, "豆角换成小白菜", reading, replies=[pick(slots=[(0, cabbage), (3, beans)])])
+    assert len(picker_calls(env)) == 2
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert "菜谱库里没有" not in reply and "导入" not in reply
+    assert "这次没能把小白菜加进来，可以再试一次。" in reply
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert "import_recipes" not in card["next_actions"]
+    assert [u["code"] for u in card["unmet"]] == ["not_done"]
+    # The removal is kept for a button.
+    assert card["unfinished"]["reading"]["remove"][0]["with_name"] == "小白菜"
+
+
+def test_a_wish_whose_targets_are_all_locked_says_they_stay(revise_env):
+    from minemydinner.agent.revise_step import WISH_MATCHED_NOTHING_ZH, WISH_TARGETS_LOCKED_ZH
+
+    env = revise_env
+    first_meal(env)
+    [pepper] = dish_ids(env, "青椒炒肉")
+    _hand_add(env, pepper)
+    before = env.graph.get_state(env.config).values["current_plan"]
+    reading = {"kind": "change", "wish": "别那么辣", "wish_targets": [pepper]}
+    out = read(env, "青椒炒肉别那么辣", reading)
+    assert picker_calls(env) == []
+    assert out["current_plan"] == before
+    reply = out["messages"][-1].content
+    assert WISH_TARGETS_LOCKED_ZH.format(wish="别那么辣") in reply
+    assert WISH_MATCHED_NOTHING_ZH.format(wish="别那么辣") not in reply
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["ignored"] == [{"wish_target": pepper, "reason": "locked"}]
+
+
+# ---- Task 11 fix round 1 (development run 1) ----
+
+
+def test_an_add_with_no_dish_type_reaches_the_picker_as_any_type(revise_env):
+    """Fix 1: "再添一道" read as an add with no type is a slot of any type, not ignored; the
+    picker's shortlist then covers the meat and vegetable dishes."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "add": [{"dish_type": None, "count": 1}]}
+    out = read(env, "再添一道", reading, replies=[pick(slots=[(0, beans)])])
+    text = picker_input(env)
+    assert "- Slot 0: added" in text
+    shortlist = json.loads(text.split("\n")[1])
+    assert {"meat dish", "vegetable dish"} <= set(shortlist)
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["ignored"] == []
+
+
+def test_a_side_count_add_nothing_fills_offers_relax_split_which_adds_any_dish(revise_env):
+    """Fix 3: "荤菜再来一个" (an add of a meat dish, the meat count stated) that no meat dish
+    fills offers relax_split, as a short side does on a new plan. Pressed, the meal keeps the
+    total the turn asked for (one more dish), and the dish may be of either side."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "add": [{"dish_type": "meat dish", "count": 1}],
+        "counts": {"meat_dishes": 2},
+    }
+    out = read(env, "荤菜再来一个", reading, replies=[pick(slots=[(0, None)])])
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True
+    assert "relax_split" in card["next_actions"]
+    out = press(env, "relax_split", replies=[pick(slots=[(0, beans)])])
+    assert "__interrupt__" not in out
+    spec = latest_record(env).request["spec"]
+    assert spec["dishes"] == 3
+    assert spec["meat_dishes"] is None and spec["vegetable_dishes"] is None
+    # The unfinished add is re-run as a dish of any type.
+    assert "- Slot 0: added" in picker_input(env)
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
+    assert out["current_plan"]["passed"]
+
+
+def test_a_button_turn_shows_the_picker_no_earlier_words(revise_env):
+    """Task 11 fix 2, item 1: a button re-runs the offering turn's structured reading (kept on
+    its card), so the picker reads the reading's wish, never that turn's raw words: "荤菜再来一个吧"
+    would ask for a meat dish while relax_split allows either side."""
+    env = revise_env
+    first_meal(env)
+    [beans] = dish_ids(env, "干煸豆角")
+    message = "荤菜再来一个吧"
+    reading = {
+        "kind": "change",
+        "add": [{"dish_type": "meat dish", "count": 1}],
+        "counts": {"meat_dishes": 2},
+    }
+    out = read(env, message, reading, replies=[pick(slots=[(0, None)])])
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["unfinished"]["words"] == message and "relax_split" in card["next_actions"]
+    press(env, "relax_split", replies=[pick(slots=[(0, beans)])])
+    text = picker_input(env)
+    assert message not in text and "earlier message" not in text
+    assert "The user's wish: none" in text
+
+
+def test_the_picker_counts_the_plan_after_the_decided_drops(revise_env):
+    """Task 11 fix 2, fix round 1: the counts line counts the plan after what code already
+    decided (a named drop leaves), so the picker never counts a dish that is going."""
+    env = revise_env
+    first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    reading = {
+        "kind": "change",
+        "remove": [{"id": cabbage, "mode": "drop", "quote": "小白菜"}],
+        "counts": {"dishes": 2},
+    }
+    read(env, "小白菜不要了，还是两个菜", reading, replies=[pick(slots=[(0, beans)])])
+    text = picker_input(env)
+    assert f"- Leaving the plan: {cabbage}" in text
+    assert (
+        "dishes (meat and vegetable dishes, soups not included): 1 in the plan after what is "
+        "already decided, exactly 2 stated"
+    ) in text
+
+
+def test_an_add_with_no_stated_side_offers_no_relax_split(revise_env):
+    env = revise_env
+    first_meal(env)
+    reading = {"kind": "change", "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(env, "再加个荤菜", reading, replies=[pick(slots=[(0, None)])])
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert "relax_split" not in card["next_actions"]
+
+
+def test_an_empty_picker_reply_is_asked_again_at_once(revise_env):
+    """Fix 4: a picker reply with no answer (no tool call and no text, or a tool call whose
+    arguments could not be read) is asked again at once, without using up an attempt; the
+    unreadable call is kept in the record."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    broken = AIMessage(
+        content="",
+        invalid_tool_calls=[
+            {"name": "PickerAnswer", "args": '{"slots": [', "id": "x", "error": "bad JSON"}
+        ],
+    )
+    out = read(env, "白菜换掉", reading, replies=[broken, pick(slots=[(0, beans)])])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    first_ask, second_ask = picker_calls(env)
+    # Task 11 fix 3, fix round 1: an answer cut before its slots closed is re-asked as cut.
+    assert "cut short" in second_ask[-1].content
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["attempt"] == 0 and attempt["problems"] == []
+    assert attempt["empty_replies"] == 1
+    assert out["retries"] == 0 and latest_record(env).first_passed is True
+    calls = [e for e in change_events(env, "model_call") if e.get("step") == "pick"]
+    assert calls[0]["response"]["invalid_tool_calls"][0]["name"] == "PickerAnswer"
+    assert "invalid_tool_calls" not in calls[1]["response"]
+
+
+def test_two_empty_replies_use_up_one_attempt(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    empty = AIMessage(content="")
+    out = read(env, "白菜换掉", reading, replies=[empty, empty, pick(slots=[(0, beans)])])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    assert len(picker_calls(env)) == 3
+    first_try, second_try = change_events(env, "pick_attempt")
+    assert first_try["empty_replies"] == 1 and first_try["answer"] is None
+    assert second_try["empty_replies"] == 0 and second_try["problems"] == []
+
+
+def test_the_picker_shortlist_leaves_out_the_plan_dishes(revise_env):
+    """Fix 5: dishes already in the plan cannot be chosen, so the picker's shortlist leaves
+    them out."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    pepper, beans = dish_ids(env, "青椒炒肉", "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    read(env, "白菜换掉", reading, replies=[pick(slots=[(0, beans)])])
+    shortlist = json.loads(picker_input(env).split("\n")[1])
+    listed = {e["id"] for entry in shortlist.values() for e in entry["candidates"]}
+    assert not listed & {beef, cabbage, soup}
+    assert {pepper, beans} <= listed
+
+
+# ---- Task 11 fix round 1, review fixes ----
+
+
+def test_the_picker_never_makes_more_than_six_calls_in_a_turn(revise_env):
+    """Review fix 1 (spec 5.7: with the reader, a change turn makes at most seven calls): the
+    picker only searches and never answers, so each run of it hits its call limit. The first
+    attempt and its re-ask use the turn's six picker calls; no second attempt starts, and
+    code's fallback keeps the replaced dish."""
+    from minemydinner.agent.planner import PICK_TURN_MODEL_CALLS
+
+    env = revise_env
+    first = first_meal(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", reading, replies=[tool_call("search_recipes", {"query": "菜"})])
+    assert PICK_TURN_MODEL_CALLS == 6
+    assert len(picker_calls(env)) == 6
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["empty_replies"] == 1 and attempt["answer"] is None
+    assert out["current_plan"] == first["current_plan"]
+    assert len(reader_calls(env)) == 1
+
+
+def test_an_empty_reply_after_searches_then_searches_stays_within_the_budget(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    search = tool_call("search_recipes", {"query": "菜"})
+    empty = AIMessage(content="")
+    # Attempt 1: two searches, then empty (3 calls); the re-ask: one search, then empty (2).
+    # Five calls used: a second attempt (up to three more) no longer fits.
+    read(env, "白菜换掉", reading, replies=[search, search, empty, search, empty, search])
+    assert len(picker_calls(env)) == 5
+    assert len(change_events(env, "pick_attempt")) == 1
+
+
+def test_an_add_for_the_wish_adds_nothing_when_the_wish_is_not_met(revise_env):
+    """Review fix 2 (user decision): an add the reader marks for_wish is there only for the
+    wish; when the picker says the wish is not met, nothing is added."""
+    env = revise_env
+    first = first_meal(env)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "wish": "海鲜",
+        "add": [{"dish_type": "vegetable dish", "count": 1, "for_wish": True}],
+    }
+    out = read(env, "想吃点海鲜", reading, replies=[pick(slots=[(0, beans)], wish_met=False)])
+    assert "- Slot 0: a vegetable dish, added, for the wish" in picker_input(env)
+    assert out["current_plan"] == first["current_plan"]
+    card = out["reply_plans"][out["messages"][-1].id]
+    reply = out["messages"][-1].content
+    assert "“海鲜”" in reply and "干煸豆角" not in reply and "没找到可以加的" not in reply
+    assert [u["code"] for u in card["unmet"]] == ["wish_unmet"]
+    # A button re-runs the add, still marked for the wish.
+    assert card["unfinished"]["reading"]["add"] == [
+        {"dish_type": "vegetable dish", "count": 1, "name": "", "for_wish": True}
+    ]
+
+
+def test_a_replace_for_the_wish_keeps_the_dish_when_the_wish_is_not_met(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
+    reading = {
+        "kind": "change",
+        "wish": "海鲜",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜", "for_wish": True}],
+    }
+    out = read(env, "白菜换成海鲜", reading, replies=[pick(slots=[(0, beans)], wish_met=False)])
+    assert out["current_plan"] == first["current_plan"]
+    assert "“海鲜”" in out["messages"][-1].content
+
+
+def test_an_unmarked_add_is_still_added_when_the_wish_is_not_met(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "wish": "海鲜",
+        "add": [{"dish_type": "vegetable dish", "count": 1}],
+    }
+    out = read(env, "再加个素菜，想吃海鲜", reading,
+               replies=[pick(slots=[(0, beans)], wish_met=False)])
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
+
+
+def test_a_rule_breaking_dish_removed_by_codes_fallback_says_no_replacement_was_chosen(
+    revise_env,
+):
+    """Review fix 3: with no usable picker answer, a dish that breaks this meal's avoidance
+    still leaves, but the reply does not claim nothing could replace it."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "change", "meal_avoid": ["牛肉"]}
+    out = read(env, "今天不吃牛肉", reading, replies=[AIMessage(content="")])
+    assert ids_of_plan(out["current_plan"]) == [cabbage, soup]
+    reply = out["messages"][-1].content
+    assert "土豆炖牛肉去掉了" in reply and "这次没能选出替换的菜，可以再试一次。" in reply
+    assert "也没找到可以替换的菜" not in reply
+
+
+def test_a_rule_breaking_dish_still_leaves_when_codes_strip_breaks_a_stated_count(revise_env):
+    """Final review I1: the user states one meat and one vegetable dish. The picker crosses
+    the types of two replace slots (a vegetable dish for the pork dish this meal avoids, a
+    pork dish for the vegetable dish); the counts still hold. Code strips the pork pick, and
+    the stripped answer then breaks the stated count. Code's fallback takes over: the dish
+    that breaks this meal's avoidance still leaves, and the slots match the dishes placed."""
+    env = revise_env
+    braised = make_recipe(env.session, "红烧肉", "meat dish", [L("猪肉", "main")])
+    titles = ("青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
+    first_meal(env, titles, parse={"dishes": 2, "soups": 1, "mode": "shopping"})
+    pepper, cabbage, soup = dish_ids(env, *titles)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "meal_avoid": ["猪肉"],
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}],
+        "counts": {"meat_dishes": 1, "vegetable_dishes": 1},
+    }
+    out = read(
+        env, "今天不吃猪肉，白菜也换掉，还是一荤一素", reading,
+        replies=[pick(slots=[(0, braised.id), (1, beans)])],
+    )
+    [frame] = change_events(env, "frame")
+    assert [(s["replaces"], s["reason"]) for s in frame["frame"]["slots"]] == [
+        (cabbage, "asked"),
+        (pepper, "breaks_rule"),
+    ]
+    assert len(change_events(env, "pick_attempt")) == 2
+    result = ids_of_plan(out["current_plan"])
+    assert pepper not in result and braised.id not in result
+    assert result == [cabbage, soup]
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["recipe_ids"] == result
+    # Every slot record matches the plan: no slot says it placed a dish that is not there.
+    assert all(s["recipe_id"] is None or s["recipe_id"] in result for s in outcome["slots"])
+    reply = out["messages"][-1].content
+    assert "青椒炒肉去掉了" in reply
+    assert "干煸豆角" not in reply
+
+
+def test_a_rule_breaking_dish_left_in_the_result_is_removed_by_the_final_check(
+    revise_env, monkeypatch
+):
+    """Final review I1 backstop: whatever the steps before it did, the change's result never
+    keeps a dish that breaks this meal's avoidance; the reply says it was removed."""
+    from minemydinner.agent import graph as graph_module
+    from minemydinner.agent.picker import Picks
+
+    # A fallback that (wrongly) leaves the rule-breaking dish's slot out of the frame.
+    monkeypatch.setattr(
+        graph_module,
+        "fallback_pick",
+        lambda frame: (frame.model_copy(update={"slots": [], "choices": []}), Picks()),
+    )
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "change", "meal_avoid": ["牛肉"]}
+    out = read(env, "今天不吃牛肉", reading, replies=[AIMessage(content="")])
+    assert ids_of_plan(out["current_plan"]) == [cabbage, soup]
+    assert "土豆炖牛肉去掉了" in out["messages"][-1].content
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["recipe_ids"] == [cabbage, soup]
+    assert [i["recipe_id"] for i in outcome["unfinished"] if i["kind"] == "removed"] == [beef]
+
+
+@pytest.mark.parametrize(
+    "locale, text, said, not_said",
+    [
+        ("zh", "这顿别放牛肉", "去掉了土豆炖牛肉。", "也没找到可以替换的菜"),
+        ("en", "no beef this time", "Removed 土豆炖牛肉.", "nothing could replace it"),
+    ],
+)
+def test_a_rule_breaking_dish_the_reader_drops_is_said_as_removed(
+    revise_env, locale, text, said, not_said
+):
+    """Task 11 fix 4 (development run 4, scenario meal_avoid_beef): the reader both left beef
+    out of this meal and dropped the beef dish. Code follows the reading (the dish leaves, no
+    replacement is searched), and the reply says it was removed, never that no replacement
+    was found."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {
+        "kind": "change",
+        "meal_avoid": ["牛肉"],
+        "remove": [{"id": beef, "mode": "drop", "quote": text}],
+        "reading": "我理解为这顿不要牛肉，土豆炖牛肉就不放了。",
+    }
+    out = read(env, text, reading, replies=[], locale=locale)
+    assert picker_calls(env) == []
+    assert ids_of_plan(out["current_plan"]) == [cabbage, soup]
+    reply = out["messages"][-1].content
+    assert said in reply and not_said not in reply
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["unfinished"] == []
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["next_actions"] == []
+
+
+def test_relax_split_spec_counts_only_stated_sides_and_guards_a_missing_total():
+    """Review fixes 4 and 5."""
+    from minemydinner.agent.change_step import UNFINISHED, relax_split_spec
+
+    adds = [
+        {"dish_type": "meat dish", "count": 1, "name": ""},
+        {"dish_type": "vegetable dish", "count": 2, "name": ""},
+        {"dish_type": "soup", "count": 1, "name": ""},
+    ]
+    recipes = [{"dish_type": "meat dish"}, {"dish_type": "vegetable dish"}, {"dish_type": "soup"}]
+    card = {
+        "spec": {"dishes": 2, "soups": 1},
+        "recipes": recipes,
+        "request": {"counts_stated_now": True, "meat_dishes": 2},
+        UNFINISHED: {"reading": {"add": adds}},
+    }
+    # Only the meat add is on a stated side.
+    assert relax_split_spec(card)["dishes"] == 3
+    # No total on the card: the card's meat and vegetable dishes count.
+    assert relax_split_spec({**card, "spec": {"dishes": None, "soups": 1}})["dishes"] == 3
+    # A turn that stated no count adds nothing.
+    plain = {**card, "request": {"counts_stated_now": False, "meat_dishes": 2}}
+    assert relax_split_spec(plain) == card["spec"]
+
+
+# ---- Task 11, after development run 3 (fix 3) ----
+
+
+def cut_pick(args: str) -> AIMessage:
+    """A picker reply whose PickerAnswer arguments were cut short (DeepSeek, dev runs 1-3)."""
+    return AIMessage(
+        content="",
+        invalid_tool_calls=[{"name": "PickerAnswer", "args": args, "id": "x", "error": "bad"}],
+    )
+
+
+def cut_slots(recipe_id: int, tail: str = ', "wish_result"') -> str:
+    return f'{{"choices": [], "slots": [{{"index": 0, "recipe_id": {recipe_id}}}]{tail}'
+
+
+def test_a_cut_picker_answer_with_closed_slots_is_salvaged_and_applied(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    cut = cut_slots(beans, ', "note": "豆角很下饭。", "wish_result"')
+    out = read(env, "白菜换掉", reading, replies=[cut_pick(cut)])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    assert len(picker_calls(env)) == 1
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["salvaged"] is True and attempt["empty_replies"] == 0
+    assert attempt["problems"] == [] and attempt["answer"]["wish_met"] is None
+    # What came after the slots is not given: no note.
+    assert attempt["answer"]["note"] == ""
+    assert "豆角很下饭" not in out["messages"][-1].content
+
+
+def test_a_salvaged_answer_goes_through_the_checks(revise_env):
+    """A salvaged dish already in the plan is a problem like any other: the picker is asked
+    again with it."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(
+        env, "白菜换掉", reading, replies=[cut_pick(cut_slots(beef)), pick(slots=[(0, beans)])]
+    )
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    first_try, second_try = change_events(env, "pick_attempt")
+    assert first_try["salvaged"] is True
+    assert any("already in the plan" in p for p in first_try["problems"])
+    assert second_try["salvaged"] is False and second_try["problems"] == []
+
+
+def test_a_cut_before_the_slots_closed_is_no_answer(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    cut = f'{{"choices": [], "slots": [{{"index": 0, "recipe_id": {beans}'
+    out = read(env, "白菜换掉", reading, replies=[cut_pick(cut), pick(slots=[(0, beans)])])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["empty_replies"] == 1 and attempt["salvaged"] is False
+
+
+def test_a_salvaged_answer_never_skips_the_wish_only_guard(revise_env):
+    """wish_met is unknown in a salvaged answer: when a slot made only for the wish got a
+    dish, the guard needs it, so the salvaged answer is set aside as no answer (asked again
+    within the budget), never applied as if the wish were met."""
+    env = revise_env
+    first = first_meal(env)
+    cabbage, beans, cucumber = dish_ids(env, "清炒小白菜", "干煸豆角", "凉拌黄瓜")
+    reading = {
+        "kind": "change",
+        "wish": "辣的",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜", "for_wish": True}],
+    }
+    cut = cut_pick(cut_slots(beans))
+    out = read(env, "白菜换个辣的", reading, replies=[cut])
+    # Every reply was set aside: code's fallback keeps the dish.
+    assert out["current_plan"] == first["current_plan"]
+    attempts = change_events(env, "pick_attempt")
+    assert attempts[0]["salvage_set_aside"] is True and attempts[0]["empty_replies"] == 1
+    assert all(a["answer"] is None and a["salvaged"] is False for a in attempts)
+    reply = out["messages"][-1].content
+    assert "这次没能换掉清炒小白菜" in reply and "干煸豆角" not in reply
+    # Fix round 1: nothing was tried, so nothing is said about the wish being unmet.
+    assert "菜谱库里没有完全符合" not in reply
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert "wish_unmet" not in [u["code"] for u in card["unmet"]]
+    # The button still re-runs the wish on that dish.
+    assert [r["id"] for r in card["unfinished"]["reading"]["remove"]] == [cabbage]
+    assert card["next_actions"]
+    # The re-ask after a cut answer says it was cut short.
+    asks = picker_calls(env)
+    assert "cut short" in asks[1][-1].content and "gave no answer" not in asks[1][-1].content
+
+
+def test_codes_fallback_with_a_wish_says_nothing_about_the_wish(revise_env):
+    """Fix round 1: with no usable picker answer for a wish target, the reply says the dish
+    could not be changed this time, never that the library has no dish for the wish."""
+    env = revise_env
+    first = first_meal(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    reading = {"kind": "change", "wish": "辣的", "wish_targets": [cabbage]}
+    out = read(env, "来点辣的", reading, replies=[AIMessage(content="")])
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert "这次没能换掉清炒小白菜，先保留了它，可以再试一次。" in reply
+    assert "菜谱库里没有完全符合" not in reply
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert "wish_unmet" not in [u["code"] for u in card["unmet"]]
+    assert card["unfinished"]["reading"]["wish_targets"] == [cabbage]
+    assert card["next_actions"]
+    # An empty reply (not a cut one) is still asked again with the no-answer message.
+    assert "gave no answer" in picker_calls(env)[1][-1].content
+
+
+def test_a_cut_answer_with_a_closed_wish_result_is_not_set_aside(revise_env):
+    """Fix round 1: only the closing brace is missing, so wish_met is known and the wish-only
+    guard reads it like a full answer (pick_v4 sends it as wish_result)."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "wish": "辣的",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜", "for_wish": True}],
+    }
+    cut = cut_slots(beans, ', "note": "干煸豆角带辣椒。", "wish_result": "yes"')
+    out = read(env, "白菜换个辣的", reading, replies=[cut_pick(cut)])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["salvaged"] is True and attempt["salvage_set_aside"] is False
+    assert attempt["answer"]["wish_met"] is True
+    assert "干煸豆角带辣椒。" in out["messages"][-1].content
+
+
+def test_a_full_answer_after_a_set_aside_one_is_used(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    beans, cucumber = dish_ids(env, "干煸豆角", "凉拌黄瓜")
+    reading = {
+        "kind": "change",
+        "wish": "辣的",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜", "for_wish": True}],
+    }
+    out = read(
+        env, "白菜换个辣的", reading,
+        replies=[cut_pick(cut_slots(beans)), pick(slots=[(0, cucumber)], wish_met=True)],
+    )
+    assert ids_of_plan(out["current_plan"]) == [beef, cucumber, soup]
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["salvage_set_aside"] is True and attempt["empty_replies"] == 1
+
+
+def test_a_salvaged_answer_with_a_wish_but_no_wish_only_slot_is_used(revise_env):
+    """A replace the user asked for (not only for the wish) does not need wish_met: the
+    salvaged dish is placed, and nothing is said about the wish."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "wish": "辣的",
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}],
+    }
+    out = read(env, "白菜换个辣的", reading, replies=[cut_pick(cut_slots(beans))])
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["salvaged"] is True
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert "wish_unmet" not in [u["code"] for u in card["unmet"]]
+
+
+def test_an_add_left_empty_by_no_answer_says_it_could_not_be_added_this_time(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    reading = {"kind": "change", "add": [{"dish_type": "vegetable dish", "count": 1}]}
+    out = read(env, "加个素菜", reading, replies=[AIMessage(content="")])
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert "这次没能加上素菜，可以再试一次。" in reply
+    assert "没找到可以加的" not in reply
+
+
+def test_a_replace_left_empty_by_no_answer_says_it_could_not_be_changed_this_time(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    reading = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
+    out = read(env, "白菜换掉", reading, replies=[AIMessage(content="")])
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert "这次没能换掉清炒小白菜，先保留了它，可以再试一次。" in reply
+    assert "没找到合适的" not in reply
+
+
+# The reader's answer that contradicted its own reading in development run 3: a change
+# reading with a wish that changes nothing is asked again once.
+NOTHING_READING = {
+    "kind": "change",
+    "wish": "水产的",
+    "reading": "我理解为把其中一道菜换成水产类的菜。",
+}
+
+
+def test_a_wish_only_reading_that_changes_nothing_is_asked_again_once(revise_env):
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    second = {**NOTHING_READING, "wish_targets": [cabbage]}
+    env.model.structured["FollowUpReading"] = [NOTHING_READING, second]
+    env.model.replies = [pick(slots=[(0, beans)], wish_met=True)]
+    out = env.graph.invoke(
+        {"messages": [HumanMessage("这顿想吃点水产的")], "locale": "zh"}, env.config
+    )
+    calls = reader_calls(env)
+    assert len(calls) == 2
+    # Fresh messages, then the problem in plain words.
+    assert calls[1][:-1] == calls[0]
+    problem = calls[1][-1].content
+    assert "我理解为把其中一道菜换成水产类的菜。" in problem and "changes no dish" in problem
+    assert ids_of_plan(out["current_plan"]) == [beef, beans, soup]
+    events = latest_record(env).events
+    asks = [e for e in events if e.get("kind") == "model_call" and e["step"] == "read_follow_up"]
+    assert len(asks) == 2
+    [reask] = [e for e in events if e.get("kind") == "reader_reask"]
+    assert "changes no dish" in reask["problem"]
+    assert reask["reading"]["wish_targets"] == []
+    # The reading the turn used is the second one.
+    assert out["reading"]["wish_targets"] == [cabbage]
+
+
+def test_a_second_reading_that_still_changes_nothing_keeps_todays_behaviour(revise_env):
+    env = revise_env
+    first = first_meal(env)
+    env.model.structured["FollowUpReading"] = [NOTHING_READING]
+    out = env.graph.invoke(
+        {"messages": [HumanMessage("这顿想吃点水产的")], "locale": "zh"}, env.config
+    )
+    assert len(reader_calls(env)) == 2
+    assert out["current_plan"] == first["current_plan"]
+    assert "“水产的”" in out["messages"][-1].content
+
+
+def test_the_reader_is_not_asked_again_when_the_reading_changes_something(revise_env):
+    env = revise_env
+    first_meal(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    for reading in (
+        # The which-dish case (Task 7 ruling 12): ambiguous, no wish.
+        {"kind": "change", "ambiguous": True, "reading": "不确定是哪道菜"},
+        # A wish with a change of conditions only, or of this meal's avoidance only.
+        {**NOTHING_READING, "conditions": {"mode": "fridge_only"}},
+        {**NOTHING_READING, "meal_avoid": ["香菜"]},
+        {**NOTHING_READING, "counts": {"dishes": 2}},
+        {**NOTHING_READING, "wish_targets": [cabbage]},
+        {**NOTHING_READING, "add": [{"dish_type": "vegetable dish", "count": 1}]},
+        # Not a change.
+        {"kind": "other", "wish": "水产的"},
+    ):
+        before = len(reader_calls(env))
+        read(env, "这顿想吃点水产的", reading, replies=[pick(slots=[(0, None)])])
+        assert len(reader_calls(env)) == before + 1, reading
+
+
+def test_a_reader_reask_takes_one_call_from_the_pickers_budget(revise_env):
+    """Spec 5.7: with the reader's two calls the turn stays at seven calls or fewer: the
+    picker has five. It only searches here; its first attempt (three calls) leaves two, so
+    neither the re-ask of an empty reply nor a second attempt starts."""
+    env = revise_env
+    first_meal(env)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    env.model.structured["FollowUpReading"] = [
+        NOTHING_READING, {**NOTHING_READING, "wish_targets": [cabbage]}
+    ]
+    env.model.replies = [tool_call("search_recipes", {"query": "鱼"})]
+    env.graph.invoke({"messages": [HumanMessage("这顿想吃点水产的")], "locale": "zh"}, env.config)
+    assert len(reader_calls(env)) == 2
+    assert len(picker_calls(env)) == 3
+    [attempt] = change_events(env, "pick_attempt")
+    assert attempt["empty_replies"] == 0
+
+
+def test_not_done_sentences_in_both_languages():
+    """Task 11 fix 3: an item left unfilled because the picker gave no usable answer says it
+    could not be done this time, never that nothing fits."""
+    from minemydinner.agent.revise_step import unfinished_sentence
+
+    def say(locale, **item):
+        base = {"kind": "unfilled", "recipe_id": None, "dish_type": "", "title": None,
+                "why": "", "for_count": False, "must_use": [], "not_done": True}
+        return unfinished_sentence({**base, **item}, None, [], locale)
+
+    assert say("zh", dish_type="vegetable dish") == "这次没能加上素菜，可以再试一次。"
+    assert say("en", dish_type="vegetable dish") == (
+        "No vegetable dish could be added this time; you can try again."
+    )
+    assert say("zh", recipe_id=7, title="清炒小白菜") == (
+        "这次没能换掉清炒小白菜，先保留了它，可以再试一次。"
+    )
+    assert say("en", recipe_id=7, title="清炒小白菜") == (
+        "清炒小白菜 could not be changed this time, so it stays; you can try again."
+    )
+    assert say("zh", dish_type="meat dish", for_count=True) == (
+        "这次没能加上荤菜，可以再试一次。也没能按你说的数量改，原来的菜都留着。"
+    )
+    assert say("zh", dish_type="vegetable dish", must_use=["豆腐"]) == (
+        "这次没能加上用豆腐做的素菜，可以再试一次。这次没用上豆腐。"
+    )
+    assert say("en", dish_type="vegetable dish", must_use=["tofu"]) == (
+        "No vegetable dish using tofu could be added this time; you can try again. tofu is "
+        "not used this time."
+    )
+    # A must-use choice that made no slot (code's fallback): nothing was replaced.
+    assert say("zh", must_use=["豆腐"]) == "这次没能选出用豆腐做的菜，没用上豆腐，可以再试一次。"
+    assert say("en", must_use=["tofu"]) == (
+        "No dish using tofu could be chosen this time, so tofu is not used; you can try again."
+    )
+    # Without not_done the library wording stays.
+    assert say("zh", dish_type="vegetable dish", not_done=False) == "没找到可以加的素菜。"
+
+
+def test_reading_changes_nothing_is_structural():
+    from minemydinner.agent.change_step import reader_problem, reading_changes_nothing
+    from minemydinner.agent.follow_up import FollowUpReading
+
+    reading = FollowUpReading.model_validate(NOTHING_READING)
+    assert reading_changes_nothing(reading, [])
+    assert not reading_changes_nothing(reading, ["香菜"])
+    with_avoid = FollowUpReading.model_validate({**NOTHING_READING, "meal_avoid": ["香菜"]})
+    assert reading_changes_nothing(with_avoid, ["香菜"])
+    for extra in (
+        {"wish": ""},
+        {"kind": "new_meal"},
+        {"remove": [{"id": 1, "mode": "replace", "quote": "x"}]},
+        {"add": [{"dish_type": "soup"}]},
+        {"wish_targets": [1]},
+        {"counts": {"soups": 1}},
+        {"conditions": {"clear_time_limit": True}},
+        {"conditions": {"prefer_use": ["虾"]}},
+    ):
+        changed = FollowUpReading.model_validate({**NOTHING_READING, **extra})
+        assert not reading_changes_nothing(changed, []), extra
+    assert reader_problem(reading) == (
+        'Your reading says "我理解为把其中一道菜换成水产类的菜。", but it changes no dish: say '
+        "which dish goes (remove) or what is added (add) for the wish. Answer again with the "
+        "whole reading."
+    )
+    plain = FollowUpReading.model_validate({**NOTHING_READING, "reading": ""})
+    assert reader_problem(plain).startswith('Your reading has the wish "水产的", but')

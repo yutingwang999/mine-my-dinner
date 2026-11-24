@@ -261,15 +261,6 @@ export function ChatPage() {
     });
   }
 
-  function chooseRevise(value: "revise" | "plan") {
-    if (pending?.kind !== "revise_or_plan") return;
-    // The history records the choice, as the thread read returns it.
-    const answered: ThreadItem = { type: "question", value: { ...pending, choice: value } };
-    setItems((current) => [...current, answered]);
-    followRef.current = true;
-    void run((id) => resume(id, value, locale), answered);
-  }
-
   function confirmDiners(answer: DinerAnswer) {
     if (pending?.kind !== "diners") return;
     // The history keeps only who was confirmed, as the thread read returns it.
@@ -348,7 +339,6 @@ export function ChatPage() {
             void submit(t("replanMessage"));
           }}
           onChooseStyle={chooseStyle}
-          onChooseRevise={chooseRevise}
           onConfirmDiners={confirmDiners}
           dinerDraft={dinerDraft && dinerDraft.pending === pending ? dinerDraft.draft : undefined}
           onDinerDraft={keepDinerDraft}
@@ -360,7 +350,7 @@ export function ChatPage() {
         />
       </div>
       <div className="chat-bottom">
-        <Composer busy={busy || loading || editing || pending?.kind === "revise_or_plan"} onSend={send} value={draft} onChange={setDraft} textareaRef={inputRef} />
+        <Composer busy={busy || loading || editing} onSend={send} value={draft} onChange={setDraft} textareaRef={inputRef} />
         <div className="chat-tools">
           <RequestStyleSwitch value={style} onChange={changeStyle} />
           <button type="button" className="composer-action" disabled={busy || loading || editing} onClick={newConversation}>
