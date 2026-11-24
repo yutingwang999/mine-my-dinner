@@ -18,7 +18,7 @@ The edited card is the plan card (`build_dishes_card`) plus:
 """
 
 from datetime import datetime, timezone
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -130,9 +130,6 @@ class Keep(BaseModel):
 
 class Restore(BaseModel):
     action: Literal["restore"] = "restore"
-
-
-EditAction = Annotated[Remove | Add | Keep | Restore, Field(discriminator="action")]
 
 
 class EditOutcome(BaseModel):

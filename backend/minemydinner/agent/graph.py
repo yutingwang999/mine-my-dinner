@@ -62,6 +62,7 @@ from minemydinner.agent.change_step import (
     reading_changes_nothing,
     result_spec,
     relax_split_spec,
+    side_adds_left,
     slot_results,
     unfinished_items,
     unfinished_reading,
@@ -153,6 +154,7 @@ from minemydinner.agent.revise_step import (
     unfinished_sentence,
     which_dish_question,
     wish_matched_nothing,
+    wish_targets_capped,
     wish_targets_locked,
     wish_unmet_actions,
     wish_unmet_entries,
@@ -644,19 +646,32 @@ SHORTLIST_HEADER = (
 )
 
 
+def _shortlist_candidate(entry: ShortlistEntry, mains: dict[int, list[str]] | None) -> dict:
+    fields = {name: value for name, value in asdict(entry).items() if name != "dish_type"}
+    if mains is None:
+        return fields
+    out: dict = {}
+    for name, value in fields.items():
+        out[name] = value
+        if name == "title":
+            out["main"] = mains.get(entry.id, [])
+    return out
+
+
 def shortlist_json(
-    entries: dict[str, list[ShortlistEntry]], complete: Collection[str] = ()
+    entries: dict[str, list[ShortlistEntry]],
+    complete: Collection[str] = (),
+    mains: dict[int, list[str]] | None = None,
 ) -> str:
     """The shortlist as compact JSON, in a fixed order: dish types as the shortlist orders
     them, each as {"complete": bool, "candidates": [...]} with entries in rank order and
-    fields in a fixed order (the dish type is the key)."""
+    fields in a fixed order (the dish type is the key). With `mains` (the picker's), each
+    candidate also has "main", its main ingredient lines, right after "title"; the planner
+    passes none and its text is unchanged."""
     data = {
         dish_type: {
             "complete": dish_type in complete,
-            "candidates": [
-                {name: value for name, value in asdict(entry).items() if name != "dish_type"}
-                for entry in items
-            ],
+            "candidates": [_shortlist_candidate(entry, mains) for entry in items],
         }
         for dish_type, items in entries.items()
     }
@@ -780,6 +795,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 # (3b-1 spec 5.2), so "one fewer" is one fewer than the dishes shown. A turn
                 # that stated counts (a failed "再加一道") keeps them.
                 base = on_plan_counts(base, state["current_plan"])
+                if action == "relax_split" and base.get("dishes") is not None:
+                    # Plan 3b-2 change fixes, fix 5: "any mix" keeps the total that turn asked
+                    # for, the plan shown and the typed adds it could not make.
+                    left = side_adds_left(card.get(UNFINISHED), card["request"])
+                    base = {**base, "dishes": base["dishes"] + left}
             card_spec = relax_split_spec(card) if action == "relax_split" else card.get("spec")
             return {
                 **fresh,
@@ -887,7 +907,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         """`read_follow_up` for an older thread's revise turn whose parse already ran (it was
         paused on a question before plan 3b-2): `request` is that parse, so the turn keeps the
         `previous_request` route_intent set for it."""
-        return {**read_follow_up(state), "previous_request": state.get("previous_request")}
+        reading = read_follow_up(state)
+        # The parse the turn already made stays in the buffer ahead of the reader's calls
+        # (final review M1); `read_follow_up` alone starts the buffer fresh.
+        earlier = list(state.get("model_calls") or [])
+        return {
+            **reading,
+            "model_calls": [*earlier, *reading["model_calls"]],
+            "previous_request": state.get("previous_request"),
+        }
 
     def after_reading(state: ChatState) -> str:
         """A change goes straight to the change path, with no parse call (spec 5.1); a people
@@ -1707,6 +1735,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "reader_reasks": sum(
                 1 for e in state.get("model_calls") or [] if e.get("kind") == "reader_reask"
             ),
+            # The model calls of this turn before the reader (the parse of an older paused
+            # thread), also taken from the picker's budget.
+            "earlier_calls": sum(
+                1
+                for e in state.get("model_calls") or []
+                if e.get("kind") == "model_call" and e.get("step") != "read_follow_up"
+            ),
         }
         update = {
             "request": request,
@@ -1777,7 +1812,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             session, deps.client, ctx, wanted, ParsedRequest.model_validate(request), vectors,
             exclude_ids=[*plan_ids, *frame.placed],
         )
-        return f"{SHORTLIST_HEADER}\n{shortlist_json(found.entries, found.complete)}", found
+        shown = [e.id for items in found.entries.values() for e in items]
+        _, mains = dish_facts(session, shown)
+        text = shortlist_json(found.entries, found.complete, mains)
+        return f"{SHORTLIST_HEADER}\n{text}", found
 
     def picker_wish(state: ChatState, change: dict) -> str:
         """The wish the picker reads, in the user's words: the reading's, else the request's
@@ -1908,7 +1946,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # The picker's model calls so far this turn (`PICK_TURN_MODEL_CALLS`). A reader asked
         # again this turn used one of them (spec 5.7: seven calls in all).
         calls_used = 0
-        budget = PICK_TURN_MODEL_CALLS - change.get("reader_reasks", 0)
+        budget = (
+            PICK_TURN_MODEL_CALLS
+            - change.get("reader_reasks", 0)
+            - change.get("earlier_calls", 0)
+        )
 
         def fits() -> bool:
             return calls_used + PICK_MODEL_CALL_LIMIT <= budget
@@ -2244,24 +2286,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         wish_unmet = bool(wish) and outcome["wish_met"] is False
         limit = spec.get("time_limit_min")
         sentences = [unfinished_sentence(i, limit, meal_avoid, locale) for i in items]
-        actions = change_actions(items, spec, wish_unmet, stated=frame.count_ranges)
+        actions = change_actions(items, spec, wish_unmet)
         unmet = change_unmet(items, sentences, limit, locale, wish_unmet)
         unmet_wish_text = change_wish_unmet(wish, locale) if wish_unmet else ""
         # Spec 5.4: a wish that touches no dish of the plan and guides no new dish changes
         # nothing, and the reply says so.
         guided = frame.slots or any(c.mode == "replace" for c in frame.choices)
         targets = list(used.wish_targets)
-        locked_targets = {
-            item.get("wish_target")
-            for item in frame.ignored
-            if item.get("reason") == "locked" and "wish_target" in item
-        }
         nothing_text = ""
-        if wish and targets and set(targets) <= locked_targets:
+        if wish and targets and set(targets) <= set(frame.locked_wish_targets):
             # Every dish the wish touches was added or kept by hand: they stay.
             nothing_text = wish_targets_locked(wish, locale)
         elif wish and not targets and not guided and not frame.placed:
             nothing_text = wish_matched_nothing(wish, locale)
+        # Spec 5.6 (change fixes): wish targets over the cap stay, and the reply says so.
+        capped_text = wish_targets_capped(locale) if frame.capped_wish_targets else ""
         read_text = (
             reading_sentence(shown.reading, locale)
             if shown is not None and shown.ambiguous and shown.reading.strip()
@@ -2353,6 +2392,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     done,
                     read_text,
                     nothing_text,
+                    capped_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=bool(done)),
                     unmet_wish_text,
@@ -2373,6 +2413,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     lead,
                     read_text,
                     nothing_text,
+                    capped_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=False),
                     unmet_wish_text,
@@ -2403,6 +2444,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if not plan_kept:
             update.update(current_plan=card, plan_versions=[*versions, card])
         prepare = deps.client.prepare_text
+        # The record matches the final check: a slot whose dish it removed names no dish.
+        recorded_slots = [
+            s
+            if s["recipe_id"] is None or s["recipe_id"] in result_ids
+            else {**s, "recipe_id": None, "why": "removed by the final rule check"}
+            for s in outcome["slots"]
+        ]
         deps.recorder.add_event(
             state["run_id"],
             {
@@ -2411,7 +2459,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 "plan_kept": plan_kept,
                 "empty_plan": bool(frame.empty_plan or not result_ids),
                 "asks_which_dish": bool(asks_which),
-                "slots": map_strings(outcome["slots"], prepare),
+                "slots": map_strings(recorded_slots, prepare),
                 "wish_met": outcome["wish_met"],
                 "unfinished": map_strings(items, prepare),
             },

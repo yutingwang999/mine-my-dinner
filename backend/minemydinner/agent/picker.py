@@ -4,10 +4,11 @@ picker's answer schema, its input after the system prompt, and the code that che
 against the frame and applies it. Pure code: no model call and no database. The diner rules,
 stock, cookware and the time limit of the new dishes are checked afterwards by `validate_plan`.
 
-Code checks, it does not interpret (spec 5.4, amended 2026-11-23): a replace slot takes a dish
-of any type, so the picker chooses what kind of dish takes a dish's place; code checks an add's
-type, the stated counts (`Frame.count_ranges`), the rules and conditions, and for a named slot
-nothing beyond those (the picker judges which dish the user's words mean).
+Code checks, it does not interpret (spec 5.4, amended 2026-11-23): a replace slot has no dish
+type in code; the picker keeps a replacement's kind (soup for soup, staple for staple, meat or
+vegetable dish for either) unless the user's words or the wish point elsewhere. Code checks an
+add's type, that an untyped add is a meat or vegetable dish, the stated counts
+(`Frame.count_ranges`), the rules and conditions, and for a named slot nothing beyond those (the picker judges which dish the user's words mean).
 
 Slot numbering: the frame's slots are numbered 0, 1, ... in order. A dish the picker chooses in
 a "replace" choice becomes one more slot in that dish's place; these slots are numbered after
@@ -23,7 +24,11 @@ from pydantic import BaseModel, Field, ValidationError
 
 from minemydinner.agent.frame import Choice, Frame, Slot, fold
 from minemydinner.agent.revision import DishFacts
-from minemydinner.planning.composition import count_categories
+from minemydinner.planning.composition import (
+    DISH_TYPE_OF_CATEGORY,
+    SPLIT_CATEGORIES,
+    count_categories,
+)
 from minemydinner.planning.validate import PlanSpec
 
 # A picker answer with problems is retried once with them (spec 5.7).
@@ -340,6 +345,15 @@ def _check_choices(frame: Frame, answer: Picks, problems: list[str]) -> list[lis
     return chosen_all
 
 
+# The two side types: an add of no type is one of them (3b-2 design 5.4).
+_SIDE_TYPES = tuple(DISH_TYPE_OF_CATEGORY[c] for c in SPLIT_CATEGORIES)
+
+
+def _untyped_add(slot: Slot) -> bool:
+    """An add of no type and no name: one more meat or vegetable dish, either kind."""
+    return slot.replaces is None and not slot.dish_type and not slot.named
+
+
 def _check_slots(
     plan_ids: list[int],
     frame: Frame,
@@ -349,8 +363,10 @@ def _check_slots(
     problems: list[str],
 ) -> dict[int, int | None]:
     """The dish of each slot (None: nothing fits), with a problem for a slot without an answer,
-    an unknown dish, an add of a stated type filled with another type, a dish already in the
-    plan, or a dish picked twice. A replace slot and a named slot take any type."""
+    an unknown dish, an add of a stated type filled with another type, an add of no type (no
+    name either) filled with a dish that is no meat or vegetable dish (it counts toward the dish
+    total, 3b-2 design 5.4), a dish already in the plan, or a dish picked twice. A replace slot
+    and a named slot take any type."""
     by_index = _first_by_index(answer.slots, len(slots), "Slot", problems)
     taken = set(plan_ids) | set(frame.placed)
     picked: set[int] = set()
@@ -374,6 +390,8 @@ def _check_slots(
                 f"Slot {index} needs {_article(slot.dish_type)}, but dish {recipe_id} is "
                 f"{_article(found.dish_type)}."
             )
+        elif _untyped_add(slot) and found.dish_type not in _SIDE_TYPES:
+            problems.append(f"Slot {index} must be a meat or vegetable dish.")
         if recipe_id in taken:
             problems.append(f"Slot {index}: dish {recipe_id} is already in the plan.")
         elif recipe_id in picked:
@@ -516,24 +534,32 @@ def conditions_line(spec: PlanSpec) -> str:
 
 def _slot_line(index: int, slot: Slot) -> str:
     """A slot in the picker's input: the dish it replaces (no dish type: the picker chooses the
-    kind) and the user's words for it, or an add's type; a named slot asks for the library
-    dish the user's words mean."""
+    kind) and the user's words for it, or an add's type (an add of no type and no name is a
+    meat or vegetable dish, either kind); a named slot asks for the library dish the user's
+    words mean, by its title or by its main ingredients."""
     if slot.replaces is not None:
         line = f"- Slot {index}: in place of {slot.replaces}"
         if slot.words.strip():
-            line += f'; the user\'s words: "{slot.words.strip()}"'
+            line += f', which goes because of the user\'s words "{slot.words.strip()}"'
+            if not slot.named:
+                line += (
+                    "; choose the new dish from the wish and the meal's rules, "
+                    "not from these words"
+                )
         if slot.for_wish:
             line += ", for the wish"
     elif slot.dish_type:
-        line = f"- Slot {index}: {_article(slot.dish_type)}, added"
+        line = f"- Slot {index}: one more {slot.dish_type} the user asked for"
+    elif slot.named:
+        line = f"- Slot {index}: one more dish the user asked for, of any type"
     else:
-        line = f"- Slot {index}: added"
+        line = f"- Slot {index}: one more meat or vegetable dish the user asked for, either kind"
     if slot.for_wish and slot.replaces is None:
         line += ", for the wish"
     if slot.named:
         line += (
-            f'; the user named "{slot.named}": the library dish these words mean, or 0 '
-            "when none is"
+            f'; the user named "{slot.named}": the library dish these words mean, by its '
+            "title or by its main ingredients, or 0 when none is"
         )
     if slot.must_use:
         line += f"; it must use {', '.join(slot.must_use)}, which no dish uses yet"

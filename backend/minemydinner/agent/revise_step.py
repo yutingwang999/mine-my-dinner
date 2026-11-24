@@ -58,6 +58,12 @@ WISH_TARGETS_LOCKED_EN = (
     "The dishes “{wish}” is about were added or kept by you, so they stay and nothing was "
     "changed for it."
 )
+# Wish targets over the cap (half of the unlocked dishes, rounded up) stay: the cap's effect.
+WISH_TARGETS_CAPPED_ZH = "一次最多为愿望换一半的菜，其余的先留着；还想换的话可以再说。"
+WISH_TARGETS_CAPPED_EN = (
+    "A wish changes at most half of the dishes at a time, so the rest stay; ask again to "
+    "change more."
+)
 # The dishes stay, but the meal's conditions changed (an avoidance taken back, a new time
 # limit no dish breaks): a new version carries them.
 CONDITIONS_ONLY_ZH = "菜不用换，方案已经按新的要求更新。"
@@ -522,6 +528,10 @@ def wish_matched_nothing(wish: str, locale: str) -> str:
 def wish_targets_locked(wish: str, locale: str) -> str:
     template = WISH_TARGETS_LOCKED_ZH if is_zh(locale) else WISH_TARGETS_LOCKED_EN
     return template.format(wish=wish)
+
+
+def wish_targets_capped(locale: str) -> str:
+    return WISH_TARGETS_CAPPED_ZH if is_zh(locale) else WISH_TARGETS_CAPPED_EN
 
 
 def change_wish_unmet(wish: str, locale: str) -> str:

@@ -52,26 +52,29 @@ def needs_picker(frame: Frame) -> bool:
 
 
 def side_adds_left(unfinished: dict | None, request: dict) -> int:
-    """How many meat or vegetable dishes the unfinished typed adds of a card still ask for, on
-    a side whose count the card's turn stated (`request`, the card's request), as
-    `change_actions` offers relax_split only for those."""
-    if not request.get("counts_stated_now"):
-        return 0
-    stated = {c for c in SPLIT_CATEGORIES if request.get(c) is not None}
+    """How many meat or vegetable dishes the unfinished typed adds of a card still ask for
+    (`request`, the card's request). When the card's turn stated counts, only the adds on a
+    side it stated count (a stated total already holds the others); when it stated none, every
+    typed meat or vegetable add counts, as the plan shown does not hold it yet."""
+    if request.get("counts_stated_now"):
+        sides = {c for c in SPLIT_CATEGORIES if request.get(c) is not None}
+    else:
+        sides = set(SPLIT_CATEGORIES)
     data = (unfinished or {}).get("reading") or {}
     return sum(
         add.get("count") or 0
         for add in data.get("add") or []
-        if CATEGORY_OF_DISH_TYPE.get(add.get("dish_type") or "") in stated
+        if CATEGORY_OF_DISH_TYPE.get(add.get("dish_type") or "") in sides
         and not (add.get("name") or "").strip()
     )
 
 
 def relax_split_spec(card: dict) -> dict | None:
     """The spec relax_split ("any mix") works from on a card: the card's own, with the total
-    raised by the meat or vegetable dishes the card's change could not add on a stated side
-    (`side_adds_left`), so the button keeps the total that turn asked for. A spec without a
-    total counts the card's dishes."""
+    raised by the meat or vegetable dishes the card's change could not add (`side_adds_left`),
+    so the button keeps the total that turn asked for. A spec without a total counts the
+    card's dishes. (A turn that stated no count rebases its request on the plan shown, whose
+    total wins; `route_intent` raises that total by the same adds.)"""
     spec = card.get("spec")
     left = side_adds_left(card.get(UNFINISHED), card.get("request") or {})
     if not left or spec is None:
@@ -408,15 +411,13 @@ def unused_must(items: list[dict]) -> set[str]:
     return {fold(n) for item in items for n in item.get("must_use") or []}
 
 
-def change_actions(
-    items: list[dict], spec: dict, wish_unmet: bool, stated: Collection[str] = ()
-) -> list[str]:
+def change_actions(items: list[dict], spec: dict, wish_unmet: bool) -> list[str]:
     """The next actions for the unfinished parts only (spec 5.5), as today's failure reasons
     map them: a dish not in the library offers importing; a dish hidden by the time limit,
     stock or cookware offers dropping the limit, shopping or registering cookware; a slot
     nothing fits (and an unmet wish) offers what an unmet wish does; an added meat or
-    vegetable dish nothing fits, whose side count is `stated` (the count fields this turn
-    states, `Frame.count_ranges`), also offers relax_split, as a short side on a new plan."""
+    vegetable dish nothing fits (a typed add left unfilled, whether or not the turn stated a
+    count) also offers relax_split, as a short side on a new plan."""
     fridge = spec["mode"] == "fridge_only"
     chosen: set[str] = set()
 
@@ -444,7 +445,7 @@ def change_actions(
             chosen.update(wish_unmet_actions(spec))
             category = CATEGORY_OF_DISH_TYPE.get(item.get("dish_type") or "")
             side_add = item.get("recipe_id") is None and category in SPLIT_CATEGORIES
-            if side_add and category in stated:
+            if side_add:
                 chosen.update(next_actions(spec, [], [], short_categories=[category]))
     if wish_unmet:
         chosen.update(wish_unmet_actions(spec))

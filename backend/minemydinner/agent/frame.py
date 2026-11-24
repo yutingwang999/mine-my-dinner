@@ -5,8 +5,8 @@ which bounded choices the picker may make.
 Code checks, it does not interpret (spec 5.4, amended 2026-11-23): whatever needs reading
 language is a model's judgment, and code holds only the invariants. A locked dish goes only
 with a quote that is the user's own words from this message, or because it breaks a rule; a
-replace slot carries no dish type (the picker chooses the kind of dish; stated counts are
-checked on the result); the dishes a wish touches are the reader's `wish_targets`, capped at
+replace slot carries no dish type (the picker keeps the kind unless the user's words or the
+wish point elsewhere; stated counts are checked on the result); the dishes a wish touches are the reader's `wish_targets`, capped at
 half of the unlocked dishes; a named dish is placed by code only when it equals a library
 title, and otherwise the picker finds the dish the words mean; a change that leaves no dish
 is flagged.
@@ -47,8 +47,9 @@ _EXACT_CATEGORIES = ("soups", "staples", "desserts", "snacks")
 
 class Slot(BaseModel):
     """A new dish the picker must choose: in place of `replaces`, or added. A replace slot has
-    no dish type (the picker chooses the kind of dish); an add keeps the type the reading gave
-    it, or none for a named dish or an add of any type."""
+    no dish type (the picker keeps the kind unless the words or the wish point elsewhere); an add
+    keeps the type the reading gave it, or none for a named dish or an untyped add (a meat or
+    vegetable dish, either kind, checked on the picker's answer)."""
 
     kind: Literal["replace", "add"]
     dish_type: str | None = None
@@ -115,7 +116,7 @@ class Frame(BaseModel):
     them). `drops`: plan dishes that leave with no slot (named drops, a lower count, a dish a
     placed named dish replaces). `slots`: new dishes to choose. `placed`: named library dishes
     added directly. `missing`: named dishes not placed. `ignored`: parts of the reading code
-    refused, with the reason, for the record."""
+    refused, with the reason, for the record; code reads the typed fields below instead."""
 
     keep: list[int]
     drops: list[int]
@@ -130,6 +131,10 @@ class Frame(BaseModel):
     # The counts this message (or a button) states, as [low, high] per count field ("dishes",
     # "meat_dishes", "soups", ...): invariants code checks the picker's result against.
     count_ranges: dict[str, list[int]] = Field(default_factory=dict)
+    # The wish targets left out, in the reader's order (also in `ignored`, as the record):
+    # dishes the user added or kept by hand, and dishes over the cap on a wish's changes.
+    locked_wish_targets: list[int] = Field(default_factory=list)
+    capped_wish_targets: list[int] = Field(default_factory=list)
 
 
 def _break_rank(reason: str) -> int:
@@ -364,8 +369,8 @@ class _Builder:
         self.choices.append(Choice(dish_type=dish_type, candidates=pool, up_to=count, mode="drop"))
 
     def untyped_adds(self) -> int:
-        """Add slots of any type (no type, no name): each is one more dish, of a kind the
-        picker chooses."""
+        """Untyped adds (no type, no name): each is one more dish, a meat or vegetable dish of
+        either kind (checked on the picker's answer)."""
         return sum(1 for s in self.slots if s.kind == "add" and not s.dish_type and not s.named)
 
     def add_count(
@@ -503,7 +508,9 @@ def build_frame(
         i: reason for i, reason in breaking.items() if i not in locked or reason in RULE_BREAKS
     }
 
-    # Named removals.
+    # Named removals. A dish replaced only to meet the wish (`for_wish`) counts toward the
+    # wish's cap below; such a removal is itself never capped.
+    wish_removals: list[int] = []
     for item in reading.remove if reading else []:
         if item.id not in in_plan:
             builder.ignored.append({"id": item.id, "reason": "not_in_plan"})
@@ -537,6 +544,9 @@ def build_frame(
                 named=name,
                 for_wish=item.for_wish,
             )
+        if item.for_wish and item.id not in locked and placed in ("placed", "not_found"):
+            # A dish that leaves for the wish (a name hidden by a condition keeps the dish).
+            wish_removals.append(item.id)
 
     # Dishes that break the new request; a dish already handled keeps its one entry.
     for dish_id in builder.plan_ids:
@@ -544,20 +554,26 @@ def build_frame(
             builder.replace(dish_id, breaking[dish_id])
 
     # The dishes the wish touches, as the reader names them: unlocked dishes only, at most
-    # half of them (rounded up), the reader's order deciding which stay. A dish already
-    # changing needs no slot of its own; the wish guides its replacement too.
+    # half of them (rounded up), the reader's order deciding which stay. The reading's
+    # removals for the wish (`wish_removals`) are among them, so they count first. A dish
+    # already changing needs no slot of its own; the wish guides its replacement too. The
+    # targets left out are kept by reason (locked, over the cap) for the reply.
+    locked_targets: list[int] = []
+    capped_targets: list[int] = []
     if reading is not None and reading.wish.strip():
         limit = max_general_changes(len([i for i in builder.plan_ids if i not in locked]))
-        taken = 0
+        taken = len(wish_removals)
         for dish_id in dict.fromkeys(reading.wish_targets):
             if dish_id not in in_plan:
                 builder.ignored.append({"wish_target": dish_id, "reason": "not_in_plan"})
             elif dish_id in locked:
                 builder.ignored.append({"wish_target": dish_id, "reason": "locked"})
+                locked_targets.append(dish_id)
             elif dish_id in builder.handled:
                 continue
             elif taken >= limit:
                 builder.ignored.append({"wish_target": dish_id, "reason": "over_limit"})
+                capped_targets.append(dish_id)
             else:
                 builder.replace(dish_id, "", for_wish=True)
                 taken += 1
@@ -573,8 +589,8 @@ def build_frame(
         elif add.count < 1:
             builder.ignored.append({"add": add.model_dump(), "reason": "bad_count"})
         else:
-            # No type: a dish of any type (spec 5.4: code sets no type the reading did not
-            # give); the picker chooses the kind.
+            # No type: a meat or vegetable dish, either kind (spec 5.4: code sets no type the
+            # reading did not give; the picker's answer is checked).
             builder.add_count(add.dish_type, add.count, for_wish=add.for_wish)
 
     # The counts: from the change list, unless the message (or a button) states them.
@@ -636,4 +652,6 @@ def build_frame(
         ignored=builder.ignored,
         count_drops=builder.count_drops,
         count_ranges=builder.count_ranges,
+        locked_wish_targets=locked_targets,
+        capped_wish_targets=capped_targets,
     )

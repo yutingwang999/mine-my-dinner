@@ -39,7 +39,12 @@ from minemydinner.agent.graph import WISH_UNMET_NOTE_EN, WISH_UNMET_NOTE_ZH
 from minemydinner.agent.labels import LabelTable, labels_scope, load_label_context
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
 from minemydinner.agent.request import ParsedRequest
-from minemydinner.agent.revise_step import WISH_UNMET, open_conflict_ids
+from minemydinner.agent.revise_step import (
+    WISH_TARGETS_CAPPED_EN,
+    WISH_TARGETS_CAPPED_ZH,
+    WISH_UNMET,
+    open_conflict_ids,
+)
 from minemydinner.models import Diner, Rating, Recipe, RecipeCookware, RecipeImage, RecipeIngredient
 from minemydinner.planning.composition import CATEGORY_OF_DISH_TYPE, SPLIT_CATEGORIES
 from minemydinner.planning.context import load_planning_context
@@ -534,6 +539,8 @@ def _template_pattern(template: str) -> re.Pattern[str]:
 
 
 _WISH_UNMET_NOTES = tuple(_template_pattern(t) for t in (WISH_UNMET_NOTE_ZH, WISH_UNMET_NOTE_EN))
+# A change that left some wish targets over the cap says so in a fixed sentence (no wish in it).
+_WISH_CAPPED_NOTES = (WISH_TARGETS_CAPPED_ZH, WISH_TARGETS_CAPPED_EN)
 
 
 def wish_unmet_said(card: dict | None, reply: str, turn: str) -> bool:
@@ -544,6 +551,8 @@ def wish_unmet_said(card: dict | None, reply: str, turn: str) -> bool:
     - a `wish_unmet` entry in the card's unmet (a new plan whose planner said the wish was
       not met, or a revision that found nothing that fits);
     - the new-plan wish-unmet sentence (WISH_UNMET_NOTE_ZH / _EN, any wish) in the reply;
+    - the change's capped sentence (WISH_TARGETS_CAPPED_ZH / _EN: some dishes the wish touches
+      were kept over the cap) in the reply;
     - a revision whose card kept the plan as it was (`plan_kept`) and has at least one unmet
       entry: a failed revision (every attempt failed a check) or a nothing-fits revision.
       Its reply says the change could not be made and the card says why, so the wish
@@ -555,6 +564,8 @@ def wish_unmet_said(card: dict | None, reply: str, turn: str) -> bool:
     if any(entry.get("code") == WISH_UNMET for entry in card.get("unmet") or []):
         return True
     if any(pattern.search(reply or "") for pattern in _WISH_UNMET_NOTES):
+        return True
+    if any(sentence in (reply or "") for sentence in _WISH_CAPPED_NOTES):
         return True
     return turn == "revision" and bool(card.get("plan_kept")) and bool(card.get("unmet"))
 

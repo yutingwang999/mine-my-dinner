@@ -22,8 +22,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ANSWER_TOOL = "PickerAnswer"
-API_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-flash"
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+REPLAY_TASK = "planning_eval"
+
+
+def replay_model(config=None) -> tuple[str, str]:
+    """The API URL and model id the replay uses: the primary model of the `planning_eval`
+    task in the model config. Only DeepSeek's endpoint is known here."""
+    from minemydinner.llm.config import load_llm_config
+
+    config = config or load_llm_config()
+    model = config.models[config.tasks[REPLAY_TASK].primary]
+    if model.provider != "deepseek":
+        raise SystemExit(
+            f"The replay calls DeepSeek, but task {REPLAY_TASK} runs on {model.provider} "
+            f"({model.model}); set a DeepSeek model as its primary first."
+        )
+    return DEEPSEEK_URL, model.model
 
 
 @dataclass
@@ -124,13 +139,14 @@ def replay(run_folders: list[Path], repeat: int, out: Path, rename: str | None) 
         answer_tool, system = renamed(answer_tool, system, old, new)
         label = f"{old}->{new}"
     tools = [convert_to_openai_tool(t) for t in PICK_TOOLS] + [answer_tool]
+    api_url, model_id = replay_model()
     key = Settings().deepseek_api_key.get_secret_value()
     out.mkdir(parents=True, exist_ok=True)
     total = answers = cut = searches = 0
     lines = [f"{len(inputs)} distinct inputs, {repeat} times each, schema: {label}"]
     for n, (human, scenario) in enumerate(inputs.items()):
         body = {
-            "model": MODEL,
+            "model": model_id,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": human}],
             "tools": tools,
             "tool_choice": "required",
@@ -138,7 +154,7 @@ def replay(run_folders: list[Path], repeat: int, out: Path, rename: str | None) 
         }
         for i in range(repeat):
             response = httpx.post(
-                API_URL, json=body, headers={"Authorization": f"Bearer {key}"}, timeout=60
+                api_url, json=body, headers={"Authorization": f"Bearer {key}"}, timeout=60
             )
             (out / f"{n:02d}_{i}.json").write_text(response.text, encoding="utf-8")
             total += 1

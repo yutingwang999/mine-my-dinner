@@ -6,7 +6,7 @@ This document follows one user message through the planning conversation: which 
 
 ## How to read this document
 
-The document describes the code **as of Phase 1 plan 3b-2 (one)**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v4` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
+The document describes the code **as of the Phase 1 plan 3b-2 change fixes**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v6` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
 
 Three labels separate what the code does now from what it did before:
 
@@ -154,7 +154,7 @@ flowchart TD
     RR["A change reading<br/>(or a button: the card's unfinished parts, button_reading)"] --> RA["request_after (code only)<br/>the plan's request + stated counts / conditions<br/>+ the whole meal_avoid + a stated wish"]
     RA --> BC["build_change (code only)<br/>revision_spec: the counts are the current plan's own<br/>validate_plan finds the dishes that break the new request (breaking)<br/>build_frame builds the frame; a frame event<br/>a new planning_runs record (from_version)"]
     BC -->|"the stated counts contradict each other"| UN["unclear: did not understand"]
-    BC -->|"the frame has a slot or a choice,<br/>and some dish is left"| PK["pick_dishes<br/>(model call 2+: pick_v4,<br/>search tool only, at most 2 searches and 3 model calls per attempt,<br/>answers PickerAnswer)"]
+    BC -->|"the frame has a slot or a choice,<br/>and some dish is left"| PK["pick_dishes<br/>(model call 2+: pick_v6,<br/>search tool only, at most 2 searches and 3 model calls per attempt,<br/>answers PickerAnswer)"]
     BC -->|"nothing to choose, or no dish would be left"| PC
     PK -->|"no answer, or an answer cut short<br/>(a cut answer whose slots closed is salvaged)"| RE["asked again at once<br/>(uses no attempt; bounded by the turn budget)"] --> PK
     PK --> CK{"check_pick (code only)<br/>1. apply_picks: against the frame<br/>2. validate_plan: H1/H2/H3/H6 of the new dishes<br/>3. must-use choices and adds use their ingredient (must_use_misses)"}
@@ -228,8 +228,8 @@ In order. The last column names the **[Earlier]** after-the-fact check of the 3b
 |---|---|---|
 | 1. Named removals | `drop` removes the dish; `replace` makes a replace slot with no dish type; a named replacement that equals a library title and is usable is placed directly, any other name makes a named slot for the picker. A locked dish needs a quote, and the quote need only be in this message (whether it points at the dish is the reader's judgement), otherwise it is refused (`locked_without_quote`) | R1, R2, R3 |
 | 2. Dishes that break the new request | A diner rule, this meal's avoidance, stock in fridge-only mode, cookware, the time limit: each becomes a replace slot with no dish type. A locked dish is replaced only for a rule or the avoidance; stock, cookware and time never move a locked dish. A dish the reading itself drops gets no slot and just goes | "A dish with a red conflict or breaking the one-meal avoidance must be replaced" |
-| 3. The wish's targets | Each of the reader's `wish_targets` becomes a replace slot for the wish, unlocked dishes only, at most half of them (rounded up, at least 1), in the reader's order; a locked target, an id not in the plan and one over the limit go to `ignored`. A wish that touches no dish and guides no new dish changes nothing, and the reply says so | R4 |
-| 4. Adds | A named dish: placed when it equals a library title and is usable, recorded missing when a hard condition hides it (over the time limit, breaks a rule); any other name makes a named add slot the picker searches for, and only when it finds nothing is the dish said to be not in the library. A typed add: one add slot per dish. An add with no type ("再添两道"): one slot of any type per dish (it counts toward a stated total, not toward either side) | R8 |
+| 3. The wish's targets | Each of the reader's `wish_targets` becomes a replace slot for the wish, unlocked dishes only, at most half of them (rounded up, at least 1), in the reader's order; a removal the reader marked `for_wish` (a dish replaced only for the wish) counts toward that limit first and is itself never capped; a locked target, an id not in the plan and one over the limit go to `ignored`, and the locked and over-the-limit ones also to `locked_wish_targets` and `capped_wish_targets`. A wish that touches no dish and guides no new dish changes nothing, and the reply says so; when every target is locked the reply says they stay, and when some targets are over the limit it says once that a wish changes at most half of the dishes at a time and the user can ask again (it states the cap's effect, it does not judge the wish) | R4 |
+| 4. Adds | A named dish: placed when it equals a library title and is usable, recorded missing when a hard condition hides it (over the time limit, breaks a rule); any other name makes a named add slot the picker searches for, and only when it finds nothing is the dish said to be not in the library. A typed add: one add slot per dish. An add with no type ("再添两道"): one slot per dish, a meat or a vegetable dish the picker chooses (it counts toward a stated total, not toward either side; code rejects any other type) | R8 |
 | 5. Counts | No stated count: the change list sets them (a replace slot counts as its dish's type). Stated counts: only the stated fields bind; they are recorded in `count_ranges` and checked on the picker's result; above the plan code adds slots, below it drops first new dishes not yet chosen, then unlocked dishes (a "drop exactly N" choice for the picker when there are more candidates than needed) | R7, `attempt_spec` |
 | 6. A new must-use ingredient no dish uses | The picker replaces 1 of the unlocked dishes, the choice naming the ingredient; an add slot carries it instead when there is one (the first add for a stated count, else the first add) | — |
 | 7. **[Compatibility]** An old card's wish | A card saved before cards kept their unfinished parts has only its wish: its button gives the picker a "replace 1 to N of these unlocked dishes" choice (N at most half) | — |
@@ -240,7 +240,7 @@ Finding a named dish (`lookup_named`): only a title equal to the name (case and 
 ### What the picker sees
 
 One user message:
-- The shortlist: an add gets its own dish type; a replace slot, a replace choice and an add of any type take any type, so they get the replaced dishes' types plus meat and vegetable dishes. It is built from the new request, and the plan's dishes and the dishes placed by name are left out (the picker may not choose them). With only a drop choice: "Shortlist: none given...".
+- The shortlist: an add gets its own dish type; a replace slot, a replace choice and an add of any type take any type, so they get the replaced dishes' types plus meat and vegetable dishes. Each candidate also lists its main ingredients (`main`, right after `title`; the planner's shortlist has none). It is built from the new request, and the plan's dishes and the dishes placed by name are left out (the picker may not choose them). With only a drop choice: "Shortlist: none given...".
 - `Current plan:` with its marks (computed against the new avoidance).
 - `Diner and meal rules:` the diners' anonymous rules, plus "This meal only, not a diner's rule: leave out ...".
 - `Meal conditions:` one line with the mode, the time limit and the must-use ingredients (on every call).
@@ -248,16 +248,16 @@ One user message:
 - `The user's wish:` the reading's wish. On a button turn it is the wish of the structured reading kept on the offering card, never that turn's words, which could contradict the button. **[Compatibility]** Only an old card saved before cards kept the reading adds "the user's earlier message: ...".
 - `Already decided:` dishes leaving, dishes placed by name.
 - `Choices (which current dishes go):` one line each (drop exactly N / replace 1 to N; a must-use choice says "the new dish must use ...").
-- `Slots (new dishes to choose):` one line each (a replace slot names its dish, with the user's words and "for the wish" when it is; a typed add gives its type, an add of any type or a named add says "added"; a named slot gives the user's name and "or 0 when none is"; an add carrying a must-use ingredient says "it must use ...").
+- `Slots (new dishes to choose):` one line each (a replace slot names its dish and says the user's words are why it goes, not a guide to its replacement (a named slot keeps the name instead), with "for the wish" when it is; an add says "one more <type> the user asked for", "one more meat or vegetable dish the user asked for, either kind" for an add with no type, or "one more dish ..., of any type" for a named add; a named slot gives the user's name, asks for the library dish these words mean "by its title or by its main ingredients", and "or 0 when none is"; an add carrying a must-use ingredient says "it must use ...").
 - `Reply locale:`.
 
 It never sees the conversation, the reading, or the rest of the request summary (unstated counts, prefer use, all use).
 
-The retry message: `Your previous answer had these problems. Answer again with each one fixed:` and one line per problem (a choice answered wrongly, a typed add of the wrong type, a stated count broken, a dish already in the plan, a new dish that breaks a rule / misses stock / misses cookware / is over time, a dish chosen for a must-use ingredient that does not use it).
+The retry message: `Your previous answer had these problems. Answer again with each one fixed:` and one line per problem (a choice answered wrongly, a typed add of the wrong type, an add with no type filled with a dish that is no meat or vegetable dish ("Slot <n> must be a meat or vegetable dish."), a stated count broken, a dish already in the plan, a new dish that breaks a rule / misses stock / misses cookware / is over time, a dish chosen for a must-use ingredient that does not use it).
 
-Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
+Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again and less the model calls an older paused thread made before the reader in the same turn (`earlier_calls`; compatibility with threads paused before plan 3b-2)); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
 
-### The picker's answer (`PickerAnswer`, `pick_v4`)
+### The picker's answer (`PickerAnswer`, `pick_v6`)
 
 No nullable field, in this order:
 
@@ -266,7 +266,7 @@ No nullable field, in this order:
 | `choices` | The ids chosen per choice (exactly N for a drop choice; 1 to N for a replace choice, each chosen dish getting a slot for its replacement after the listed ones) |
 | `slots` | A recipe id per slot, 0 when nothing fits, with a short reason |
 | `note` | One or two sentences, in the reply locale, on why the new dishes fit |
-| `wish_result` | `"yes"` / `"no"` / `"no_wish"`: whether the new dishes meet the wish; `"no_wish"` when there is none |
+| `wish_result` | `"yes"` / `"no"` / `"no_wish"`: whether the new dishes chosen meet the wish (since `pick_v5`, "yes" even when not every dish the wish touches could change; "no" when the dishes chosen for the wish do not meet it or nothing could be chosen for it); `"no_wish"` when there is none |
 
 Code converts it at the boundary (`PickerAnswer.picks()`): 0 becomes None, and `wish_result` becomes the internal `wish_met` (true / false / None), which the records and the reply use. Why: DeepSeek cut some answers right after the key of a nullable field (server-side, HTTP 200); with no nullable field and this order, no answer was cut in the latest runs. An answer cut after its `choices` and `slots` closed is salvaged (`salvaged_picks`; `salvaged` true on the event) and checked as usual; when its `wish_met` is unknown but it chose a dish for a slot made only for the wish, it is set aside as no answer and asked again.
 
@@ -293,7 +293,8 @@ Known gap (in `docs/phase-1-carryover.md`): when only this final check removes a
 - An add made for a stated count that finds nothing: the drops made with it are withheld.
 - A named dish not in the library (the picker answered 0), or hidden by the time limit or another condition: not added, and the reply gives the reason (over time says how long it takes).
 - A new must-use ingredient no dish uses: the original dish stays (or the add is not made); only when the result really misses it does the reply say so once ("没找到用豆腐做的菜来换红烧茄子，这次没用上豆腐，红烧茄子先留着。"). The name leaves the new version's spec and `plan_request` (so the card shows no second H7), but this turn's `request` keeps it, so a button tries again.
-- The reply lists what could not be done, and the card offers next actions for those parts only (import recipes, no time limit, allow shopping, ...). A typed meat or vegetable add left unfilled, when the turn stated that side's count, also offers "any mix": pressed, it keeps the total that turn asked for and re-runs those adds as dishes of any type. The card's `unfinished` keeps the parts not done and this turn's structured reading; a button on that card re-runs only those parts.
+- The reply lists what could not be done, and the card offers next actions for those parts only (import recipes, no time limit, allow shopping, ...). A typed meat or vegetable add left unfilled also offers "any mix", whether or not the turn stated a count: pressed, it keeps the total that turn asked for and re-runs those adds as dishes of any type. When the turn stated no count, the total is the plan shown plus the typed meat and vegetable adds it could not make; when it stated counts, the stated total plus the adds on a stated side (`side_adds_left`). The card's `unfinished` keeps the parts not done and this turn's structured reading; a button on that card re-runs only those parts.
+- Wish targets over the limit (half of the unlocked dishes, rounded up) stay, and the reply says so once, after the change sentences and before the picker's note: "一次最多为愿望换一半的菜，其余的先留着；还想换的话可以再说。" ("A wish changes at most half of the dishes at a time, so the rest stay; ask again to change more.").
 - Nothing could be done: the plan stays (`plan_kept`).
 
 ### Counts after a change (`revision_spec` + the frame)
