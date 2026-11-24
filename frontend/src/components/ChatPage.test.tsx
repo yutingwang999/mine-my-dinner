@@ -484,6 +484,34 @@ describe("ChatPage", () => {
     expect(texts[2]).toMatch(/yes/);
   });
 
+  it("shows an answered choice card of an older thread as one history line", async () => {
+    // Threads saved by plans 3b-1 and 3b-1b recorded the "change or plan anew" card.
+    window.localStorage.setItem(THREAD_KEY, "t4");
+    setup({
+      "GET /api/chat/threads/t4": () => ({
+        items: [
+          { type: "user", text: "spicier" },
+          { type: "question", value: { kind: "revise_or_plan", message: "spicier", choice: "revise" } },
+          { type: "question", value: { kind: "revise_or_plan", message: "fish", choice: null } },
+          { type: "question", value: { kind: "brand_new_kind" } },
+          // A question value without fields renders nothing rather than throwing.
+          { type: "question", value: { kind: "question" } },
+          { type: "user", text: "thanks" },
+        ],
+        messages: [],
+        current_plan: null,
+        pending: null,
+      }),
+    });
+    await screen.findByText("You chose: Change this plan");
+    const texts = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(texts).toHaveLength(4);
+    expect(texts[0]).toMatch(/spicier/);
+    expect(texts[1]).toMatch(/You chose: Change this plan/);
+    expect(texts[2]).toMatch(/Skipped/);
+    expect(texts[3]).toMatch(/thanks/);
+  });
+
   it("reverts the switch when a request-style choice fails", async () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({

@@ -470,6 +470,12 @@
       "skip": "Skip",
       "switchLabel": "Ask me first when details are missing"
     },
+    "reviseOrPlan": {
+      "revise": "Change this plan",
+      "plan": "Plan a new meal",
+      "chose": "You chose: {choice}",
+      "skipped": "Skipped"
+    },
     "diners": {
       "title": "Who is eating?",
       "totalBefore": "",

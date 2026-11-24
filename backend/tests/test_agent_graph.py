@@ -4829,6 +4829,72 @@ def test_a_rule_breaking_dish_removed_by_codes_fallback_says_no_replacement_was_
     assert "也没找到可以替换的菜" not in reply
 
 
+def test_a_rule_breaking_dish_still_leaves_when_codes_strip_breaks_a_stated_count(revise_env):
+    """Final review I1: the user states one meat and one vegetable dish. The picker crosses
+    the types of two replace slots (a vegetable dish for the pork dish this meal avoids, a
+    pork dish for the vegetable dish); the counts still hold. Code strips the pork pick, and
+    the stripped answer then breaks the stated count. Code's fallback takes over: the dish
+    that breaks this meal's avoidance still leaves, and the slots match the dishes placed."""
+    env = revise_env
+    braised = make_recipe(env.session, "红烧肉", "meat dish", [L("猪肉", "main")])
+    titles = ("青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
+    first_meal(env, titles, parse={"dishes": 2, "soups": 1, "mode": "shopping"})
+    pepper, cabbage, soup = dish_ids(env, *titles)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "meal_avoid": ["猪肉"],
+        "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}],
+        "counts": {"meat_dishes": 1, "vegetable_dishes": 1},
+    }
+    out = read(
+        env, "今天不吃猪肉，白菜也换掉，还是一荤一素", reading,
+        replies=[pick(slots=[(0, braised.id), (1, beans)])],
+    )
+    [frame] = change_events(env, "frame")
+    assert [(s["replaces"], s["reason"]) for s in frame["frame"]["slots"]] == [
+        (cabbage, "asked"),
+        (pepper, "breaks_rule"),
+    ]
+    assert len(change_events(env, "pick_attempt")) == 2
+    result = ids_of_plan(out["current_plan"])
+    assert pepper not in result and braised.id not in result
+    assert result == [cabbage, soup]
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["recipe_ids"] == result
+    # Every slot record matches the plan: no slot says it placed a dish that is not there.
+    assert all(s["recipe_id"] is None or s["recipe_id"] in result for s in outcome["slots"])
+    reply = out["messages"][-1].content
+    assert "青椒炒肉去掉了" in reply
+    assert "干煸豆角" not in reply
+
+
+def test_a_rule_breaking_dish_left_in_the_result_is_removed_by_the_final_check(
+    revise_env, monkeypatch
+):
+    """Final review I1 backstop: whatever the steps before it did, the change's result never
+    keeps a dish that breaks this meal's avoidance; the reply says it was removed."""
+    from minemydinner.agent import graph as graph_module
+    from minemydinner.agent.picker import Picks
+
+    # A fallback that (wrongly) leaves the rule-breaking dish's slot out of the frame.
+    monkeypatch.setattr(
+        graph_module,
+        "fallback_pick",
+        lambda frame: (frame.model_copy(update={"slots": [], "choices": []}), Picks()),
+    )
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "change", "meal_avoid": ["牛肉"]}
+    out = read(env, "今天不吃牛肉", reading, replies=[AIMessage(content="")])
+    assert ids_of_plan(out["current_plan"]) == [cabbage, soup]
+    assert "土豆炖牛肉去掉了" in out["messages"][-1].content
+    [outcome] = change_events(env, "change_outcome")
+    assert outcome["recipe_ids"] == [cabbage, soup]
+    assert [i["recipe_id"] for i in outcome["unfinished"] if i["kind"] == "removed"] == [beef]
+
+
 @pytest.mark.parametrize(
     "locale, text, said, not_said",
     [

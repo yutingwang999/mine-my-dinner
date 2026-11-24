@@ -470,6 +470,12 @@
       "skip": "跳过",
       "switchLabel": "信息不全时先问我"
     },
+    "reviseOrPlan": {
+      "revise": "在这份方案上改",
+      "plan": "重新规划一顿",
+      "chose": "你选择了：{choice}",
+      "skipped": "已跳过"
+    },
     "diners": {
       "title": "这顿谁吃？",
       "totalBefore": "一共",

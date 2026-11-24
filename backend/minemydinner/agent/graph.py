@@ -2058,6 +2058,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 chosen = [s.recipe_id for s in answer.slots if s.recipe_id is not None]
                 facts, _ = dish_facts(session, [*ids, *frame.placed, *chosen])
             outcome = apply_picks(ids, used_frame, answer, facts)
+            if outcome.problems:
+                # Code's changes to the answer broke a stated count (final review I1: two
+                # crossed-type picks, one of them left out): code's fallback instead, so a
+                # dish that breaks a rule still leaves and no slot claims a dish not placed.
+                used_frame, answer = fallback_pick(frame)
+                hidden = {}
+                picker_nulls = set()
+                wish_unmet_slots = set()
+                fell_back = True
+                own = False
+                outcome = apply_picks(ids, used_frame, answer, facts)
         # Only this turn's wish (on a button, the offering turn's) is ever reported unmet.
         has_wish = bool((change["reading"].get("wish") or "").strip())
         slots = slot_results(used_frame, answer)
@@ -2168,6 +2179,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             done = apply_picks(ids, frame, Picks(), {})
             outcome = {"recipe_ids": done.recipe_ids, "slots": [], "wish_met": None, "note": ""}
         result_ids = outcome["recipe_ids"]
+        if not frame.empty_plan:
+            # Backstop (final review I1): a dish that breaks a diner rule or this meal's
+            # avoidance never stays (spec 5.5); the reply says it was removed (below).
+            ruled = {i for i in result_ids if breaking.get(i) in RULE_BREAKS}
+            if ruled:
+                result_ids = [i for i in result_ids if i not in ruled]
+                outcome = {**outcome, "recipe_ids": result_ids}
         spec = state["spec"]
         meal_avoid = list(state["constraints"].get("meal_avoid") or [])
         with deps.session_factory() as session:
@@ -2192,7 +2210,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             not_done=bool(outcome.get("not_done")),
         )
         said = {i["recipe_id"] for i in items if i["kind"] == "removed"}
-        paired = {s["replaces"] for s in outcome["slots"] if s["recipe_id"] is not None}
+        paired = {
+            s["replaces"] for s in outcome["slots"]
+            if s["recipe_id"] is not None and s["recipe_id"] in result_ids
+        }
         named_gone = {
             r["id"] for r in change["reading"].get("remove") or []
             if change["named"].get(r.get("with_name") or "") in result_ids

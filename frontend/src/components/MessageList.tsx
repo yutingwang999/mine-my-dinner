@@ -42,19 +42,34 @@ type Props = {
   onEditing?: (saving: boolean) => void;
 };
 
-/** The assistant's words for a question: the hint that used to sit above the input. */
+/** The assistant's words for a question: the hint that used to sit above the input. A value
+ * without fields (a question saved in another shape) has no words, never an error. */
 function useQuestionText() {
   const t = useTranslations("chat");
   const format = useFormatter();
-  return (value: Extract<Pending, { kind: "question" }>): string =>
-    value.problem && t.has(`problem.${value.problem}`)
-      ? t(`problem.${value.problem}`)
-      : t("question.hint", {
-          fields: format.list(
-            value.fields.map((field) => (t.has(`question.${field}`) ? t(`question.${field}`) : field)),
-            { type: "disjunction" },
-          ),
-        });
+  return (value: Extract<Pending, { kind: "question" }>): string => {
+    if (value.problem && t.has(`problem.${value.problem}`)) return t(`problem.${value.problem}`);
+    const fields: unknown = (value as { fields?: unknown }).fields;
+    if (!Array.isArray(fields) || fields.length === 0) return "";
+    return t("question.hint", {
+      fields: format.list(
+        fields.map((field) => {
+          const name = String(field);
+          return t.has(`question.${name}`) ? t(`question.${name}`) : name;
+        }),
+        { type: "disjunction" },
+      ),
+    });
+  };
+}
+
+/** The history line of an answered choice card from plans 3b-1 and 3b-1b (no longer asked). */
+function useReviseOrPlanText() {
+  const t = useTranslations("chat.reviseOrPlan");
+  return (value: Extract<AskedQuestion, { kind: "revise_or_plan" }>): string =>
+    value.choice === "revise" || value.choice === "plan"
+      ? t("chose", { choice: t(value.choice) })
+      : t("skipped");
 }
 
 /** The history line of an answered diner card: who was confirmed (the user as "me"). */
@@ -95,6 +110,23 @@ export function MessageList({
   const errorText = useErrorText();
   const questionText = useQuestionText();
   const dinersText = useDinersText();
+  const reviseOrPlanText = useReviseOrPlanText();
+
+  /** A recorded question's history line; "" for a kind this client does not know. */
+  const askedText = (value: AskedQuestion): string => {
+    switch (value.kind) {
+      case "request_style":
+        return tStyle("title");
+      case "diners":
+        return dinersText(value);
+      case "revise_or_plan":
+        return reviseOrPlanText(value);
+      case "question":
+        return questionText(value);
+      default:
+        return "";
+    }
+  };
 
   // The newest plan stays actionable until a newer one replaces it (design 5.1).
   let newestPlan = -1;
@@ -115,16 +147,12 @@ export function MessageList({
             );
           }
           if (item.type === "question") {
+            const text = askedText(item.value);
+            if (!text) return null;
             return (
               <li key={index} className="chat-message chat-assistant">
                 <strong className="sr-only">{t("assistant")}</strong>
-                <p>
-                  {item.value.kind === "request_style"
-                    ? tStyle("title")
-                    : item.value.kind === "diners"
-                      ? dinersText(item.value)
-                      : questionText(item.value)}
-                </p>
+                <p>{text}</p>
               </li>
             );
           }

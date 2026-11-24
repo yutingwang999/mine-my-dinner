@@ -560,5 +560,5 @@ Run 1's three "empty" picker replies were cut answers recorded before `invalid_t
 - **Largest call:** about 6,780 tokens (round 10: about 6,900).
 - **Decision:**
   - Taken (user-approved, 2026-11-24): the expectation changes and the runner fix above.
-  - Pending (user): what to do with the picker-input, picker-judgement and code causes (`meal_avoid_covers_hand_added`, `swap_for_a_daikon_dish`, `general_lighter_or_added`, `allow_shopping_button_after_add_one`, `any_mix_button_after_one_more_meat`, `all_four_spicy`, `any_mix_typed`). They are in `docs/phase-1-carryover.md`.
+  - Taken (user, 2026-11-24): the picker-input, picker-judgement and code causes are recorded now and fixed in a small plan before plan two (`meal_avoid_covers_hand_added`, `swap_for_a_daikon_dish`, `general_lighter_or_added`, `allow_shopping_button_after_add_one`, `any_mix_button_after_one_more_meat`, `all_four_spicy`, `any_mix_typed`, the held-out one a record only). They are in `docs/phase-1-carryover.md`.
 - **Results of record:** this round ran every set on the final prompt versions, so its runs replace round 10's as the results of record.

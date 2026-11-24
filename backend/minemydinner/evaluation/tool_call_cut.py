@@ -1,4 +1,5 @@
-"""Find and replay the picker answers DeepSeek cuts short (docs/investigations/2026-11-24-...).
+"""Find and replay the picker answers DeepSeek cuts short (docs/phase-1-carryover.md, the
+entry "DeepSeek cuts the picker's tool-call arguments").
 
 DeepSeek sometimes returns a `PickerAnswer` tool call whose arguments stop right after one
 key, with HTTP 200 and `finish_reason: "tool_calls"`. This module counts those answers in
