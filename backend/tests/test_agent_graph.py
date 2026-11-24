@@ -4567,6 +4567,62 @@ def test_a_wish_whose_targets_are_all_locked_says_they_stay(revise_env):
     assert frame["frame"]["ignored"] == [{"wish_target": pepper, "reason": "locked"}]
 
 
+def _four_unlocked(env: ReviseEnv) -> list[int]:
+    """A meal of four unlocked dishes: two meat dishes, a vegetable dish and a soup."""
+    titles = (*THREE, "紫菜蛋花汤")
+    first_meal(env, titles, parse={"dishes": 3, "soups": 1, "mode": "shopping"})
+    return dish_ids(env, *titles)
+
+
+def test_capped_wish_targets_are_said(revise_env):
+    """Plan 3b-2 change fixes, fix 6: wish targets over the cap (half of the unlocked dishes)
+    stay, and the reply says so with one fixed sentence."""
+    from minemydinner.agent.revise_step import wish_targets_capped
+
+    env = revise_env
+    targets = _four_unlocked(env)
+    beans, cucumber = dish_ids(env, "干煸豆角", "凉拌黄瓜")
+    reading = {"kind": "change", "wish": "辣一些", "wish_targets": targets}
+    out = read(
+        env, "都辣一些", reading,
+        replies=[pick(slots=[(0, beans), (1, cucumber)], wish_met=True)],
+    )
+    text = picker_input(env)
+    assert "- Slot 1:" in text and "- Slot 2:" not in text
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["capped_wish_targets"] == targets[2:]
+    reply = out["messages"][-1].content
+    assert reply.count(wish_targets_capped("zh")) == 1
+    assert wish_targets_capped("en") not in reply
+
+
+def test_capped_and_locked_and_unmet_wish_sentences_together(revise_env):
+    """Fix 6 with M4: one locked target and four unlocked ones, the wish not met: the capped
+    sentence once, no "every target locked" sentence, and the unmet-wish sentence."""
+    from minemydinner.agent.revise_step import (
+        WISH_TARGETS_LOCKED_ZH,
+        change_wish_unmet,
+        wish_targets_capped,
+    )
+
+    env = revise_env
+    unlocked = _four_unlocked(env)
+    [beans] = dish_ids(env, "干煸豆角")
+    _hand_add(env, beans)
+    reading = {"kind": "change", "wish": "辣一些", "wish_targets": [beans, *unlocked]}
+    out = read(
+        env, "都辣一些", reading,
+        replies=[pick(slots=[(0, None), (1, None)], wish_met=False)],
+    )
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["locked_wish_targets"] == [beans]
+    assert frame["frame"]["capped_wish_targets"] == unlocked[2:]
+    reply = out["messages"][-1].content
+    assert reply.count(wish_targets_capped("zh")) == 1
+    assert WISH_TARGETS_LOCKED_ZH.format(wish="辣一些") not in reply
+    assert change_wish_unmet("辣一些", "zh") in reply
+
+
 # ---- Task 11 fix round 1 (development run 1) ----
 
 
@@ -4658,13 +4714,38 @@ def test_the_picker_counts_the_plan_after_the_decided_drops(revise_env):
     ) in text
 
 
-def test_an_add_with_no_stated_side_offers_no_relax_split(revise_env):
+def test_a_typed_add_left_unfilled_offers_any_mix_without_a_stated_count(revise_env):
+    """Plan 3b-2 change fixes, fix 5: a typed add (a meat dish) that nothing fills offers
+    relax_split whether or not the turn stated a count: a typed add left unfilled."""
     env = revise_env
     first_meal(env)
     reading = {"kind": "change", "add": [{"dish_type": "meat dish", "count": 1}]}
     out = read(env, "再加个荤菜", reading, replies=[pick(slots=[(0, None)])])
     card = out["reply_plans"][out["messages"][-1].id]
-    assert "relax_split" not in card["next_actions"]
+    assert card["plan_kept"] is True
+    assert "relax_split" in card["next_actions"]
+
+
+def test_any_mix_on_a_typed_add_without_a_stated_count_grows_the_plan(revise_env):
+    """Fix 5: pressed, relax_split re-runs the unfilled typed add as a dish of any type and
+    keeps the total that turn asked for (one dish more than the card), with no question."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(env, "再加个荤菜", reading, replies=[pick(slots=[(0, None)])])
+    card = out["reply_plans"][out["messages"][-1].id]
+    shown = ids_of_plan(card)
+    out = press(env, "relax_split", replies=[pick(slots=[(0, beans)])])
+    assert "__interrupt__" not in out
+    assert "- Slot 0: one more dish the user asked for, of any type" in picker_input(env)
+    plan = out["current_plan"]
+    assert len(ids_of_plan(plan)) == len(shown) + 1
+    assert ids_of_plan(plan) == [beef, cabbage, soup, beans] and plan["passed"]
+    spec = latest_record(env).request["spec"]
+    assert spec["dishes"] == 3
+    assert spec["meat_dishes"] is None and spec["vegetable_dishes"] is None
 
 
 def test_an_empty_picker_reply_is_asked_again_at_once(revise_env):
@@ -4932,7 +5013,7 @@ def test_a_rule_breaking_dish_the_reader_drops_is_said_as_removed(
     assert card["next_actions"] == []
 
 
-def test_relax_split_spec_counts_only_stated_sides_and_guards_a_missing_total():
+def test_relax_split_spec_counts_stated_sides_and_guards_a_missing_total():
     """Review fixes 4 and 5."""
     from minemydinner.agent.change_step import UNFINISHED, relax_split_spec
 
@@ -4952,9 +5033,10 @@ def test_relax_split_spec_counts_only_stated_sides_and_guards_a_missing_total():
     assert relax_split_spec(card)["dishes"] == 3
     # No total on the card: the card's meat and vegetable dishes count.
     assert relax_split_spec({**card, "spec": {"dishes": None, "soups": 1}})["dishes"] == 3
-    # A turn that stated no count adds nothing.
+    # A turn that stated no count (change fixes, fix 5): every typed meat or vegetable add
+    # counts, as the plan shown does not hold it; a soup add does not.
     plain = {**card, "request": {"counts_stated_now": False, "meat_dishes": 2}}
-    assert relax_split_spec(plain) == card["spec"]
+    assert relax_split_spec(plain)["dishes"] == 5
 
 
 # ---- Task 11, after development run 3 (fix 3) ----

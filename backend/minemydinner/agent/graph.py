@@ -62,6 +62,7 @@ from minemydinner.agent.change_step import (
     reading_changes_nothing,
     result_spec,
     relax_split_spec,
+    side_adds_left,
     slot_results,
     unfinished_items,
     unfinished_reading,
@@ -153,6 +154,7 @@ from minemydinner.agent.revise_step import (
     unfinished_sentence,
     which_dish_question,
     wish_matched_nothing,
+    wish_targets_capped,
     wish_targets_locked,
     wish_unmet_actions,
     wish_unmet_entries,
@@ -793,6 +795,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 # (3b-1 spec 5.2), so "one fewer" is one fewer than the dishes shown. A turn
                 # that stated counts (a failed "再加一道") keeps them.
                 base = on_plan_counts(base, state["current_plan"])
+                if action == "relax_split" and base.get("dishes") is not None:
+                    # Plan 3b-2 change fixes, fix 5: "any mix" keeps the total that turn asked
+                    # for, the plan shown and the typed adds it could not make.
+                    left = side_adds_left(card.get(UNFINISHED), card["request"])
+                    base = {**base, "dishes": base["dishes"] + left}
             card_spec = relax_split_spec(card) if action == "relax_split" else card.get("spec")
             return {
                 **fresh,
@@ -2260,24 +2267,21 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         wish_unmet = bool(wish) and outcome["wish_met"] is False
         limit = spec.get("time_limit_min")
         sentences = [unfinished_sentence(i, limit, meal_avoid, locale) for i in items]
-        actions = change_actions(items, spec, wish_unmet, stated=frame.count_ranges)
+        actions = change_actions(items, spec, wish_unmet)
         unmet = change_unmet(items, sentences, limit, locale, wish_unmet)
         unmet_wish_text = change_wish_unmet(wish, locale) if wish_unmet else ""
         # Spec 5.4: a wish that touches no dish of the plan and guides no new dish changes
         # nothing, and the reply says so.
         guided = frame.slots or any(c.mode == "replace" for c in frame.choices)
         targets = list(used.wish_targets)
-        locked_targets = {
-            item.get("wish_target")
-            for item in frame.ignored
-            if item.get("reason") == "locked" and "wish_target" in item
-        }
         nothing_text = ""
-        if wish and targets and set(targets) <= locked_targets:
+        if wish and targets and set(targets) <= set(frame.locked_wish_targets):
             # Every dish the wish touches was added or kept by hand: they stay.
             nothing_text = wish_targets_locked(wish, locale)
         elif wish and not targets and not guided and not frame.placed:
             nothing_text = wish_matched_nothing(wish, locale)
+        # Spec 5.6 (change fixes): wish targets over the cap stay, and the reply says so.
+        capped_text = wish_targets_capped(locale) if frame.capped_wish_targets else ""
         read_text = (
             reading_sentence(shown.reading, locale)
             if shown is not None and shown.ambiguous and shown.reading.strip()
@@ -2369,6 +2373,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     done,
                     read_text,
                     nothing_text,
+                    capped_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=bool(done)),
                     unmet_wish_text,
@@ -2389,6 +2394,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     lead,
                     read_text,
                     nothing_text,
+                    capped_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=False),
                     unmet_wish_text,

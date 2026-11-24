@@ -115,7 +115,7 @@ class Frame(BaseModel):
     them). `drops`: plan dishes that leave with no slot (named drops, a lower count, a dish a
     placed named dish replaces). `slots`: new dishes to choose. `placed`: named library dishes
     added directly. `missing`: named dishes not placed. `ignored`: parts of the reading code
-    refused, with the reason, for the record."""
+    refused, with the reason, for the record; code reads the typed fields below instead."""
 
     keep: list[int]
     drops: list[int]
@@ -130,6 +130,10 @@ class Frame(BaseModel):
     # The counts this message (or a button) states, as [low, high] per count field ("dishes",
     # "meat_dishes", "soups", ...): invariants code checks the picker's result against.
     count_ranges: dict[str, list[int]] = Field(default_factory=dict)
+    # The wish targets left out, in the reader's order (also in `ignored`, as the record):
+    # dishes the user added or kept by hand, and dishes over the cap on a wish's changes.
+    locked_wish_targets: list[int] = Field(default_factory=list)
+    capped_wish_targets: list[int] = Field(default_factory=list)
 
 
 def _break_rank(reason: str) -> int:
@@ -545,7 +549,10 @@ def build_frame(
 
     # The dishes the wish touches, as the reader names them: unlocked dishes only, at most
     # half of them (rounded up), the reader's order deciding which stay. A dish already
-    # changing needs no slot of its own; the wish guides its replacement too.
+    # changing needs no slot of its own; the wish guides its replacement too. The targets left
+    # out are kept by reason (locked, over the cap) for the reply.
+    locked_targets: list[int] = []
+    capped_targets: list[int] = []
     if reading is not None and reading.wish.strip():
         limit = max_general_changes(len([i for i in builder.plan_ids if i not in locked]))
         taken = 0
@@ -554,10 +561,12 @@ def build_frame(
                 builder.ignored.append({"wish_target": dish_id, "reason": "not_in_plan"})
             elif dish_id in locked:
                 builder.ignored.append({"wish_target": dish_id, "reason": "locked"})
+                locked_targets.append(dish_id)
             elif dish_id in builder.handled:
                 continue
             elif taken >= limit:
                 builder.ignored.append({"wish_target": dish_id, "reason": "over_limit"})
+                capped_targets.append(dish_id)
             else:
                 builder.replace(dish_id, "", for_wish=True)
                 taken += 1
@@ -636,4 +645,6 @@ def build_frame(
         ignored=builder.ignored,
         count_drops=builder.count_drops,
         count_ranges=builder.count_ranges,
+        locked_wish_targets=locked_targets,
+        capped_wish_targets=capped_targets,
     )

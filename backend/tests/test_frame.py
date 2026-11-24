@@ -284,6 +284,30 @@ def test_wish_targets_skip_locked_dishes_unknown_ids_and_dishes_already_changing
     ]
 
 
+def test_wish_targets_over_the_cap_are_listed_as_capped():
+    # Spec 5.6: four unlocked dishes, all four named by the wish: two change, and the other
+    # two, the last in the reader's order, are listed as capped (the reply says so).
+    frame = _frame(_change(wish="辣一些", wish_targets=[2, 3, 4, 5]), locked={1})
+    assert frame.slots == [
+        Slot(kind="replace", replaces=2, for_wish=True),
+        Slot(kind="replace", replaces=3, for_wish=True),
+    ]
+    assert frame.capped_wish_targets == [4, 5]
+    assert frame.locked_wish_targets == []
+    # The record stays.
+    assert frame.ignored == [
+        {"wish_target": 4, "reason": "over_limit"},
+        {"wish_target": 5, "reason": "over_limit"},
+    ]
+
+
+def test_locked_wish_targets_are_listed():
+    frame = _frame(_change(wish="清淡点", wish_targets=[1, 5]), locked={1})
+    assert frame.locked_wish_targets == [1]
+    assert frame.capped_wish_targets == []
+    assert frame.slots == [Slot(kind="replace", replaces=5, for_wish=True)]
+
+
 def test_a_wish_without_targets_changes_nothing():
     frame = _frame(_change(wish="辣一些", wish_targets=[]))
     assert frame.slots == [] and frame.choices == [] and frame.keep == PLAN
