@@ -243,10 +243,13 @@ scenarios:
     button_after: switch_to_shopping
     expect_no_question: true
 
+  # Set-up corrected (user-approved, 2026-11-24, round 12): 蒜 and 香菜 added to the fridge. Without them
+  # the first plan's vegetable dishes and 凉拌黄瓜 could not be made, so the expected added vegetable
+  # dish was impossible. The expectation is unchanged.
   - name: any_mix_button_after_one_more_meat
     request: 两个人吃晚饭，四个菜，只用冰箱里有的。
     locale: zh
-    inventory: {猪肉: plenty, 青椒: 3, 小白菜: 1, 西兰花: 1, 菠菜: 1, 黄瓜: 2}
+    inventory: {猪肉: plenty, 青椒: 3, 小白菜: 1, 西兰花: 1, 菠菜: 1, 黄瓜: 2, 蒜: plenty, 香菜: plenty}
     cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅, 烤箱]
     first_plan: [青椒肉丝, 清炒小白菜, 蒜蓉西兰花, 清炒菠菜]
     follow_up: 再加一个肉菜

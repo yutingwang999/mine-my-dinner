@@ -20,24 +20,24 @@ A new item gets a status when it is added. When an item is done, change its stat
 
 Counts per section (2026-11-24):
 
-| Section | Open | Check | Note | Closed |
-|---|---|---|---|---|
-| Work Phase 0 explicitly handed to Phase 1 tasks | 2 | 0 | 0 | 3 |
-| Model and API behavior found during Phase 0 | 1 | 0 | 3 | 0 |
-| Before making the repository public (T1.11 checklist additions) | 4 | 0 | 0 | 1 |
-| Evaluation gaps to fix before Phase 2 model comparisons | 3 | 0 | 2 | 0 |
-| Found while trying the first planning slice (Phase 1 plan 1, checkpoint) | 0 | 0 | 0 | 10 |
-| Deferred from Phase 1 plan 1 | 32 | 0 | 3 | 8 |
-| Deferred from Phase 1 plan 2a | 25 | 0 | 10 | 1 |
-| Deferred from the import and dictionary plan | 19 | 0 | 0 | 1 |
-| Minor findings from the final Phase 0 review, deferred | 3 | 0 | 0 | 4 |
-| Deferred from Phase 1 plan 2b | 15 | 0 | 0 | 1 |
-| Deferred from Phase 1 plan 3a | 6 | 0 | 0 | 2 |
-| Deferred from Phase 1 plan 3b-1 | 9 | 0 | 0 | 14 |
-| Deferred from Phase 1 plan 3b-1b | 11 | 0 | 0 | 15 |
-| Deferred from Phase 1 plan 3b-2 (one) | 19 | 0 | 0 | 8 |
-| Deferred from Phase 1 plan 3b-2 change fixes | 6 | 1 | 0 | 0 |
-| **Total** | **155** | **1** | **18** | **68** |
+| Section | Open | Note | Closed |
+|---|---|---|---|
+| Work Phase 0 explicitly handed to Phase 1 tasks | 2 | 0 | 3 |
+| Model and API behavior found during Phase 0 | 1 | 3 | 0 |
+| Before making the repository public (T1.11 checklist additions) | 4 | 0 | 1 |
+| Evaluation gaps to fix before Phase 2 model comparisons | 3 | 2 | 0 |
+| Found while trying the first planning slice (Phase 1 plan 1, checkpoint) | 0 | 0 | 10 |
+| Deferred from Phase 1 plan 1 | 32 | 3 | 8 |
+| Deferred from Phase 1 plan 2a | 25 | 10 | 1 |
+| Deferred from the import and dictionary plan | 19 | 0 | 1 |
+| Minor findings from the final Phase 0 review, deferred | 3 | 0 | 4 |
+| Deferred from Phase 1 plan 2b | 15 | 0 | 1 |
+| Deferred from Phase 1 plan 3a | 6 | 0 | 2 |
+| Deferred from Phase 1 plan 3b-1 | 9 | 0 | 14 |
+| Deferred from Phase 1 plan 3b-1b | 11 | 0 | 15 |
+| Deferred from Phase 1 plan 3b-2 (one) | 19 | 0 | 8 |
+| Deferred from Phase 1 plan 3b-2 change fixes | 6 | 0 | 1 |
+| **Total** | **155** | **18** | **69** |
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -657,5 +657,12 @@ Findings judged safe to defer during the change-fixes plan's task reviews. Each 
 - `Open` **"Any mix" and the capped sentence (Task 3 review) (→ code health, any step; the wording → round 12).** (1) The raise of the total for an unfilled typed add on a card with no stated count lives in two places, `relax_split_spec` (`agent/change_step.py`) and `route_intent` (`agent/graph.py`); on the change path the request's rebased total always wins, so the spec raise is effectively unused there. One helper that returns the raised base would keep them from drifting apart. (2) When nothing could be changed (the plan stays), the reply reads "…方案保持原样。" and then the capped sentence "…其余的先留着…", where "the rest" reads oddly; check it in round 12. (3) `test_relax_split_spec_counts_stated_sides_and_guards_a_missing_total` pins the spec raise for a no-count card, a value the graph path never uses; the graph test is the one that decides the behaviour.
 - `Open` **Turn budget and outcome record leftovers (Task 4 review) (→ code health, any step).** (1) The picker's first attempt is not gated by the turn budget (`if attempt and not fits()` in `pick_attempts`), so a legacy paused thread that carries a route call and two parse calls (an `ask_question` loop), plus a reader re-ask and a full first attempt, can still reach 8 model calls; with only one parse it stays at 7. Legacy threads only. Gating the first attempt too, or capping `earlier_calls`, would close it. (2) The `change_outcome` record labels every slot whose dish is not in `recipe_ids` "removed by the final rule check", although such a dish could in principle be missing for another reason (hidden, dropped by `apply_picks`); record text only. (3) In the outcome-record test the helper `says_beef_was_placed` follows `beef, cabbage, soup = ...` with no blank line.
 - `Open` **Misses of round 12 to fix (→ fix round A of the change-fixes plan).** (1) An untyped add's slot line says "of any type", so with `pick_v5` the picker added a staple (`add_one_everything_else_has_egg`, must); an untyped add counts as a meat or vegetable dish. (2) The named-slot clause reads to the picker as a dish name, so an ingredient name finds nothing (`swap_for_a_daikon_dish`). (3) The wish cap counts only wish-target slots, not the reading's removals marked for the wish, so a wish changed three of four dishes (`too_many_eggs`, must; earlier than this plan). (4) The runner's `wish_unmet_said` does not count the capped-targets sentence (`all_four_spicy`). (5) The picker changes a replaced dish's kind when no dish of that kind is left (`change_the_soups` in the development runs, `too_many_tomatoes_english`).
-- `Check` **`any_mix_button_after_one_more_meat` expects what cannot happen (round 12) (→ the user).** The "any mix" button is now offered and pressed, but no new dish can be made from the scenario's fridge with `library_revise2.yaml`: the code-built shortlist is empty and two searches find nothing, so the expected added vegetable dish is impossible. Changing the expectation needs the user's approval.
 - `Open` **Reader readings in round 12 (→ plan two, the next reader version).** `follow_up_v4` (unchanged since round 11) varied on: which dish a wish for something the plan lacks replaces (`button_shopping_after_seafood_wish`, must in the development runs); listing a dish that does not touch the wish as a wish target (`no_meat_today_english`, must); counts the message does not state (`drop_the_meat_dishes`, `keep_one_replace_the_rest`); dropping both soups while stating one (`one_soup_is_enough`, must, development run 1); add versus replace (`one_spicy_after_all`); drop versus replace (`no_porridge`). The picker answered "no" for a vague wish it had acted on (`looks_not_great`).
+
+<details>
+<summary>Closed items (1)</summary>
+
+- `Done` **`any_mix_button_after_one_more_meat` expects what cannot happen (round 12) (→ the user).** The "any mix" button is now offered and pressed, but no new dish can be made from the scenario's fridge with `library_revise2.yaml`: the code-built shortlist is empty and two searches find nothing, so the expected added vegetable dish is impossible. Changing the expectation needs the user's approval.
+  - Status (2026-11-24): the user chose to correct the set-up: the scenario's fridge gains 蒜 and 香菜 (the first plan's vegetable dishes and 凉拌黄瓜 need them); the expectation is unchanged.
+
+</details>

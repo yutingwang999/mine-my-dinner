@@ -645,4 +645,5 @@ Run 2 used the same code as run 1, to tell variance from cause.
     - `diners_three_people_one_no_lamb` and `core_en_spicy_shopping`: first-turn and English-reply causes, as in round 11.
 - **Picker answers cut by DeepSeek:** none in the round's 109 picker calls; one in development run 2 (salvaged).
 - **Cost:** the round's ten runs cost $0.165 cache-aware and $0.959 uncached. The two development runs added $0.102 cache-aware.
-- **Decision (user, 2026-11-24):** fix round A. Address the untyped-add slot line, the named-slot clause, the wish cap counting the reading's wish removals, the runner's unmet-wish check, and picker kind-keeping (`pick_v6`). Then development run 3 and the next round. The `any_mix_button_after_one_more_meat` expectation is the user's decision.
+- **Decision (user, 2026-11-24):** fix round A. Address the untyped-add slot line, the named-slot clause, the wish cap counting the reading's wish removals, the runner's unmet-wish check, and picker kind-keeping (`pick_v6`). Then development run 3 and the next round. 
+  - Taken (user-approved, 2026-11-24): the set-up of `any_mix_button_after_one_more_meat` (heldout2) is corrected: its fridge gains 蒜 and 香菜, which the first plan's vegetable dishes and 凉拌黄瓜 need; the expectation is unchanged. A comment at the scenario says so.
