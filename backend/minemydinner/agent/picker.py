@@ -521,13 +521,18 @@ def _slot_line(index: int, slot: Slot) -> str:
     if slot.replaces is not None:
         line = f"- Slot {index}: in place of {slot.replaces}"
         if slot.words.strip():
-            line += f'; the user\'s words: "{slot.words.strip()}"'
+            line += f', which goes because of the user\'s words "{slot.words.strip()}"'
+            if not slot.named:
+                line += (
+                    "; choose the new dish from the wish and the meal's rules, "
+                    "not from these words"
+                )
         if slot.for_wish:
             line += ", for the wish"
     elif slot.dish_type:
-        line = f"- Slot {index}: {_article(slot.dish_type)}, added"
+        line = f"- Slot {index}: one more {slot.dish_type} the user asked for"
     else:
-        line = f"- Slot {index}: added"
+        line = f"- Slot {index}: one more dish the user asked for, of any type"
     if slot.for_wish and slot.replaces is None:
         line += ", for the wish"
     if slot.named:

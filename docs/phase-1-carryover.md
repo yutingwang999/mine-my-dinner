@@ -36,7 +36,8 @@ Counts per section (2026-11-24):
 | Deferred from Phase 1 plan 3b-1 | 9 | 0 | 14 |
 | Deferred from Phase 1 plan 3b-1b | 11 | 0 | 15 |
 | Deferred from Phase 1 plan 3b-2 (one) | 22 | 0 | 5 |
-| **Total** | **152** | **18** | **65** |
+| Deferred from Phase 1 plan 3b-2 change fixes | 1 | 0 | 0 |
+| **Total** | **153** | **18** | **65** |
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -639,3 +640,9 @@ The misses of plan 3b-2 (one)'s evaluation round (round 11 in `docs/planning-eva
   Also closed: the reviser's missing call cap, since a change turn now takes at most 7 calls and round 11's most was 4. "The replacement quote is matched in one direction only" is gone with `quote_matches`, but `swap_for_a_daikon_dish` still misses for the shortlist cause below.
 
 </details>
+
+## Deferred from Phase 1 plan 3b-2 change fixes
+
+Findings judged safe to defer during the change-fixes plan's task reviews. Each ends with where it goes next.
+
+- `Open` **Picker input tests and docs (Task 1 review) (→ code health, any step).** In `tests/test_picker.py` the `_slot_line` import sits before `SlotPick` (import order), and two updated slot-line assertions run past the usual line length (`tests/test_agent_graph.py` near line 232, `tests/test_picker.py` near line 483). The `main` values in the picker's example shortlist in `docs/planner-what-each-model-sees.md` were written by hand from each dish's missing lines, not captured from a run; replace them with a real capture when the example is next regenerated.

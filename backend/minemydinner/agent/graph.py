@@ -644,19 +644,32 @@ SHORTLIST_HEADER = (
 )
 
 
+def _shortlist_candidate(entry: ShortlistEntry, mains: dict[int, list[str]] | None) -> dict:
+    fields = {name: value for name, value in asdict(entry).items() if name != "dish_type"}
+    if mains is None:
+        return fields
+    out: dict = {}
+    for name, value in fields.items():
+        out[name] = value
+        if name == "title":
+            out["main"] = mains.get(entry.id, [])
+    return out
+
+
 def shortlist_json(
-    entries: dict[str, list[ShortlistEntry]], complete: Collection[str] = ()
+    entries: dict[str, list[ShortlistEntry]],
+    complete: Collection[str] = (),
+    mains: dict[int, list[str]] | None = None,
 ) -> str:
     """The shortlist as compact JSON, in a fixed order: dish types as the shortlist orders
     them, each as {"complete": bool, "candidates": [...]} with entries in rank order and
-    fields in a fixed order (the dish type is the key)."""
+    fields in a fixed order (the dish type is the key). With `mains` (the picker's), each
+    candidate also has "main", its main ingredient lines, right after "title"; the planner
+    passes none and its text is unchanged."""
     data = {
         dish_type: {
             "complete": dish_type in complete,
-            "candidates": [
-                {name: value for name, value in asdict(entry).items() if name != "dish_type"}
-                for entry in items
-            ],
+            "candidates": [_shortlist_candidate(entry, mains) for entry in items],
         }
         for dish_type, items in entries.items()
     }
@@ -1777,7 +1790,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             session, deps.client, ctx, wanted, ParsedRequest.model_validate(request), vectors,
             exclude_ids=[*plan_ids, *frame.placed],
         )
-        return f"{SHORTLIST_HEADER}\n{shortlist_json(found.entries, found.complete)}", found
+        shown = [e.id for items in found.entries.values() for e in items]
+        _, mains = dish_facts(session, shown)
+        text = shortlist_json(found.entries, found.complete, mains)
+        return f"{SHORTLIST_HEADER}\n{text}", found
 
     def picker_wish(state: ChatState, change: dict) -> str:
         """The wish the picker reads, in the user's words: the reading's, else the request's

@@ -240,7 +240,7 @@ Finding a named dish (`lookup_named`): only a title equal to the name (case and 
 ### What the picker sees
 
 One user message:
-- The shortlist: an add gets its own dish type; a replace slot, a replace choice and an add of any type take any type, so they get the replaced dishes' types plus meat and vegetable dishes. It is built from the new request, and the plan's dishes and the dishes placed by name are left out (the picker may not choose them). With only a drop choice: "Shortlist: none given...".
+- The shortlist: an add gets its own dish type; a replace slot, a replace choice and an add of any type take any type, so they get the replaced dishes' types plus meat and vegetable dishes. Each candidate also lists its main ingredients (`main`, right after `title`; the planner's shortlist has none). It is built from the new request, and the plan's dishes and the dishes placed by name are left out (the picker may not choose them). With only a drop choice: "Shortlist: none given...".
 - `Current plan:` with its marks (computed against the new avoidance).
 - `Diner and meal rules:` the diners' anonymous rules, plus "This meal only, not a diner's rule: leave out ...".
 - `Meal conditions:` one line with the mode, the time limit and the must-use ingredients (on every call).
@@ -248,7 +248,7 @@ One user message:
 - `The user's wish:` the reading's wish. On a button turn it is the wish of the structured reading kept on the offering card, never that turn's words, which could contradict the button. **[Compatibility]** Only an old card saved before cards kept the reading adds "the user's earlier message: ...".
 - `Already decided:` dishes leaving, dishes placed by name.
 - `Choices (which current dishes go):` one line each (drop exactly N / replace 1 to N; a must-use choice says "the new dish must use ...").
-- `Slots (new dishes to choose):` one line each (a replace slot names its dish, with the user's words and "for the wish" when it is; a typed add gives its type, an add of any type or a named add says "added"; a named slot gives the user's name and "or 0 when none is"; an add carrying a must-use ingredient says "it must use ...").
+- `Slots (new dishes to choose):` one line each (a replace slot names its dish and says the user's words are why it goes, not a guide to its replacement (a named slot keeps the name instead), with "for the wish" when it is; an add says "one more <type> the user asked for", or "one more dish ..., of any type" for an add of any type or a named add; a named slot gives the user's name and "or 0 when none is"; an add carrying a must-use ingredient says "it must use ...").
 - `Reply locale:`.
 
 It never sees the conversation, the reading, or the rest of the request summary (unstated counts, prefer use, all use).
