@@ -64,4 +64,4 @@ See [docs/local-development.md](docs/local-development.md) for the full guide, i
 
 ## License
 
-No license has been chosen yet, so all rights are reserved for now.
+This repository is public for viewing only. It has no open-source license: all rights are reserved, and no permission is given to use, copy, modify, or distribute the code or its documents.

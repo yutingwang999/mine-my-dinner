@@ -69,6 +69,7 @@ Counts per section (2026-11-24):
 ## Before making the repository public (T1.11 checklist additions)
 
 - `Open` Make `USER_AGENT` configurable, add a contact URL, and tell forks that change fetch rules to use their own name; choose a license and add usage terms to the README.
+  - Status (2026-11-24): the license part is decided: no license, the repository is public for viewing only, and the README says so (user decision). The User-Agent part stays open; it matters only when someone else runs the app.
 - `Open` Pin the resolved address in the web import before any public deployment (DNS rebinding is possible between the address check and the fetch; acceptable while the instance is private).
 - `Open` Check the full history for secrets (replaces the dropped gitleaks pre-commit hook).
 - `Open` Next.js 16.4.3 is flagged by a security advisory (`npm run build` printed it on 2026-11-24 and suggested `next upgrade`). Upgrading is the user's decision; check the advisory and upgrade before any public deployment.
