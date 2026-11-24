@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from minemydinner.evaluation.tool_call_cut import is_cut, main, pick_calls, renamed, scan
 
 CUT_ARGS = '{"choices": [], "slots": [{"index": 0, "recipe_id": 779}], "wish_met"'
@@ -70,6 +72,31 @@ def test_renamed_stops_when_the_field_is_not_in_the_schema():
         assert "wish_met is not a field of PickerAnswer" in str(stop)
     else:
         raise AssertionError("renaming a missing field must stop")
+
+
+def test_replay_model_reads_the_config():
+    from minemydinner.evaluation.tool_call_cut import replay_model
+    from minemydinner.llm.config import load_llm_config
+
+    config = load_llm_config()
+    primary = config.tasks["planning_eval"].primary
+    assert replay_model() == (
+        "https://api.deepseek.com/chat/completions",
+        config.models[primary].model,
+    )
+    other = next(n for n, m in config.models.items() if m.provider != "deepseek")
+    changed = config.model_copy(
+        update={
+            "tasks": {
+                **config.tasks,
+                "planning_eval": config.tasks["planning_eval"].model_copy(
+                    update={"primary": other}
+                ),
+            }
+        }
+    )
+    with pytest.raises(SystemExit):
+        replay_model(changed)
 
 
 def test_replay_refuses_without_spend(tmp_path, capsys):

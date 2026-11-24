@@ -907,7 +907,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         """`read_follow_up` for an older thread's revise turn whose parse already ran (it was
         paused on a question before plan 3b-2): `request` is that parse, so the turn keeps the
         `previous_request` route_intent set for it."""
-        return {**read_follow_up(state), "previous_request": state.get("previous_request")}
+        reading = read_follow_up(state)
+        # The parse the turn already made stays in the buffer ahead of the reader's calls
+        # (final review M1); `read_follow_up` alone starts the buffer fresh.
+        earlier = list(state.get("model_calls") or [])
+        return {
+            **reading,
+            "model_calls": [*earlier, *reading["model_calls"]],
+            "previous_request": state.get("previous_request"),
+        }
 
     def after_reading(state: ChatState) -> str:
         """A change goes straight to the change path, with no parse call (spec 5.1); a people
@@ -1727,6 +1735,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "reader_reasks": sum(
                 1 for e in state.get("model_calls") or [] if e.get("kind") == "reader_reask"
             ),
+            # The model calls of this turn before the reader (the parse of an older paused
+            # thread), also taken from the picker's budget.
+            "earlier_calls": sum(
+                1
+                for e in state.get("model_calls") or []
+                if e.get("kind") == "model_call" and e.get("step") != "read_follow_up"
+            ),
         }
         update = {
             "request": request,
@@ -1931,7 +1946,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # The picker's model calls so far this turn (`PICK_TURN_MODEL_CALLS`). A reader asked
         # again this turn used one of them (spec 5.7: seven calls in all).
         calls_used = 0
-        budget = PICK_TURN_MODEL_CALLS - change.get("reader_reasks", 0)
+        budget = (
+            PICK_TURN_MODEL_CALLS
+            - change.get("reader_reasks", 0)
+            - change.get("earlier_calls", 0)
+        )
 
         def fits() -> bool:
             return calls_used + PICK_MODEL_CALL_LIMIT <= budget
@@ -2425,6 +2444,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if not plan_kept:
             update.update(current_plan=card, plan_versions=[*versions, card])
         prepare = deps.client.prepare_text
+        # The record matches the final check: a slot whose dish it removed names no dish.
+        recorded_slots = [
+            s
+            if s["recipe_id"] is None or s["recipe_id"] in result_ids
+            else {**s, "recipe_id": None, "why": "removed by the final rule check"}
+            for s in outcome["slots"]
+        ]
         deps.recorder.add_event(
             state["run_id"],
             {
@@ -2433,7 +2459,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 "plan_kept": plan_kept,
                 "empty_plan": bool(frame.empty_plan or not result_ids),
                 "asks_which_dish": bool(asks_which),
-                "slots": map_strings(outcome["slots"], prepare),
+                "slots": map_strings(recorded_slots, prepare),
                 "wish_met": outcome["wish_met"],
                 "unfinished": map_strings(items, prepare),
             },

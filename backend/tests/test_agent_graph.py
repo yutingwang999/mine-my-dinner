@@ -4979,6 +4979,77 @@ def test_a_rule_breaking_dish_left_in_the_result_is_removed_by_the_final_check(
     assert [i["recipe_id"] for i in outcome["unfinished"] if i["kind"] == "removed"] == [beef]
 
 
+def test_the_outcome_record_names_no_dish_the_final_check_removed(revise_env, monkeypatch):
+    """The `change_outcome` record matches the final check: a slot that placed a dish the
+    check then removed names no dish."""
+    from minemydinner.agent import graph as graph_module
+    from minemydinner.agent.picker import Picks
+
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    def says_beef_was_placed(frame, answer):
+        """A slot record that placed the beef dish the final check then removes."""
+        return [
+            {
+                "index": 0, "kind": "add", "replaces": None, "named": "", "reason": "",
+                "dish_type": "", "must_use": [], "recipe_id": beef, "why": "picked",
+            }
+        ]
+
+    monkeypatch.setattr(
+        graph_module,
+        "fallback_pick",
+        lambda frame: (frame.model_copy(update={"slots": [], "choices": []}), Picks()),
+    )
+    monkeypatch.setattr(graph_module, "slot_results", says_beef_was_placed)
+    reading = {"kind": "change", "meal_avoid": ["牛肉"]}
+    out = read(env, "今天不吃牛肉", reading, replies=[AIMessage(content="")])
+    assert beef not in ids_of_plan(out["current_plan"])
+    [outcome] = change_events(env, "change_outcome")
+    assert beef not in outcome["recipe_ids"] and outcome["slots"]
+    assert all(
+        s["recipe_id"] is None or s["recipe_id"] in outcome["recipe_ids"] for s in outcome["slots"]
+    )
+
+
+def test_an_older_paused_thread_keeps_the_parse_event_and_stays_within_seven_calls(revise_env):
+    """Final review M1: the reader's events are added to the parse event an older paused
+    thread already holds, and the picker's budget counts that call."""
+    env = revise_env
+    first = first_meal(env)
+    env.graph.update_state(
+        env.config,
+        {
+            "messages": [HumanMessage("两个菜，三个荤菜")],
+            "intent": "revise",
+            "reading": None,
+            "previous_request": first["request"],
+            "asked_question": False,
+            "button": None,
+            "model_calls": [],
+        },
+        as_node="route_intent",
+    )
+    env.model.structured["ParsedRequest"] = [{"dishes": 2, "meat_dishes": 3}]
+    out = env.graph.invoke(None, env.config)
+    assert out["__interrupt__"][0].value["kind"] == "question"
+    cabbage, _ = dish_ids(env, "清炒小白菜", "干煸豆角")
+    env.model.structured["ParsedRequest"] = [{"query": "辣"}]
+    env.model.structured["FollowUpReading"] = [
+        {
+            "kind": "change",
+            "wish": "辣一些的",
+            "wish_targets": [cabbage],
+        }
+    ]
+    env.model.replies = [AIMessage(content="")] * 12
+    env.graph.invoke(Command(resume="白菜换成辣的"), env.config)
+    steps = [e["step"] for e in latest_record(env).events if e.get("kind") == "model_call"]
+    assert "parse" in steps and "read_follow_up" in steps
+    assert len(steps) <= 7
+
+
 @pytest.mark.parametrize(
     "locale, text, said, not_said",
     [
