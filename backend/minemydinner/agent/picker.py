@@ -4,10 +4,11 @@ picker's answer schema, its input after the system prompt, and the code that che
 against the frame and applies it. Pure code: no model call and no database. The diner rules,
 stock, cookware and the time limit of the new dishes are checked afterwards by `validate_plan`.
 
-Code checks, it does not interpret (spec 5.4, amended 2026-11-23): a replace slot takes a dish
-of any type, so the picker chooses what kind of dish takes a dish's place; code checks an add's
-type, the stated counts (`Frame.count_ranges`), the rules and conditions, and for a named slot
-nothing beyond those (the picker judges which dish the user's words mean).
+Code checks, it does not interpret (spec 5.4, amended 2026-11-23): a replace slot has no dish
+type in code; the picker keeps a replacement's kind (soup for soup, staple for staple, meat or
+vegetable dish for either) unless the user's words or the wish point elsewhere. Code checks an
+add's type, that an untyped add is a meat or vegetable dish, the stated counts
+(`Frame.count_ranges`), the rules and conditions, and for a named slot nothing beyond those (the picker judges which dish the user's words mean).
 
 Slot numbering: the frame's slots are numbered 0, 1, ... in order. A dish the picker chooses in
 a "replace" choice becomes one more slot in that dish's place; these slots are numbered after

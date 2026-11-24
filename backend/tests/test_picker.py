@@ -625,10 +625,10 @@ def test_slot_line_says_the_quote_is_why_the_dish_goes():
 
 
 def test_slot_line_with_a_named_replacement_keeps_the_name():
-    slot = Slot(kind="replace", replaces=3, words="把辣椒炒肉换成萝卜", named="萝卜")
+    slot = Slot(kind="replace", replaces=3, words="把红烧肉换成土豆", named="土豆")
     line = _slot_line(0, slot)
     assert "which goes because of the user's words" in line
-    assert 'the user named "萝卜"' in line
+    assert 'the user named "土豆"' in line
     assert "not from these words" not in line
 
 
@@ -654,10 +654,10 @@ def test_slot_line_for_an_untyped_add_names_meat_or_vegetable():
 
 
 def test_named_clause_allows_main_ingredients():
-    line = _slot_line(0, Slot(kind="replace", replaces=42, named="萝卜"))
+    line = _slot_line(0, Slot(kind="replace", replaces=42, named="土豆"))
     assert "by its title or by its main ingredients" in line
     assert line.endswith(
-        '; the user named "萝卜": the library dish these words mean, by its title or by its '
+        '; the user named "土豆": the library dish these words mean, by its title or by its '
         "main ingredients, or 0 when none is"
     )
 

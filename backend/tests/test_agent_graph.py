@@ -5053,7 +5053,8 @@ def test_an_older_paused_thread_keeps_the_parse_event_and_stays_within_seven_cal
             "previous_request": first["request"],
             "asked_question": False,
             "button": None,
-            "model_calls": [],
+            # The route call a real older thread holds before its first parse.
+            "model_calls": [{"kind": "model_call", "step": "route"}],
         },
         as_node="route_intent",
     )
@@ -5074,6 +5075,10 @@ def test_an_older_paused_thread_keeps_the_parse_event_and_stays_within_seven_cal
     steps = [e["step"] for e in latest_record(env).events if e.get("kind") == "model_call"]
     assert "parse" in steps and "read_follow_up" in steps
     assert len(steps) <= 7
+    # The thread carries route + parse + parse (earlier_calls = 3), so the picker's budget is
+    # 6 - 3 = 3: one call, and no re-ask or second attempt, because a whole attempt (3 calls)
+    # no longer fits. Without the subtraction the empty replies would be asked again.
+    assert len(picker_calls(env)) == 1
 
 
 @pytest.mark.parametrize(

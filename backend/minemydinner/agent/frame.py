@@ -5,8 +5,8 @@ which bounded choices the picker may make.
 Code checks, it does not interpret (spec 5.4, amended 2026-11-23): whatever needs reading
 language is a model's judgment, and code holds only the invariants. A locked dish goes only
 with a quote that is the user's own words from this message, or because it breaks a rule; a
-replace slot carries no dish type (the picker chooses the kind of dish; stated counts are
-checked on the result); the dishes a wish touches are the reader's `wish_targets`, capped at
+replace slot carries no dish type (the picker keeps the kind unless the user's words or the
+wish point elsewhere; stated counts are checked on the result); the dishes a wish touches are the reader's `wish_targets`, capped at
 half of the unlocked dishes; a named dish is placed by code only when it equals a library
 title, and otherwise the picker finds the dish the words mean; a change that leaves no dish
 is flagged.
@@ -47,8 +47,9 @@ _EXACT_CATEGORIES = ("soups", "staples", "desserts", "snacks")
 
 class Slot(BaseModel):
     """A new dish the picker must choose: in place of `replaces`, or added. A replace slot has
-    no dish type (the picker chooses the kind of dish); an add keeps the type the reading gave
-    it, or none for a named dish or an add of any type."""
+    no dish type (the picker keeps the kind unless the words or the wish point elsewhere); an add
+    keeps the type the reading gave it, or none for a named dish or an untyped add (a meat or
+    vegetable dish, either kind, checked on the picker's answer)."""
 
     kind: Literal["replace", "add"]
     dish_type: str | None = None
@@ -368,8 +369,8 @@ class _Builder:
         self.choices.append(Choice(dish_type=dish_type, candidates=pool, up_to=count, mode="drop"))
 
     def untyped_adds(self) -> int:
-        """Add slots of any type (no type, no name): each is one more dish, of a kind the
-        picker chooses."""
+        """Untyped adds (no type, no name): each is one more dish, a meat or vegetable dish of
+        either kind (checked on the picker's answer)."""
         return sum(1 for s in self.slots if s.kind == "add" and not s.dish_type and not s.named)
 
     def add_count(
@@ -588,8 +589,8 @@ def build_frame(
         elif add.count < 1:
             builder.ignored.append({"add": add.model_dump(), "reason": "bad_count"})
         else:
-            # No type: a dish of any type (spec 5.4: code sets no type the reading did not
-            # give); the picker chooses the kind.
+            # No type: a meat or vegetable dish, either kind (spec 5.4: code sets no type the
+            # reading did not give; the picker's answer is checked).
             builder.add_count(add.dish_type, add.count, for_wish=add.for_wish)
 
     # The counts: from the change list, unless the message (or a button) states them.

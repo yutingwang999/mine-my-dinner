@@ -6,7 +6,7 @@ This document follows one user message through the planning conversation: which 
 
 ## How to read this document
 
-The document describes the code **as of Phase 1 plan 3b-2 (one)**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v6` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
+The document describes the code **as of the Phase 1 plan 3b-2 change fixes**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v6` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
 
 Three labels separate what the code does now from what it did before:
 
@@ -255,7 +255,7 @@ It never sees the conversation, the reading, or the rest of the request summary 
 
 The retry message: `Your previous answer had these problems. Answer again with each one fixed:` and one line per problem (a choice answered wrongly, a typed add of the wrong type, an add with no type filled with a dish that is no meat or vegetable dish ("Slot <n> must be a meat or vegetable dish."), a stated count broken, a dish already in the plan, a new dish that breaks a rule / misses stock / misses cookware / is over time, a dish chosen for a must-use ingredient that does not use it).
 
-Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
+Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again and less the model calls an older paused thread made before the reader in the same turn (`earlier_calls`; compatibility with threads paused before plan 3b-2)); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
 
 ### The picker's answer (`PickerAnswer`, `pick_v6`)
 

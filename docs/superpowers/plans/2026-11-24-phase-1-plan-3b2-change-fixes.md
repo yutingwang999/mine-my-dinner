@@ -26,7 +26,7 @@
 
 ## Review Focus
 
-1. A replace slot that is also named ("换成萝卜": `words` and `named` both set): the new slot line must not tell the picker to ignore the words in a way that drops the named dish — the "not from these words" clause appears only when the slot has no `named`. (Task 1 test.)
+1. A replace slot that is also named ("换成土豆": `words` and `named` both set): the new slot line must not tell the picker to ignore the words in a way that drops the named dish — the "not from these words" clause appears only when the slot has no `named`. (Task 1 test.)
 2. A recipe whose lines are all optional, or that has no lines: its shortlist `main` is `[]`, never an error. (Task 1 test.)
 3. The planner's shortlist JSON carries no `main` field (new-plan sets stay comparable). (Task 1 test.)
 4. "Any mix" on a typed add with no stated count: pressed, the plan grows by the asked dish as any type; it never shrinks and never asks for the count. (Task 3 graph test.)
@@ -57,7 +57,7 @@ Slot-line formats (spec 5.1, 5.4); everything after these prefixes (`, for the w
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_picker.py`:
   - `test_slot_line_says_the_quote_is_why_the_dish_goes`: a replace `Slot(kind="replace", replaces=12, words="今晚鸡肉就算了")` → line equals the first row above with `i=0`.
-  - `test_slot_line_with_a_named_replacement_keeps_the_name` (Review Focus 1): `words="把辣椒炒肉换成萝卜", named="萝卜"` → contains `which goes because of the user's words`, contains `the user named "萝卜"`, and does not contain `not from these words`.
+  - `test_slot_line_with_a_named_replacement_keeps_the_name` (Review Focus 1): `words="把红烧肉换成土豆", named="土豆"` → contains `which goes because of the user's words`, contains `the user named "土豆"`, and does not contain `not from these words`.
   - `test_slot_line_for_an_asked_add`: `Slot(kind="add", dish_type="meat dish")` → `- Slot 0: one more meat dish the user asked for`; `Slot(kind="add")` → `- Slot 0: one more dish the user asked for, of any type`; a `for_wish=True` add ends with `, for the wish`.
   - Update existing assertions that expect `the user's words: "` or `, added` to the new formats.
 - [ ] **Step 2: Write the failing tests** in `tests/test_agent_graph.py`:
@@ -208,7 +208,7 @@ Round 12 missed its thresholds (`docs/planning-evaluation-history.md`, round 12)
 
 - [ ] **Step 1: Write the failing tests:**
   - `test_slot_line_for_an_untyped_add_names_meat_or_vegetable`: `Slot(kind="add")` → `- Slot 0: one more meat or vegetable dish the user asked for, either kind`.
-  - `test_named_clause_allows_main_ingredients`: `Slot(kind="replace", replaces=42, named="萝卜")` → contains `by its title or by its main ingredients`.
+  - `test_named_clause_allows_main_ingredients`: `Slot(kind="replace", replaces=42, named="土豆")` → contains `by its title or by its main ingredients`.
   - `test_an_untyped_add_filled_with_a_staple_is_a_problem` (`apply_picks`): facts where the chosen id is a staple food → problems contain `Slot 0 must be a meat or vegetable dish.`; a vegetable dish → no problem.
   - `test_frame` — `test_wish_removals_count_toward_the_wish_cap`: 4 unlocked dishes; reading `remove=[{id: A, mode: replace, for_wish: True}]`, `wish_targets=[A, B, C]` → slots for A and B only, `capped_wish_targets == [C]`. And a removal not marked `for_wish` does not count toward the cap.
   - runner — `test_capped_sentence_counts_as_the_wish_unmet_said`: a reply containing `wish_targets_capped("zh")` (and the en copy) → `wish_unmet_said(...)` is True.
