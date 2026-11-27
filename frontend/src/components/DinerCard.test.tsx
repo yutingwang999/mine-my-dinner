@@ -1,8 +1,8 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DinerCard } from "@/components/DinerCard";
+import { DinerCard, type DinerDraft } from "@/components/DinerCard";
 import type { DinerAnswer, DinersPending, ProposedRule } from "@/lib/chat";
 import { callsTo, mockFetch, renderWithProviders } from "@/test/helpers";
 
@@ -488,5 +488,132 @@ describe("DinerCard", () => {
     expect(box).toBeChecked();
     await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
     expect(box).toBeChecked();
+  });
+
+  it("sends the settled guest key back", async () => {
+    const rule = proposed({ rule_type: "dislike", text: "no peanuts" });
+    const { onConfirm } = setup(
+      card({
+        rows: [card().rows[0]],
+        headcount: 2,
+        guests: [{ key: "guest:1", name: "小李", proposed: [rule], diet_words: [] }],
+      }),
+    );
+    const answer = await confirm(onConfirm);
+    expect(answer.guests).toHaveLength(1);
+    expect(answer.guests[0].key).toBe("guest:1");
+    expect(answer.guests[0].rules).toEqual([expect.objectContaining({ text: "no peanuts", save: false })]);
+  });
+
+  it("does not send a key for a guest added on the card", async () => {
+    const { onConfirm } = setup(card({ rows: [card().rows[0]], guests: [], headcount: 1 }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a person" }));
+    const answer = await confirm(onConfirm);
+    expect(answer.guests).toHaveLength(1);
+    expect(answer.guests[0].key ?? null).toBeNull();
+  });
+
+  it("starts the unmatched answer from the card", () => {
+    setup({ ...soloWithOthers(), others_answer: "unsure" });
+    expect(screen.getByRole("button", { name: "Not sure" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows the stated-below notice and still lets the user confirm", async () => {
+    const { onConfirm } = setup(card({ stated_total: 1 }));
+    expect(screen.getByText("You said 1, and 3 are ticked. Untick anyone not eating.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm and start planning" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(screen.getByText("You said 1, and 1 are ticked. Untick anyone not eating.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "One fewer person" }));
+    await userEvent.click(screen.getByRole("button", { name: "One fewer person" }));
+    expect(screen.queryByText(/You said 1/)).not.toBeInTheDocument();
+    const answer = await confirm(onConfirm);
+    expect(answer.headcount).toBe(1);
+  });
+
+  it("follow-up card: unticking lowers the total", async () => {
+    const { onConfirm } = setup(card({ others_answer: null }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(total()).toHaveValue(1);
+    expect(screen.queryByText(/not matched yet/)).not.toBeInTheDocument();
+    const answer = await confirm(onConfirm);
+    expect(answer.others).toBe(0);
+    expect(answer.headcount).toBe(1);
+  });
+
+  it("first-turn card: unticking keeps the total", async () => {
+    setup(card());
+    await userEvent.click(screen.getByRole("checkbox", { name: "Me" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(total()).toHaveValue(3);
+    expect(screen.getByText("2 people are not matched yet")).toBeInTheDocument();
+  });
+
+  it("follow-up card: removing a guest lowers the total", async () => {
+    const { onConfirm } = setup(card({ others_answer: null }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(total()).toHaveValue(2);
+    const answer = await confirm(onConfirm);
+    expect(answer.others).toBe(0);
+    expect(answer.headcount).toBe(2);
+  });
+
+  const settledCard = () =>
+    card({
+      rows: [card().rows[0]],
+      headcount: 2,
+      guests: [{ key: "guest:1", name: "小李", proposed: [], diet_words: [] }],
+      others_answer: null,
+    });
+
+  it("a removed settled guest is not sent", async () => {
+    const { onConfirm } = setup(settledCard());
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    const answer = await confirm(onConfirm);
+    expect(answer.guests).toEqual([]);
+  });
+
+  it("a settled guest key survives a draft remount", async () => {
+    mockFetch({});
+    let saved: DinerDraft | undefined;
+    const first = renderWithProviders(
+      <DinerCard pending={settledCard()} busy={false} onConfirm={vi.fn()} onDraft={(d) => (saved = d)} />,
+    );
+    await waitFor(() => expect(saved).toBeDefined());
+    first.unmount();
+    const onConfirm = vi.fn<(answer: DinerAnswer) => void>();
+    renderWithProviders(<DinerCard pending={settledCard()} busy={false} onConfirm={onConfirm} draft={saved} />);
+    const answer = await confirm(onConfirm);
+    expect(answer.guests[0].key).toBe("guest:1");
+  });
+
+  it("follow-up card: untick then re-tick restores the total", async () => {
+    setup(card({ headcount: 5, others_answer: null }));
+    expect(screen.getByText("2 people are not matched yet")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(total()).toHaveValue(4);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Xiao Wang" }));
+    expect(total()).toHaveValue(5);
+    expect(screen.getByText("2 people are not matched yet")).toBeInTheDocument();
+    expect(screen.queryByText(/The number of people is now/)).not.toBeInTheDocument();
+  });
+
+  it("follow-up card: adding the unmatched as guests keeps the total", async () => {
+    setup(card({ rows: [card().rows[0]], guests: [], headcount: 4, others_answer: null }));
+    expect(total()).toHaveValue(4);
+    await userEvent.click(screen.getByRole("button", { name: "Yes, I'll fill them in" }));
+    expect(total()).toHaveValue(4);
+    expect(screen.getAllByLabelText("Name")).toHaveLength(3);
+    expect(screen.queryByText(/not matched yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The number of people is now/)).not.toBeInTheDocument();
+  });
+
+  it("first-turn card: adding the unmatched as guests keeps the total", async () => {
+    setup(card({ rows: [card().rows[0]], guests: [], headcount: 4 }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, I'll fill them in" }));
+    expect(total()).toHaveValue(4);
+    expect(screen.queryByText(/The number of people is now/)).not.toBeInTheDocument();
   });
 });

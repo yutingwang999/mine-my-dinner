@@ -132,7 +132,7 @@ export type DinerRow = {
 };
 
 /** A person from the conversation who is not a saved friend. */
-export type GuestRow = { name: string | null; proposed: ProposedRule[]; diet_words: string[] };
+export type GuestRow = { key?: string | null; name: string | null; proposed: ProposedRule[]; diet_words: string[] };
 
 /** The diner card's interrupt value (backend build_card). */
 export type DinersPending = {
@@ -144,12 +144,16 @@ export type DinersPending = {
   others: number;
   /** The request mentions a restriction, but no rule was parsed. */
   nudge: boolean;
+  /** Follow-up card only: the unmatched answer already given. The key is always present on a follow-up card (null when unanswered) and never on a first-turn card, so it tells them apart. */
+  others_answer?: "none" | "unsure" | null;
+  /** Follow-up card only: the message's number, when it is below the preselected people. */
+  stated_total?: number | null;
 };
 
 /** A rule ticked or entered on the card; `save` writes it to the person's profile. */
 export type RuleChoice = RuleWrite & { save: boolean };
 
-export type GuestAnswer = { name: string | null; rules: RuleChoice[]; save: boolean };
+export type GuestAnswer = { key?: string | null; name: string | null; rules: RuleChoice[]; save: boolean };
 
 /** The confirmed diner card (backend DinerAnswer). */
 export type DinerAnswer = {

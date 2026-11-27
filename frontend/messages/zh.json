@@ -480,6 +480,7 @@
       "asked": "这顿谁吃？",
       "me": "我",
       "summarySelf": "我",
+      "statedBelow": "你说的是 {said} 个人，现在勾选了 {ticked} 个，请把不来吃的取消勾选。",
       "headcountChanged": "人数已改为 {count} 人。",
       "nudge": "你提到了忌口，请确认已经填上",
       "dietHint": "暂不支持按类别忌口，请把不吃的食材（如猪肉、牛肉、鸡肉、鱼、虾）逐个加上",

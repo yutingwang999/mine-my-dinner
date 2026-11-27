@@ -480,6 +480,7 @@
       "asked": "Who is eating?",
       "me": "Me",
       "summarySelf": "you",
+      "statedBelow": "You said {said}, and {ticked} are ticked. Untick anyone not eating.",
       "headcountChanged": "The number of people is now {count}.",
       "nudge": "You mentioned a dietary limit. Please check that it is filled in.",
       "dietHint": "Rules by food category are not supported yet. Add each ingredient they do not eat (such as pork, beef, chicken, fish, shrimp).",

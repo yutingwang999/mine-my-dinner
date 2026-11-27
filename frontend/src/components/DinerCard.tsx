@@ -22,7 +22,7 @@ const MAX_OTHERS = 50;
 
 type Choice = { rule: ProposedRule; ticked: boolean; save: boolean };
 
-type Guest = { key: number; name: string; choices: Choice[]; dietWords: string[]; save: boolean };
+type Guest = { key: number; settled: string | null; name: string; choices: Choice[]; dietWords: string[]; save: boolean };
 
 type OthersAnswer = "none" | "unsure";
 
@@ -156,6 +156,7 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
       draft?.guests ??
       pending.guests.map((guest, key) => ({
         key,
+        settled: guest.key ?? null,
         name: guest.name ?? "",
         choices: ticked(guest.proposed),
         dietWords: guest.diet_words,
@@ -165,7 +166,7 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
   const [nextKey, setNextKey] = useState(draft?.nextKey ?? pending.guests.length);
   // Row keys being edited: "diner:<id>" or "guest:<key>".
   const [editing, setEditing] = useState<Set<string>>(new Set());
-  const [othersAnswer, setOthersAnswer] = useState<OthersAnswer | null>(draft?.othersAnswer ?? null);
+  const [othersAnswer, setOthersAnswer] = useState<OthersAnswer | null>(draft ? draft.othersAnswer : (pending.others_answer ?? null));
   const [error, setError] = useState<unknown>(null);
   // The editable total (spec 5.2), prefilled with the card's headcount. It never falls below
   // the people ticked and added, and rises with them (`raised` shows the notice).
@@ -205,6 +206,8 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
   const headcount = Math.max(total, eating);
   // The people the total holds beyond those ticked and added; the backend takes at most 50.
   const others = Math.min(MAX_OTHERS, headcount - eating);
+  // Only the backend's follow-up card carries `others_answer`, even when it is null.
+  const followUp = pending.others_answer !== undefined;
   const roomForGuests = MAX_GUESTS - guests.length;
 
   function clampTotal(value: number, onCard: number): number {
@@ -222,6 +225,21 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
     } else if (total > onCard + MAX_OTHERS) {
       setTotal(onCard + MAX_OTHERS);
     }
+  }
+
+  /** A follow-up card: someone leaving takes one off the total too (spec 5.2). */
+  function leave(onCard: number) {
+    setTotal(clampTotal(headcount - 1, onCard));
+    setRaised(false);
+  }
+
+  /**
+   * A follow-up card: someone joining puts one each back on the total (the reverse of `leave`).
+   * The hint shows only when the people on the card exceed the card's own total.
+   */
+  function join(count: number, onCard: number) {
+    setTotal(clampTotal(headcount + count, onCard));
+    setRaised(onCard > pending.headcount);
   }
 
   /** A total stepped or typed by the user, kept between the people on the card and the limit. */
@@ -262,12 +280,15 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
     const next = new Set(selected);
     if (!next.delete(dinerId)) next.add(dinerId);
     setSelected(next);
-    fitTotal(next.size + guests.length);
+    if (!followUp) fitTotal(next.size + guests.length);
+    else if (next.has(dinerId)) join(1, next.size + guests.length);
+    else leave(next.size + guests.length);
   }
 
   function newGuests(count: number): Guest[] {
     return Array.from({ length: count }, (_, index) => ({
       key: nextKey + index,
+      settled: null,
       name: "",
       choices: [],
       dietWords: [],
@@ -275,16 +296,19 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
     }));
   }
 
-  function addGuests(count: number) {
+  /** `fromOthers`: the unmatched people become named guests, so the total stays as it is. */
+  function addGuests(count: number, fromOthers = false) {
     setGuests((current) => [...current, ...newGuests(count)]);
     setNextKey((current) => current + count);
     setOthersAnswer(null);
-    fitTotal(eating + count);
+    if (!fromOthers && followUp) join(count, eating + count);
+    else fitTotal(eating + count);
   }
 
   function removeGuest(key: number) {
     setGuests((current) => current.filter((old) => old.key !== key));
-    fitTotal(eating - 1);
+    if (followUp) leave(eating - 1);
+    else fitTotal(eating - 1);
   }
 
   function updateGuest(key: number, change: (guest: Guest) => Guest) {
@@ -335,6 +359,7 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
       guests: guests.map((guest) => {
         const name = guest.name.trim() || null;
         return {
+          ...(guest.settled ? { key: guest.settled } : {}),
           name,
           rules: guest.choices.filter((choice) => choice.ticked).map((choice) => toChoice(choice.rule, false)),
           save: guest.save && name !== null,
@@ -392,6 +417,9 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
         </span>
       </div>
       {raised && <p className="hint">{t("headcountChanged", { count: headcount })}</p>}
+      {pending.stated_total != null && headcount > pending.stated_total && (
+        <p className="notice notice-info">{t("statedBelow", { said: pending.stated_total, ticked: eating })}</p>
+      )}
       {pending.nudge && <p className="notice notice-warning">{t("nudge")}</p>}
       <ul className="diner-list">
         {pending.rows.map((row) => {
@@ -546,7 +574,7 @@ export function DinerCard({ pending, busy, onConfirm, draft, onDraft }: Props) {
             >
               {t("noLimits")}
             </button>
-            <button type="button" disabled={busy || others > roomForGuests} onClick={() => addGuests(others)}>
+            <button type="button" disabled={busy || others > roomForGuests} onClick={() => addGuests(others, true)}>
               {t("fillIn")}
             </button>
             <button
