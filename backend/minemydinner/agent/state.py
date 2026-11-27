@@ -83,5 +83,19 @@ class ChatState(TypedDict):
     # grows; a conversation starts one with the user as "Diner 1".
     diner_labels: dict | None
     # The confirmed diner set (SettledDiners.to_state()), reused by later requests that do
-    # not change who eats; replaced by the next confirmed card, None after a skipped card.
+    # not change who eats; replaced by the next confirmed card, None after a skipped card. A
+    # skipped card on a people turn (plan 3b-2 (two) spec 5.1) leaves it as it was.
     settled_diners: dict | None
+    # The parse's own headcount, before `carry_unstated` fills it from the plan's request: the
+    # number the message states, which the follow-up card's total starts from. Set by every
+    # parse and kept across turns (a new message does not reset it): a turn that reuses the
+    # last parse ("plan again") reuses its headcount too, which is correct.
+    parsed_headcount: int | None
+    # This turn's diner card was skipped on a people turn (the confirmed set stays). Reset by
+    # every new message.
+    diners_skipped: bool
+    # This turn's confirmed card changed the confirmed set (who eats, their meal-only rules,
+    # the unmatched people or the headcount): on a people turn the plan then gets a new
+    # version even when no dish changes, so its diners line shows the new set. Reset by every
+    # new message.
+    diners_changed: bool

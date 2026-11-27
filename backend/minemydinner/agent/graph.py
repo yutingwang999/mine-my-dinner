@@ -61,6 +61,7 @@ from minemydinner.agent.change_text import (
     from_version,
     kept_locked,
     locked_changed_text,
+    locked_count_kept,
     must_unmet_names,
     open_conflict_ids,
     partial_text,
@@ -71,6 +72,7 @@ from minemydinner.agent.change_text import (
     unchanged_note,
     unfinished_sentence,
     which_dish_question,
+    who_eats_sentence,
     wish_matched_nothing,
     wish_targets_capped,
     wish_targets_locked,
@@ -84,12 +86,14 @@ from minemydinner.agent.diners import (
     answer_summary,
     apply_answer,
     build_card,
+    build_follow_up_card,
     card_needed,
     constraints_from,
     guest_key,
     not_yet_known,
     profile_rules,
     settled_friend_deleted,
+    settled_from_plan,
     settled_rules,
     stated_friend_rules,
     stated_to_rules,
@@ -104,9 +108,18 @@ from minemydinner.agent.labels import (
     load_label_context,
 )
 from minemydinner.agent.edits import locked_ids, revised_card
+from minemydinner.agent.diner_change import (
+    message_sets_counts,
+    moved_counts,
+    must_change,
+    people_constraints,
+    remakes,
+)
 from minemydinner.agent.follow_up import (
     FollowUpReading,
+    ReadAdd,
     ReadConditions,
+    ReadCounts,
     hand_edit_line,
     reader_messages,
     request_after,
@@ -387,8 +400,9 @@ def _reads_follow_up(state: ChatState) -> bool:
 
 
 # The intent each reading kind continues with: a change takes the change path (no parse); a
-# people message is parsed as a follow-up (the plan line, `carry_unstated`) and always shows
-# the diner card (`after_parse`); a new meal plans anew.
+# people message is parsed as a follow-up (the plan line, `carry_unstated`), always shows the
+# diner card (`after_parse`) and then adjusts the plan on the change path (`after_diners`); a
+# new meal plans anew.
 READING_INTENTS = {"change": "revise", "people": "revise", "new_meal": "plan", "other": "other"}
 
 # The count fields of a request, as the reader's conditions name them.
@@ -500,7 +514,35 @@ def _fresh_turn(state: ChatState) -> dict:
         "asked_question": False,
         "button": None,
         "reading": None,
+        "diners_skipped": False,
+        "diners_changed": False,
     }
+
+
+def _people_turn(state: ChatState) -> bool:
+    """This turn's reading changes who eats on a plan with dishes (plan 3b-2 (two) spec 5.1):
+    after the diner card the plan is adjusted on the change path, never planned anew."""
+    return (state.get("reading") or {}).get("kind") == "people" and _has_dishes(state)
+
+
+def _same_set(before: dict | None, after: dict | None) -> bool:
+    """Two confirmed diner sets (`SettledDiners.to_state()`) hold the same people: the same
+    diners, guests (by key and name) with the same meal-only rules, the same unmatched people
+    and answer, and the same headcount. The headcount the parse stated is not compared."""
+
+    def key(data: dict | None):
+        if data is None:
+            return None
+        return (
+            sorted(data.get("diner_ids") or []),
+            sorted(json.dumps(rule, sort_keys=True) for rule in data.get("meal_rules") or []),
+            sorted((data.get("guest_names") or {}).items()),
+            int(data.get("others") or 0),
+            data.get("others_answer"),
+            int(data["headcount"]),
+        )
+
+    return key(before) == key(after)
 
 
 def _button_turn(state: ChatState) -> bool:
@@ -912,6 +954,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         messages = [SystemMessage(load_prompt("parse")), *conversation]
         result = deps.client.invoke_structured(deps.task, messages, ParsedRequest)
         parsed = _restore_parsed(result.parsed.model_dump())
+        # The number the message itself states, before the plan's request fills a null.
+        parsed_headcount = parsed.get("headcount")
         if _revises(state):
             # A null is no statement on a revise turn either: the request behind the plan fills
             # it before the diner-card check reads it, so a parse that left out the headcount
@@ -919,6 +963,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             parsed = carry_unstated(parsed, state.get("plan_request"))
         return {
             "request": parsed,
+            "parsed_headcount": parsed_headcount,
             "model_calls": [
                 *(state.get("model_calls") or []),
                 _model_call_event(deps.client, "parse", messages, result),
@@ -952,8 +997,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return "unclear"
         if _revises(state):
             # A follow-up never asks the ask-first question: unstated fields come from the
-            # current plan. A reading of kind "people" always shows the diner card and plans
-            # anew (plan 3b-2 spec 5.1); load_context then marks the turn as a plan.
+            # current plan. A reading of kind "people" always shows the diner card, then
+            # adjusts the plan (plan 3b-2 (two) spec 5.1, `after_diners`).
             if (state.get("reading") or {}).get("kind") == "people":
                 return "select_diners"
             # With no dish to change (after an early stop) it plans from this parse.
@@ -1026,18 +1071,42 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         """The diner card (spec 5.2, 5.3). A confirmed answer (a dict) is applied by code and
         becomes the conversation's settled diner set; guests get labels in the table. A
         skipped card (None or text) plans as before the card existed: the user alone with
-        the parse's headcount, the rest unconfirmed, and no settled set."""
+        the parse's headcount, the rest unconfirmed, and no settled set.
+
+        Plan 3b-2 (two) spec 5.1, 5.2: with a confirmed set, or on a people turn on a plan
+        with dishes, the card takes its follow-up shape and starts from that set; a people
+        turn on a thread with no confirmed set starts from the plan's own facts
+        (`settled_from_plan`). Its total starts from the headcount the parse states
+        (`parsed_headcount`), never the one carried from the plan. A skipped card on a people
+        turn keeps the set as it was (`diners_skipped`)."""
         parsed = ParsedRequest.model_validate(state["request"])
         ctx = current_labels.get()
         texts = _current_request(state["messages"])
+        people = _people_turn(state)
+        stated = state.get("parsed_headcount")
         with deps.session_factory() as session:
+            before = state.get("settled_diners")
+            if before is None and people:
+                self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+                before = settled_from_plan(self_id, state["constraints"])
             matched = _matched_friend_ids(texts, ctx.friends, ctx.food_terms, parsed, ctx.table)
-            card = build_card(session, parsed, ctx.table, matched, "\n".join(texts))
+            if before is not None:
+                card = build_follow_up_card(
+                    session, parsed, ctx.table, matched, "\n".join(texts), before, stated
+                )
+            else:
+                card = build_card(session, parsed, ctx.table, matched, "\n".join(texts))
         answer = interrupt(card)
-        update: dict[str, Any] = {"settled_diners": None}
+        update: dict[str, Any] = {}
         if not isinstance(answer, dict):
             asked = {"kind": "diners", "summary": None}
             update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
+            if people:
+                # Who eats did not change: the set stays, and the reading's other changes
+                # still run on the change path.
+                update["diners_skipped"] = True
+            else:
+                update["settled_diners"] = None
             return update
         chosen = DinerAnswer.model_validate(answer)
         with deps.session_factory() as session:
@@ -1045,9 +1114,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # the commit would create a saved guest twice.
             asked = {"kind": "diners", "summary": answer_summary(session, chosen)}
             update["questions"] = [*(state.get("questions") or []), _question(state, asked)]
-            settled = apply_answer(session, chosen, ctx.table, stated_headcount=parsed.headcount)
+            settled = apply_answer(
+                session, chosen, ctx.table, stated_headcount=stated, settled=before
+            )
             update["settled_diners"] = settled.to_state()
+        update["diners_changed"] = not _same_set(before, update["settled_diners"])
         return update
+
+    def after_diners(state: ChatState) -> str:
+        """Plan 3b-2 (two) spec 5.1: after the card a people turn adjusts the current plan on
+        the change path; every other turn plans from the confirmed set."""
+        return "build_change" if _people_turn(state) else "load_context"
 
     def _question(state: ChatState, value: dict) -> dict:
         # Shown in the chat and rendered into the parse input (parse_messages): `at` is the
@@ -1541,12 +1618,51 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         button's request, and the reading is the offering card's unfinished parts
         (`button_reading`). The dishes that break the new request come from `validate_plan`
         on the kept plan (overrides carried, so a dish kept against a rule by the user's
-        confirmation is not breaking). Starts the planning run, recording the frame."""
+        confirmation is not breaking). Starts the planning run, recording the frame.
+
+        A people turn (plan 3b-2 (two) spec 5.3-5.5) runs here after the diner card: the
+        constraints come from the confirmed set (the old ones after a skipped card), the
+        request takes the new headcount, and the counts the headcount moves bind as this
+        message's stated counts unless the message states its own. When more than half of
+        the plan must change, the plan is made again (`remake`)."""
         button = state["button"] if _button_turn(state) else None
         base = state["plan_request"]
+        index = from_version(state["current_plan"], state.get("plan_versions") or [])
+        with deps.session_factory() as session:
+            plan, deleted = live_plan(session, state["current_plan"])
+        people: dict | None = None
+        people_set = state["constraints"]
         if button is None:
             reading = FollowUpReading.model_validate(state["reading"])
+            if reading.kind == "people":
+                skipped = bool(state.get("diners_skipped"))
+                old = int(state["constraints"]["headcount"])
+                people_set = people_constraints(
+                    None if skipped else state.get("settled_diners"), state["constraints"]
+                )
+                new = int(people_set["headcount"])
+                present = count_categories(r["dish_type"] for r in plan["recipes"])
+                moved = {} if message_sets_counts(reading) else moved_counts(old, new, present)
+                if moved:
+                    # The moved counts bind like counts the message states (spec 5.3).
+                    changes: dict[str, Any] = {"counts": ReadCounts(**moved)}
+                    more = moved.get("dishes", present["dishes"]) - present["dishes"]
+                    if more > 0:
+                        # An added dish is a meat or a vegetable dish of the picker's choice
+                        # (spec 5.3, 5.5): untyped adds, which the frame takes out of the
+                        # side total, so no typed side add is made; the total still binds.
+                        changes["add"] = [*reading.add, ReadAdd(dish_type=None, count=more)]
+                    reading = reading.model_copy(update=changes)
+                people = {
+                    "old_headcount": old,
+                    "new_headcount": new,
+                    "present": present,
+                    "moved": moved,
+                    "skipped": skipped,
+                }
             request = request_after(base, reading)
+            if people is not None:
+                request["headcount"] = people["new_headcount"]
             words = "\n".join(_current_request(state["messages"]))
             unfinished = None
         else:
@@ -1558,10 +1674,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if request_problem(parsed):
             # Stated counts that contradict each other: nothing changes (no question, spec
             # 5.6); the reply asks for the counts again.
-            return Command(update={"model_calls": []}, goto="unclear")
-        index = from_version(state["current_plan"], state.get("plan_versions") or [])
-        with deps.session_factory() as session:
-            plan, deleted = live_plan(session, state["current_plan"])
+            stop: dict[str, Any] = {"model_calls": []}
+            if people is not None:
+                # The card already confirmed the set: the constraints and the plan's request
+                # follow it, so they never split from `settled_diners`.
+                with deps.session_factory() as session:
+                    stop["constraints"] = with_meal_avoid(
+                        session, people_set, list(plan["meal_avoid"])
+                    )
+                stop["plan_request"] = {**base, "headcount": people["new_headcount"]}
+            return Command(update=stop, goto="unclear")
         # A reading's counts are this message's own (request_after clears the count group),
         # so a side it states counts even when it equals the plan's request ("还是要两个荤菜"
         # after a turn that could not add one); the other fields still compare with it.
@@ -1589,10 +1711,24 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         ids = [r["id"] for r in plan["recipes"]]
         named: dict[str, int] = {}
         with deps.session_factory() as session:
-            constraints = with_meal_avoid(session, state["constraints"], meal_avoid)
+            constraints = with_meal_avoid(session, people_set, meal_avoid)
             ctx = load_planning_context(session, meal_constraints({"constraints": constraints}))
             found = validate_plan(session, ctx, spec, ids, carried_overrides(plan, ids))
             breaking = breaking_from(found)
+            locked = locked_ids(plan) - open_conflict_ids(plan)
+            remade = False
+            if people is not None:
+                # Spec 5.4: the dishes that break the new set's rules plus those the moved
+                # counts drop. More than half: make it again, but only when some dish is
+                # unlocked (with every dish locked a remake would change nothing).
+                must = must_change(
+                    breaking,
+                    people["present"],
+                    people["moved"],
+                    {r["id"]: r["dish_type"] for r in plan["recipes"]},
+                )
+                remade = remakes(len(ids), must) and any(i not in locked for i in ids)
+                people.update(must_change=must, remade=remade)
             before = {fold(n) for n in PlanSpec.model_validate(plan["spec"]).must_use}
             uncovered = sorted(
                 n for n in must_unmet_names(found.violations) if fold(n) not in before
@@ -1608,7 +1744,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
 
             frame = build_frame(
                 ids,
-                locked_ids(plan) - open_conflict_ids(plan),
+                locked,
                 facts,
                 plan["spec"],
                 spec,
@@ -1617,6 +1753,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 lookup,
                 words,
                 uncovered_must=uncovered,
+                remake=remade,
             )
         prepare = deps.client.prepare_text
         record = {
@@ -1645,6 +1782,22 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             del deps.run_query_vectors[stale]
         for event in state.get("model_calls") or []:
             deps.recorder.add_event(run_id, event)
+        diner_change = None
+        if people is not None:
+            # Spec 5.8: after the reader and parse calls, before the frame.
+            diner_change = {
+                key: people[key]
+                for key in (
+                    "old_headcount",
+                    "new_headcount",
+                    "present",
+                    "moved",
+                    "must_change",
+                    "remade",
+                    "skipped",
+                )
+            }
+            deps.recorder.add_event(run_id, {"kind": "diner_change", **diner_change})
         pairs = [[i, reason] for i, reason in breaking.items()]
         deps.recorder.add_event(
             run_id,
@@ -1678,6 +1831,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 for e in state.get("model_calls") or []
                 if e.get("kind") == "model_call" and e.get("step") != "read_follow_up"
             ),
+            # A people turn's change in who eats (spec 5.3, 5.4), for the reply; None on any
+            # other turn.
+            "diner_change": diner_change,
         }
         update = {
             "request": request,
@@ -2252,6 +2408,32 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 ],
             }
         new_conditions = conditions_changed(live, compared, meal_avoid)
+        diner_change = change.get("diner_change")
+        if diner_change is not None and state.get("diners_changed"):
+            # Plan 3b-2 (two): a new confirmed set is a change of conditions, so the same
+            # dishes make a new version whose diners line shows the set.
+            new_conditions = True
+        who_text = locked_text = ""
+        if diner_change is not None:
+            who_text = who_eats_sentence(
+                diner_change["old_headcount"],
+                diner_change["new_headcount"],
+                diner_change["moved"],
+                diner_change["present"],
+                locale,
+            )
+            if diner_change["moved"] and result_ids:
+                # A count the new headcount lowers that the result still exceeds: the dishes
+                # it would drop are all locked (spec 5.4, a drop never takes a locked dish).
+                with deps.session_factory() as session:
+                    types = dict(
+                        session.execute(
+                            select(Recipe.id, Recipe.dish_type).where(Recipe.id.in_(result_ids))
+                        ).all()
+                    )
+                have = count_categories(types[i] for i in result_ids if i in types)
+                if any(have[k] > v for k, v in diner_change["moved"].items()):
+                    locked_text = locked_count_kept(locale)
         frame_empty = not (
             frame.drops or frame.slots or frame.choices or frame.placed or frame.missing
         )
@@ -2311,10 +2493,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     live, result_ids, change, outcome["slots"], titles, breaking, meal_avoid,
                     locale, removed=[i["recipe_id"] for i in items if i["kind"] == "removed"],
                 )
-                if not done and not dishes_changed:
+                if not done and not dishes_changed and not locked_text:
                     done = conditions_only_note(locale)
                 parts = [
+                    who_text,
                     done,
+                    locked_text,
                     read_text,
                     nothing_text,
                     capped_text,
@@ -2335,7 +2519,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     # The wish matched nothing: that sentence says why the plan stays.
                     lead, nothing_text = nothing_text, ""
                 parts = [
+                    who_text,
                     lead,
+                    locked_text,
                     read_text,
                     nothing_text,
                     capped_text,
@@ -2357,6 +2543,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 defaults_used=current.get("defaults_used") or [],
                 search_notes=card_search_notes(current),
             )
+            if diner_change is not None:
+                # The confirmed set stands whatever happened to the dishes: the constraints
+                # above are its own, and the plan's request takes its headcount.
+                update["plan_request"] = {
+                    **(state.get("plan_request") or {}),
+                    "headcount": diner_change["new_headcount"],
+                }
         words = change.get("words") or ""
         card = _reply_card(card, state["request"], plan_kept=plan_kept, words=words)
         left = (
@@ -2495,7 +2688,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     builder.add_conditional_edges("parse_request", after_parse, gates)
     builder.add_conditional_edges("ask_style", after_parse, gates)
     builder.add_edge("ask_question", "parse_request")
-    builder.add_edge("select_diners", "load_context")
+    builder.add_conditional_edges(
+        "select_diners", after_diners, ["build_change", "load_context"]
+    )
     builder.add_edge("load_context", "check_feasibility")
     builder.add_edge("planner", "validate_plan")
     builder.add_edge("present_plan", END)

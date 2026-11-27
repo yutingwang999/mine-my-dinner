@@ -56,13 +56,14 @@ flowchart TD
 
     AP -->|"the request contradicts itself (request_problem)<br/>and this message has not been asked about"| Q["⏸ Question ask_question<br/>(one node: the contradiction if any,<br/>otherwise the mode / dish count)"] --> PR
     AP -->|"contradiction, already asked"| U["unclear: the fixed did-not-understand reply"] --> E2([End])
-    AP -->|"intent = revise, read as people"| D
+    AP -->|"intent = revise, read as people"| DP["⏸ Diner card select_diners, follow-up shape<br/>(starts from the confirmed set; with none,<br/>from the plan's own facts: the user + headcount − 1 others)"]
+    DP -->|"after_diners: a people turn<br/>(confirmed, or skipped: the set stays):<br/>adjust, or make it again when<br/>more than half must change"| BC
     AP -->|"intent = revise, the plan has no dishes<br/>(after an early stop)"| DC{"Diner card needed?"}
     DC -->|"yes"| D
     DC -->|"no"| LC
     AP -->|"new plan: no request style set yet"| ST["⏸ Request style card ask_style<br/>ask first / plan first"] --> AP
     AP -->|"new plan: style ask-first,<br/>no mode or no dish count, not asked for this message"| Q
-    AP -->|"new plan: card_needed is true"| D["⏸ Diner card select_diners"]
+    AP -->|"new plan: card_needed is true"| D["⏸ Diner card select_diners<br/>(follow-up shape when a set is confirmed)"]
     AP -->|"plan again with the reused parse:<br/>a friend in the settled set was deleted"| D
     AP -->|"otherwise"| LC
 
@@ -85,7 +86,8 @@ flowchart TD
 | revise becomes plan | `current_plan` is empty | There is no plan to change. A no-plan or early-stop reply counts as "a plan with no dishes": a route answer revise parses the message as a follow-up and plans from scratch |
 | Contradiction question | `request_problem`: the meat and vegetable ranges do not fit the total, or the total is over the limit | Asked in every style, at most once per new message. On the change branch, contradicting stated counts get the did-not-understand reply (no question) |
 | No ask-first question with intent revise | `_revises(state)` is true | Unstated fields come from the current plan (`carry_unstated`), not from the defaults |
-| Diner card | New plan: `card_needed` (table below). A `people` reading always shows it. Plan again with the reused parse ignores `card_needed` and checks only whether a friend in the settled set was deleted (`friend_deleted_since`) | A change in who eats must be confirmed by the user, never made quietly; plan again reuses the people already confirmed |
+| Diner card | New plan: `card_needed` (table below). A `people` reading always shows it. Plan again with the reused parse ignores `card_needed` and checks only whether a friend in the settled set was deleted (`friend_deleted_since`). With a confirmed set, or on a `people` turn, the card takes its follow-up shape (`build_follow_up_card`): it starts from the confirmed set (on a thread with none, from the plan's facts, `settled_from_plan`), and its total from the headcount the parse states (`parsed_headcount`, before `carry_unstated`) | A change in who eats must be confirmed by the user, never made quietly; plan again reuses the people already confirmed; nobody leaves the set without the user's own act |
+| After the card | `after_diners`: a `people` reading on a plan with dishes → `build_change` (the plan is adjusted, never planned anew); anything else → `load_context` | Plan 3b-2 (two) spec 5.1: hand edits and locked dishes survive a change in who eats |
 | Order of the checks | contradiction → intent revise (people shows the card / the card check when there are no dishes) → request style → ask-first question → diner card → `load_context` | Intent revise comes before the request style, so a follow-up never shows the request-style card |
 | Request-style card | No `request_style` in the database yet | Asked once; skipped means plan first |
 | Ask-first question | Style `ask_first`, and `mode` is empty or no dish count was stated; not yet asked for this request | design 6.2 |
@@ -97,7 +99,7 @@ flowchart TD
 | Any time | The user states a new rule of their own |
 | No settled diner set yet | The user states a diet word about themselves ("吃素"); or the headcount is 2 or more, someone else is mentioned, the parse finds a guest, a saved friend is recognised, or someone else's rule is stated |
 | A settled set exists | A friend in the set was deleted; a friend or guest outside the set appears; a rule the set lacks is stated; the set has others but this parse says the user eats alone; the parsed headcount differs from the confirmed one |
-| A follow-up on a plan with dishes | The reader reads `people` (a change in who eats, or a lasting rule about someone): the card shows, then the meal is planned from scratch. (Planned: 3b-2 plan two will adjust the plan instead) |
+| A follow-up on a plan with dishes | The reader reads `people` (a change in who eats, or a lasting rule about someone): the card shows in its follow-up shape, then the current plan is adjusted on the change branch (Section 3, "A people turn"). A skipped card keeps the confirmed set; the reading's other changes still run |
 
 **One-meal avoidance**: words about this meal only ("今天不想吃土豆") are nobody's lasting rule and show no card.
 - First turn: the parse puts it in `meal_avoid` (`parse_v8`).
@@ -252,7 +254,7 @@ It never sees the conversation, the reading, or the rest of the request summary 
 
 The retry message: `Your previous answer had these problems. Answer again with each one fixed:` and one line per problem (a choice answered wrongly, a typed add of the wrong type, an add with no type filled with a dish that is no meat or vegetable dish ("Slot <n> must be a meat or vegetable dish."), a stated count broken, a dish already in the plan, a new dish that breaks a rule / misses stock / misses cookware / is over time, a dish chosen for a must-use ingredient that does not use it).
 
-Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again and less the turn's model calls that are not the reader's (`earlier_calls`; none on a change turn today)); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
+Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again and less the turn's model calls that are not the reader's (`earlier_calls`: the parse on a people turn, none on a change turn)); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
 
 ### The picker's answer (`PickerAnswer`, `pick_v6`)
 
@@ -302,6 +304,17 @@ Known gap (in `docs/phase-1-carryover.md`): when only this final check removes a
 - A change that leaves no dish ("全都不要了"): nothing changes, and the reply asks whether to plan a new meal.
 - Mode, time and named ingredients change only when the reading states them; an unmentioned one is never cleared (clearing the time limit takes an explicit `clear_time_limit`). The one-meal avoidance is the reading's whole list, so it can be withdrawn.
 
+### A people turn: adjust, or make it again (since 3b-2 (two))
+
+After the diner card of a `people` reading, `build_change` runs on the current plan:
+- **Constraints:** from the newly confirmed set (`people_constraints`), with this meal's avoidance as usual; after a skipped card, the old ones. `old` is the plan's headcount, `new` the set's.
+- **Counts the headcount moves** (`moved_counts`): the plan's dishes move by the change in the default composition's dishes (1 → 1+0, 2 → 2+0, 3–4 → 2+1, 5+ → 3+1), never below 1, and its soups by the change in soups, never below 0. They are put on the reading as its stated counts before `request_after`, so they bind like counts the message states; a rise in the dishes is also put on the reading as untyped adds (a meat or a vegetable dish of the picker's choice), which the frame takes out of the side total, so no typed side add is made. When the message states its own counts (any `add` or any stated count, `message_sets_counts`), the difference is not applied at all. Equal defaults (3 → 4 people) move nothing.
+- **The request** takes the new headcount.
+- **Must change** (`must_change`): the dishes that break a rule of the new set (locked dishes included) plus those the moved counts drop. When more than half of the plan's dishes must change (`remakes`) and some dish is unlocked, the plan is **made again**: `build_frame(remake=True)` turns every unlocked dish into a replace slot, and a locked dish that breaks no rule stays. Otherwise the frame **adjusts**: rule breakers become replace slots, and the moved counts add or drop dishes as on any stated count. With every dish locked a remake would change nothing, so none is claimed.
+- **The plan stays** only as on any change; even then the new constraints stay and `plan_request` takes the new headcount. When the confirmed set changed (`diners_changed`), the same dishes make a new version, so the card's diners line shows the new set.
+- **The reply** leads with the who-eats sentence ("现在是 4 个人吃。"). When the moved counts would drop dishes that are all locked, the reply says they stay and the count did not drop.
+- `change["diner_change"]` keeps `old_headcount`, `new_headcount`, `present` (the plan's counts), `moved`, `must_change`, `remade` and `skipped`; it is None on any other turn.
+
 ### Locked dishes and versions
 
 - **Locked dishes** = dishes added by hand (`locked`) + dishes with a confirmed keep. A dish with a red unconfirmed conflict is not locked, and is replaced (removed when nothing replaces it).
@@ -314,6 +327,7 @@ Known gap (in `docs/phase-1-carryover.md`): when only this final check removes a
 
 Every change turn is a planning run: the request holds `reading` (`button` on a button turn) and `revision.from_version`. Its events, in order:
 - the reader's `model_call` (step `read_follow_up`; two when it is asked again, with a `reader_reask` event between them keeping the problem and the first reading);
+- on a people turn, the parse's `model_call` (step `parse`), then `diner_change` (the keys of `change["diner_change"]`);
 - `frame` (the reading used, the breaking dishes, the must-use names no dish uses, the frame);
 - one `pick_attempt` per picker attempt (the answer in code's form, its problems, `empty_replies`, `salvaged`, `salvage_set_aside`); a tool call whose arguments could not be read is kept on the `model_call` event as `invalid_tool_calls`;
 - `change_outcome`.
@@ -329,7 +343,8 @@ The tools version is `PICK_TOOLS_VERSION`.
 | A first message, a message after an early stop | route 1 + parse 1 + the planner's 1–6 per attempt (search round trips included), at most 3 attempts; a route answer other: route 1 only |
 | On a plan with dishes, read as other | reader 1 |
 | On a plan with dishes, read as change | reader 1 + the picker when needed, 1–3 per attempt, at most 2 attempts, re-asks included, at most 6 picker calls a turn; when the reader is asked again, reader 2 + at most 5 picker calls. So at most 7. Usually 2 in all; 1 when no new dish and no choice of which dishes go is needed (a stated lower count with more candidates than dishes to drop calls the picker even with no new dish). Evaluation round 11: 2.1–2.3 on average, 4 at most |
-| On a plan with dishes, read as new_meal / people | reader 1 (2 when asked again) + parse 1 + the planner's calls per attempt, at most 3 attempts |
+| On a plan with dishes, read as people | reader 1 (2 when asked again) + parse 1 + the picker when needed, from the same budget of 6 less the parse (and a reader re-ask). So at most 7 |
+| On a plan with dishes, read as new_meal | reader 1 (2 when asked again) + parse 1 + the planner's calls per attempt, at most 3 attempts |
 | Plan again | the planner's calls per attempt |
 | A next-action button on a card that keeps its request | no route, reader or parse call; the picker when needed on a card whose plan was kept or changed in part (at most 6), the planner per attempt on any other card |
 

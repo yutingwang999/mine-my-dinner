@@ -1706,13 +1706,17 @@ def test_graph_settled_friend_deleted_asks_again(tmp_path, session, seeded, veg)
 
 
 def test_graph_alone_after_a_shared_set_asks_again(tmp_path, session, seeded, veg):
-    # "就我自己吃" changes who eats: the card shows with only the user, and confirming it
-    # replaces the set (decided by the user, 2026-11-18; nothing is cleared silently).
+    # "就我自己吃" changes who eats: the card shows, and confirming it replaces the set
+    # (decided by the user, 2026-11-18; nothing is cleared silently). Plan 3b-2 (two) spec
+    # 5.2: the follow-up card starts from the set, so Alex is still on it; the stated 1 is
+    # below the two people on the card, so it shows only as `stated_total`, and the user
+    # removes Alex.
     env, me, _, _ = plan_with_alex(tmp_path, session, veg)
     out = plan(env, "就我自己吃", parse={"headcount": 1, "dishes": 1, "mode": "shopping"})
     (card,) = out["__interrupt__"]
     assert [(row["diner_id"], row["selected"]) for row in card.value["rows"]] == [(me.id, True)]
-    assert card.value["guests"] == [] and card.value["headcount"] == 1
+    assert [(g["key"], g["name"]) for g in card.value["guests"]] == [("guest:1", "Alex")]
+    assert card.value["headcount"] == 2 and card.value["stated_total"] == 1
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
@@ -1807,10 +1811,12 @@ def test_graph_friend_only_set_survives_a_follow_up_naming_the_friend(
     assert out["constraints"]["diner_ids"] == [wang.id]
     assert "allergy peanut" in out["planner_opening"]
     # A follow-up that names nobody says nobody else eats: the card asks (decided by the
-    # user, 2026-11-19), preselecting only the user.
+    # user, 2026-11-19). Plan 3b-2 (two) spec 5.2: it starts from the confirmed set, so 小王
+    # stays preselected and the user is not added.
     out = plan(env, "再做个汤", parse=one, locale="zh")
     (card,) = out["__interrupt__"]
-    assert [row["diner_id"] for row in card.value["rows"] if row["selected"]] == [me.id]
+    assert [row["diner_id"] for row in card.value["rows"] if row["selected"]] == [wang.id]
+    assert {row["diner_id"] for row in card.value["rows"]} == {me.id, wang.id}
 
 
 def test_graph_guest_only_set_survives_a_follow_up_naming_the_guest(
@@ -1945,7 +1951,8 @@ def test_graph_alone_without_a_headcount_asks_after_a_shared_set(
 ):
     # The browser-check bug (2026-11-19): "今晚我和朋友吃饭，做三个菜" settled {me, 小王} with
     # no stated number; "就我自己吃" parsed with no headcount, no guest and no one else
-    # mentioned must show the card with only the user preselected.
+    # mentioned must show the card. Plan 3b-2 (two) spec 5.2: the card starts from the
+    # confirmed set, and the user unticks 小王.
     me = self_diner(session)
     wang = add_friend(session, "小王")
     env = labelled_env(tmp_path, session)
@@ -1957,8 +1964,9 @@ def test_graph_alone_without_a_headcount_asks_after_a_shared_set(
     assert out["settled_diners"]["stated_headcount"] is None
     out = plan(env, "就我自己吃", parse={"dishes": 3}, locale="zh")
     (card,) = out["__interrupt__"]
-    assert [row["diner_id"] for row in card.value["rows"]] == [me.id]
-    assert card.value["rows"][0]["selected"] and card.value["guests"] == []
+    rows = [(row["diner_id"], row["selected"]) for row in card.value["rows"]]
+    assert rows == [(me.id, True), (wang.id, True)]
+    assert card.value["guests"] == [] and card.value["headcount"] == 2
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert out["constraints"]["diner_ids"] == [me.id]
@@ -2459,7 +2467,10 @@ def test_a_new_meal_reading_plans_a_new_meal(revise_env):
     assert [e.get("step") for e in record.events[:2]] == ["read_follow_up", "parse"]
 
 
-def test_a_people_reading_shows_the_diner_card_and_plans_anew(tmp_path, session, seeded, veg):
+def test_a_people_reading_shows_the_diner_card_and_adjusts(tmp_path, session, seeded, veg):
+    """Plan 3b-2 (two) spec 5.1: after the card a people reading adjusts the current plan
+    (here nothing breaks the new rule and nobody joins, so the plan stays), never plans
+    anew."""
     me = self_diner(session)
     env = labelled_env(tmp_path, session)
     out = plan(
@@ -2467,6 +2478,7 @@ def test_a_people_reading_shows_the_diner_card_and_plans_anew(tmp_path, session,
         replies=[final_proposal([veg.id])], locale="zh",
     )
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    first = out
     routes = len(model_calls_by_prompt(env, "route"))
     env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     # The parse states nothing about who eats: the reading alone shows the card.
@@ -2481,9 +2493,12 @@ def test_a_people_reading_shows_the_diner_card_and_plans_anew(tmp_path, session,
     planned = len(planner_requests(env))
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert len(planner_requests(env)) == planned + 1
-    assert "revision" not in out["current_plan"]
-    assert [e.get("step") for e in run_record(env).events[:2]] == ["read_follow_up", "parse"]
+    assert len(planner_requests(env)) == planned
+    assert out["current_plan"] == first["current_plan"]
+    assert run_record(env).request["revision"] == {"from_version": 0}
+    events = run_record(env).events
+    assert [e.get("step") for e in events[:2]] == ["read_follow_up", "parse"]
+    assert events[2]["kind"] == "diner_change"
 
 
 def test_an_other_reading_leaves_the_plan_alone(revise_env):
@@ -2643,8 +2658,10 @@ def test_revise_never_asks_the_ask_first_question(revise_env):
     assert out["current_plan"] == current
 
 
-def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
+def test_revise_with_a_diner_change_adjusts(tmp_path, session, seeded, veg):
     me = self_diner(session)
+    # The added dish is untyped (spec 5.3): a vegetable dish fills it as well as a meat dish.
+    spinach = make_recipe(session, "清炒菠菜", "vegetable dish", [L("菠菜")])
     env = labelled_env(tmp_path, session)
     out = plan(
         env, "今晚吃什么", parse={"dishes": 1, "mode": "shopping"},
@@ -2658,16 +2675,19 @@ def test_revise_with_a_diner_change_plans(tmp_path, session, seeded, veg):
     assert card.value["kind"] == "diners"
     # The turn was read as people: its parse input carried the plan line, and the card shows.
     assert model_calls_by_prompt(env, "parse")[-1][-1].content.startswith(PLAN_NOTE)
-    env.model.replies = [final_proposal([veg.id])]
+    env.model.replies = [pick(slots=[(0, spinach.id)])]
     chosen = {"selected": [me.id], "guests": [{"name": "Alex", "rules": [PEANUT_RULE]}]}
     planned = len(planner_requests(env))
     out = resume(env, {card.id: chosen})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    # Planned from scratch: the planner ran, the reviser never did.
-    assert len(planner_requests(env)) == planned + 1
-    assert "revision" not in out["current_plan"]
-    assert "revision" not in run_record(env).request
+    # Plan 3b-2 (two): adjusted on the change path, the planner never ran. 1 to 2 people
+    # moves the dishes from 1 to 2, so one dish is added.
+    assert len(planner_requests(env)) == planned
+    assert out["current_plan"]["revision"] == {"from_version": 0}
+    assert run_record(env).request["revision"] == {"from_version": 0}
+    assert ids_of_plan(out["current_plan"]) == [veg.id, spinach.id]
     assert out["constraints"]["guest_rules"] == [GUEST_PEANUT]
+    assert out["constraints"]["headcount"] == 2
 
 
 # ---- a revise turn's unstated fields come from the plan's request (dev run 3 of 3b-1b) ----
@@ -2706,11 +2726,12 @@ def test_revise_with_nothing_said_about_who_eats_revises(tmp_path, session, seed
     assert [r["id"] for r in out["current_plan"]["recipes"]] == [spinach.id]
 
 
-def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
+def test_revise_with_a_new_friend_rule_adjusts_with_the_plan_mode(
     tmp_path, session, seeded, veg
 ):
-    """A lasting rule in a follow-up shows the card and plans anew (spec 5.4); the new plan
-    keeps the conditions of the plan's request that the parse does not state."""
+    """A rule in a follow-up shows the card, then adjusts the plan (plan 3b-2 (two) spec
+    5.1): the new version keeps the conditions of the plan's request the message does not
+    state, and the planner never runs."""
     env, me, wang, _ = two_for_shopping(tmp_path, session, veg)
     env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     parse = {"dishes": 1, "friend_rules": [{"code": "Diner 2", "allergens": ["peanut"]}]}
@@ -2719,10 +2740,15 @@ def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
     assert card.value["kind"] == "diners"
     env.model.replies = [final_proposal([veg.id])]
     chosen = {"selected": [me.id, wang.id], "stated": {wang.id: [PEANUT_RULE]}, "headcount": 2}
+    planned = len(planner_requests(env))
     out = resume(env, {card.id: chosen})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert len(planner_requests(env)) == planned
     record = run_record(env)
-    assert "revision" not in record.request
+    assert record.request["revision"] == {"from_version": 0}
+    # The confirmed set changed (a meal-only rule): a new version with the same dish.
+    assert out["current_plan"]["revision"] == {"from_version": 0}
+    assert ids_of_plan(out["current_plan"]) == [veg.id]
     assert record.request["spec"]["mode"] == "shopping"
     assert "mode" not in (record.defaults_used or [])
     assert out["constraints"]["headcount"] == 2
@@ -2730,12 +2756,15 @@ def test_revise_with_a_new_friend_rule_plans_anew_with_the_plan_mode(
 
 def test_revise_saying_only_me_still_shows_the_card(tmp_path, session, seeded, veg):
     """A stated headcount of 1 after a set of two is a change in who eats (decided by the
-    user, 2026-11-19): the card shows, and the new plan keeps the plan's shopping mode."""
+    user, 2026-11-19): the card shows, and the adjusted plan keeps the plan's shopping mode.
+    Plan 3b-2 (two) spec 5.2: the card keeps both people ticked and shows the stated 1 as
+    `stated_total`; the user unticks 小王."""
     env, me, _, _ = two_for_shopping(tmp_path, session, veg)
     env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     out = plan(env, "就我自己吃", parse={"headcount": 1, "dishes": 1}, locale="zh")
     (card,) = out["__interrupt__"]
-    assert card.value["kind"] == "diners" and card.value["headcount"] == 1
+    assert card.value["kind"] == "diners" and card.value["headcount"] == 2
+    assert card.value["stated_total"] == 1
     env.model.replies = [final_proposal([veg.id])]
     out = resume(env, {card.id: {"selected": [me.id], "headcount": 1}})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
@@ -3328,7 +3357,7 @@ def test_meal_avoid_is_not_a_rule(revise_env):
 
 def test_lasting_rule_still_shows_the_card(revise_env):
     env = revise_env
-    first_meal(env)
+    first = first_meal(env)
     # Plan 3b-2: a lasting rule about someone is read as people, which shows the card.
     env.model.structured["FollowUpReading"] = [{"kind": "people"}]
     out = plan(
@@ -3347,9 +3376,11 @@ def test_lasting_rule_still_shows_the_card(revise_env):
     env.model.replies = [final_proposal(dish_ids(env, "清炒小白菜", "干煸豆角", "紫菜蛋花汤"))]
     out = resume(env, {card.id: None})
     assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    # Planned anew (3b-1 behaviour), not revised.
-    assert len(planner_runs(env)) == planned + 1
-    assert "revision" not in out["current_plan"]
+    # Plan 3b-2 (two): the skipped card keeps who eats and the rule is not saved, so the
+    # turn adjusts nothing: no planner call, the plan stays.
+    assert len(planner_runs(env)) == planned
+    assert out["current_plan"] == first["current_plan"]
+    assert out["change"]["diner_change"]["skipped"] is True
 
 
 def test_meal_avoid_applies_to_a_new_plan(revise_env):
@@ -5413,3 +5444,304 @@ def test_picker_shortlist_main_is_empty_for_a_recipe_without_required_lines(revi
 def test_planner_shortlist_has_no_main_field(graph_env, veg, meat):
     out = plan(graph_env, "two dishes", parse={"dishes": 2}, replies=[final_proposal([veg.id, meat.id])])
     assert '"main"' not in out["planner_opening"]
+
+
+# ---- plan 3b-2 (two) Task 6: a people turn adjusts the current plan (spec 5.1, 5.4, 5.5) ----
+
+
+def meal_for(env, headcount: int, titles, counts: dict) -> dict:
+    """A meal for `headcount` people with the dishes `titles`. For two or more the diner card
+    shows and confirms the user and unnamed others."""
+    me = self_diner(env.session)
+    ids = dish_ids(env, *titles)
+    parse = {"headcount": headcount, "mode": "shopping", **counts}
+    out = say(env, "今晚吃什么", "plan", parse=parse, replies=[final_proposal(ids)])
+    if headcount > 1:
+        (card,) = out["__interrupt__"]
+        out = resume(env, {card.id: {"selected": [me.id], "headcount": headcount}})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    assert ids_of_plan(out["current_plan"]) == ids
+    return out
+
+
+def people_turn(env, text: str, answer, reading=None, parse=None, replies=None):
+    """A follow-up read as people: the diner card shows and is answered with `answer` (None
+    skips it). Returns the card and the turn's result."""
+    out = read(env, text, reading or {"kind": "people"}, parse=parse or {}, replies=replies)
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    return card, resume(env, {card.id: answer})
+
+
+def dish_types_of(plan: dict) -> list[str]:
+    return [r["dish_type"] for r in plan["recipes"]]
+
+
+def test_people_turn_adjusts_instead_of_planning_anew(revise_env):
+    env = revise_env
+    me = self_diner(env.session)
+    first = meal_for(env, 2, ("土豆炖牛肉", "清炒小白菜"), {"dishes": 2})
+    beef, cabbage, soup, pork = dish_ids(env, "土豆炖牛肉", "清炒小白菜", "紫菜蛋花汤", "青椒炒肉")
+    li = add_friend(env.session, "小李")
+    rule(env.session, li.id, "dietary restriction", ingredient="牛肉")
+    planned = len(planner_runs(env))
+    card, out = people_turn(
+        env,
+        "小李今晚也来",
+        {"selected": [me.id, li.id], "headcount": 3},
+        replies=[pick(slots=[(0, pork), (1, soup)])],
+    )
+    assert card.value["headcount"] == 3
+    assert "__interrupt__" not in out
+    # Adjusted on the change path: no planner call.
+    assert len(planner_runs(env)) == planned
+    plan = out["current_plan"]
+    assert plan["passed"] and plan["revision"] == {"from_version": 0}
+    ids = ids_of_plan(plan)
+    assert beef not in ids and cabbage in ids and pork in ids and soup in ids
+    # 2 people (2 dishes + 0 soups) to 3 people (2 + 1): one soup comes in.
+    assert plan["headcount"] == 3
+    assert sorted(dish_types_of(plan)) == ["meat dish", "soup", "vegetable dish"]
+    assert len(out["plan_versions"]) == len(first["plan_versions"]) + 1
+    assert out["change"]["diner_change"]["moved"] == {"soups": 1}
+
+
+def test_people_turn_with_an_add_does_not_apply_the_difference(revise_env):
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 2, ("土豆炖牛肉", "清炒小白菜"), {"dishes": 2})
+    [soup] = dish_ids(env, "紫菜蛋花汤")
+    reading = {"kind": "people", "add": [{"dish_type": "soup", "count": 1}]}
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 3}
+    _, out = people_turn(
+        env,
+        "Alex 也来，再加个汤",
+        answer,
+        reading=reading,
+        parse={"guests": [{"name": "Alex"}]},
+        replies=[pick(slots=[(0, soup)])],
+    )
+    assert "__interrupt__" not in out
+    [frame] = change_events(env, "frame")
+    assert [s["kind"] for s in frame["frame"]["slots"]] == ["add"]
+    assert out["change"]["diner_change"]["moved"] == {}
+    assert dish_types_of(out["current_plan"]).count("soup") == 1
+    assert len(out["current_plan"]["recipes"]) == 3
+
+
+def test_people_turn_where_no_dish_changes(revise_env):
+    """Review Focus 1: 3 to 4 people changes no count and breaks no rule. The plan keeps its
+    dishes, but the new headcount and constraints stay, and a new version shows the set."""
+    from minemydinner.agent.change_text import who_eats_sentence
+
+    env = revise_env
+    me = self_diner(env.session)
+    first = meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 4}
+    _, out = people_turn(env, "Alex 也来", answer, parse={"guests": [{"name": "Alex"}]})
+    assert "__interrupt__" not in out and picker_calls(env) == []
+    assert out["constraints"]["headcount"] == 4
+    assert out["plan_request"]["headcount"] == 4
+    assert len(out["plan_versions"]) == len(first["plan_versions"]) + 1
+    assert ids_of_plan(out["current_plan"]) == dish_ids(env, *MEAL)
+    assert out["current_plan"]["headcount"] == 4
+    present = out["change"]["diner_change"]["present"]
+    first_paragraph = out["messages"][-1].content.split("\n\n")[0]
+    assert first_paragraph == who_eats_sentence(3, 4, {}, present, "zh") != ""
+
+
+def test_people_turn_cannot_drop_locked_dishes(revise_env):
+    """Review Focus 4: 5 people to 1 would drop two dishes and the soup, but every dish is
+    locked: none leaves, nothing is made again, and the reply says the count stayed."""
+    from minemydinner.agent.change_text import locked_count_kept
+
+    env = revise_env
+    me = self_diner(env.session)
+    titles = ("土豆炖牛肉", "青椒炒肉", "清炒小白菜", "紫菜蛋花汤")
+    first = meal_for(env, 5, titles, {"dishes": 3, "soups": 1})
+    ids = dish_ids(env, *titles)
+    env.graph.update_state(
+        env.config, {"current_plan": {**first["current_plan"], "locked": list(ids)}}
+    )
+    _, out = people_turn(
+        env, "就我自己吃", {"selected": [me.id], "headcount": 1}, parse={"headcount": 1}
+    )
+    assert "__interrupt__" not in out
+    assert ids_of_plan(out["current_plan"]) == ids
+    change = out["change"]["diner_change"]
+    assert change["moved"] == {"dishes": 1, "soups": 0}
+    assert change["must_change"] == 3 and change["remade"] is False
+    assert locked_count_kept("zh") in out["messages"][-1].content
+    assert out["constraints"]["headcount"] == 1
+
+
+def test_people_turn_remakes_when_most_dishes_must_change(revise_env):
+    """Review Focus 5: a 4-dish plan with one dish added by hand (locked); the new set's
+    rules break the three others, so more than half must change: the plan is made again.
+    Every unlocked dish is a replace slot (three), and the locked dish stays."""
+    env = revise_env
+    me = self_diner(env.session)
+    titles = ("土豆炖牛肉", "青椒炒肉", "紫菜蛋花汤")
+    meal_for(env, 3, titles, {"dishes": 2, "soups": 1})
+    beef, pork, soup = dish_ids(env, *titles)
+    [beans] = dish_ids(env, "干煸豆角")
+    _hand_add(env, beans)
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    lamb = make_recipe(env.session, "葱爆羊肉", "meat dish", [L("羊肉", "main")])
+    melon = make_recipe(env.session, "冬瓜汤", "soup", [L("冬瓜", "main")])
+    li = add_friend(env.session, "小李")
+    for name in ("牛肉", "猪肉", "紫菜"):
+        rule(env.session, li.id, "dietary restriction", ingredient=name)
+    picks = pick(slots=[(0, chicken.id), (1, lamb.id), (2, melon.id)])
+    _, out = people_turn(
+        env, "小李也来", {"selected": [me.id, li.id], "headcount": 4}, replies=[picks]
+    )
+    assert "__interrupt__" not in out
+    assert out["change"]["diner_change"]["remade"] is True
+    assert out["change"]["diner_change"]["must_change"] == 3
+    [frame] = change_events(env, "frame")
+    replaced = [s["replaces"] for s in frame["frame"]["slots"] if s["kind"] == "replace"]
+    assert replaced == [beef, pork, soup]
+    plan = out["current_plan"]
+    assert set(ids_of_plan(plan)) == {chicken.id, lamb.id, melon.id, beans}
+    assert beans in plan["locked"]
+
+
+def test_people_turn_moved_dish_is_untyped(revise_env):
+    """Spec 5.3, 5.5: a dish the new headcount adds is an untyped add (a meat or a vegetable
+    dish of the picker's choice), never a typed side add, and the total still binds."""
+    env = revise_env
+    me = self_diner(env.session)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    out = say(
+        env, "今晚吃什么", "plan", parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([cabbage])],
+    )
+    [beans] = dish_ids(env, "干煸豆角")
+    _, out = people_turn(
+        env,
+        "Alex 也来",
+        {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 2},
+        parse={"guests": [{"name": "Alex"}]},
+        replies=[pick(slots=[(0, beans)])],
+    )
+    assert "__interrupt__" not in out
+    [frame] = change_events(env, "frame")
+    adds = [s for s in frame["frame"]["slots"] if s["kind"] == "add"]
+    assert [s["dish_type"] for s in adds] == [None]
+    assert frame["frame"]["count_ranges"]["dishes"] == [2, 2]
+    assert ids_of_plan(out["current_plan"]) == [cabbage, beans]
+
+
+def test_people_turn_unclear_after_card_keeps_set_and_constraints_in_sync(revise_env):
+    """A people turn whose request contradicts itself ends with the did-not-understand reply
+    after the card: the plan stays, but the confirmed set, the constraints and the plan's
+    request headcount agree."""
+    from minemydinner.agent.graph import UNCLEAR_REPLY_ZH
+
+    env = revise_env
+    me = self_diner(env.session)
+    first = meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    reading = {"kind": "people", "counts": {"dishes": 2, "meat_dishes": 3}}
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 4}
+    _, out = people_turn(
+        env, "Alex 也来，两个菜三个荤菜", answer, reading=reading,
+        parse={"guests": [{"name": "Alex"}]},
+    )
+    assert "__interrupt__" not in out
+    assert out["messages"][-1].content == UNCLEAR_REPLY_ZH
+    assert out["current_plan"] == first["current_plan"]
+    assert out["settled_diners"]["headcount"] == 4
+    assert out["constraints"]["headcount"] == 4
+    assert out["constraints"]["unconfirmed_diners"] == 2
+    assert out["plan_request"]["headcount"] == 4
+
+
+def test_people_turn_skipped_card_keeps_the_set(revise_env):
+    env = revise_env
+    first = meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    reading = {"kind": "people", "remove": [{"id": soup, "mode": "drop", "quote": "汤不要了"}]}
+    _, out = people_turn(env, "小李也来，汤不要了", None, reading=reading)
+    assert "__interrupt__" not in out
+    assert out["settled_diners"] == first["settled_diners"]
+    assert out["diners_skipped"] is True
+    assert out["change"]["diner_change"]["skipped"] is True
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage]
+    assert out["constraints"]["headcount"] == 3
+
+
+def test_people_turn_without_a_confirmed_set(revise_env):
+    """A solo plan showed no card, so the thread has no confirmed set: the plan's own facts
+    stand for it (the user alone), and a friend joining adjusts the plan."""
+    env = revise_env
+    me = self_diner(env.session)
+    cabbage, beef = dish_ids(env, "清炒小白菜", "土豆炖牛肉")
+    out = say(
+        env, "今晚吃什么", "plan", parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([cabbage])],
+    )
+    assert "__interrupt__" not in out and out.get("settled_diners") is None
+    li = add_friend(env.session, "小李")
+    planned = len(planner_runs(env))
+    card, out = people_turn(
+        env,
+        "小李今晚也来",
+        {"selected": [me.id, li.id], "headcount": 2},
+        replies=[pick(slots=[(0, beef)])],
+    )
+    rows = {row["diner_id"]: row["selected"] for row in card.value["rows"]}
+    assert rows[me.id] is True and rows[li.id] is True
+    assert card.value["headcount"] == 2
+    assert "__interrupt__" not in out
+    assert len(planner_runs(env)) == planned
+    assert out["current_plan"]["revision"] == {"from_version": 0}
+    assert ids_of_plan(out["current_plan"]) == [cabbage, beef]
+    assert out["constraints"]["headcount"] == 2
+
+
+def test_people_turn_records_diner_change(revise_env):
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 4}
+    people_turn(env, "Alex 也来", answer, parse={"guests": [{"name": "Alex"}]})
+    events = latest_record(env).events
+    assert [(e["kind"], e.get("step")) for e in events[:4]] == [
+        ("model_call", "read_follow_up"),
+        ("model_call", "parse"),
+        ("diner_change", None),
+        ("frame", None),
+    ]
+    recorded = events[2]
+    assert recorded["old_headcount"] == 3 and recorded["new_headcount"] == 4
+    assert recorded["moved"] == {} and recorded["must_change"] == 0
+    assert recorded["remade"] is False and recorded["skipped"] is False
+    assert recorded["present"]["dishes"] == 2 and recorded["present"]["soups"] == 1
+
+
+def test_people_turn_budget_counts_the_parse(revise_env, monkeypatch):
+    """The parse comes out of the picker's budget: with two picker calls a turn and one call
+    an attempt, the parse leaves one, so a picker whose answer always needs another try gets a
+    single call (reader, parse, picker: three in all). At the real constants the same
+    arithmetic gives the turn's bound of 7: reader 1 + parse 1 + at most
+    PICK_TURN_MODEL_CALLS (6) - 1 for the parse = 5 picker calls."""
+    from minemydinner.agent import graph as graph_module
+
+    monkeypatch.setattr(graph_module, "PICK_TURN_MODEL_CALLS", 2)
+    monkeypatch.setattr(graph_module, "PICK_MODEL_CALL_LIMIT", 1)
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 2, ("土豆炖牛肉", "清炒小白菜"), {"dishes": 2})
+    li = add_friend(env.session, "小李")
+    rule(env.session, li.id, "dietary restriction", ingredient="牛肉")
+    since = len(env.model.sent)
+    _, out = people_turn(
+        env,
+        "小李今晚也来",
+        {"selected": [me.id, li.id], "headcount": 3},
+        replies=[pick(slots=[(0, 999999), (1, 999998)])],
+    )
+    assert "__interrupt__" not in out
+    assert len(picker_calls(env)) == 1
+    assert len(env.model.sent) - since == 3

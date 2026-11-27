@@ -68,6 +68,18 @@ WISH_TARGETS_CAPPED_EN = (
 # limit no dish breaks): a new version carries them.
 CONDITIONS_ONLY_ZH = "菜不用换，方案已经按新的要求更新。"
 CONDITIONS_ONLY_EN = "No dish needed to change; the plan now follows the new conditions."
+# Plan 3b-2 (two) spec 5.6, a placeholder Task 7 refines: who eats now, leading the reply of a
+# people turn.
+WHO_EATS_ZH = "现在是 {n} 个人吃。"
+WHO_EATS_EN = "Now {n} people are eating."
+WHO_EATS_ONE_EN = "Now 1 person is eating."
+# A people turn whose headcount drops dishes, when the dishes that would go are all locked
+# (added or kept by hand): they stay, so the plan keeps more dishes than the new count.
+LOCKED_COUNT_KEPT_ZH = "要减掉的菜都是你手动加上或留下的，所以先保留，菜的数量没有按人数减少。"
+LOCKED_COUNT_KEPT_EN = (
+    "The dishes that would go are ones you added or kept by hand, so they stay and the plan "
+    "has more dishes than the new headcount needs."
+)
 # A dish type in the user's words.
 DISH_TYPE_WORDS = {
     "meat dish": ("荤菜", "meat dish"),
@@ -553,3 +565,20 @@ def partial_text(sentences: list[str], locale: str, lead: bool) -> str:
 
 def conditions_only_note(locale: str) -> str:
     return CONDITIONS_ONLY_ZH if is_zh(locale) else CONDITIONS_ONLY_EN
+
+
+def who_eats_sentence(
+    old: int, new: int, moved: dict[str, int], present: dict[str, int], locale: str
+) -> str:
+    """The who-eats sentence of a people turn: how many people eat now. Empty when the
+    headcount is the same and no count moved. `moved` and `present` (the plan's counts before
+    the turn) are for the wording of what moved, which Task 7 adds."""
+    if old == new and not moved:
+        return ""
+    if is_zh(locale):
+        return WHO_EATS_ZH.format(n=new)
+    return WHO_EATS_ONE_EN if new == 1 else WHO_EATS_EN.format(n=new)
+
+
+def locked_count_kept(locale: str) -> str:
+    return LOCKED_COUNT_KEPT_ZH if is_zh(locale) else LOCKED_COUNT_KEPT_EN
