@@ -432,8 +432,11 @@ def build_follow_up_card(
     new_guests = []
     for guest in parsed.guests:
         if _guest_name(guest.name) is None:
-            # An unnamed guest is new only beyond the set's unnamed room (as `card_needed`).
-            if unnamed_room > 0:
+            # An unnamed guest is new only beyond the set's unnamed room (as `card_needed`),
+            # unless it states a rule: that is always listed, so the rule is not lost.
+            if guest.allergens or guest.avoid or guest.diet_words:
+                new_guests.append(guest)
+            elif unnamed_room > 0:
                 unnamed_room -= 1
             else:
                 new_guests.append(guest)

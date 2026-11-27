@@ -719,6 +719,45 @@ def test_follow_up_card_restated_unnamed_guest_is_not_added(session, seeded):
     assert [g["key"] for g in card["guests"]] == ["guest:1", None]
 
 
+def _unmatched_other_set(me):
+    return {
+        "diner_ids": [me.id], "meal_rules": [], "guest_names": {}, "others": 1,
+        "others_answer": "unsure", "headcount": 2, "stated_headcount": None,
+    }
+
+
+def test_follow_up_card_lists_an_unnamed_guest_with_an_allergy(session, seeded):
+    from minemydinner.agent.diners import build_follow_up_card
+
+    me = self_diner(session)
+    state = _unmatched_other_set(me)
+    table = LabelTable.from_state(None, me.id)
+    parsed = ParsedRequest(guests=[{"name": None, "allergens": ["crustaceans"]}], headcount=3)
+    card = build_follow_up_card(session, parsed, table, [], "再来一个人，对虾过敏", state, 3)
+    (guest,) = card["guests"]
+    assert guest["key"] is None
+    assert [rule["allergen"] for rule in guest["proposed"]] == ["crustaceans"]
+    assert card["headcount"] == 3 and card["others"] == 1
+    # With no stated headcount the total is the set's plus the new guest.
+    parsed = ParsedRequest(guests=[{"name": None, "allergens": ["crustaceans"]}])
+    card = build_follow_up_card(session, parsed, table, [], "再来一个人，对虾过敏", state, None)
+    assert [g["key"] for g in card["guests"]] == [None]
+    assert card["headcount"] == 3
+
+
+def test_unnamed_guest_with_an_allergy_reaches_the_new_set(session, seeded):
+    from minemydinner.agent.diners import apply_answer, build_follow_up_card
+
+    me = self_diner(session)
+    state = _unmatched_other_set(me)
+    table = LabelTable.from_state(None, me.id)
+    parsed = ParsedRequest(guests=[{"name": None, "allergens": ["crustaceans"]}], headcount=3)
+    card = build_follow_up_card(session, parsed, table, [], "再来一个人，对虾过敏", state, 3)
+    result = apply_answer(session, default_answer(card), table, None, state)
+    (key,) = result.guest_names
+    assert [(r.diner_key, r.allergen) for r in result.meal_rules] == [(key, "crustaceans")]
+
+
 def test_follow_up_card_deleted_friend_moves_to_others(session, seeded):
     from minemydinner.agent.diners import apply_answer, build_follow_up_card
 
