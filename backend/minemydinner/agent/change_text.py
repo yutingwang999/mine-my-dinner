@@ -73,6 +73,15 @@ CONDITIONS_ONLY_EN = "No dish needed to change; the plan now follows the new con
 WHO_EATS_ZH = "现在是 {n} 个人吃。"
 WHO_EATS_EN = "Now {n} people are eating."
 WHO_EATS_ONE_EN = "Now 1 person is eating."
+# A people turn whose new diners make most dishes change: the plan is made again.
+REMADE_ZH = "新加入的人让大部分菜都要换，所以重新配了一桌，你手动加的菜都保留了。"
+REMADE_EN = (
+    "Most dishes had to change for the new diners, so I made the plan again, keeping the "
+    "dishes you added yourself."
+)
+# A people turn whose follow-up diner card was skipped.
+DINERS_UNCHANGED_ZH = "吃饭的人没有变。"
+DINERS_UNCHANGED_EN = "Who is eating has not changed."
 # A people turn whose headcount drops dishes, when the dishes that would go are all locked
 # (added or kept by hand): they stay, so the plan keeps more dishes than the new count.
 LOCKED_COUNT_KEPT_ZH = "要减掉的菜都是你手动加上或留下的，所以先保留，菜的数量没有按人数减少。"
@@ -356,18 +365,37 @@ def dish_type_word(dish_type: str, locale: str) -> str:
 
 
 def change_sentences(
-    pairs: list[tuple[str, str]], dropped: list[str], added: list[str], locale: str
+    pairs: list[tuple[str, str]],
+    dropped: list[str],
+    added: list[str],
+    locale: str,
+    reasons: dict[str, str] | None = None,
 ) -> str:
     """What a change did to the dishes not locked: each replacement as (old, new) title, then
-    the dishes dropped, then the dishes added ("把…换成了… / 去掉了… / 加了…")."""
+    the dishes dropped, then the dishes added ("把…换成了… / 去掉了… / 加了…"). `reasons` maps
+    a replaced dish's title to why it went (a people turn names a diner's rule)."""
+    reasons = reasons or {}
     zh = is_zh(locale)
     join = "、" if zh else ", "
     parts = []
     if pairs:
         if zh:
-            parts.append("，".join(f"把{old}换成了{new}" for old, new in pairs) + "。")
+            parts.append(
+                "，".join(
+                    f"因为{reasons[old]}，把{old}换成了{new}"
+                    if reasons.get(old)
+                    else f"把{old}换成了{new}"
+                    for old, new in pairs
+                )
+                + "。"
+            )
         else:
-            swaps = ", and ".join(f"{old} with {new}" for old, new in pairs)
+            swaps = ", and ".join(
+                f"{old} with {new}, because {reasons[old]}"
+                if reasons.get(old)
+                else f"{old} with {new}"
+                for old, new in pairs
+            )
             parts.append(f"Replaced {swaps}.")
     if dropped:
         parts.append(f"去掉了{join.join(dropped)}。" if zh else f"Removed {join.join(dropped)}.")
@@ -567,17 +595,66 @@ def conditions_only_note(locale: str) -> str:
     return CONDITIONS_ONLY_ZH if is_zh(locale) else CONDITIONS_ONLY_EN
 
 
+ZH_COUNT = {1: "一", 2: "两", 3: "三"}
+
+
+def _moves(moved: dict[str, int], present: dict[str, int]) -> tuple[dict[str, int], dict[str, int]]:
+    """The dishes and soups added and dropped: `moved` holds the new counts, `present` the old."""
+    added: dict[str, int] = {}
+    dropped: dict[str, int] = {}
+    for key in ("dishes", "soups"):
+        if key in moved:
+            diff = moved[key] - present.get(key, 0)
+            if diff > 0:
+                added[key] = diff
+            elif diff < 0:
+                dropped[key] = -diff
+    return added, dropped
+
+
+def _moved_zh(counts: dict[str, int]) -> str:
+    unit = {"dishes": "菜", "soups": "汤"}
+    return "、".join(f"{ZH_COUNT.get(n, str(n))}道{unit[k]}" for k, n in counts.items())
+
+
+def _moved_en(counts: dict[str, int]) -> str:
+    one = {"dishes": "a dish", "soups": "a soup"}
+    many = {"dishes": "dishes", "soups": "soups"}
+    return " and ".join(one[k] if n == 1 else f"{n} {many[k]}" for k, n in counts.items())
+
+
 def who_eats_sentence(
     old: int, new: int, moved: dict[str, int], present: dict[str, int], locale: str
 ) -> str:
-    """The who-eats sentence of a people turn: how many people eat now. Empty when the
-    headcount is the same and no count moved. `moved` and `present` (the plan's counts before
-    the turn) are for the wording of what moved, which Task 7 adds."""
+    """The who-eats sentence of a people turn: how many people eat now, and what moved with
+    them (`moved` holds the new counts, `present` the old ones). Empty when the headcount is
+    the same and no count moved."""
     if old == new and not moved:
         return ""
+    added, dropped = _moves(moved, present)
     if is_zh(locale):
-        return WHO_EATS_ZH.format(n=new)
-    return WHO_EATS_ONE_EN if new == 1 else WHO_EATS_EN.format(n=new)
+        head = WHO_EATS_ZH.format(n=new).removesuffix("。")
+        parts = []
+        if added:
+            parts.append(f"加了{_moved_zh(added)}")
+        if dropped:
+            parts.append(f"少了{_moved_zh(dropped)}")
+        return f"{head}，所以{'，'.join(parts)}。" if parts else f"{head}。"
+    head = (WHO_EATS_ONE_EN if new == 1 else WHO_EATS_EN.format(n=new)).removesuffix(".")
+    parts = []
+    if added:
+        parts.append(f"added {_moved_en(added)}")
+    if dropped:
+        parts.append(f"dropped {_moved_en(dropped)}")
+    return f"{head}, so I {' and '.join(parts)}." if parts else f"{head}."
+
+
+def remade_sentence(locale: str) -> str:
+    return REMADE_ZH if is_zh(locale) else REMADE_EN
+
+
+def diners_unchanged_sentence(locale: str) -> str:
+    return DINERS_UNCHANGED_ZH if is_zh(locale) else DINERS_UNCHANGED_EN
 
 
 def locked_count_kept(locale: str) -> str:

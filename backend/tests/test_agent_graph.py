@@ -4566,7 +4566,8 @@ def test_capped_and_locked_and_unmet_wish_sentences_together(revise_env):
     assert frame["frame"]["locked_wish_targets"] == [beans]
     assert frame["frame"]["capped_wish_targets"] == unlocked[2:]
     reply = out["messages"][-1].content
-    assert reply.count(wish_targets_capped("zh")) == 1
+    # The plan stays, so the capped sentence is not said (spec 5.6).
+    assert wish_targets_capped("zh") not in reply
     assert WISH_TARGETS_LOCKED_ZH.format(wish="辣一些") not in reply
     assert change_wish_unmet("辣一些", "zh") in reply
 
@@ -5745,3 +5746,128 @@ def test_people_turn_budget_counts_the_parse(revise_env, monkeypatch):
     assert "__interrupt__" not in out
     assert len(picker_calls(env)) == 1
     assert len(env.model.sent) - since == 3
+
+
+# ---- plan 3b-2 (two) Task 7: the reply on a people turn (spec 5.6) ----
+
+
+def test_people_turn_reply_leads_with_who_eats(revise_env):
+    from minemydinner.agent.change_text import who_eats_sentence
+
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 2, ("土豆炖牛肉", "清炒小白菜"), {"dishes": 2})
+    [soup] = dish_ids(env, "紫菜蛋花汤")
+    li = add_friend(env.session, "小李")
+    _, out = people_turn(
+        env,
+        "小李今晚也来",
+        {"selected": [me.id, li.id], "headcount": 3},
+        replies=[pick(slots=[(0, soup)])],
+    )
+    change = out["change"]["diner_change"]
+    assert change["moved"] == {"soups": 1}
+    first = out["messages"][-1].content.split("\n\n")[0]
+    expected = who_eats_sentence(2, 3, change["moved"], change["present"], "zh")
+    assert first == expected == "现在是 3 个人吃，所以加了一道汤。"
+
+
+def test_people_turn_replaced_sentence_names_no_person(revise_env):
+    from minemydinner.agent.change_text import rule_reason
+
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 2, ("土豆炖牛肉", "清炒小白菜"), {"dishes": 2})
+    [pork, soup] = dish_ids(env, "青椒炒肉", "紫菜蛋花汤")
+    li = add_friend(env.session, "小李")
+    rule(env.session, li.id, "dietary restriction", ingredient="牛肉")
+    _, out = people_turn(
+        env,
+        "小李今晚也来",
+        {"selected": [me.id, li.id], "headcount": 3},
+        replies=[pick(slots=[(0, pork), (1, soup)])],
+    )
+    reply = out["messages"][-1].content
+    assert "Diner" not in reply and "小李" not in reply
+    # Spec 5.6: a dish replaced for a new person's rule names the reason as a diner rule.
+    assert rule_reason("diner_rule", [], "zh") in reply
+
+
+def test_remade_reply_says_why(revise_env):
+    from minemydinner.agent.change_text import remade_sentence
+
+    env = revise_env
+    me = self_diner(env.session)
+    titles = ("土豆炖牛肉", "青椒炒肉", "紫菜蛋花汤")
+    meal_for(env, 3, titles, {"dishes": 2, "soups": 1})
+    [beans] = dish_ids(env, "干煸豆角")
+    _hand_add(env, beans)
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    lamb = make_recipe(env.session, "葱爆羊肉", "meat dish", [L("羊肉", "main")])
+    melon = make_recipe(env.session, "冬瓜汤", "soup", [L("冬瓜", "main")])
+    li = add_friend(env.session, "小李")
+    for name in ("牛肉", "猪肉", "紫菜"):
+        rule(env.session, li.id, "dietary restriction", ingredient=name)
+    picks = pick(slots=[(0, chicken.id), (1, lamb.id), (2, melon.id)])
+    _, out = people_turn(
+        env, "小李也来", {"selected": [me.id, li.id], "headcount": 4}, replies=[picks]
+    )
+    assert out["change"]["diner_change"]["remade"] is True
+    assert remade_sentence("zh") in out["messages"][-1].content
+
+
+def test_not_remade_reply_does_not_say_remade(revise_env):
+    from minemydinner.agent.change_text import remade_sentence
+
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 4}
+    _, out = people_turn(env, "Alex 也来", answer, parse={"guests": [{"name": "Alex"}]})
+    assert remade_sentence("zh") not in out["messages"][-1].content
+
+
+def test_skipped_follow_up_card_says_diners_unchanged(revise_env):
+    from minemydinner.agent.change_text import diners_unchanged_sentence
+
+    env = revise_env
+    meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    soup = dish_ids(env, "紫菜蛋花汤")[0]
+    reading = {"kind": "people", "remove": [{"id": soup, "mode": "drop", "quote": "汤不要了"}]}
+    _, out = people_turn(env, "小李也来，汤不要了", None, reading=reading)
+    assert out["change"]["diner_change"]["skipped"] is True
+    assert diners_unchanged_sentence("zh") in out["messages"][-1].content
+
+
+def test_capped_sentence_only_when_the_plan_changed(revise_env):
+    from minemydinner.agent.change_text import wish_targets_capped
+
+    env = revise_env
+    targets = _four_unlocked(env)
+    reading = {"kind": "change", "wish": "辣一些", "wish_targets": targets}
+    before = env.graph.get_state(env.config).values["current_plan"]
+    out = read(
+        env, "都辣一些", reading,
+        replies=[pick(slots=[(0, None), (1, None)], wish_met=False)],
+    )
+    [frame] = change_events(env, "frame")
+    assert frame["frame"]["capped_wish_targets"] == targets[2:]
+    assert out["current_plan"] == before
+    assert wish_targets_capped("zh") not in out["messages"][-1].content
+
+
+def test_kept_plan_lead_is_replaced_by_the_who_eats_sentence(revise_env, monkeypatch):
+    """Spec 5.6: on the kept path the unchanged note gives way to a non-empty who-eats
+    sentence. A skipped card with no change keeps the plan; the sentence is stubbed because a
+    real headcount change always makes a new version."""
+    from minemydinner.agent import graph as graph_module
+    from minemydinner.agent.change_text import unchanged_note
+
+    env = revise_env
+    first = meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
+    monkeypatch.setattr(graph_module, "who_eats_sentence", lambda *a: "现在是 3 个人吃。")
+    _, out = people_turn(env, "小李也来", None, reading={"kind": "people"})
+    assert out["current_plan"] == first["current_plan"]
+    reply = out["messages"][-1].content
+    assert reply.startswith("现在是 3 个人吃。")
+    assert unchanged_note("zh") not in reply

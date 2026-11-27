@@ -262,3 +262,103 @@ def test_no_plan_reason_names_the_meal_wish():
     assert no_plan_reason("H2", "en", ["pork"]) == "No plan fits leaving out pork at this meal"
     assert "diner" in no_plan_reason("H2", "en")
 
+
+
+# ---- plan 3b-2 (two) Task 7: the sentences of a people turn (spec 5.6) ----
+
+
+def test_who_eats_sentence_empty_when_nothing_changed():
+    from minemydinner.agent.change_text import who_eats_sentence
+
+    assert who_eats_sentence(3, 3, {}, {"dishes": 2, "soups": 1}, "zh") == ""
+    assert who_eats_sentence(3, 3, {}, {"dishes": 2, "soups": 1}, "en") == ""
+
+
+def test_who_eats_sentence_headcount_only():
+    from minemydinner.agent.change_text import who_eats_sentence
+
+    assert who_eats_sentence(3, 4, {}, {"dishes": 2}, "zh") == "现在是 4 个人吃。"
+    assert who_eats_sentence(3, 4, {}, {"dishes": 2}, "en") == "Now 4 people are eating."
+    assert who_eats_sentence(2, 1, {}, {"dishes": 2}, "en") == "Now 1 person is eating."
+
+
+def test_who_eats_sentence_names_what_moved_in_zh():
+    from minemydinner.agent.change_text import who_eats_sentence
+
+    present = {"dishes": 2, "soups": 0}
+    assert (
+        who_eats_sentence(3, 4, {"soups": 1}, present, "zh") == "现在是 4 个人吃，所以加了一道汤。"
+    )
+    assert (
+        who_eats_sentence(4, 2, {"dishes": 1}, {"dishes": 2}, "zh")
+        == "现在是 2 个人吃，所以少了一道菜。"
+    )
+    assert (
+        who_eats_sentence(2, 5, {"dishes": 4, "soups": 1}, {"dishes": 2, "soups": 0}, "zh")
+        == "现在是 5 个人吃，所以加了两道菜、一道汤。"
+    )
+
+
+def test_who_eats_sentence_names_what_moved_in_en():
+    from minemydinner.agent.change_text import who_eats_sentence
+
+    assert (
+        who_eats_sentence(3, 4, {"soups": 1}, {"dishes": 2, "soups": 0}, "en")
+        == "Now 4 people are eating, so I added a soup."
+    )
+    assert (
+        who_eats_sentence(4, 2, {"dishes": 1}, {"dishes": 2}, "en")
+        == "Now 2 people are eating, so I dropped a dish."
+    )
+    assert (
+        who_eats_sentence(2, 5, {"dishes": 4, "soups": 1}, {"dishes": 2, "soups": 0}, "en")
+        == "Now 5 people are eating, so I added 2 dishes and a soup."
+    )
+    assert (
+        who_eats_sentence(5, 1, {"dishes": 1, "soups": 0}, {"dishes": 3, "soups": 1}, "en")
+        == "Now 1 person is eating, so I dropped 2 dishes and a soup."
+    )
+
+
+def test_remade_sentence_in_both_languages():
+    from minemydinner.agent.change_text import remade_sentence
+
+    assert remade_sentence("zh") == (
+        "新加入的人让大部分菜都要换，所以重新配了一桌，你手动加的菜都保留了。"
+    )
+    assert remade_sentence("en") == (
+        "Most dishes had to change for the new diners, so I made the plan again, keeping the "
+        "dishes you added yourself."
+    )
+
+
+def test_diners_unchanged_sentence_in_both_languages():
+    from minemydinner.agent.change_text import diners_unchanged_sentence
+
+    assert diners_unchanged_sentence("zh") == "吃饭的人没有变。"
+    assert diners_unchanged_sentence("en") == "Who is eating has not changed."
+
+
+def test_change_sentences_without_reasons_are_unchanged():
+    """An ordinary change turn: the replaced-dish sentence has no reason."""
+    from minemydinner.agent.change_text import change_sentences
+
+    assert change_sentences([("牛肉", "猪肉")], [], [], "zh") == "把牛肉换成了猪肉。"
+    assert change_sentences([("beef", "pork")], [], [], "en") == "Replaced beef with pork."
+
+
+def test_change_sentences_name_a_diner_rule_reason():
+    from minemydinner.agent.change_text import change_sentences, rule_reason
+
+    zh = rule_reason("diner_rule", [], "zh")
+    en = rule_reason("diner_rule", [], "en")
+    assert (
+        change_sentences([("牛肉", "猪肉")], [], [], "zh", reasons={"牛肉": zh})
+        == f"因为{zh}，把牛肉换成了猪肉。"
+    )
+    assert (
+        change_sentences([("beef", "pork")], [], [], "en", reasons={"beef": en})
+        == f"Replaced beef with pork, because {en}."
+    )
+    # A dish with no reason in the map keeps the plain wording.
+    assert change_sentences([("牛肉", "猪肉")], [], [], "zh", reasons={"鱼": zh}) == "把牛肉换成了猪肉。"

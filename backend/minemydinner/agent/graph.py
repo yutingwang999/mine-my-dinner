@@ -55,6 +55,7 @@ from minemydinner.agent.change_text import (
     conditions_only_note,
     current_plan_text,
     deleted_note,
+    diners_unchanged_sentence,
     dish_facts,
     empty_plan_question,
     failed_note,
@@ -66,6 +67,7 @@ from minemydinner.agent.change_text import (
     open_conflict_ids,
     partial_text,
     reading_sentence,
+    remade_sentence,
     revision_defaults,
     rule_reason,
     unchanged_card,
@@ -2268,7 +2270,13 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             titles[i] for i in gone if i not in pairs and i not in locked and i not in ruled_out
         ]
         added = [titles[i] for i in result_ids if i not in before and i not in taken]
-        parts = [change_sentences(swaps, dropped, added, locale)]
+        reasons: dict[str, str] = {}
+        if change.get("diner_change") is not None:
+            # Spec 5.6: on a people turn a dish replaced for a diner's rule says so.
+            for i in gone:
+                if i in pairs and i not in locked and breaking.get(i) == "diner_rule":
+                    reasons[titles[i]] = rule_reason("diner_rule", meal_avoid, locale)
+        parts = [change_sentences(swaps, dropped, added, locale, reasons)]
         for i in gone:
             if i in locked and i not in ruled_out:
                 replacement = titles.get(pairs[i]) if i in pairs else None
@@ -2413,8 +2421,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # Plan 3b-2 (two): a new confirmed set is a change of conditions, so the same
             # dishes make a new version whose diners line shows the set.
             new_conditions = True
-        who_text = locked_text = ""
+        who_text = who_eats_text = locked_text = ""
         if diner_change is not None:
+            skipped_text = diners_unchanged_sentence(locale) if diner_change["skipped"] else ""
+            remade_text = remade_sentence(locale) if diner_change["remade"] else ""
             who_text = who_eats_sentence(
                 diner_change["old_headcount"],
                 diner_change["new_headcount"],
@@ -2422,6 +2432,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 diner_change["present"],
                 locale,
             )
+            who_eats_text = who_text
+            who_text = "\n\n".join(p for p in (who_text, remade_text, skipped_text) if p)
             if diner_change["moved"] and result_ids:
                 # A count the new headcount lowers that the result still exceeds: the dishes
                 # it would drop are all locked (spec 5.4, a drop never takes a locked dish).
@@ -2518,13 +2530,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 if lead == unchanged_note(locale) and nothing_text:
                     # The wish matched nothing: that sentence says why the plan stays.
                     lead, nothing_text = nothing_text, ""
+                if lead == unchanged_note(locale) and who_eats_text:
+                    # The who-eats sentence says why the plan stays.
+                    lead = ""
                 parts = [
                     who_text,
                     lead,
                     locked_text,
                     read_text,
                     nothing_text,
-                    capped_text,
                     outcome["note"],
                     partial_text(sentences, locale, lead=False),
                     unmet_wish_text,
