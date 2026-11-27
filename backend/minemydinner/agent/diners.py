@@ -4,7 +4,7 @@ Nothing here calls a model, and nothing the parse extracted applies before the c
 confirmed: stated rules are only proposed on the card.
 """
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal, Self
 
@@ -313,6 +313,187 @@ def _anything_stated(parsed: ParsedRequest) -> bool:
     return any(item.allergens or item.avoid or item.diet_words for item in people)
 
 
+def _card_rows(
+    session: Session,
+    parsed: ParsedRequest,
+    ordered: Sequence[Diner],
+    by_friend: dict[int, list[StatedRules]],
+    is_selected: Callable[[Diner], bool],
+    settled: dict | None = None,
+) -> list[dict]:
+    """The card's diner rows. `proposed` holds the settled set's meal-only rules of the diner
+    (none without a set), then the parse's stated rules that no saved or meal-only rule
+    already covers."""
+    saved = profile_rules(session, [diner.id for diner in ordered])
+    rows = []
+    for diner in ordered:
+        stated: list[StatedRules] = []
+        if diner.is_self:
+            if parsed.self_rules is not None:
+                stated = [parsed.self_rules]
+        else:
+            stated = by_friend.get(diner.id, [])
+        meal_only = settled_rules(settled, f"diner:{diner.id}")
+        proposed = [rule for item in stated for rule in stated_to_rules(session, item)]
+        proposed = not_yet_known(proposed, [*saved[diner.id], *meal_only])
+        rows.append(
+            {
+                "diner_id": diner.id,
+                "name": None if diner.is_self else diner.display_name,
+                "is_self": diner.is_self,
+                "selected": is_selected(diner),
+                "rules": [_rule_out(rule) for rule in saved[diner.id]],
+                "proposed": [
+                    *(_meal_rule_proposed(session, rule) for rule in meal_only),
+                    *(rule.model_dump() for rule in _unique(proposed)),
+                ],
+                "diet_words": _diet_words(stated),
+            }
+        )
+    return rows
+
+
+def _meal_rule_proposed(session: Session, rule: dict) -> dict:
+    """A settled meal-only rule in the shape of a proposed rule."""
+    ingredient_id = rule.get("ingredient_id")
+    ingredient = session.get(Ingredient, ingredient_id) if ingredient_id is not None else None
+    text = rule.get("text")
+    return ProposedRule(
+        rule_type=rule["rule_type"],
+        allergen=rule.get("allergen"),
+        ingredient_id=ingredient_id,
+        ingredient_name=ingredient.name_zh if ingredient else None,
+        text=text,
+        by_wording=ingredient_id is None and rule.get("allergen") is None and text is not None,
+    ).model_dump()
+
+
+def _guest_number(key: str) -> int:
+    return int(key.split(":", 1)[1])
+
+
+def settled_from_plan(self_id: int | None, constraints: dict) -> dict:
+    """The settled set (`SettledDiners.to_state()`) of a thread with no confirmed set, read
+    from its plan's constraints (spec 5.1): the diners the plan was made for, no meal-only
+    rules or guests, and the rest of the headcount as people not matched."""
+    diner_ids = [self_id] if self_id is not None else []
+    headcount = int(constraints["headcount"])
+    others = max(0, headcount - len(diner_ids))
+    if others == 0:
+        others_answer = None
+    elif int(constraints.get("unconfirmed_diners") or 0) > 0:
+        others_answer = "unsure"
+    else:
+        others_answer = "none"
+    return SettledDiners(
+        diner_ids=diner_ids,
+        meal_rules=[],
+        guest_names={},
+        others=others,
+        others_answer=others_answer,
+        headcount=headcount,
+        stated_headcount=None,
+    ).to_state()
+
+
+def build_follow_up_card(
+    session: Session,
+    parsed: ParsedRequest,
+    labels: LabelTable,
+    matched_friend_ids: list[int],
+    current_text: str,
+    settled: dict,
+    stated_headcount: int | None,
+) -> dict:
+    """The diner card of a follow-up (spec 5.2): it starts from the confirmed set. Rows are
+    the non-solo shape; everyone in the set who still exists and every matched friend is
+    selected, with the set's meal-only rules proposed (ticked with "save" off, they stay as
+    they are). The set's guests come first, then the parse's new guests (`key` None). A
+    stated headcount never unticks anyone: below the people on the card it only shows as
+    `stated_total`."""
+    diners = list(session.scalars(select(Diner)))
+    me = next((diner for diner in diners if diner.is_self), None)
+    by_friend = stated_friend_rules(parsed, labels)
+    matched = set(matched_friend_ids) | set(by_friend)
+    in_set = set(settled.get("diner_ids") or [])
+    friends = sorted(
+        (diner for diner in diners if not diner.is_self),
+        key=lambda diner: (diner.display_name.casefold(), diner.id),
+    )
+    ordered = ([me] if me is not None else []) + friends
+    rows = _card_rows(
+        session, parsed, ordered, by_friend,
+        lambda diner: diner.id in in_set or diner.id in matched, settled,
+    )
+    names = settled.get("guest_names") or {}
+    stated_by_key: dict[str, list[StatedRules]] = {}
+    unnamed_room = sum(1 for name in names.values() if _guest_name(name) is None)
+    unnamed_room += int(settled.get("others") or 0)
+    new_guests = []
+    for guest in parsed.guests:
+        if _guest_name(guest.name) is None:
+            # An unnamed guest is new only beyond the set's unnamed room (as `card_needed`).
+            if unnamed_room > 0:
+                unnamed_room -= 1
+            else:
+                new_guests.append(guest)
+        elif (key := guest_key(settled, guest.name)) is not None:
+            stated_by_key.setdefault(key, []).append(guest)
+        else:
+            new_guests.append(guest)
+    guests = []
+    for key, name in sorted(names.items(), key=lambda item: _guest_number(item[0])):
+        meal_only = settled_rules(settled, key)
+        stated = [
+            rule for item in stated_by_key.get(key, []) for rule in stated_to_rules(session, item)
+        ]
+        guests.append(
+            {
+                "key": key,
+                "name": name,
+                "proposed": [
+                    *(_meal_rule_proposed(session, rule) for rule in meal_only),
+                    *(rule.model_dump() for rule in _unique(not_yet_known(stated, meal_only))),
+                ],
+                "diet_words": _diet_words(stated_by_key.get(key, [])),
+            }
+        )
+    guests += [
+        {
+            "key": None,
+            "name": guest.name,
+            "proposed": [rule.model_dump() for rule in stated_to_rules(session, guest)],
+            "diet_words": _diet_words([guest]),
+        }
+        for guest in new_guests
+    ]
+    preselected = sum(1 for row in rows if row["selected"]) + len(guests)
+    stated_total = None
+    if stated_headcount is not None:
+        headcount = max(stated_headcount, preselected)
+        if stated_headcount < preselected:
+            stated_total = stated_headcount
+    else:
+        existing = {diner.id for diner in diners}
+        newly_matched = len((matched & existing) - in_set)
+        headcount = int(settled["headcount"]) + len(new_guests) + newly_matched
+    nudge = (
+        has_restriction_word(current_text)
+        and not _anything_stated(parsed)
+        and not matched
+    )
+    return {
+        "kind": "diners",
+        "headcount": headcount,
+        "rows": rows,
+        "guests": guests,
+        "others": max(0, headcount - preselected),
+        "others_answer": settled.get("others_answer"),
+        "stated_total": stated_total,
+        "nudge": nudge,
+    }
+
+
 def build_card(
     session: Session,
     parsed: ParsedRequest,
@@ -341,28 +522,9 @@ def build_card(
         key=lambda diner: (diner.display_name.casefold(), diner.id),
     )
     ordered = ([me] if me is not None else []) + friends
-    saved = profile_rules(session, [diner.id for diner in ordered])
-    rows = []
-    for diner in ordered:
-        stated: list[StatedRules] = []
-        if diner.is_self:
-            if parsed.self_rules is not None:
-                stated = [parsed.self_rules]
-        else:
-            stated = by_friend.get(diner.id, [])
-        proposed = [rule for item in stated for rule in stated_to_rules(session, item)]
-        proposed = not_yet_known(proposed, saved[diner.id])
-        rows.append(
-            {
-                "diner_id": diner.id,
-                "name": None if diner.is_self else diner.display_name,
-                "is_self": diner.is_self,
-                "selected": diner.is_self or diner.id in matched,
-                "rules": [_rule_out(rule) for rule in saved[diner.id]],
-                "proposed": [rule.model_dump() for rule in _unique(proposed)],
-                "diet_words": _diet_words(stated),
-            }
-        )
+    rows = _card_rows(
+        session, parsed, ordered, by_friend, lambda diner: diner.is_self or diner.id in matched
+    )
     guests = [
         {
             "name": guest.name,
@@ -415,6 +577,8 @@ class GuestAnswer(BaseModel):
     """A person on the card who is not a saved friend. `save` creates a friend with the
     name as given and these rules."""
 
+    # The settled guest this entry is (a follow-up card); None for a new guest.
+    key: str | None = Field(default=None, pattern=r"^guest:\d+$")
     name: str | None = Field(default=None, max_length=40)
     rules: list[RuleChoice] = Field(default_factory=list, max_length=20)
     save: bool = False
@@ -563,11 +727,14 @@ def apply_answer(
     answer: DinerAnswer,
     labels: LabelTable,
     stated_headcount: int | None = None,
+    settled: dict | None = None,
 ) -> SettledDiners:
     """Apply the confirmed card: write saved rules to profiles, create saved guests as
     friends (they join the selected diners), label the selected diners and the guests in the
     conversation's table, and return the settled set. Commits the session.
     `stated_headcount` is the headcount the parse gave for the request the card answers.
+    A guest whose `key` is one of `settled`'s guests keeps it; any other key is never
+    trusted and the guest gets a new one.
 
     Raises CardOutOfDate for an unknown diner or ingredient, and ValueError for a diet word
     as a text rule."""
@@ -591,6 +758,7 @@ def apply_answer(
             else:
                 _add_meal_rule(meal_rules, f"diner:{diner_id}", rule)
     guest_names: dict[str, str | None] = {}
+    issued = set((settled or {}).get("guest_names") or {})
     for guest in answer.guests:
         if guest.save:
             diner = Diner(display_name=guest.name, is_self=False)
@@ -603,7 +771,10 @@ def apply_answer(
                     session.add(DietaryRule(diner_id=diner.id, **_rule_fields(rule)))
             diner_ids.append(diner.id)
             continue
-        key = f"guest:{_next_guest_number(labels)}"
+        if guest.key in issued and guest.key not in guest_names:
+            key = guest.key
+        else:
+            key = f"guest:{_next_guest_number(labels)}"
         labels.names[key] = guest.name
         labels.label_for(key)
         guest_names[key] = guest.name

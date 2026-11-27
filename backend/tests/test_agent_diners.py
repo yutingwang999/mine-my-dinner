@@ -1,3 +1,5 @@
+from dataclasses import asdict
+
 from minemydinner.agent.diners import (
     DIET_WORDS,
     RESTRICTION_WORDS,
@@ -541,3 +543,210 @@ def test_no_card_when_the_settled_friend_is_named_again():
     # A friend rule stated for a settled friend also says someone else eats.
     by_rule = ParsedRequest(friend_rules=[{"code": "Diner 2", "avoid": []}])
     assert not card_needed(by_rule, [7], [], wang_only, {7}, self_id=1)
+
+
+# ---- the follow-up card (plan 3b-2 (two), spec 5.1, 5.2) ----
+
+
+def follow_up_set(me, wang, guest_names=None, headcount=4, others=1, others_answer="unsure"):
+    """A confirmed set: the user, a friend with a meal-only peanut rule, a guest 小李 with a
+    meal-only rule, and unsure others."""
+    return {
+        "diner_ids": [me.id, wang.id],
+        "meal_rules": [
+            {"diner_key": f"diner:{wang.id}", "rule_type": "allergy", "allergen": "peanut",
+             "ingredient_id": None, "text": None},
+            {"diner_key": "guest:1", "rule_type": "dietary restriction", "allergen": None,
+             "ingredient_id": None, "text": "香菜"},
+        ],
+        "guest_names": {"guest:1": "小李"} if guest_names is None else guest_names,
+        "others": others,
+        "others_answer": others_answer,
+        "headcount": headcount,
+        "stated_headcount": None,
+    }
+
+
+def default_answer(card):
+    """The card answered as the runner's default will: every row's proposed rules ticked with
+    save off, the guests with their keys, and the others as shown."""
+    return answer(
+        selected=[row["diner_id"] for row in card["rows"] if row["selected"]],
+        stated={
+            row["diner_id"]: [{**rule, "save": False} for rule in row["proposed"]]
+            for row in card["rows"]
+            if row["selected"] and row["proposed"]
+        },
+        guests=[
+            {"key": guest["key"], "name": guest["name"], "rules": guest["proposed"]}
+            for guest in card["guests"]
+        ],
+        others=card["others"],
+        others_answer=card["others_answer"],
+    )
+
+
+def test_follow_up_card_confirmed_untouched_loses_nobody(session, seeded):
+    from minemydinner.agent.diners import apply_answer, build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang)
+    table = LabelTable.from_state(
+        {"labels": {"guest:1": "Diner 3", f"diner:{wang.id}": "Diner 2"},
+         "names": {"guest:1": "小李"}}, me.id)
+    before = dict(table.labels), dict(table.names)
+    card = build_follow_up_card(session, ParsedRequest(), table, [], "换个辣的", state, None)
+    result = apply_answer(session, default_answer(card), table, None, state)
+    assert result.diner_ids == state["diner_ids"]
+    assert [asdict(r) for r in result.meal_rules] == state["meal_rules"]
+    assert result.guest_names == {"guest:1": "小李"}
+    assert result.others == 1 and result.others_answer == "unsure"
+    assert result.headcount == state["headcount"]
+    assert (table.labels, table.names) == before
+
+
+def test_follow_up_card_adds_what_the_message_names(session, seeded):
+    from minemydinner.agent.diners import build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang)
+    table = LabelTable.from_state(None, me.id)
+    parsed = ParsedRequest(guests=[{"name": "小王王"}, {"name": "小李"}])
+    card = build_follow_up_card(session, parsed, table, [], "再加小王王", state, None)
+    assert card["headcount"] == state["headcount"] + 1
+    assert [(g["key"], g["name"]) for g in card["guests"]] == [("guest:1", "小李"),
+                                                               (None, "小王王")]
+    assert card["others"] == 1 and card["others_answer"] == "unsure"
+
+
+def test_follow_up_card_stated_total_below_preselected(session, seeded):
+    from minemydinner.agent.diners import build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang, guest_names={}, headcount=3, others=1)
+    state["meal_rules"] = []
+    table = LabelTable.from_state(None, me.id)
+    zhao = friend(session, "小赵")
+    state["diner_ids"] = [me.id, wang.id, zhao.id]
+    state["others"], state["others_answer"] = 0, None
+    card = build_follow_up_card(session, ParsedRequest(headcount=1), table, [], "就我吃", state, 1)
+    assert card["headcount"] == 3 and card["stated_total"] == 1
+    assert all(row["selected"] for row in card["rows"])
+
+
+def test_follow_up_card_never_preselects_a_deleted_friend(session, seeded):
+    from minemydinner.agent.diners import apply_answer, build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang, guest_names={})
+    state["diner_ids"] = [me.id, 9999]
+    table = LabelTable.from_state(None, me.id)
+    card = build_follow_up_card(session, ParsedRequest(), table, [], "换个辣的", state, None)
+    assert 9999 not in [row["diner_id"] for row in card["rows"]]
+    result = apply_answer(session, default_answer(card), table, None, state)
+    assert 9999 not in result.diner_ids
+
+
+def test_guest_key_kept_on_a_follow_up_answer(session, seeded):
+    from minemydinner.agent.diners import apply_answer
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang)
+    table = LabelTable.from_state({"labels": {"guest:1": "Diner 3"}, "names": {"guest:1": "小李"}},
+                                  me.id)
+    given = answer(selected=[me.id], guests=[{"key": "guest:1", "name": "小李"}])
+    result = apply_answer(session, given, table, None, state)
+    assert result.guest_names == {"guest:1": "小李"}
+    assert [key for key in table.labels if key.startswith("guest:")] == ["guest:1"]
+    # A key the server did not issue is never trusted, and none is trusted without a set.
+    forged = answer(selected=[me.id], guests=[{"key": "guest:7", "name": "小李"}])
+    assert list(apply_answer(session, forged, table, None, state).guest_names) == ["guest:2"]
+    again = answer(selected=[me.id], guests=[{"key": "guest:1", "name": "小李"}])
+    assert list(apply_answer(session, again, table, None, None).guest_names) == ["guest:3"]
+
+
+def test_settled_from_plan():
+    from minemydinner.agent.diners import settled_from_plan
+
+    constraints = {"diner_ids": [1], "guest_rules": [], "unconfirmed_diners": 1, "headcount": 2}
+    state = settled_from_plan(1, constraints)
+    assert state["diner_ids"] == [1] and state["others"] == 1
+    assert state["others_answer"] == "unsure" and state["headcount"] == 2
+    assert state["meal_rules"] == [] and state["guest_names"] == {}
+    assert state["stated_headcount"] is None
+    solo = settled_from_plan(1, {**constraints, "headcount": 1})
+    assert solo["others"] == 0 and solo["others_answer"] is None
+    known = settled_from_plan(1, {**constraints, "unconfirmed_diners": 0})
+    assert known["others_answer"] == "none"
+
+
+def test_follow_up_card_proposes_a_new_rule_for_a_settled_guest(session, seeded):
+    from minemydinner.agent.diners import build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang)
+    table = LabelTable.from_state(None, me.id)
+    parsed = ParsedRequest(guests=[{"name": "小李", "allergens": ["peanut"]}])
+    card = build_follow_up_card(session, parsed, table, [], "小李对花生过敏", state, None)
+    (guest,) = card["guests"]
+    assert guest["key"] == "guest:1" and guest["name"] == "小李"
+    assert [rule.get("text") or rule.get("allergen") for rule in guest["proposed"]] == [
+        "香菜", "peanut"
+    ]
+    assert card["headcount"] == state["headcount"]
+
+
+def test_follow_up_card_restated_unnamed_guest_is_not_added(session, seeded):
+    from minemydinner.agent.diners import build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang)  # others = 1
+    table = LabelTable.from_state(None, me.id)
+    one = ParsedRequest(guests=[{"name": None}])
+    card = build_follow_up_card(session, one, table, [], "还有一个人", state, None)
+    assert card["headcount"] == state["headcount"]
+    assert [g["name"] for g in card["guests"]] == ["小李"]
+    two = ParsedRequest(guests=[{"name": None}, {"name": None}])
+    card = build_follow_up_card(session, two, table, [], "还有两个人", state, None)
+    assert card["headcount"] == state["headcount"] + 1
+    assert [g["key"] for g in card["guests"]] == ["guest:1", None]
+
+
+def test_follow_up_card_deleted_friend_moves_to_others(session, seeded):
+    from minemydinner.agent.diners import apply_answer, build_follow_up_card
+
+    me = self_diner(session)
+    state = {
+        "diner_ids": [me.id, 9999], "meal_rules": [], "guest_names": {}, "others": 0,
+        "others_answer": None, "headcount": 2, "stated_headcount": None,
+    }
+    table = LabelTable.from_state(None, me.id)
+    card = build_follow_up_card(session, ParsedRequest(), table, [], "换个辣的", state, None)
+    assert card["others"] == 1 and card["headcount"] == 2
+    result = apply_answer(session, default_answer(card), table, None, state)
+    assert result.headcount == 2
+
+
+def test_follow_up_card_adds_exactly_what_the_message_names(session, seeded):
+    from minemydinner.agent.diners import apply_answer, build_follow_up_card
+
+    me = self_diner(session)
+    wang = friend(session, "小王")
+    state = follow_up_set(me, wang)
+    table = LabelTable.from_state({"labels": {"guest:1": "Diner 3", f"diner:{wang.id}": "Diner 2"},
+                                   "names": {"guest:1": "小李"}}, me.id)
+    parsed = ParsedRequest(guests=[{"name": "小赵"}])
+    card = build_follow_up_card(session, parsed, table, [], "再加小赵", state, None)
+    result = apply_answer(session, default_answer(card), table, None, state)
+    assert result.diner_ids == state["diner_ids"]
+    assert [asdict(r) for r in result.meal_rules] == state["meal_rules"]
+    assert result.guest_names == {"guest:1": "小李", "guest:2": "小赵"}
+    assert result.others == 1 and result.others_answer == "unsure"
+    assert result.headcount == state["headcount"] + 1
