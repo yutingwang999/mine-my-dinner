@@ -630,3 +630,40 @@ def test_a_placed_dish_that_uses_the_must_use_ingredient_needs_no_choice():
         "西兰花换成麻婆豆腐",
     )
     assert frame.placed == [60] and frame.choices == []
+
+
+def test_remake_turns_every_unlocked_dish_into_a_replace_slot():
+    frame = _frame(
+        _change(), locked={1}, breaking={4: "diner_rule"}, plan=[1, 2, 3, 4], remake=True
+    )
+    assert sorted(s.replaces for s in frame.slots) == [2, 3, 4]
+    assert all(s.kind == "replace" for s in frame.slots)
+    assert frame.keep == [1]
+
+
+def test_remake_keeps_a_locked_rule_breaker_out():
+    frame = _frame(
+        _change(), locked={1, 2}, breaking={1: "diner_rule"}, plan=[1, 2, 3, 4], remake=True
+    )
+    by_dish = {s.replaces: s for s in frame.slots}
+    assert by_dish[1].reason == "breaks_rule"
+    assert by_dish[3].reason == "asked" and by_dish[4].reason == "asked"
+    assert 2 not in by_dish and frame.keep == [2]
+
+
+def test_remake_with_a_lower_count_drops_replace_slots_first():
+    facts = {**FACTS, 6: DishFacts("紫菜汤", ["紫菜"], "soup")}
+    frame = _frame(
+        _change(counts=ReadCounts(soups=1)),
+        plan=[*PLAN, 6],
+        facts=facts,
+        spec=_spec(soups=1),
+        remake=True,
+    )
+    without = _frame(_change(), plan=[*PLAN, 6], facts=facts, remake=True)
+    assert len(frame.drops) == 1 and frame.drops[0] in (3, 6)
+    assert frame.drops == frame.count_drops
+    # The dropped dish had a remake slot; the slot is gone.
+    assert frame.drops[0] in [s.replaces for s in without.slots]
+    assert frame.drops[0] not in [s.replaces for s in frame.slots]
+    assert len(frame.slots) == len(without.slots) - 1

@@ -483,6 +483,7 @@ def build_frame(
     message: str,
     *,
     uncovered_must: list[str] | None = None,
+    remake: bool = False,
 ) -> Frame:
     """The frame of a change (spec 5.4). `reading` is None on a button turn: the frame then
     comes from the specs alone. `spec_before` is the plan's spec (its `must_use` tells which
@@ -495,7 +496,8 @@ def build_frame(
     break the request (replace slots; a locked dish only for a rule or avoidance), the wish's
     targets (at most half of the unlocked dishes), named and typed adds, the counts (only the
     fields the message states, or all of them on a button), an uncovered must-use
-    ingredient, and last whether any dish is left."""
+    ingredient, and last whether any dish is left. `remake` turns every unlocked dish not yet
+    handled into a replace slot, after the rule-breaking step."""
     builder = _Builder(plan_ids, locked, facts)
     in_plan = set(builder.plan_ids)
     # A locked dish goes for a rule or an avoidance only (today's rule); stock, cookware or
@@ -549,6 +551,14 @@ def build_frame(
     for dish_id in builder.plan_ids:
         if dish_id in breaking and dish_id not in builder.handled:
             builder.replace(dish_id, breaking[dish_id])
+
+    # Make it again (who eats changed so much that most of the plan must go): every unlocked
+    # dish not yet handled becomes a replace slot. A locked dish that breaks a rule is a slot
+    # already; a locked dish that breaks none stays.
+    if remake:
+        for dish_id in builder.plan_ids:
+            if dish_id not in builder.handled and dish_id not in locked:
+                builder.replace(dish_id, "")
 
     # The dishes the wish touches, as the reader names them: unlocked dishes only, at most
     # half of them (rounded up), the reader's order deciding which stay. The reading's
