@@ -1,5 +1,5 @@
 import type { Allergen, DishType, RuleType } from "@/lib/api";
-import { type ChatPlan, type Locale, normalizePlan, post } from "@/lib/chat";
+import { type ChatPlan, type Locale, post } from "@/lib/chat";
 
 /**
  * One H2 conflict of a dish (backend agent/edits.py `Conflict`). Diners are named by display
@@ -49,7 +49,7 @@ const base = (threadId: string) => `/api/chat/threads/${threadId}/plan`;
 
 async function edit(threadId: string, action: string, body: Record<string, unknown>): Promise<ChatPlan> {
   const response = await post(`${base(threadId)}/${action}`, body);
-  return normalizePlan(((await response.json()) as { plan: ChatPlan }).plan);
+  return ((await response.json()) as { plan: ChatPlan }).plan;
 }
 
 export async function searchPlan(threadId: string, query: string, locale: Locale): Promise<SearchResult> {

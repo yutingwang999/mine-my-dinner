@@ -18,7 +18,6 @@ import {
   loadThread,
   type Locale,
   type NextAction,
-  normalizePlan,
   type Pending,
   putRequestStyle,
   readEvents,
@@ -170,7 +169,7 @@ export function ChatPage() {
         break;
       case "plan": {
         seen.plan = true;
-        const plan = normalizePlan(event.data);
+        const plan = event.data;
         const old = seen.assistant;
         const next: ThreadItem =
           old?.type === "assistant"

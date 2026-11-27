@@ -6,7 +6,6 @@ import {
   type DinersPending,
   dinerSummary,
   loadThread,
-  normalizePlan,
   readEvents,
   sendMessage,
   storedThreadId,
@@ -91,74 +90,27 @@ describe("chat client", () => {
   });
 });
 
-describe("normalizePlan", () => {
-  function withSpec(spec: Record<string, unknown>): ChatPlan {
-    return { ...plan(), spec } as unknown as ChatPlan;
-  }
-
-  it("reads an old minimum split as 'at least' on each named side", () => {
-    const old = withSpec({ mode: "shopping", dishes: 3, soups: 0, meat_dishes: 1, vegetable_dishes: 1, split_is_minimum: true });
-    const { spec } = normalizePlan(old);
-    expect([spec.meat_bound, spec.vegetable_bound]).toEqual(["at_least", "at_least"]);
-    expect(spec).not.toHaveProperty("split_is_minimum");
-  });
-
-  it("reads an old exact split as exact and leaves an unnamed side unbound", () => {
-    const old = withSpec({ mode: "shopping", dishes: 8, soups: 0, meat_dishes: 2, split_is_minimum: false });
-    const { spec } = normalizePlan(old);
-    expect([spec.meat_bound, spec.vegetable_bound]).toEqual(["exact", null]);
-  });
-
-  it("keeps the bounds of a current spec", () => {
-    const current = withSpec({
-      mode: "shopping",
-      dishes: 3,
-      soups: 0,
-      meat_dishes: null,
-      vegetable_dishes: 1,
-      meat_bound: null,
-      vegetable_bound: "at_most",
-    });
-    const { spec } = normalizePlan(current);
-    expect([spec.meat_bound, spec.vegetable_bound]).toEqual([null, "at_most"]);
-  });
-});
-
 describe("loadThread", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("returns items with each plan normalized and no extra card when a plan exists", async () => {
-    const old = { ...plan() } as unknown as Record<string, unknown>;
-    delete old.reasons;
+  it("returns the items, the pending question and the editable flag", async () => {
     mockFetch({
       "GET /api/chat/threads/t": () => ({
         items: [
           { type: "user", text: "hi" },
-          { type: "assistant", id: "a", text: "", plan: old },
+          { type: "assistant", id: "a", text: "", plan: plan() },
           { type: "question", value: { kind: "request_style" } },
         ],
-        messages: [],
-        current_plan: plan(),
         pending: null,
+        editable: true,
       }),
     });
     const state = await loadThread("t");
     expect(state.items).toHaveLength(3);
+    expect(state.editable).toBe(true);
+    expect(state.pending).toBeNull();
     const reply = state.items[1];
-    expect(reply.type === "assistant" && reply.plan?.reasons).toEqual([]);
-  });
-
-  it("appends a card-only item for current_plan when no item has a plan", async () => {
-    mockFetch({
-      "GET /api/chat/threads/t": () => ({
-        items: [{ type: "assistant", id: "a", text: "old", plan: null }],
-        current_plan: plan(),
-        pending: null,
-      }),
-    });
-    const state = await loadThread("t");
-    expect(state.items).toHaveLength(2);
-    expect(state.items[1]).toMatchObject({ type: "assistant", id: null, text: "" });
+    expect(reply.type === "assistant" && reply.plan?.passed).toBe(true);
   });
 });
 

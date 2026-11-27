@@ -470,12 +470,6 @@
       "skip": "Skip",
       "switchLabel": "Ask me first when details are missing"
     },
-    "reviseOrPlan": {
-      "revise": "Change this plan",
-      "plan": "Plan a new meal",
-      "chose": "You chose: {choice}",
-      "skipped": "Skipped"
-    },
     "diners": {
       "title": "Who is eating?",
       "totalBefore": "",
@@ -549,7 +543,6 @@
       "assumedFridgeOnly": "fridge only",
       "assumedShopping": "shopping allowed",
       "leftOut": "{count, plural, one {# dish was left out because an ingredient has an unknown allergen.} other {# dishes were left out because an ingredient has an unknown allergen.}}",
-      "showLeftOut": "Show which dishes",
       "leftOutTitles": "Dishes left out",
       "semanticPaused": "Search by meaning is paused for now, so results may be less relevant. Searching by name still works.",
       "asked": "As you asked: {list}.",
@@ -615,7 +608,6 @@
     },
     "problem": {
       "split_conflicts_total": "The meat and vegetable counts do not fit the total number of dishes. Tell me the counts again.",
-      "split_exceeds_total": "The meat and vegetable dishes add up to more than the total number of dishes. Tell me the counts again.",
       "too_many": "That is more than I can plan at once, at most 12 dishes in total. Tell me how many you want."
     },
     "edit": {

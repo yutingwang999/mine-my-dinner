@@ -146,11 +146,10 @@ describe("ChatPage", () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({
       "GET /api/chat/threads/t9": () => ({
-        messages: [
-          { role: "user", text: "dinner" },
-          { role: "assistant", text: "Earlier reply." },
+        items: [
+          { type: "user", text: "dinner" },
+          { type: "assistant", id: "a1", text: "Earlier reply.", plan: plan() },
         ],
-        current_plan: plan(),
         pending: { kind: "question", fields: ["composition"] },
       }),
       "POST /api/chat/threads/t9/resume": () => stream(DONE),
@@ -168,8 +167,7 @@ describe("ChatPage", () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({
       "GET /api/chat/threads/t9": () => ({
-        messages: [{ role: "user", text: "dinner" }],
-        current_plan: null,
+        items: [{ type: "user", text: "dinner" }],
         pending: { kind: "request_style" },
       }),
     });
@@ -262,18 +260,6 @@ describe("ChatPage", () => {
     expect(callsTo(calls, "POST", "/api/chat/threads/t1/messages")[1].body).toEqual({ text, locale: "en" });
   });
 
-  it("shows the contradiction hint for a composition question", async () => {
-    setup({
-      "POST /api/chat/threads/t1/messages": () =>
-        stream(
-          frame("interrupt", { kind: "question", fields: ["composition"], problem: "split_exceeds_total" }),
-          DONE,
-        ),
-    });
-    await send("dinner");
-    expect(await screen.findByText(/add up to more than the total/)).toBeInTheDocument();
-  });
-
   it("shows the conflict hint for counts that do not fit the total", async () => {
     setup({
       "POST /api/chat/threads/t1/messages": () =>
@@ -293,20 +279,6 @@ describe("ChatPage", () => {
     });
     await send("dinner");
     expect(await screen.findByText(/at most 12 dishes in total/)).toBeInTheDocument();
-  });
-
-  it("restores a plan saved before the new fields existed without crashing", async () => {
-    window.localStorage.setItem(THREAD_KEY, "t8");
-    const old = plan({
-      warnings: [{ code: "S1", recipe_id: 1, detail: { name: "oil", needed: 2, have: 1, unit: "ml" } }],
-    }) as unknown as Record<string, unknown>;
-    for (const key of ["reasons", "defaults_used", "next_actions", "servings_notes", "unmet"]) delete old[key];
-    old.spec = { mode: "fridge_only", dishes: 1, soups: 0, time_limit_min: null };
-    setup({
-      "GET /api/chat/threads/t8": () => ({ messages: [], current_plan: old, pending: null }),
-    });
-    expect(await screen.findByText(/check the actual ingredients for allergens/)).toBeInTheDocument();
-    expect(screen.getByText("oil: 葱花蛋 2, 2 ml needed, 1 ml in stock.")).toBeInTheDocument();
   });
 
   it("falls back to the standard hint for an unknown problem", async () => {
@@ -365,8 +337,7 @@ describe("ChatPage", () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({
       "GET /api/chat/threads/t9": () => ({
-        messages: [{ role: "assistant", text: "Old reply." }],
-        current_plan: null,
+        items: [{ type: "assistant", id: "a1", text: "Old reply.", plan: null }],
         pending: null,
       }),
     });
@@ -426,8 +397,6 @@ describe("ChatPage", () => {
     setup({
       "GET /api/chat/threads/t9": () => ({
         items: [{ type: "user", text: "dinner" }],
-        messages: [],
-        current_plan: null,
         pending: { kind: "request_style" },
       }),
       "POST /api/chat/threads/t9/resume": () => reply(500, { code: "internal" }),
@@ -472,8 +441,6 @@ describe("ChatPage", () => {
           { type: "question", value: { kind: "question", fields: ["mode"] } },
           { type: "user", text: "yes" },
         ],
-        messages: [],
-        current_plan: null,
         pending: null,
       }),
     });
@@ -484,41 +451,11 @@ describe("ChatPage", () => {
     expect(texts[2]).toMatch(/yes/);
   });
 
-  it("shows an answered choice card of an older thread as one history line", async () => {
-    // Threads saved by plans 3b-1 and 3b-1b recorded the "change or plan anew" card.
-    window.localStorage.setItem(THREAD_KEY, "t4");
-    setup({
-      "GET /api/chat/threads/t4": () => ({
-        items: [
-          { type: "user", text: "spicier" },
-          { type: "question", value: { kind: "revise_or_plan", message: "spicier", choice: "revise" } },
-          { type: "question", value: { kind: "revise_or_plan", message: "fish", choice: null } },
-          { type: "question", value: { kind: "brand_new_kind" } },
-          // A question value without fields renders nothing rather than throwing.
-          { type: "question", value: { kind: "question" } },
-          { type: "user", text: "thanks" },
-        ],
-        messages: [],
-        current_plan: null,
-        pending: null,
-      }),
-    });
-    await screen.findByText("You chose: Change this plan");
-    const texts = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
-    expect(texts).toHaveLength(4);
-    expect(texts[0]).toMatch(/spicier/);
-    expect(texts[1]).toMatch(/You chose: Change this plan/);
-    expect(texts[2]).toMatch(/Skipped/);
-    expect(texts[3]).toMatch(/thanks/);
-  });
-
   it("reverts the switch when a request-style choice fails", async () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({
       "GET /api/chat/threads/t9": () => ({
         items: [{ type: "user", text: "dinner" }],
-        messages: [],
-        current_plan: null,
         pending: { kind: "request_style" },
       }),
       "POST /api/chat/threads/t9/resume": () => reply(500, { code: "internal" }),
@@ -580,8 +517,7 @@ describe("ChatPage", () => {
     let attempt = 0;
     setup({
       "GET /api/chat/threads/t9": () => ({
-        messages: [{ role: "assistant", text: "Which?" }],
-        current_plan: plan(),
+        items: [{ type: "assistant", id: "a1", text: "Which?", plan: plan() }],
         pending: { kind: "question", fields: ["mode"] },
       }),
       "POST /api/chat/threads/t9/resume": () =>
@@ -601,8 +537,7 @@ describe("ChatPage", () => {
     window.localStorage.setItem(THREAD_KEY, "t9");
     setup({
       "GET /api/chat/threads/t9": () => ({
-        messages: [],
-        current_plan: plan(),
+        items: [{ type: "assistant", id: "a1", text: "Reply.", plan: plan() }],
         pending: { kind: "question", fields: ["mode"] },
       }),
       "POST /api/chat/threads/t9/resume": () => reply(500, { code: "internal" }),
@@ -621,8 +556,6 @@ describe("ChatPage", () => {
       { type: "user", text: "more" },
       { type: "assistant", id: "a2", text: "Second plan.", plan: plan({ next_actions: ["switch_to_shopping"] }) },
     ],
-    messages: [],
-    current_plan: plan(),
     pending: null,
   };
 
@@ -676,30 +609,11 @@ describe("ChatPage", () => {
     expect(screen.getAllByRole("listitem").filter((li) => li.className.includes("chat-assistant"))).toHaveLength(1);
   });
 
-  it("shows the plan of an old thread as a card at the end, actionable", async () => {
-    window.localStorage.setItem(THREAD_KEY, "t6");
-    setup({
-      "GET /api/chat/threads/t6": () => ({
-        messages: [
-          { role: "user", text: "dinner" },
-          { role: "assistant", text: "Old reply." },
-        ],
-        current_plan: plan({ next_actions: ["fewer_dishes"] }),
-        pending: null,
-      }),
-    });
-    expect(await screen.findByRole("button", { name: "Fewer dishes" })).toBeEnabled();
-    const items = screen.getAllByRole("listitem").filter((li) => li.className.includes("chat-message"));
-    expect(items[items.length - 1]).toContainElement(screen.getByRole("button", { name: "Fewer dishes" }));
-  });
-
   it("shows a pending question as an assistant item and keeps it after the answer", async () => {
     window.localStorage.setItem(THREAD_KEY, "t7");
     setup({
       "GET /api/chat/threads/t7": () => ({
         items: [{ type: "user", text: "dinner" }],
-        messages: [],
-        current_plan: null,
         pending: { kind: "question", fields: ["mode"] },
       }),
       "POST /api/chat/threads/t7/resume": () => stream(frame("message", { role: "assistant", text: "Thanks." }), DONE),

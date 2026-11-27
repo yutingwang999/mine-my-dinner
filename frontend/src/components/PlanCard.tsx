@@ -47,16 +47,16 @@ function Asked({ plan }: { plan: ChatPlan }) {
   const items: string[] = [];
   // The user's own bounds, not the tightened ranges the planner reads (design 5.11).
   const split: string[] = [];
+  // A named count always has a bound (backend request.py _bound), hence the `!` below.
   if (spec.meat_dishes != null && stated("meat_dishes")) {
-    split.push(t("askedMeat", { count: spec.meat_dishes, bound: spec.meat_bound ?? "exact" }));
+    split.push(t("askedMeat", { count: spec.meat_dishes, bound: spec.meat_bound! }));
   }
   if (spec.vegetable_dishes != null && stated("vegetable_dishes")) {
     split.push(
-      t("askedVegetable", { count: spec.vegetable_dishes, bound: spec.vegetable_bound ?? "exact" }),
+      t("askedVegetable", { count: spec.vegetable_dishes, bound: spec.vegetable_bound! }),
     );
   }
-  // An old record's "composition" stood for both counts, so neither was stated.
-  if (stated("dishes") && !defaults.includes("composition") && spec.dishes > 0) {
+  if (stated("dishes") && spec.dishes > 0) {
     const dishes = t("askedDishes", { count: spec.dishes });
     items.push(
       split.length > 0
@@ -67,7 +67,7 @@ function Asked({ plan }: { plan: ChatPlan }) {
     // An assumed total ("三个人，最多一个素菜"): the named sides are still what the user said.
     items.push(...split);
   }
-  if (stated("soups") && !defaults.includes("composition") && spec.soups > 0) {
+  if (stated("soups") && spec.soups > 0) {
     items.push(t("askedSoups", { count: spec.soups }));
   }
   for (const [name, key] of [
@@ -96,12 +96,10 @@ function Assumed({ plan }: { plan: ChatPlan }) {
   if (plan.defaults_used.includes("headcount")) {
     parts.push(t("assumedHeadcount", { count: plan.headcount }));
   }
-  // An old record may carry "composition", which stood for both counts.
-  const legacy = plan.defaults_used.includes("composition");
-  if (legacy || plan.defaults_used.includes("dishes")) {
+  if (plan.defaults_used.includes("dishes")) {
     parts.push(t("assumedDishes", { count: plan.spec.dishes }));
   }
-  if (legacy ? plan.spec.soups > 0 : plan.defaults_used.includes("soups")) {
+  if (plan.defaults_used.includes("soups")) {
     parts.push(t("assumedSoups", { count: plan.spec.soups }));
   }
   for (const [name, key] of [
@@ -179,11 +177,10 @@ function warningText(
   }
 }
 
-/** Whose rules the plan was checked against; none for a solo plan or one saved before 2b. */
+/** Whose rules the plan was checked against; none for a solo plan. */
 function DinersLine({ plan }: { plan: ChatPlan }) {
   const t = useTranslations("chat.plan");
-  const diners = plan.diners ?? [];
-  const others = plan.others ?? 0;
+  const { diners, others } = plan;
   if (!diners.some((diner) => !diner.is_self) && others === 0) return null;
   // Named people one by one; guests without a name counted together ("3 位客人").
   const unnamed = diners.filter((diner) => !diner.is_self && !diner.name).length;
@@ -225,8 +222,8 @@ function LeftOutRow({
 }
 
 /**
- * Dishes left out for unknown allergens. A plan saved before their ingredient names were
- * kept lists titles only; otherwise each name can be confirmed, and then planning again.
+ * Dishes left out for unknown allergens: each ingredient name can be confirmed, and then
+ * planning again.
  */
 function LeftOutDishes({
   plan,
@@ -238,11 +235,9 @@ function LeftOutDishes({
   replanDisabled: boolean;
 }) {
   const t = useTranslations("chat.plan");
-  const [showTitles, setShowTitles] = useState(false);
   const [resolved, setResolved] = useState(false);
-  const titles = plan.left_out_unknown_allergens;
-  const details = plan.left_out_details ?? [];
-  if (titles.length === 0 && details.length === 0) return null;
+  const details = plan.left_out_details;
+  if (details.length === 0) return null;
 
   // Grouped by ingredient name, in order of first appearance.
   const groups = new Map<string, string[]>();
@@ -253,28 +248,7 @@ function LeftOutDishes({
       groups.set(line, group);
     }
   }
-  const grouped = new Set([...groups.values()].flat());
-  const count = new Set([...titles, ...details.map((dish) => dish.title)]).size;
-
-  if (groups.size === 0) {
-    return (
-      <div className="left-out-box">
-        <h3>{t("leftOut", { count })}</h3>
-        <span className="dish-toggles">
-          <button type="button" aria-expanded={showTitles} onClick={() => setShowTitles(!showTitles)}>
-            {t("showLeftOut")}
-          </button>
-        </span>
-        {showTitles && (
-          <ul aria-label={t("leftOutTitles")}>
-            {titles.map((title) => (
-              <li key={title}>{title}</li>
-            ))}
-          </ul>
-        )}
-      </div>
-    );
-  }
+  const count = new Set(details.map((dish) => dish.title)).size;
 
   return (
     <div className="left-out left-out-box">
@@ -283,14 +257,6 @@ function LeftOutDishes({
         {[...groups].map(([name, groupTitles]) => (
           <LeftOutRow key={name} name={name} titles={groupTitles} onResolved={() => setResolved(true)} />
         ))}
-        {/* Titles kept without their ingredient names (an older reply in the same thread). */}
-        {titles
-          .filter((title) => !grouped.has(title))
-          .map((title) => (
-            <li key={`title-${title}`}>
-              <span>{title}</span>
-            </li>
-          ))}
       </ul>
       {resolved && onReplan && (
         <div className="actions">

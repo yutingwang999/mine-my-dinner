@@ -45,7 +45,6 @@ export type PlanNote = { field: "deleted_recipes"; titles: string[] };
  */
 export type PlanEdit = { overrides: unknown[]; log: unknown[]; conflicts: Conflict[]; kept?: Conflict[] };
 
-/** The `current_plan` the planning graph presents (backend agent/graph.py present_plan). */
 /** How a named meat or vegetable count binds (design 5.11). */
 export type Bound = "exact" | "at_least" | "at_most";
 
@@ -91,15 +90,15 @@ export type ChatPlan = {
   headcount: number;
   servings_notes: { recipe_id: number; servings: number; headcount: number }[];
   left_out_unknown_allergens: string[];
-  /** Per left-out dish, the ingredient line names that caused it; absent before plan 2b. */
-  left_out_details?: LeftOutDish[];
+  /** Per left-out dish, the ingredient line names that caused it. */
+  left_out_details: LeftOutDish[];
   /** Whose rules the plan was checked against: the user first, then friends, then guests. */
-  diners?: PlanDiner[];
+  diners: PlanDiner[];
   /** People eating who match no diner; their limits are unknown. */
-  others?: number;
+  others: number;
   semantic_paused: boolean;
   passed: boolean;
-  /** True on a manual version (plan 3a); absent on plans saved before manual edits. */
+  /** True on a manual version (plan 3a); a model card omits it. */
   edited?: boolean;
   /** The index of the model version this card edits or restores. */
   model_version?: number;
@@ -164,8 +163,7 @@ export type DinerAnswer = {
 };
 
 /** The history summary of a confirmed card: friends' and guests' names, and how many more. */
-/** `self` is absent in histories saved before it existed (treated as false). */
-export type DinerSummary = { self?: boolean; names: string[]; others: number };
+export type DinerSummary = { self: boolean; names: string[]; others: number };
 
 export type Pending =
   | { kind: "request_style" }
@@ -173,11 +171,8 @@ export type Pending =
   | {
       kind: "question";
       fields: string[];
-      // split_exceeds_total stays for questions saved before split_conflicts_total existed.
-      problem?: "split_conflicts_total" | "split_exceeds_total" | "too_many";
+      problem?: "split_conflicts_total" | "too_many";
     };
-
-export type ChatMessage = { role: "user" | "assistant"; text: string };
 
 export type ChatEvent =
   | { event: "progress"; data: { step: string } }
@@ -197,9 +192,7 @@ export type ThreadItem =
 /** A question as the history records it; the diner card keeps only a summary (null when skipped). */
 export type AskedQuestion =
   | Exclude<Pending, { kind: "diners" }>
-  | { kind: "diners"; summary: DinerSummary | null }
-  // History only: the answered choice card of threads saved by plans 3b-1 and 3b-1b.
-  | { kind: "revise_or_plan"; message?: string; choice?: "revise" | "plan" | null };
+  | { kind: "diners"; summary: DinerSummary | null };
 
 export type ThreadState = {
   items: ThreadItem[];
@@ -209,11 +202,9 @@ export type ThreadState = {
 };
 
 type RawThread = {
-  items?: ThreadItem[];
-  messages?: ChatMessage[];
-  current_plan?: ChatPlan | null;
-  pending?: Pending | null;
-  editable?: boolean;
+  items: ThreadItem[];
+  pending: Pending | null;
+  editable: boolean;
 };
 
 export const THREAD_KEY = "mmd.chat.thread";
@@ -322,23 +313,7 @@ export function resume(
 
 export async function loadThread(threadId: string): Promise<ThreadState> {
   const raw = (await (await call(`/api/chat/threads/${threadId}`, { method: "GET" })).json()) as RawThread;
-  const source: ThreadItem[] =
-    raw.items ??
-    (raw.messages ?? []).map(
-      (message): ThreadItem =>
-        message.role === "user"
-          ? { type: "user", text: message.text }
-          : { type: "assistant", id: null, text: message.text, plan: null },
-    );
-  const items = source.map(
-    (item): ThreadItem =>
-      item.type === "assistant" && item.plan ? { ...item, plan: normalizePlan(item.plan) } : item,
-  );
-  // A thread saved before plans were kept per reply: show its one plan as a card-only reply at the end.
-  if (raw.current_plan && !items.some((item) => item.type === "assistant" && item.plan)) {
-    items.push({ type: "assistant", id: null, text: "", plan: normalizePlan(raw.current_plan) });
-  }
-  return { items, pending: raw.pending ?? null, editable: raw.editable ?? false };
+  return { items: raw.items, pending: raw.pending, editable: raw.editable };
 }
 
 /** The history summary of a confirmed card, built as the backend's answer_summary builds it. */
@@ -384,56 +359,3 @@ export const KNOWN_ACTIONS: readonly NextAction[] = [
   "register_cookware",
   "import_recipes",
 ];
-
-/**
- * Fills the fields a plan saved by an older version lacks, so the card can rely on the
- * current shape. An old S1 warning (one recipe, no `parts`) gets one part from it.
- */
-export function normalizePlan(raw: ChatPlan): ChatPlan {
-  const old = raw as unknown as Partial<ChatPlan> & {
-    spec?: Partial<ChatPlan["spec"]> & { split_is_minimum?: boolean };
-  };
-  const spec: Partial<ChatPlan["spec"]> & { split_is_minimum?: boolean } = old.spec ?? {};
-  const meat_dishes = spec.meat_dishes ?? null;
-  const vegetable_dishes = spec.vegetable_dishes ?? null;
-  // A spec saved before bounds existed: split_is_minimum made both named sides "at least".
-  const oldBound: Bound = spec.split_is_minimum ? "at_least" : "exact";
-  const bound = (count: number | null, value: Bound | null | undefined): Bound | null =>
-    count === null ? null : (value ?? oldBound);
-  return {
-    ...raw,
-    recipes: old.recipes ?? [],
-    missing: old.missing ?? {},
-    missing_cookware: old.missing_cookware ?? {},
-    unmet: old.unmet ?? [],
-    reasons: old.reasons ?? [],
-    next_actions: old.next_actions ?? [],
-    defaults_used: old.defaults_used ?? [],
-    servings_notes: old.servings_notes ?? [],
-    left_out_unknown_allergens: old.left_out_unknown_allergens ?? [],
-    warnings: (old.warnings ?? []).map((finding) => {
-      if (finding.code !== "S1" || Array.isArray(finding.detail?.parts)) return finding;
-      const parts =
-        finding.recipe_id === null
-          ? []
-          : [{ recipe_id: finding.recipe_id, amount: Number(finding.detail?.needed ?? 0) }];
-      return { ...finding, detail: { ...finding.detail, parts } };
-    }),
-    spec: {
-      mode: spec.mode ?? "fridge_only",
-      dishes: spec.dishes ?? 0,
-      soups: spec.soups ?? 0,
-      meat_dishes,
-      vegetable_dishes,
-      meat_bound: bound(meat_dishes, spec.meat_bound),
-      vegetable_bound: bound(vegetable_dishes, spec.vegetable_bound),
-      staples: spec.staples ?? 0,
-      desserts: spec.desserts ?? 0,
-      snacks: spec.snacks ?? 0,
-      time_limit_min: spec.time_limit_min ?? null,
-      must_use: spec.must_use ?? [],
-      all_use: spec.all_use ?? [],
-      prefer_use: spec.prefer_use ?? [],
-    },
-  };
-}

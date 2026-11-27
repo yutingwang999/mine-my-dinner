@@ -470,12 +470,6 @@
       "skip": "跳过",
       "switchLabel": "信息不全时先问我"
     },
-    "reviseOrPlan": {
-      "revise": "在这份方案上改",
-      "plan": "重新规划一顿",
-      "chose": "你选择了：{choice}",
-      "skipped": "已跳过"
-    },
     "diners": {
       "title": "这顿谁吃？",
       "totalBefore": "一共",
@@ -549,7 +543,6 @@
       "assumedFridgeOnly": "只用冰箱现有食材",
       "assumedShopping": "可以购物",
       "leftOut": "有 {count} 道菜因为含有过敏原未知的食材而被排除。",
-      "showLeftOut": "查看是哪些菜",
       "leftOutTitles": "被排除的菜",
       "semanticPaused": "按语义搜索暂时停用，结果可能没那么相关。按名称搜索仍可使用。",
       "asked": "按你的要求：{list}。",
@@ -615,7 +608,6 @@
     },
     "problem": {
       "split_conflicts_total": "荤菜和素菜的数量要求和总菜数对不上。请重新告诉我各自的数量。",
-      "split_exceeds_total": "荤菜和素菜的数量加起来超过了总菜数。请重新告诉我各自的数量。",
       "too_many": "一次最多只能安排 12 道（所有种类合计）。请告诉我想做几道。"
     },
     "edit": {

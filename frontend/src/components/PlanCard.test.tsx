@@ -56,18 +56,6 @@ describe("PlanCard", () => {
     expect(screen.getByText("Assumed: 2 dishes. Say if that's wrong.")).toBeInTheDocument();
   });
 
-  it("treats an old composition value as both counts", () => {
-    renderWithProviders(
-      <PlanCard
-        plan={plan({
-          defaults_used: ["composition"],
-          spec: spec({ dishes: 2, soups: 1 }),
-        })}
-      />,
-    );
-    expect(screen.getByText("Assumed: 2 dishes, 1 soup. Say if that's wrong.")).toBeInTheDocument();
-  });
-
   it("states only the defaulted values", () => {
     renderWithProviders(
       <PlanCard
@@ -147,14 +135,6 @@ describe("PlanCard", () => {
     );
     expect(screen.getByText("oil: 葱花蛋 2, 2 tbsp needed, 1 tbsp in stock.")).toBeInTheDocument();
     expect(screen.getByText("rice: 葱花蛋 2, 2 bowl needed, 1 bowl in stock.")).toBeInTheDocument();
-  });
-
-  it("counts dishes left out for unknown allergens and lists their titles on request", async () => {
-    renderWithProviders(<PlanCard plan={plan({ left_out_unknown_allergens: ["秘制酱鸡", "怪味面"] })} />);
-    expect(screen.getByText(/2 dishes were left out because an ingredient has an unknown allergen/)).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Show which dishes"));
-    const list = screen.getByRole("list", { name: "Dishes left out" });
-    expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["秘制酱鸡", "怪味面"]);
   });
 
   it("shows the semantic-search notice when paused", () => {
@@ -468,7 +448,7 @@ describe("PlanCard layout order", () => {
 
   it("puts the left-out dishes after the problem boxes", () => {
     const { container } = renderWithProviders(
-      <PlanCard plan={plan({ ...noPlan, left_out_unknown_allergens: ["秘制酱鸡"] })} />,
+      <PlanCard plan={plan({ ...noPlan, left_out_details: [{ id: 1, title: "秘制酱鸡", lines: ["秘制酱"] }] })} />,
     );
     const red = container.querySelector(".notice-warning:not(.allergen-notice)") as HTMLElement;
     const box = container.querySelector(".left-out-box") as HTMLElement;
@@ -482,7 +462,7 @@ describe("PlanCard layout order", () => {
         plan={plan({
           headcount: 3,
           servings_notes: [{ recipe_id: 1, servings: 2, headcount: 3 }],
-          left_out_unknown_allergens: ["秘制酱鸡"],
+          left_out_details: [{ id: 1, title: "秘制酱鸡", lines: ["秘制酱"] }],
         })}
       />,
     );
@@ -726,13 +706,6 @@ describe("PlanCard diners and left-out dishes", () => {
     unmount();
     zhCard(plan({ diners: [], others: 2 }));
     expect(screen.getByText("另外 2 人的忌口未知")).toBeInTheDocument();
-  });
-
-  it("shows an old plan's left-out titles without a confirm button", async () => {
-    renderWithProviders(<PlanCard plan={plan({ left_out_unknown_allergens: ["秘制酱鸡"] })} onReplan={vi.fn()} />);
-    await userEvent.click(screen.getByText("Show which dishes"));
-    expect(screen.getByText("秘制酱鸡")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Confirm allergens" })).toBeNull();
   });
 
   it("lists the left-out dishes on an early-stop reply with no dishes", () => {
@@ -1106,7 +1079,7 @@ describe("PlanCard manual edits", () => {
     expect(screen.getByText("No dish can be made.")).toBeInTheDocument();
   });
 
-  it("renders an old plan without edit fields as before", () => {
+  it("renders a model card without edit fields as a plain card", () => {
     renderWithProviders(<PlanCard plan={TWO} editable threadId="t1" onEdited={vi.fn()} />);
     expect(screen.queryByText("Edited by hand")).toBeNull();
     expect(screen.queryByRole("button", { name: "Restore the model's plan" })).toBeNull();

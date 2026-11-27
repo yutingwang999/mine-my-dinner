@@ -63,15 +63,6 @@ function useQuestionText() {
   };
 }
 
-/** The history line of an answered choice card from plans 3b-1 and 3b-1b (no longer asked). */
-function useReviseOrPlanText() {
-  const t = useTranslations("chat.reviseOrPlan");
-  return (value: Extract<AskedQuestion, { kind: "revise_or_plan" }>): string =>
-    value.choice === "revise" || value.choice === "plan"
-      ? t("chose", { choice: t(value.choice) })
-      : t("skipped");
-}
-
 /** The history line of an answered diner card: who was confirmed (the user as "me"). */
 function useDinersText() {
   const t = useTranslations("chat.diners");
@@ -110,7 +101,6 @@ export function MessageList({
   const errorText = useErrorText();
   const questionText = useQuestionText();
   const dinersText = useDinersText();
-  const reviseOrPlanText = useReviseOrPlanText();
 
   /** A recorded question's history line; "" for a kind this client does not know. */
   const askedText = (value: AskedQuestion): string => {
@@ -119,8 +109,6 @@ export function MessageList({
         return tStyle("title");
       case "diners":
         return dinersText(value);
-      case "revise_or_plan":
-        return reviseOrPlanText(value);
       case "question":
         return questionText(value);
       default:
