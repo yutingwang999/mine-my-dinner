@@ -37,8 +37,8 @@ from minemydinner.agent.change_step import (
     reader_problem,
     reading_changes_nothing,
     result_spec,
+    any_mix_request,
     relax_split_spec,
-    side_adds_left,
     slot_results,
     unfinished_items,
     unfinished_reading,
@@ -122,6 +122,7 @@ from minemydinner.agent.follow_up import (
     ReadAdd,
     ReadConditions,
     ReadCounts,
+    confirmed_set_lines,
     hand_edit_line,
     reader_messages,
     request_after,
@@ -798,16 +799,16 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 state.get("current_plan") is not None
             )
             base = card["request"]
-            if revises and not base.get("counts_stated_now"):
+            if revises and action == "relax_split":
+                # Plan 3b-2 change fixes, fix 5: "any mix" keeps the total that turn asked
+                # for, the plan shown and the typed adds it could not make (shared with a
+                # typed any_mix, `any_mix_request`).
+                base = any_mix_request(base, state["current_plan"], card)
+            elif revises and not base.get("counts_stated_now"):
                 # The card's turn stated no count: the counts are the plan the user sees
                 # (3b-1 spec 5.2), so "one fewer" is one fewer than the dishes shown. A turn
                 # that stated counts (a failed "再加一道") keeps them.
                 base = on_plan_counts(base, state["current_plan"])
-                if action == "relax_split" and base.get("dishes") is not None:
-                    # Plan 3b-2 change fixes, fix 5: "any mix" keeps the total that turn asked
-                    # for, the plan shown and the typed adds it could not make.
-                    left = side_adds_left(card.get(UNFINISHED), card["request"])
-                    base = {**base, "dishes": base["dishes"] + left}
             card_spec = relax_split_spec(card) if action == "relax_split" else card.get("spec")
             return {
                 **fresh,
@@ -842,7 +843,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         route call. The reader sees the plan's lines with their marks, the diners' rules as
         anonymous labels (Diner 1 is the user), the meal's current conditions (this meal's
         one-meal avoidance included) and the whole conversation. Its kind picks the path
-        (`READING_INTENTS`); the reading is kept in the state and recorded with the run."""
+        (`READING_INTENTS`); the reading is kept in the state and recorded with the run.
+
+        Plan 3b-2 (two) spec 5.7 (6): the diner lines start with who eats, the confirmed set
+        by label (`confirmed_set_lines`); a thread with no confirmed set gives the plan's own
+        facts (`settled_from_plan`), so the reader always sees who eats."""
         # The request the plan was built from: the conditions the plan meets.
         base = state.get("plan_request") or state.get("request") or {}
         constraints = state.get("constraints") or {
@@ -862,7 +867,14 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # it is taken out of the constraints and gives no rule line.
             people = with_meal_avoid(session, constraints, [])
             ctx = load_planning_context(session, meal_constraints({"constraints": people}))
-            diner_lines = meal_preferences(session, ctx, current_table())
+            table = current_labels.get().table
+            settled = state.get("settled_diners")
+            headcount = constraints.get("headcount")
+            if settled is None and headcount is not None:
+                self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+                settled = settled_from_plan(self_id, constraints)
+            who = [] if headcount is None else confirmed_set_lines(settled, table, headcount)
+            diner_lines = [*who, *meal_preferences(session, ctx, table)]
             # The hand edits on this plan after it was proposed (Task 11 fix 2): they add
             # no message.
             log = (state["current_plan"].get("edit") or {}).get("log") or []
@@ -1662,7 +1674,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     "moved": moved,
                     "skipped": skipped,
                 }
-            request = request_after(base, reading)
+            present_dishes = count_categories(r["dish_type"] for r in plan["recipes"])["dishes"]
+            # "Any mix" by message changes the plan as the relax_split button does (spec 5.7
+            # (4)): the same starting request (`any_mix_request`, on the newest card), and the
+            # frame meets its total with the split cleared. A message with an add or a stated
+            # count decides by its own counts.
+            mix_only = reading.conditions.any_mix and not message_sets_counts(reading)
+            start = any_mix_request(base, plan, _button_card(state)) if mix_only else base
+            request = request_after(start, reading, present_dishes)
+            if mix_only and request.get("dishes") is not None:
+                total = ReadCounts(dishes=request["dishes"])
+                reading = reading.model_copy(update={"counts": total})
             if people is not None:
                 request["headcount"] = people["new_headcount"]
             words = "\n".join(_current_request(state["messages"]))
@@ -1707,6 +1729,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         else:
             if reading.conditions.clear_time_limit:
                 spec = spec.model_copy(update={"time_limit_min": None})
+            if reading.conditions.no_longer_must_use:
+                # An emptied list states nothing to `revision_spec`, so a must-use taken back
+                # is set here, as the relax_named button sets it (`spec_changes`).
+                spec = spec.model_copy(
+                    update={name: list(request.get(name) or []) for name in ("must_use", "all_use")}
+                )
             # The reading's whole list: a withdrawn avoidance is simply missing.
             meal_avoid = list(request.get("meal_avoid") or [])
             used = reading

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from minemydinner.agent.change_rules import DishFacts, max_general_changes
+from minemydinner.agent.change_rules import DishFacts, fold, max_general_changes
 from minemydinner.agent.follow_up import FollowUpReading
 from minemydinner.models import Recipe
 from minemydinner.planning.composition import (
@@ -160,11 +160,6 @@ def breaking_from(result: ValidationResult) -> dict[int, str]:
         if current is None or _break_rank(reason) < _break_rank(current):
             found[finding.recipe_id] = reason
     return found
-
-
-def fold(text: str) -> str:
-    """A name compared case- and space-insensitively."""
-    return "".join(text.casefold().split())
 
 
 _fold = fold
@@ -591,8 +586,6 @@ def build_frame(
         if add.name.strip():
             if builder.place(add.name, lookup(add.name), None) == "not_found":
                 builder.slots.append(Slot(kind="add", named=add.name.strip()))
-        elif add.dish_type is not None and add.dish_type not in CATEGORY_OF_DISH_TYPE:
-            builder.ignored.append({"add": add.model_dump(), "reason": "unknown_dish_type"})
         elif add.count < 1:
             builder.ignored.append({"add": add.model_dump(), "reason": "bad_count"})
         else:

@@ -431,12 +431,6 @@ def test_adds_by_type_and_by_name():
     assert frame.keep == PLAN
 
 
-def test_an_add_of_an_unknown_dish_type_is_ignored():
-    frame = _frame(_change(add=[ReadAdd(dish_type="凉菜", count=1)]))
-    assert frame.slots == []
-    assert [item["reason"] for item in frame.ignored] == ["unknown_dish_type"]
-
-
 def test_an_add_with_no_dish_type_adds_slots_of_any_type():
     # "再添两道": the reading gives a count and no type. Code sets no type (spec 5.4): the
     # picker chooses the kind of each new dish.

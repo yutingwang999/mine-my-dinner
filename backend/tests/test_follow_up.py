@@ -1,13 +1,19 @@
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from pydantic import ValidationError
 
 from minemydinner.agent.follow_up import (
     FollowUpReading,
+    ReadAdd,
     ReadCounts,
     ReadConditions,
+    confirmed_set_lines,
     hand_edit_line,
     reader_messages,
     request_after,
 )
+from minemydinner.agent.labels import LabelTable
+from minemydinner.planning.composition import CATEGORY_OF_DISH_TYPE
 
 
 def _request(**over) -> dict:
@@ -149,3 +155,114 @@ def test_reader_messages_put_the_hand_edit_line_after_the_plan():
         hand_edits=line,
     )[0].content
     assert text.index("Current plan:") < text.index(line) < text.index("Diners:")
+
+
+# ---- plan 3b-2 (two) Task 8: follow_up_v5's schema and request (spec 5.7) ----
+
+
+def test_add_dish_type_is_an_enum():
+    with pytest.raises(ValidationError):
+        ReadAdd(dish_type="main course")
+    for dish_type in CATEGORY_OF_DISH_TYPE:
+        assert ReadAdd(dish_type=dish_type).dish_type == dish_type
+    assert ReadAdd().dish_type is None
+    schema = ReadAdd.model_json_schema()["properties"]["dish_type"]
+    enum = next(item["enum"] for item in schema["anyOf"] if "enum" in item)
+    assert enum == list(CATEGORY_OF_DISH_TYPE)
+
+
+def test_new_conditions_default_to_no_statement():
+    cond = ReadConditions()
+    assert cond.any_mix is False and cond.no_longer_must_use == []
+
+
+def test_request_after_any_mix_keeps_the_total():
+    old = _request(
+        dishes=4,
+        meat_dishes=2,
+        vegetable_dishes=2,
+        meat_bound="exact",
+        vegetable_bound="exact",
+        range_fields=["meat_dishes", "soups"],
+    )
+    reading = FollowUpReading(kind="change", conditions=ReadConditions(any_mix=True))
+    new = request_after(old, reading, present_dishes=3)
+    assert new["meat_dishes"] is None and new["vegetable_dishes"] is None
+    assert new["meat_bound"] is None and new["vegetable_bound"] is None
+    assert new["dishes"] == 4
+    assert new["counts_stated_now"] is True
+    assert new["range_fields"] == ["soups"]
+    assert new["soups"] == 1
+
+
+def test_request_after_any_mix_without_a_total_uses_the_plan():
+    old = _request(dishes=None, meat_dishes=2, vegetable_dishes=1)
+    reading = FollowUpReading(kind="change", conditions=ReadConditions(any_mix=True))
+    new = request_after(old, reading, present_dishes=3)
+    assert new["dishes"] == 3
+    assert new["meat_dishes"] is None and new["vegetable_dishes"] is None
+
+
+def test_request_after_any_mix_matches_the_relax_split_button():
+    from minemydinner.agent.actions import apply_action
+
+    old = _request(dishes=4, meat_dishes=2, vegetable_dishes=2, meat_bound="exact")
+    reading = FollowUpReading(kind="change", conditions=ReadConditions(any_mix=True))
+    by_words = request_after(old, reading, present_dishes=3)
+    by_button = apply_action(old, "relax_split", {"dishes": 3})
+    # The reading's meal_avoid is its whole list (empty here); every other field agrees.
+    assert by_words == {**by_button, "meal_avoid": []}
+
+
+def test_request_after_takes_back_must_use():
+    old = _request(must_use=["鸡蛋", "番茄"], all_use=["鸡蛋"])
+    cond = ReadConditions(no_longer_must_use=[" 鸡蛋 "])
+    new = request_after(old, FollowUpReading(kind="change", conditions=cond))
+    assert new["must_use"] == ["番茄"]
+    assert new["all_use"] == []
+    # Without the field nothing is taken back.
+    kept = request_after(old, FollowUpReading(kind="change"))
+    assert kept["must_use"] == ["鸡蛋", "番茄"] and kept["all_use"] == ["鸡蛋"]
+
+
+def test_confirmed_set_lines():
+    settled = {
+        "diner_ids": [7, 1],
+        "meal_rules": [],
+        "guest_names": {"guest:1": "Alex"},
+        "others": 1,
+        "others_answer": "unsure",
+        "headcount": 4,
+        "stated_headcount": None,
+    }
+    table = LabelTable.from_state(
+        {"labels": {"diner:7": "Diner 2", "guest:1": "Diner 3"}, "names": {"guest:1": "Alex"}},
+        self_id=1,
+    )
+    lines = confirmed_set_lines(settled, table, 4)
+    assert lines == [
+        "- Diner 1 (the user)",
+        "- Diner 2",
+        "- Diner 3, guest for this meal only",
+        "- 1 more person, not named",
+        "- Headcount: 4",
+    ]
+    assert "Alex" not in "\n".join(lines)
+
+
+def test_confirmed_set_lines_for_the_user_alone():
+    settled = {
+        "diner_ids": [1],
+        "meal_rules": [],
+        "guest_names": {},
+        "others": 2,
+        "others_answer": "none",
+        "headcount": 3,
+        "stated_headcount": None,
+    }
+    table = LabelTable.from_state({}, self_id=1)
+    assert confirmed_set_lines(settled, table, 3) == [
+        "- Diner 1 (the user)",
+        "- 2 more people, not named",
+        "- Headcount: 3",
+    ]

@@ -41,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v5+pick_v6"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -234,12 +234,10 @@ def test_follow_up_v2_states_the_task_11_principles():
 
 
 def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v4"
-    # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); this test
-    # keeps pick_v4's own numbers.
-    reader = load_prompt("follow_up")
+    # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); plan 3b-2
+    # (two) Task 8: the reader in use is follow_up_v5. This test keeps the v4 numbers.
+    reader = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
     picker = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
-    assert reader == (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
     assert len(reader) == 5499
     assert len(picker) == 4268
     revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
@@ -710,7 +708,7 @@ def test_pick_v6_size():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v5+pick_v6"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
@@ -1085,3 +1083,45 @@ def test_fixed_messages_match_the_frontend_files(locale):
     chat = _chat_strings(locale)
     assert REPLAN_MESSAGE[locale] == chat["replanMessage"]
     assert ACTION_MESSAGES[locale] == chat["actionMessage"]
+
+
+# ---- plan 3b-2 (two) Task 8: follow_up_v5 (spec 5.7) ----
+
+
+def test_follow_up_v5_is_in_use():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v5"
+    assert load_prompt("follow_up") == (PROMPT_DIR / "follow_up_v5.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_follow_up_v5_is_within_budget():
+    v5 = (PROMPT_DIR / "follow_up_v5.md").read_text(encoding="utf-8")
+    # Spec 3: under half of route_v6 plus revise_v4 (about 6,900 characters).
+    assert len(v5) < 6900
+    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    route_v6 = (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
+    assert len(v5) < (len(route_v6) + len(revise_v4)) / 2
+    # The reader and the picker in use stay shorter than the two prompts they replace.
+    assert len(v5) + len(load_prompt("pick")) < len(route_v6) + len(revise_v4)
+
+
+def test_follow_up_v5_states_the_diner_change_principles():
+    v5 = (PROMPT_DIR / "follow_up_v5.md").read_text(encoding="utf-8")
+    # 1. A people reading also carries the message's other changes.
+    assert "also fill the other fields for the rest of the message" in v5
+    # 2. A fresh start wins over people.
+    assert "A fresh start wins" in v5
+    # 3. A lasting rule about someone already eating is people.
+    assert "a lasting rule about what someone eats, even someone who already eats" in v5
+    # 4. any_mix and no_longer_must_use only when the message says so.
+    assert "any_mix" in v5 and "no_longer_must_use" in v5
+    # Task 8 fix round 1: meal_avoid is the whole list for a people reading too.
+    assert "meal_avoid is the whole list after this message, whatever the kind (people too)" in v5
+    # The input names the confirmed set.
+    assert "who eats this meal" in v5
+    # Kept from v4: internal words never reach the user.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v5
+    # Invented examples only, at most five lines.
+    examples = v5.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 5

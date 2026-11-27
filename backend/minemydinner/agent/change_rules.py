@@ -22,6 +22,11 @@ class DishFacts:
     dish_type: str = ""
 
 
+def fold(text: str) -> str:
+    """A name compared case- and space-insensitively."""
+    return "".join(text.casefold().split())
+
+
 def max_general_changes(unlocked: int) -> int:
     """How many unlocked dishes a wish may replace: half, rounded up, at least one."""
     if unlocked <= 0:

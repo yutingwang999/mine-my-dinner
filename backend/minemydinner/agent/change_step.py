@@ -16,6 +16,7 @@ from collections.abc import Collection
 
 from pydantic import ValidationError
 
+from minemydinner.agent.actions import on_plan_counts
 from minemydinner.agent.card_text import NEXT_ACTION_ORDER, next_actions
 from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadConditions, ReadCounts
 from minemydinner.agent.frame import Frame, fold
@@ -67,6 +68,21 @@ def side_adds_left(unfinished: dict | None, request: dict) -> int:
         if CATEGORY_OF_DISH_TYPE.get(add.get("dish_type") or "") in sides
         and not (add.get("name") or "").strip()
     )
+
+
+def any_mix_request(request: dict, plan: dict, card: dict | None) -> dict:
+    """The request "any mix" starts from on a card that revises, for the relax_split button
+    and a typed `any_mix` alike (plan 3b-2 (two) Task 8): a request whose turn stated no count
+    is rebased on the plan shown (`on_plan_counts`), and its total grows by the meat or
+    vegetable adds the newest card could not make (`side_adds_left`). A request that stated
+    counts keeps them."""
+    if request.get("counts_stated_now"):
+        return request
+    base = on_plan_counts(request, plan)
+    if card is not None and base.get("dishes") is not None:
+        left = side_adds_left(card.get(UNFINISHED), card.get("request") or {})
+        base = {**base, "dishes": base["dishes"] + left}
+    return base
 
 
 def relax_split_spec(card: dict) -> dict | None:

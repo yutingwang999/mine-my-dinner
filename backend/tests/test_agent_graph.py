@@ -2620,6 +2620,54 @@ def test_the_reader_sees_the_plan_the_diners_and_this_meals_avoidance(
     assert out["reading"]["meal_avoid"] == ["香菜"]
 
 
+def test_reader_input_lists_the_confirmed_set(tmp_path, session, seeded, veg):
+    """Plan 3b-2 (two) spec 5.7 (6): the reader's Diners: part starts with the confirmed set,
+    by label only: the user, each other diner, each guest for this meal only, the people not
+    named and the headcount. No saved nickname or guest name reaches the reader."""
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    rule(session, wang.id, "allergy", allergen="peanut")
+    env = labelled_env(tmp_path, session)
+    parse = {
+        "headcount": 4,
+        "others_mentioned": True,
+        "guests": [{"name": "Alex"}],
+        "dishes": 1,
+        "mode": "shopping",
+    }
+    (card,) = plan(env, "我和小王还有朋友们吃饭", parse=parse, locale="zh")["__interrupt__"]
+    env.model.replies = [final_proposal([veg.id])]
+    answer = {"selected": [me.id, wang.id], "guests": [{"name": "Alex"}], "headcount": 4}
+    out = resume(env, {card.id: answer})
+    assert "__interrupt__" not in out and out["current_plan"]["passed"]
+    env.model.structured["FollowUpReading"] = [{"kind": "other"}]
+    plan(env, "谢谢", locale="zh")
+    (sent,) = model_calls_by_prompt(env, "follow_up")
+    text = sent[1].content
+    expected = (
+        "Diners:\n- Diner 1 (the user)\n- Diner 2\n- Diner 3, guest for this meal only\n"
+        "- 1 more person, not named\n- Headcount: 4\n"
+    )
+    assert expected in text
+    # The rule lines follow the set.
+    assert text.index(expected) < text.index("Diner 2: allergy peanut")
+    assert "小王" not in text and "Alex" not in text
+
+
+def test_reader_input_without_a_confirmed_set_lists_the_plans_diners(revise_env):
+    """A solo plan showed no card: the reader still sees who eats, from the plan's own facts
+    (`settled_from_plan`)."""
+    env = revise_env
+    first = first_meal(env)
+    assert first.get("settled_diners") is None
+    read(env, "谢谢", {"kind": "other"})
+    (sent,) = reader_calls(env)
+    text = sent[1].content
+    headcount = first["constraints"]["headcount"]
+    assert "Diners:\n- Diner 1 (the user)\n" in text
+    assert f"- Headcount: {headcount}" in text
+
+
 def test_the_reader_sees_which_dishes_break_this_meals_avoidance(revise_env):
     """The plan lines keep the revise step's marks: a dish that breaks this meal's one-meal
     avoidance (the plan card's own list) is marked, and the avoidance is a condition."""
@@ -4344,6 +4392,124 @@ def test_a_partial_change_says_an_unused_must_use_ingredient_once(revise_env):
     assert out["request"]["must_use"] == ["猪肉"]
 
 
+def test_a_reading_takes_back_the_only_must_use_ingredient(revise_env):
+    """Plan 3b-2 (two) spec 5.7 (5): no_longer_must_use empties the list, which states
+    nothing to `revision_spec`; the change path sets it, so the new version no longer
+    requires the name."""
+    env = revise_env
+    first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "shopping", "must_use": ["牛肉"]})
+    out = read(
+        env, "牛肉那个要求去掉吧", {"kind": "change", "conditions": {"no_longer_must_use": ["牛肉"]}}
+    )
+    assert "__interrupt__" not in out
+    assert out["request"]["must_use"] == []
+    assert out["current_plan"]["spec"]["must_use"] == []
+    assert ids_of_plan(out["current_plan"]) == list(dish_ids(env, *MEAL))
+    assert picker_calls(env) == []
+
+
+def test_a_reading_with_any_mix_clears_the_split_and_keeps_the_total(revise_env):
+    """Plan 3b-2 (two) spec 5.7 (4): any_mix gives the request the relax_split button gives:
+    the sides cleared, the total kept. No dish changes and no picker call is made."""
+    env = revise_env
+    parse = {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1, "soups": 1, "mode": "shopping"}
+    first = first_meal(env, parse=parse)
+    out = read(env, "荤的素的怎么配都可以", {"kind": "change", "conditions": {"any_mix": True}})
+    assert "__interrupt__" not in out
+    request = out["request"]
+    assert request["meat_dishes"] is None and request["vegetable_dishes"] is None
+    assert request["meat_bound"] is None and request["vegetable_bound"] is None
+    assert request["dishes"] == 2 and request["counts_stated_now"] is True
+    assert out["current_plan"] == first["current_plan"]
+    assert picker_calls(env) == []
+
+
+def test_any_mix_message_on_a_short_plan_adds_a_dish(revise_env):
+    """Task 8 fix rounds 1 and 2: a typed "any mix" with no add and no stated count binds the
+    total the relax_split button would bind (`any_mix_request`). The plan's request stated its
+    counts on its turn, so its total stands: a plan short of it (two meat dishes asked, one
+    removed by hand) gets a dish of either kind."""
+    env = revise_env
+    parse = {
+        "dishes": 3, "meat_dishes": 2, "vegetable_dishes": 1, "mode": "shopping",
+        "counts_stated_now": True,
+    }
+    first_meal(env, THREE, parse=parse)
+    beef, cabbage, pork = dish_ids(env, *THREE)
+    [beans] = dish_ids(env, "干煸豆角")
+    _hand_remove(env, pork)
+    out = read(
+        env, "荤的素的怎么配都可以", {"kind": "change", "conditions": {"any_mix": True}},
+        replies=[pick(slots=[(0, beans)])],
+    )
+    assert "__interrupt__" not in out
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [beef, cabbage, beans]
+    assert plan["spec"]["dishes"] == 3
+    assert plan["spec"]["meat_dishes"] is None and plan["spec"]["vegetable_dishes"] is None
+    assert len(picker_calls(env)) == 1
+
+
+def test_any_mix_message_after_a_failed_meat_add_adds_the_dish(revise_env):
+    """Task 8 fix round 2: "one more meat dish" that no meat dish fills leaves the add on the
+    card (`unfinished`); a typed "any mix" next binds the plan shown plus that add, as the
+    relax_split button does, so one dish of either kind comes in. The result is the button's
+    (`test_a_side_count_add_nothing_fills_offers_relax_split_which_adds_any_dish`)."""
+    env = revise_env
+    first_meal(env)
+    beef, cabbage, soup = dish_ids(env, *MEAL)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {"kind": "change", "add": [{"dish_type": "meat dish", "count": 1}]}
+    out = read(env, "再来一个荤菜", reading, replies=[pick(slots=[(0, None)])])
+    card = out["reply_plans"][out["messages"][-1].id]
+    assert card["plan_kept"] is True and card["unfinished"]
+    out = read(
+        env, "荤的素的怎么配都可以", {"kind": "change", "conditions": {"any_mix": True}},
+        replies=[pick(slots=[(0, beans)])],
+    )
+    assert "__interrupt__" not in out
+    spec = latest_record(env).request["spec"]
+    assert spec["dishes"] == 3
+    assert spec["meat_dishes"] is None and spec["vegetable_dishes"] is None
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage, soup, beans]
+    assert out["current_plan"]["passed"]
+
+
+def test_any_mix_message_on_a_hand_shrunk_plan_keeps_its_size(revise_env):
+    """Task 8 fix round 2: the plan's request stated no counts on its turn, so "any mix"
+    counts from the plan shown, as the button rebases an unstated request (`on_plan_counts`):
+    a dish the user removed by hand is not added back."""
+    env = revise_env
+    parse = {"dishes": 3, "meat_dishes": 2, "vegetable_dishes": 1, "mode": "shopping"}
+    first_meal(env, THREE, parse=parse)
+    beef, cabbage, pork = dish_ids(env, *THREE)
+    _hand_remove(env, pork)
+    out = read(env, "荤的素的怎么配都可以", {"kind": "change", "conditions": {"any_mix": True}})
+    assert "__interrupt__" not in out
+    assert ids_of_plan(out["current_plan"]) == [beef, cabbage]
+    assert out["request"]["dishes"] == 2
+    assert picker_calls(env) == []
+
+
+def test_any_mix_with_an_add_follows_the_add(revise_env):
+    """With an add, the message's own counts decide: one dish is added and none dropped."""
+    env = revise_env
+    parse = {"dishes": 3, "meat_dishes": 2, "vegetable_dishes": 1, "mode": "shopping"}
+    first_meal(env, THREE, parse=parse)
+    [beans] = dish_ids(env, "干煸豆角")
+    reading = {
+        "kind": "change",
+        "add": [{"dish_type": None, "count": 1}],
+        "conditions": {"any_mix": True},
+    }
+    out = read(env, "再加一道，荤素都行", reading, replies=[pick(slots=[(0, beans)])])
+    assert "__interrupt__" not in out
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == [*dish_ids(env, *THREE), beans]
+    assert out["request"]["meat_dishes"] is None and out["request"]["vegetable_dishes"] is None
+    assert len(picker_calls(env)) == 1
+
+
 # ---- plan 3b-2 Task 10b: code checks, it does not interpret (spec 5.4 amendment) ----
 
 
@@ -5476,6 +5642,31 @@ def people_turn(env, text: str, answer, reading=None, parse=None, replies=None):
 
 def dish_types_of(plan: dict) -> list[str]:
     return [r["dish_type"] for r in plan["recipes"]]
+
+
+def test_people_turn_keeps_the_meals_avoidance(revise_env):
+    """Task 8 fix round 1: a people reading fills meal_avoid as the whole list, as a change
+    does (follow_up_v5); a reading that repeats the meal's avoidance keeps it in the
+    constraints, the plan's request and the new version."""
+    env = revise_env
+    me = self_diner(env.session)
+    meal_for(env, 2, ("土豆炖牛肉", "清炒小白菜"), {"dishes": 2, "meal_avoid": ["香菜"]})
+    values = env.graph.get_state(env.config).values
+    assert values["plan_request"]["meal_avoid"] == ["香菜"]
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 3}
+    _, out = people_turn(
+        env,
+        "Alex 也来",
+        answer,
+        reading={"kind": "people", "meal_avoid": ["香菜"]},
+        parse={"guests": [{"name": "Alex"}]},
+        replies=[pick(slots=[(0, dish_ids(env, "紫菜蛋花汤")[0])])],
+    )
+    assert "__interrupt__" not in out
+    assert out["constraints"]["meal_avoid"] == ["香菜"]
+    assert out["plan_request"]["meal_avoid"] == ["香菜"]
+    assert out["current_plan"]["meal_avoid"] == ["香菜"]
+    assert out["plan_request"]["headcount"] == 3
 
 
 def test_people_turn_adjusts_instead_of_planning_anew(revise_env):

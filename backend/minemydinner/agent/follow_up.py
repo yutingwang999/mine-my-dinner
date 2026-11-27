@@ -9,7 +9,13 @@ from typing import Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-from minemydinner.agent.change_rules import COUNT_GROUP, unset
+from minemydinner.agent.actions import relax_split
+from minemydinner.agent.change_rules import COUNT_GROUP, fold, unset
+from minemydinner.agent.labels import SELF_LABEL, LabelTable
+
+# The dish types an add may name: the keys of `CATEGORY_OF_DISH_TYPE` (plan 3b-2 (two) spec
+# 5.7 (3)); the schema carries them to the model as an enum.
+DishType = Literal["meat dish", "vegetable dish", "soup", "staple food", "dessert", "snack"]
 
 
 class ReadRemoval(BaseModel):
@@ -44,11 +50,11 @@ class ReadRemoval(BaseModel):
 class ReadAdd(BaseModel):
     """Dishes the message adds."""
 
-    dish_type: str | None = Field(
+    dish_type: DishType | None = Field(
         default=None,
         description=(
-            "The dish type to add (meat dish, vegetable dish, soup, staple food, dessert, "
-            "snack), or null when the user named a dish or stated no type."
+            "The dish type to add, or null when the user named a dish or stated no type (a "
+            "meat or vegetable dish, either kind)."
         ),
     )
     count: int = Field(default=1, description="How many dishes of this type to add.")
@@ -94,6 +100,19 @@ class ReadConditions(BaseModel):
     prefer_use: list[str] = Field(
         default_factory=list,
         description="Ingredients the message prefers. Empty when it states none.",
+    )
+    any_mix: bool = Field(
+        default=False,
+        description=(
+            "True only when the message says meat and vegetable dishes may come in any mix."
+        ),
+    )
+    no_longer_must_use: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ingredients the conditions require that the message says no longer need to be "
+            "used. Empty when it takes none back."
+        ),
     )
 
 
@@ -186,6 +205,36 @@ def hand_edit_line(log: list[dict], titles: dict[int, str]) -> str:
     return "The user changed this plan by hand after it was proposed: " + "; ".join(changes) + "."
 
 
+def confirmed_set_lines(settled: dict | None, table: LabelTable, headcount: int) -> list[str]:
+    """Who eats this meal, for the reader's `Diners:` part (plan 3b-2 (two) spec 5.7 (6)):
+    the confirmed set (`SettledDiners.to_state()`) by the conversation's labels only, never a
+    nickname or a guest's name: the user, each other diner, each guest (this meal only), the
+    people not named, then the headcount. Rules stay in the rule lines."""
+    lines: list[str] = []
+    others: list[str] = []
+    if settled is not None:
+        for diner_id in settled.get("diner_ids") or []:
+            label = table.label_for(f"diner:{diner_id}")
+            if label == SELF_LABEL:
+                lines.append(f"- {label} (the user)")
+            else:
+                others.append(label)
+        lines += [f"- {label}" for label in sorted(others, key=_label_number)]
+        guests = [table.label_for(key) for key in settled.get("guest_names") or {}]
+        lines += [
+            f"- {label}, guest for this meal only" for label in sorted(guests, key=_label_number)
+        ]
+        unnamed = int(settled.get("others") or 0)
+        if unnamed > 0:
+            lines.append(f"- {unnamed} more {'person' if unnamed == 1 else 'people'}, not named")
+    lines.append(f"- Headcount: {headcount}")
+    return lines
+
+
+def _label_number(label: str) -> int:
+    return int(label.rsplit(" ", 1)[1])
+
+
 def reader_messages(
     conversation: list[BaseMessage],
     plan_lines: str,
@@ -196,8 +245,9 @@ def reader_messages(
 ) -> list[BaseMessage]:
     """The reader's input after the system prompt (spec 5.3): one user message with the plan
     lines, what the user changed by hand on this plan after it was proposed (`hand_edit_line`,
-    when anything), the diner lines (anonymous "Diner N" rules, never a saved nickname), the
-    current conditions and the whole conversation, in that order."""
+    when anything), the diner lines (who eats, `confirmed_set_lines`, then the anonymous
+    "Diner N" rules, never a saved nickname), the current conditions and the whole
+    conversation, in that order."""
     turns = []
     for message in conversation:
         who = "Assistant" if isinstance(message, AIMessage) else "User"
@@ -213,7 +263,9 @@ def reader_messages(
     return [HumanMessage("\n\n".join(parts))]
 
 
-def request_after(request: dict, reading: FollowUpReading) -> dict:
+def request_after(
+    request: dict, reading: FollowUpReading, present_dishes: int | None = None
+) -> dict:
     """The request after a `change` reading. Stated counts replace the whole count group of the
     old request (as `carry_unstated` treats it); conditions replace their own fields;
     `meal_avoid` is the reading's whole list; a stated wish replaces the query. Everything
@@ -222,7 +274,12 @@ def request_after(request: dict, reading: FollowUpReading) -> dict:
     `counts_stated_now` says whether this message states counts, never an earlier turn's: the
     change path then meets the stated counts, and otherwise keeps the plan's own (a hand-grown
     plan keeps its size). A button pressed later on this turn's card reads it the same way
-    (`on_plan_counts` rebases an unstated request on the plan shown)."""
+    (`on_plan_counts` rebases an unstated request on the plan shown).
+
+    `any_mix` clears the meat and vegetable split as the relax_split button does
+    (`relax_split`): the total is the request's, else `present_dishes` (the plan's present
+    dish total), and the counts are stated now. `no_longer_must_use` takes each name, folded,
+    out of `must_use` and `all_use`."""
     new = dict(request)
     stated = {k: v for k, v in reading.counts.model_dump().items() if v is not None}
     new["counts_stated_now"] = bool(stated)
@@ -240,6 +297,15 @@ def request_after(request: dict, reading: FollowUpReading) -> dict:
     for name in ("must_use", "prefer_use"):
         if not unset(getattr(cond, name)):
             new[name] = list(getattr(cond, name))
+    if cond.no_longer_must_use:
+        gone = {fold(name) for name in cond.no_longer_must_use}
+        for name in ("must_use", "all_use"):
+            if name in new:
+                new[name] = [n for n in new[name] or [] if fold(n) not in gone]
+    if cond.any_mix:
+        total = None if present_dishes is None else {"dishes": present_dishes}
+        new = relax_split(new, total)
+        new["counts_stated_now"] = True
     new["meal_avoid"] = list(reading.meal_avoid)
     if reading.wish.strip():
         new["query"] = reading.wish

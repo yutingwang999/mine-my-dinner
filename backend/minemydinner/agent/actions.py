@@ -80,7 +80,10 @@ def _fewer_dishes(request: dict, spec: dict | None) -> dict:
     return changed
 
 
-def _relax_split(request: dict, spec: dict | None) -> dict:
+def relax_split(request: dict, spec: dict | None) -> dict:
+    """The request with its meat and vegetable split cleared and its total kept: the
+    request's own, else the spec's (`_total`). Shared by the relax_split button and a
+    reading's `any_mix` (`request_after`)."""
     changed = dict(request)
     total = _total(request, spec)
     if total is not None:
@@ -107,7 +110,7 @@ def apply_action(request: dict, action: str, spec: dict | None = None) -> dict:
     elif action == "drop_time_limit":
         changed = {**request, "time_limit_min": None}
     elif action == "relax_split":
-        changed = _relax_split(request, spec)
+        changed = relax_split(request, spec)
     elif action == "relax_named":
         named = [*(request.get("must_use") or []), *(request.get("all_use") or [])]
         prefer = list(dict.fromkeys([*(request.get("prefer_use") or []), *named]))
