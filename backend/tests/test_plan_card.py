@@ -62,6 +62,7 @@ def test_build_dishes_card_failed_validation_lists_unmet(graph_env, veg):  # noq
     violation = {"code": "H4", "recipe_id": veg.id, "detail": {
         "required": {"dishes": 2, "meat_dishes": 1, "vegetable_dishes": 1},
         "present": {"vegetable dish": 1},
+        "ranges": {"meat_dishes": [1, 1], "vegetable_dishes": [1, 1]},
     }}
     card = build_dishes_card(
         session,

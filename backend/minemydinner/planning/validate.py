@@ -54,20 +54,6 @@ class PlanSpec(BaseModel):
     all_use: list[str] = Field(default_factory=list)
     prefer_use: list[str] = Field(default_factory=list)
 
-    @model_validator(mode="before")
-    @classmethod
-    def _read_old_split(cls, data: Any) -> Any:
-        """A spec saved before bounds existed carries `split_is_minimum`: true means both
-        named sides are "at least", false means exact (design 5.11, old records)."""
-        if not isinstance(data, dict) or "split_is_minimum" not in data:
-            return data
-        data = dict(data)
-        minimum = bool(data.pop("split_is_minimum"))
-        for side, bound in (("meat_dishes", "meat_bound"), ("vegetable_dishes", "vegetable_bound")):
-            if data.get(side) is not None and data.get(bound) is None:
-                data[bound] = "at_least" if minimum else "exact"
-        return data
-
     @model_validator(mode="after")
     def _total_in_range(self) -> "PlanSpec":
         total = self.dishes + self.soups + self.staples + self.desserts + self.snacks

@@ -228,7 +228,7 @@ class ParsedRequest(BaseModel):
         default=None, ge=1, description="Avoid dishes cooked in the last N days, only if asked."
     )
     # Plan 3b-1b spec 5.4. Code applies it to this meal as the meal's own rule (diner key
-    # "meal"), never to a profile; requests stored before parse_v7 load it as empty.
+    # "meal"), never to a profile. An empty list states nothing.
     meal_avoid: list[str] = Field(
         default_factory=list,
         max_length=10,
@@ -239,7 +239,7 @@ class ParsedRequest(BaseModel):
         ),
     )
     # None on requests parsed before parse_v6; a revision then compares counts with the
-    # previous request instead (agent/revision.py).
+    # previous request instead (agent/change_rules.py).
     counts_stated_now: bool | None = Field(
         default=None,
         description=(

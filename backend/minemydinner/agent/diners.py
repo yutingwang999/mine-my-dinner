@@ -235,10 +235,8 @@ def card_needed(
             return True
         if parsed.headcount is None:
             return False
-        known = settled.get("stated_headcount")
-        if known is None:
-            known = settled.get("headcount")
-        return parsed.headcount != known
+        # None means the parse gave no headcount for the set, so any stated one differs.
+        return parsed.headcount != settled.get("stated_headcount")
     return bool(
         (parsed.headcount or 1) >= 2
         or parsed.others_mentioned
@@ -487,9 +485,9 @@ class SettledDiners:
     others: int
     others_answer: str | None
     headcount: int
-    # The headcount the parse gave when the set was confirmed (None when it gave none, or in
-    # a set saved before this was kept). Later requests compare their stated headcount with
-    # it, so a total edited on the card does not ask again for the same words.
+    # The headcount the parse gave when the set was confirmed (None when it gave none).
+    # Later requests compare their stated headcount with it, so a total edited on the card
+    # does not ask again for the same words.
     stated_headcount: int | None = None
 
     def to_state(self) -> dict:
@@ -512,7 +510,7 @@ class SettledDiners:
             others=int(data.get("others") or 0),
             others_answer=data.get("others_answer"),
             headcount=int(data["headcount"]),
-            stated_headcount=data.get("stated_headcount"),
+            stated_headcount=data["stated_headcount"],
         )
 
 

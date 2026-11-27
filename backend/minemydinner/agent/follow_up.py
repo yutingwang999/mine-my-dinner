@@ -9,7 +9,7 @@ from typing import Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field
 
-from minemydinner.agent.revision import COUNT_GROUP, unset
+from minemydinner.agent.change_rules import COUNT_GROUP, unset
 
 
 class ReadRemoval(BaseModel):

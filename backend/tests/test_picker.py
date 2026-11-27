@@ -18,7 +18,7 @@ from minemydinner.agent.picker import (
     picker_messages,
 )
 from minemydinner.agent.planner import PICK_SEARCH_LIMIT, PICK_TOOLS_VERSION, TOOLS_VERSION
-from minemydinner.agent.revision import DishFacts
+from minemydinner.agent.change_rules import DishFacts
 from minemydinner.planning.validate import PlanSpec
 from tests.recipefakes import seeded  # noqa: F401
 

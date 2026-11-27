@@ -2561,7 +2561,7 @@ def test_wish_unmet_said_reads_code_written_signs_only():
 
 
 def test_capped_sentence_counts_as_the_wish_unmet_said():
-    from minemydinner.agent.revise_step import wish_targets_capped
+    from minemydinner.agent.change_text import wish_targets_capped
 
     for locale in ("zh", "en"):
         reply = "换好了。\n\n" + wish_targets_capped(locale)
@@ -3321,7 +3321,7 @@ def _card(dishes, **extra):
     return {
         "recipes": [{"id": i, "title": t, "dish_type": d} for i, t, d in dishes],
         "unmet": [], "next_actions": [], "reasons": [], "warnings": [], "passed": True,
-        "left_out_unknown_allergens": [], **extra,
+        "left_out_unknown_allergens": [], "locked": [], **extra,
     }
 
 

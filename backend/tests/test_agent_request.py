@@ -520,18 +520,6 @@ def test_at_least_one_soup_is_one_soup_assumed():
     assert "soups" in defaults_used
 
 
-def test_old_spec_with_split_is_minimum_reads_as_bounds():
-    old = PlanSpec.model_validate(
-        {"mode": "shopping", "dishes": 3, "soups": 0, "meat_dishes": 1, "vegetable_dishes": 1,
-         "split_is_minimum": True}
-    )
-    assert (old.meat_bound, old.vegetable_bound) == ("at_least", "at_least")
-    exact = PlanSpec.model_validate(
-        {"mode": "shopping", "dishes": 8, "soups": 0, "meat_dishes": 2, "split_is_minimum": False}
-    )
-    assert (exact.meat_bound, exact.vegetable_bound) == ("exact", None)
-
-
 def test_dish_total_is_lowered_to_the_upper_bounds():
     # 五个人，最多一个荤菜，最多一个素菜: the default 3 dishes is lowered to 2.
     request = P(
@@ -758,7 +746,7 @@ def test_revise_v1_v2_v3_are_frozen_and_revise_v4_keeps_its_rules():
     assert "- add: the message only adds dishes" in v3
     assert "LOCKED KEPT CONFLICT" in v3 and "replace_with" in v3
     # Task 5: the reviser's mark of a dish that breaks this meal's one-meal avoidance.
-    from minemydinner.agent.revise_step import BREAKS_MEAL_WISH
+    from minemydinner.agent.change_text import BREAKS_MEAL_WISH
 
     assert v3.count(BREAKS_MEAL_WISH) == 3
     assert "not in the library and can be imported" in v3

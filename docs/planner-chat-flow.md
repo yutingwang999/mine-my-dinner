@@ -40,11 +40,11 @@ flowchart TD
     RD -->|"kind = other"| O
 
     R -->|"the message is the fixed plan-again text<br/>and the thread has a parsed request"| RP["no route, no parse<br/>intent = plan, the last parse reused"]
-    R -->|"the message is a next-action button's fixed text<br/>(any mix, no time limit, ...)<br/>and the thread has a parsed request"| AB{"Does the newest reply's card<br/>keep its own request?<br/>(_button_card)"}
+    R -->|"the message is a next-action button's fixed text<br/>(any mix, no time limit, ...)<br/>and the thread has a parsed request"| AB{"Is there a card to change?<br/>(_button_card: the newest card, which keeps its own request)"}
     AB -->|"yes: code changes the card's request (apply_action)<br/>no route, reader or parse call, no question"| BK{"Was the card's plan kept (plan_kept),<br/>or its change done only in part (unfinished)?"}
     BK -->|"yes"| BC
     BK -->|"no (no plan, early stop, failed new plan)"| LC
-    AB -->|"[Compatibility] no: a card from before 3b-1b<br/>no route, intent = plan"| PR
+    AB -->|"no card"| U0["unclear: the fixed did-not-understand reply"] --> E2
     R -->|"otherwise: call the route model<br/>(model call 1: route_v6)"| RM{"Route answer"}
     RM -->|"other"| O["other: the fixed reply<br/>(no planning, no record)"] --> E1([End])
     RM -->|"unsure (always),<br/>revise with no plan yet"| P0["treated as plan"]
@@ -57,7 +57,6 @@ flowchart TD
     AP -->|"the request contradicts itself (request_problem)<br/>and this message has not been asked about"| Q["⏸ Question ask_question<br/>(one node: the contradiction if any,<br/>otherwise the mode / dish count)"] --> PR
     AP -->|"contradiction, already asked"| U["unclear: the fixed did-not-understand reply"] --> E2([End])
     AP -->|"intent = revise, read as people"| D
-    AP -->|"[Compatibility] intent = revise, no reading, the plan has dishes<br/>(a thread paused on a question before 3b-2)"| RPT["read_paused_turn<br/>(the reader reads this turn)"] --> BC
     AP -->|"intent = revise, the plan has no dishes<br/>(after an early stop)"| DC{"Diner card needed?"}
     DC -->|"yes"| D
     DC -->|"no"| LC
@@ -71,7 +70,6 @@ flowchart TD
     LC --> PLAN["New-plan branch (Section 2)"]
 ```
 
-(After `read_paused_turn` the reading takes the same paths by kind as `read_follow_up`; the diagram shows only change.)
 
 ### What each decision rests on
 
@@ -82,13 +80,13 @@ flowchart TD
 | The reading's path | `after_reading`: `change` → `build_change`; `new_meal`, `people` → the parse; `other` → the fixed reply | `READING_INTENTS`: change and people are recorded as intent revise, new_meal as plan |
 | No route (plan again) | `_reuses_parse`: the last message is exactly the fixed plan-again text and `state.request` is set | Plan again reuses the newest parse and saves two model calls |
 | No route (next-action button) | `_is_action_message`: the last message is exactly one of the five buttons' fixed texts (`ACTION_MESSAGES`, both languages; a test keeps them equal to the frontend's) and `state.request` is set | Code knows what a button changes |
-| No parse for a button either (since 3b-1b) | `_button_card`: the newest reply's card keeps the `request` it was built from. Code changes one field (`apply_action` in `agent/actions.py`: allow shopping → shopping; fewer dishes → the total down by one, never below one; no time limit → the limit cleared; any mix → the sides cleared, the total kept; named ingredients optional → `must_use` and `all_use` moved into `prefer_use`). A card with `plan_kept` (the plan stayed) or `unfinished` (the change was done only in part) goes to the change branch; any other card plans from scratch. **[Compatibility]** A card from before 3b-1b has no request and is parsed | The button keeps that turn's other conditions. On a card whose plan was kept or changed in part, it keeps the hand edits and re-runs only the parts not done. The record carries `request["button"]` |
+| No parse for a button either (since 3b-1b) | `_button_card`: the newest reply's card keeps the `request` it was built from. Code changes one field (`apply_action` in `agent/actions.py`: allow shopping → shopping; fewer dishes → the total down by one, never below one; no time limit → the limit cleared; any mix → the sides cleared, the total kept; named ingredients optional → `must_use` and `all_use` moved into `prefer_use`). A card with `plan_kept` (the plan stayed) or `unfinished` (the change was done only in part) goes to the change branch; any other card plans from scratch. A button pressed with no card to change gets the fixed unclear reply, with no model call | The button keeps that turn's other conditions. On a card whose plan was kept or changed in part, it keeps the hand edits and re-runs only the parts not done. The record carries `request["button"]` |
 | unsure becomes plan | The route answers `unsure` | A message on a plan with dishes never reaches the route, so when the route runs there is no dish to change. (**[Earlier]** an unsure answer showed a revise-or-plan choice card, Section 5) |
 | revise becomes plan | `current_plan` is empty | There is no plan to change. A no-plan or early-stop reply counts as "a plan with no dishes": a route answer revise parses the message as a follow-up and plans from scratch |
 | Contradiction question | `request_problem`: the meat and vegetable ranges do not fit the total, or the total is over the limit | Asked in every style, at most once per new message. On the change branch, contradicting stated counts get the did-not-understand reply (no question) |
 | No ask-first question with intent revise | `_revises(state)` is true | Unstated fields come from the current plan (`carry_unstated`), not from the defaults |
 | Diner card | New plan: `card_needed` (table below). A `people` reading always shows it. Plan again with the reused parse ignores `card_needed` and checks only whether a friend in the settled set was deleted (`friend_deleted_since`) | A change in who eats must be confirmed by the user, never made quietly; plan again reuses the people already confirmed |
-| Order of the checks | contradiction → intent revise (people shows the card / old-thread reading / the card check when there are no dishes) → request style → ask-first question → diner card → `load_context` | Intent revise comes before the request style, so a follow-up never shows the request-style card |
+| Order of the checks | contradiction → intent revise (people shows the card / the card check when there are no dishes) → request style → ask-first question → diner card → `load_context` | Intent revise comes before the request style, so a follow-up never shows the request-style card |
 | Request-style card | No `request_style` in the database yet | Asked once; skipped means plan first |
 | Ask-first question | Style `ask_first`, and `mode` is empty or no dish count was stated; not yet asked for this request | design 6.2 |
 
@@ -232,8 +230,7 @@ In order. The last column names the **[Earlier]** after-the-fact check of the 3b
 | 4. Adds | A named dish: placed when it equals a library title and is usable, recorded missing when a hard condition hides it (over the time limit, breaks a rule); any other name makes a named add slot the picker searches for, and only when it finds nothing is the dish said to be not in the library. A typed add: one add slot per dish. An add with no type ("再添两道"): one slot per dish, a meat or a vegetable dish the picker chooses (it counts toward a stated total, not toward either side; code rejects any other type) | R8 |
 | 5. Counts | No stated count: the change list sets them (a replace slot counts as its dish's type). Stated counts: only the stated fields bind; they are recorded in `count_ranges` and checked on the picker's result; above the plan code adds slots, below it drops first new dishes not yet chosen, then unlocked dishes (a "drop exactly N" choice for the picker when there are more candidates than needed) | R7, `attempt_spec` |
 | 6. A new must-use ingredient no dish uses | The picker replaces 1 of the unlocked dishes, the choice naming the ingredient; an add slot carries it instead when there is one (the first add for a stated count, else the first add) | — |
-| 7. **[Compatibility]** An old card's wish | A card saved before cards kept their unfinished parts has only its wish: its button gives the picker a "replace 1 to N of these unlocked dishes" choice (N at most half) | — |
-| 8. Is any dish left | If not, it asks whether to plan a new meal, with no picker call | R9 |
+| 7. Is any dish left | If not, it asks whether to plan a new meal, with no picker call | R9 |
 
 Finding a named dish (`lookup_named`): only a title equal to the name (case and spaces ignored). Anything else (one character off, part of a title) is the picker's judgement of which dish the words mean; when the dish it finds is hidden by a hard condition, the reply gives the real reason, never "not in the library".
 
@@ -245,7 +242,7 @@ One user message:
 - `Diner and meal rules:` the diners' anonymous rules, plus "This meal only, not a diner's rule: leave out ...".
 - `Meal conditions:` one line with the mode, the time limit and the must-use ingredients (on every call).
 - `Stated counts (code checks the result):` only when counts were stated: each stated field with the plan's number after what code already decided, and the stated number; the total is written "dishes (meat and vegetable dishes, soups not included)", so a soup never counts as a dish.
-- `The user's wish:` the reading's wish. On a button turn it is the wish of the structured reading kept on the offering card, never that turn's words, which could contradict the button. **[Compatibility]** Only an old card saved before cards kept the reading adds "the user's earlier message: ...".
+- `The user's wish:` the reading's wish. On a button turn it is the wish of the structured reading kept on the offering card, never that turn's words, which could contradict the button.
 - `Already decided:` dishes leaving, dishes placed by name.
 - `Choices (which current dishes go):` one line each (drop exactly N / replace 1 to N; a must-use choice says "the new dish must use ...").
 - `Slots (new dishes to choose):` one line each (a replace slot names its dish and says the user's words are why it goes, not a guide to its replacement (a named slot keeps the name instead), with "for the wish" when it is; an add says "one more <type> the user asked for", "one more meat or vegetable dish the user asked for, either kind" for an add with no type, or "one more dish ..., of any type" for a named add; a named slot gives the user's name, asks for the library dish these words mean "by its title or by its main ingredients", and "or 0 when none is"; an add carrying a must-use ingredient says "it must use ...").
@@ -255,7 +252,7 @@ It never sees the conversation, the reading, or the rest of the request summary 
 
 The retry message: `Your previous answer had these problems. Answer again with each one fixed:` and one line per problem (a choice answered wrongly, a typed add of the wrong type, an add with no type filled with a dish that is no meat or vegetable dish ("Slot <n> must be a meat or vegetable dish."), a stated count broken, a dish already in the plan, a new dish that breaks a rule / misses stock / misses cookware / is over time, a dish chosen for a must-use ingredient that does not use it).
 
-Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again and less the model calls an older paused thread made before the reader in the same turn (`earlier_calls`; compatibility with threads paused before plan 3b-2)); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
+Asked again with no answer: `You gave no answer. Answer with the PickerAnswer tool.`; with an answer cut short: `Your answer was cut short before it ended. Answer again in full with the PickerAnswer tool.`. This uses no attempt but counts toward the turn budget (`PICK_TURN_MODEL_CALLS` = 6, one less when the reader was asked again and less the turn's model calls that are not the reader's (`earlier_calls`; none on a change turn today)); an attempt or re-ask starts only when a whole attempt (3 calls) still fits, otherwise the last answer stands, and with none code's fallback takes over.
 
 ### The picker's answer (`PickerAnswer`, `pick_v6`)
 
@@ -335,8 +332,6 @@ The tools version is `PICK_TOOLS_VERSION`.
 | On a plan with dishes, read as new_meal / people | reader 1 (2 when asked again) + parse 1 + the planner's calls per attempt, at most 3 attempts |
 | Plan again | the planner's calls per attempt |
 | A next-action button on a card that keeps its request | no route, reader or parse call; the picker when needed on a card whose plan was kept or changed in part (at most 6), the planner per attempt on any other card |
-| **[Compatibility]** A next-action button on a card from before 3b-1b | parse 1 + the planner per attempt (no route) |
-| **[Compatibility]** A revise turn of a thread paused on a question before 3b-2 | parse 1 + reader + picker; the parse call is not yet charged to the turn budget, so this rare turn can reach 8 (carryover, final review M1) |
 
 ---
 
@@ -357,5 +352,4 @@ In 3b-1 and 3b-1b a follow-up went through three models: the route (`route_v3` �
 
 **[Compatibility]** leftovers of that flow still in the code:
 - an old thread's history may hold an answered choice card; the chat page still shows it as one history line ("You chose: Change this plan", or "Skipped"), and the backend gives it no question text;
-- the chat state's `proposal` field may hold an old `RevisionProposal` dump; nothing reads it;
-- the modules `agent/revise_step.py` and `agent/revision.py` keep their old names but now hold only helpers the change branch uses (the rename is in the carryover).
+- the modules once named `agent/revise_step.py` and `agent/revision.py` are now `agent/change_text.py` (the change reply's sentences) and `agent/change_rules.py` (the spec, carry-over and limit rules).

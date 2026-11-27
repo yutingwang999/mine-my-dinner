@@ -158,8 +158,8 @@ def latest_model_index(versions: list[dict]) -> int:
 
 def locked_ids(plan: dict) -> set[int]:
     """The dishes a revision must keep: those added by hand and still in the plan (`locked`)
-    and those an override covers. A card saved before locks existed reads as no locks."""
-    ids = set(plan.get("locked") or [])
+    and those an override covers."""
+    ids = set(plan["locked"])
     ids.update(o["recipe_id"] for o in (plan.get("edit") or {}).get("overrides", []))
     return ids
 

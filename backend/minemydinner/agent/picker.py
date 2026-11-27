@@ -23,7 +23,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel, Field, ValidationError
 
 from minemydinner.agent.frame import Choice, Frame, Slot, fold
-from minemydinner.agent.revision import DishFacts
+from minemydinner.agent.change_rules import DishFacts
 from minemydinner.planning.composition import (
     DISH_TYPE_OF_CATEGORY,
     SPLIT_CATEGORIES,

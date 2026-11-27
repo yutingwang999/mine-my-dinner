@@ -77,7 +77,7 @@ Two buttons appear only when they can help:
 - **Fewer dishes** only when the meal has more than one dish in total.
 - **Any mix of meat and vegetable dishes** only when the user named a meat or vegetable count and a meat or vegetable side, named or implied, is short. A short dish total alone does not offer it, because dropping the split would not add a dish.
 
-"Allow shopping", "Fewer dishes", "Drop the time limit", "Any mix of meat and vegetable dishes", and "The named ingredients are optional" send a short fixed message. Since plan 3b-1b code changes the request of the card that offered the button, with no route or parse call (`agent/actions.py`; `docs/planner-request-and-counts.md`, Section 8): on a stop card the meal is planned again from scratch with that request, and on a failed revision's card the current plan is revised again. A card saved before plan 3b-1b still has its message parsed as a new plan. "Update inventory", "Register cookware", and "Import recipes" are links to the inventory and import pages.
+"Allow shopping", "Fewer dishes", "Drop the time limit", "Any mix of meat and vegetable dishes", and "The named ingredients are optional" send a short fixed message. Since plan 3b-1b code changes the request of the card that offered the button, with no route or parse call (`agent/actions.py`; `docs/planner-request-and-counts.md`, Section 8): on a stop card the meal is planned again from scratch with that request, and on a failed revision's card the current plan is revised again. "Update inventory", "Register cookware", and "Import recipes" are links to the inventory and import pages.
 
 ## 5. How it relates to validation
 

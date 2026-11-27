@@ -39,7 +39,7 @@ from minemydinner.agent.graph import WISH_UNMET_NOTE_EN, WISH_UNMET_NOTE_ZH
 from minemydinner.agent.labels import LabelTable, labels_scope, load_label_context
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
 from minemydinner.agent.request import ParsedRequest
-from minemydinner.agent.revise_step import (
+from minemydinner.agent.change_text import (
     WISH_TARGETS_CAPPED_EN,
     WISH_TARGETS_CAPPED_ZH,
     WISH_UNMET,

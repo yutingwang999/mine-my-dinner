@@ -15,16 +15,13 @@ class ChatState(TypedDict):
     locale: Annotated[str, _latest]
     intent: str | None
     # This turn's follow-up reading (FollowUpReading as a dict, plan 3b-2 spec 5.2) when the
-    # thread had a plan with dishes; None on a routed turn. Never set on a thread saved before.
+    # thread had a plan with dishes; None on a routed turn.
     reading: dict | None
     # The parsed request (ParsedRequest as a dict).
     request: dict | None
-    # The thread's request before this turn's parse replaced it (plan 3b-1): a revision takes a
-    # count or field from the new request only when it differs from this one.
-    previous_request: dict | None
     # The request the current plan was built from: set by a new plan and by a passed revision,
     # never by a turn that leaves the plan as it was. A revision compares the new request with
-    # this one; a thread saved before it existed falls back to `previous_request`.
+    # this one.
     plan_request: dict | None
     # The next-action button of this turn when code changed the request of the card that
     # offered it (plan 3b-1b spec 5.5): no parse ran, and the run's record notes it. Reset by
@@ -46,8 +43,7 @@ class ChatState(TypedDict):
     # written when it starts, then cleared.
     model_calls: list[dict]
     run_id: int | None
-    # The planner's last proposal (PlanProposal dump). A thread saved during plan 3b-1 may
-    # hold a revise step's RevisionProposal dump here; nothing reads it now.
+    # The planner's last proposal (PlanProposal dump).
     proposal: dict | None
     validation: dict | None
     first_passed: bool | None
@@ -69,10 +65,6 @@ class ChatState(TypedDict):
     # The recipe ids the shortlist offered, in opening order, for the retry message.
     shortlist_ids: list[int]
     retries: int
-    # The plan 3b-1 revise step's state, kept so threads saved before plan 3b-2 load: its
-    # `message` and `earlier` (the words of a revise turn) still give a button pressed on that
-    # turn's card its offering words (`graph._offering_words`). The change path sets it to None.
-    revision: dict | None
     # The change in progress (plan 3b-2 spec 5.4-5.6): `from_version`, `deleted`, `plan_ids`
     # (the plan it changes), the `frame` (Frame dump), the `reading` it was built from (on a
     # button, the one made from the offering card's unfinished parts), `words` (the user's
@@ -88,7 +80,7 @@ class ChatState(TypedDict):
     reply_plans: dict[str, dict]
     questions: list[dict]
     # The conversation's label table (LabelTable.to_state()): diner keys to "Diner N". It only
-    # grows; a thread saved before it existed starts one with the user as "Diner 1".
+    # grows; a conversation starts one with the user as "Diner 1".
     diner_labels: dict | None
     # The confirmed diner set (SettledDiners.to_state()), reused by later requests that do
     # not change who eats; replaced by the next confirmed card, None after a skipped card.

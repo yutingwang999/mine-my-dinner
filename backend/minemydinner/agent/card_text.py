@@ -3,8 +3,6 @@ actions, in the request's locale. Never model output."""
 
 from collections.abc import Sequence
 
-from minemydinner.planning.composition import ranges_for
-
 
 def is_zh(locale: str) -> bool:
     return locale == "zh"
@@ -55,19 +53,8 @@ def side_phrases(ranges: dict, total: int, zh: bool) -> dict[str, str]:
 
 
 def detail_ranges(detail: dict) -> dict[str, tuple[int, int]]:
-    """The side ranges of an H4 finding. A finding saved before ranges existed carries the
-    named sides in `required` and a `minimum` flag instead."""
-    if "ranges" in detail:
-        return {side: (low, high) for side, (low, high) in detail["ranges"].items()}
-    required = detail["required"]
-    bound = "at_least" if detail.get("minimum") else "exact"
-    return ranges_for(
-        required.get("dishes", 0),
-        required.get("meat_dishes"),
-        bound,
-        required.get("vegetable_dishes"),
-        bound,
-    )
+    """The side ranges of an H4 finding."""
+    return {side: (low, high) for side, (low, high) in detail["ranges"].items()}
 
 
 def counts_text(detail: dict, zh: bool, wanted: bool = False) -> str:

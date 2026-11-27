@@ -24,6 +24,60 @@ from minemydinner.agent.card_text import (
     reason_text,
     side_phrases,
 )
+from minemydinner.agent.change_rules import carry_unstated, revision_spec
+from minemydinner.agent.change_step import (
+    UNFINISHED,
+    button_reading,
+    change_actions,
+    change_unmet,
+    conditions_changed,
+    fallback_pick,
+    needs_picker,
+    needs_wish_met,
+    reader_problem,
+    reading_changes_nothing,
+    result_spec,
+    relax_split_spec,
+    side_adds_left,
+    slot_results,
+    unfinished_items,
+    unfinished_reading,
+    unused_must,
+    withhold_count_drops,
+    without_picks,
+    without_unmet_wish_picks,
+)
+from minemydinner.agent.change_text import (
+    card_search_notes,
+    carried_overrides,
+    change_sentences,
+    change_wish_unmet,
+    conditions_only_note,
+    current_plan_text,
+    deleted_note,
+    dish_facts,
+    empty_plan_question,
+    failed_note,
+    from_version,
+    kept_locked,
+    locked_changed_text,
+    must_unmet_names,
+    open_conflict_ids,
+    partial_text,
+    reading_sentence,
+    revision_defaults,
+    rule_reason,
+    unchanged_card,
+    unchanged_note,
+    unfinished_sentence,
+    which_dish_question,
+    wish_matched_nothing,
+    wish_targets_capped,
+    wish_targets_locked,
+    wish_unmet_actions,
+    wish_unmet_entries,
+    without_deleted,
+)
 from minemydinner.agent.diners import (
     DinerAnswer,
     SettledDiners,
@@ -48,28 +102,6 @@ from minemydinner.agent.labels import (
     find_friends,
     labels_scope,
     load_label_context,
-)
-from minemydinner.agent.change_step import (
-    UNFINISHED,
-    button_reading,
-    change_actions,
-    change_unmet,
-    conditions_changed,
-    fallback_pick,
-    needs_picker,
-    needs_wish_met,
-    reader_problem,
-    reading_changes_nothing,
-    result_spec,
-    relax_split_spec,
-    side_adds_left,
-    slot_results,
-    unfinished_items,
-    unfinished_reading,
-    unused_must,
-    withhold_count_drops,
-    without_picks,
-    without_unmet_wish_picks,
 )
 from minemydinner.agent.edits import locked_ids, revised_card
 from minemydinner.agent.follow_up import (
@@ -129,38 +161,6 @@ from minemydinner.agent.request import (
     request_problem,
     set_request_style,
 )
-from minemydinner.agent.revise_step import (
-    card_search_notes,
-    carried_overrides,
-    change_sentences,
-    change_wish_unmet,
-    conditions_only_note,
-    current_plan_text,
-    deleted_note,
-    dish_facts,
-    empty_plan_question,
-    failed_note,
-    from_version,
-    kept_locked,
-    locked_changed_text,
-    must_unmet_names,
-    open_conflict_ids,
-    partial_text,
-    reading_sentence,
-    revision_defaults,
-    rule_reason,
-    unchanged_card,
-    unchanged_note,
-    unfinished_sentence,
-    which_dish_question,
-    wish_matched_nothing,
-    wish_targets_capped,
-    wish_targets_locked,
-    wish_unmet_actions,
-    wish_unmet_entries,
-    without_deleted,
-)
-from minemydinner.agent.revision import carry_unstated, revision_meal_avoid, revision_spec
 from minemydinner.agent.state import ChatState
 from minemydinner.llm.client import map_strings
 from minemydinner.models import Diner, Recipe
@@ -350,11 +350,9 @@ def _reuses_parse(state: ChatState) -> bool:
 
 def _is_action_message(state: ChatState) -> bool:
     """True when the latest message is a fixed next-action button message and the thread has a
-    request. Such a turn never makes a route call (the button's change is known in code). On a
-    card that keeps its request (`_button_card`) code
-    changes that request and nothing is parsed (plan 3b-1b spec 5.5); on an older card the
-    parse relaxes the request (3b-1). As a thread's first message the text takes the normal
-    path."""
+    request. Such a turn never makes a route call (the button's change is known in code): code
+    changes the card's request and nothing is parsed (plan 3b-1b spec 5.5). As a thread's
+    first message the text takes the normal path."""
     last = state["messages"][-1]
     return (
         state.get("request") is not None
@@ -403,14 +401,6 @@ _READER_COUNTS = (
     "desserts",
     "snacks",
 )
-
-
-def current_meal_avoid(plan: dict, request: dict) -> list[str]:
-    """This meal's one-meal avoidance as the plan stands: the plan card's own list (it is the
-    one a revision keeps), else the request's for a card saved before cards carried it."""
-    if "meal_avoid" in plan:
-        return list(plan.get("meal_avoid") or [])
-    return list(request.get("meal_avoid") or [])
 
 
 def reader_conditions(
@@ -481,58 +471,33 @@ def _newest_card(state: ChatState) -> tuple[int, dict] | None:
 
 
 def _button_card(state: ChatState) -> dict | None:
-    """The card that offered the button of this turn: the newest card (`_newest_card`), when
-    it keeps the request it was built from. None when no reply has a card or the card was
-    saved before cards kept their request (or was replaced by a hand edit)."""
+    """The card that offered the button of this turn: the newest card (`_newest_card`), or
+    None when no reply has a card. A card keeps the request it was built from."""
     found = _newest_card(state)
-    if found is None:
-        return None
-    card = found[1]
-    return card if card.get("request") is not None else None
+    return None if found is None else found[1]
 
 
-# The card field that keeps a kept revision card's turn words (`revision_words`), so a button
+# The card field that keeps a kept revision card's turn words, so a button
 # pressed on that card later, after turns without a card, still sees that turn's wish.
 WISH_WORDS = "wish_words"
 
 
-def revision_words(revision: dict) -> str:
-    """All the user's words a revision is checked against: on a button revision the offering
-    turn's wish (`earlier`), then this turn's message. A revision stored before `earlier`
-    existed has both in `message` already."""
-    return "\n".join(w for w in (revision.get("earlier"), revision.get("message")) if w)
-
-
 def _offering_words(state: ChatState) -> list[str]:
     """On a button revision, the user's words of the turn whose card offered the button (the
-    newest card). That card keeps them (`WISH_WORDS`, `revision_words` of its turn, which
-    already hold the words before an earlier button in a chain). A card saved before it kept
-    them: when it is the newest reply, the state's `revision` is still its turn's; otherwise
-    (or with no revision) the user's messages just before the card's reply."""
+    newest card). A card that kept its plan keeps them (`WISH_WORDS`), and they already hold
+    the words before an earlier button in a chain."""
     found = _newest_card(state)
     if found is None:
         return []
-    reply_index, card = found
-    if card.get(WISH_WORDS):
-        return [card[WISH_WORDS]]
-    messages = state["messages"][:-1]
-    newest_reply = max(
-        (i for i, m in enumerate(messages) if isinstance(m, AIMessage)), default=None
-    )
-    if newest_reply == reply_index:
-        words = revision_words(state.get("revision") or {})
-        if words:
-            return [words]
-    return _current_request(messages[:reply_index])
+    words = found[1].get(WISH_WORDS)
+    return [words] if words else []
 
 
 def _fresh_turn(state: ChatState) -> dict:
     """The state a new message starts from, whether it is routed or read: a new request may be
-    asked about once, and the thread's request is kept before this turn replaces it (a change
-    compares the two). The reader sets `reading` itself."""
+    asked about once. The reader sets `reading` itself."""
     return {
         "asked_question": False,
-        "previous_request": state.get("request"),
         "button": None,
         "reading": None,
     }
@@ -692,7 +657,7 @@ def planner_opening(
 
 def _split_text(spec: dict) -> str:
     """The meat and vegetable sides for the request summary, from their tightened ranges
-    (design 5.11). A spec saved before bounds existed is read by PlanSpec."""
+    (design 5.11)."""
     parsed = PlanSpec.model_validate(spec)
     sides = side_phrases(side_ranges(parsed), parsed.dishes, False).values()
     return ", ".join(sides) if sides else "none (any mix of meat and vegetable dishes)"
@@ -705,11 +670,10 @@ def _merge_notes(
     excluded: Sequence[ExcludedRecipe] = (),
 ) -> dict:
     """Search notes with `titles` and `excluded` added (once each) and `paused` or-ed in.
-    `left_out_details` holds the ingredient lines per recipe; notes saved before it existed
-    have titles only."""
-    notes = notes or {}
-    left_out = list(notes.get("left_out_unknown_allergens", []))
-    details = list(notes.get("left_out_details", []))
+    `left_out_details` holds the ingredient lines per recipe."""
+    notes = notes or _empty_search_notes()
+    left_out = list(notes["left_out_unknown_allergens"])
+    details = list(notes["left_out_details"])
     known = {d["id"] for d in details}
     for item in excluded:
         if item.id not in known:
@@ -720,7 +684,7 @@ def _merge_notes(
     return {
         "left_out_unknown_allergens": left_out,
         "left_out_details": details,
-        "semantic_paused": bool(notes.get("semantic_paused", False)) or paused,
+        "semantic_paused": bool(notes["semantic_paused"]) or paused,
     }
 
 
@@ -777,7 +741,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         if _is_action_message(state):
             card = _button_card(state)
             if card is None:
-                # A card without its request (3b-1): no route call; choose parses the message.
+                # No card to change: no route call; `choose` answers "unclear".
                 return {**fresh, "intent": "plan", "model_calls": []}
             # Spec 5.5: the card's request with the button's change, in code. On a revision
             # card that kept the plan the turn revises the current plan again; on any other
@@ -845,7 +809,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         }
         with deps.session_factory() as session:
             plan, _ = live_plan(session, state["current_plan"])
-            meal_avoid = current_meal_avoid(plan, base)
+            meal_avoid = list(plan["meal_avoid"])
             avoid_ids = meal_avoid_ids(
                 session, plan, with_meal_avoid(session, constraints, meal_avoid)
             )
@@ -903,20 +867,6 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "model_calls": events,
         }
 
-    def read_paused_turn(state: ChatState) -> dict:
-        """`read_follow_up` for an older thread's revise turn whose parse already ran (it was
-        paused on a question before plan 3b-2): `request` is that parse, so the turn keeps the
-        `previous_request` route_intent set for it."""
-        reading = read_follow_up(state)
-        # The parse the turn already made stays in the buffer ahead of the reader's calls
-        # (final review M1); `read_follow_up` alone starts the buffer fresh.
-        earlier = list(state.get("model_calls") or [])
-        return {
-            **reading,
-            "model_calls": [*earlier, *reading["model_calls"]],
-            "previous_request": state.get("previous_request"),
-        }
-
     def after_reading(state: ChatState) -> str:
         """A change goes straight to the change path, with no parse call (spec 5.1); a people
         message (which then shows the diner card) and a new meal take the parse; "other" gets
@@ -936,6 +886,10 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     def choose(state: ChatState) -> str:
         if state["intent"] not in ("plan", "revise"):
             return "other"
+        if _is_action_message(state) and not _button_turn(state) and not _reuses_parse(state):
+            # A button pressed with no card to change (the API refuses it as a stale
+            # interrupt; this is the graph's own answer).
+            return "unclear"
         if _button_turn(state):
             # The request is complete: no parse and no question (spec 5.5). Who eats is the
             # card's, so the diner card shows only when a settled friend was deleted since.
@@ -962,9 +916,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # A null is no statement on a revise turn either: the request behind the plan fills
             # it before the diner-card check reads it, so a parse that left out the headcount
             # is not "only me", and a fallback new plan keeps the plan's conditions (dev run 3).
-            parsed = carry_unstated(
-                parsed, state.get("plan_request") or state.get("previous_request")
-            )
+            parsed = carry_unstated(parsed, state.get("plan_request"))
         return {
             "request": parsed,
             "model_calls": [
@@ -1004,11 +956,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             # anew (plan 3b-2 spec 5.1); load_context then marks the turn as a plan.
             if (state.get("reading") or {}).get("kind") == "people":
                 return "select_diners"
-            # A revise turn with no reading is an older thread's, paused on a question before
-            # plan 3b-2: the reader reads it now (the old revise step is gone). With no dish
-            # to change (after an early stop) it plans from this parse.
-            if _has_dishes(state):
-                return "read_paused_turn"
+            # With no dish to change (after an early stop) it plans from this parse.
             return "select_diners" if diner_card_needed(state, parsed) else "load_context"
         with deps.session_factory() as session:
             style = get_request_style(session)
@@ -1595,11 +1543,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         on the kept plan (overrides carried, so a dish kept against a rule by the user's
         confirmation is not breaking). Starts the planning run, recording the frame."""
         button = state["button"] if _button_turn(state) else None
-        base = state.get("plan_request") or state.get("previous_request") or {}
-        wish_choice = False
-        # A card saved before cards kept their unfinished parts has no structured reading, so
-        # its button gives the picker the offering turn's words (`picker_wish`).
-        words_for_picker = False
+        base = state["plan_request"]
         if button is None:
             reading = FollowUpReading.model_validate(state["reading"])
             request = request_after(base, reading)
@@ -1608,15 +1552,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         else:
             reading = None
             request = state["request"]
-            card = _button_card(state) or {}
-            unfinished = card.get(UNFINISHED)
-            words_for_picker = UNFINISHED not in card
-            if UNFINISHED not in card and card.get("plan_kept") and request.get("query"):
-                # A kept card saved before cards kept their unfinished parts: its wish is
-                # what was not done. It names no dish, so the picker chooses which dishes
-                # it touches, inside a limit code sets.
-                unfinished = {"reading": {"wish": request["query"]}}
-                wish_choice = True
+            unfinished = _button_card(state).get(UNFINISHED)
             words = (unfinished or {}).get("words") or "\n".join(_offering_words(state))
         parsed = ParsedRequest.model_validate(request)
         if request_problem(parsed):
@@ -1638,7 +1574,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             return Command(update={"model_calls": []}, goto="unclear")
         if button is not None:
             spec = spec.model_copy(update=spec_changes(request, button))
-            meal_avoid = revision_meal_avoid(plan, base, request)
+            # A kept turn's card request may hold a newer avoidance than the plan; an empty
+            # list never clears it, so the plan's own stands then.
+            meal_avoid = list(request.get("meal_avoid") or plan["meal_avoid"])
             used = button_reading(
                 unfinished, request, spec, any_side=button == "relax_split"
             )
@@ -1679,7 +1617,6 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                 lookup,
                 words,
                 uncovered_must=uncovered,
-                wish_choice=wish_choice,
             )
         prepare = deps.client.prepare_text
         record = {
@@ -1726,7 +1663,6 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "frame": frame.model_dump(),
             "reading": used.model_dump(),
             "words": words,
-            "words_for_picker": words_for_picker,
             "breaking": pairs,
             "named": named,
             "outcome": None,
@@ -1735,8 +1671,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "reader_reasks": sum(
                 1 for e in state.get("model_calls") or [] if e.get("kind") == "reader_reask"
             ),
-            # The model calls of this turn before the reader (the parse of an older paused
-            # thread), also taken from the picker's budget.
+            # The model calls of this turn that are not the reader's (on a people turn, the
+            # parse), also taken from the picker's budget.
             "earlier_calls": sum(
                 1
                 for e in state.get("model_calls") or []
@@ -1761,8 +1697,6 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             "search_notes": _empty_search_notes(),
             "planner_opening": None,
             "shortlist_ids": [],
-            # An older thread's revise-step state is cleared, so it never reads as this turn's.
-            "revision": None,
             "change": change,
         }
         goto = "pick_dishes" if needs_picker(frame) and not frame.empty_plan else "present_change"
@@ -1822,17 +1756,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         taste wish. A button turn's reading is the offering turn's structured reading (its
         card's unfinished parts), so the wish reaches the picker through it and the offering
         turn's words are not shown: they could contradict the button ("荤菜再来一个" on
-        relax_split, Task 11 fix 2). Only a card saved before cards kept that reading
-        (`words_for_picker`) still passes the words, as the wish's context."""
-        wish = (change["reading"].get("wish") or "").strip() or state["request"].get("query") or ""
-        if (
-            not _button_turn(state)
-            or not change.get("words_for_picker")
-            or not change.get("words")
-        ):
-            return wish
-        earlier = f"the user's earlier message: {change['words']}"
-        return f"{wish} ({earlier})" if wish else earlier
+        relax_split, Task 11 fix 2)."""
+        return (change["reading"].get("wish") or "").strip() or state["request"].get("query") or ""
 
     def check_pick(state: ChatState, plan: dict, frame: Frame, answer, spec: PlanSpec, codes):
         """The picker's answer against the frame (`apply_picks`), then the hard checks of its
@@ -1949,7 +1874,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         budget = (
             PICK_TURN_MODEL_CALLS
             - change.get("reader_reasks", 0)
-            - change.get("earlier_calls", 0)
+            - change["earlier_calls"]
         )
 
         def fits() -> bool:
@@ -2493,8 +2418,8 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         the client hooks replace saved nicknames in every model call the node makes. The
         scope is set inside the node's own run, in the thread that makes its model calls;
         LangGraph copies the context into any thread it starts from there. The node's update
-        gets `diner_labels` when the table changed (it only grows). A thread saved before
-        the table existed starts one with the user as "Diner 1"."""
+        gets `diner_labels` when the table changed (it only grows). A conversation starts a
+        table with the user as "Diner 1"."""
         takes_config = "config" in inspect.signature(node).parameters
 
         def run(state: ChatState, config: RunnableConfig):
@@ -2517,7 +2442,6 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
     builder = StateGraph(ChatState)
     builder.add_node("route_intent", with_labels(route_intent))
     builder.add_node("read_follow_up", with_labels(read_follow_up))
-    builder.add_node("read_paused_turn", with_labels(read_paused_turn))
     builder.add_node("other", with_labels(other))
     # The parse output keeps labels as labels (friend_rules codes are resolved by code), so
     # no nickname reaches the state's request through the post-hook.
@@ -2551,17 +2475,15 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         lambda state: "read_follow_up" if _reads_follow_up(state) else "route_intent",
         ["read_follow_up", "route_intent"],
     )
-    for reader in ("read_follow_up", "read_paused_turn"):
-        builder.add_conditional_edges(
-            reader, after_reading, ["build_change", "parse_request", "other"]
-        )
+    builder.add_conditional_edges(
+        "read_follow_up", after_reading, ["build_change", "parse_request", "other"]
+    )
     gates = [
         "ask_style",
         "ask_question",
         "select_diners",
         "load_context",
         "unclear",
-        "read_paused_turn",
     ]
     builder.add_conditional_edges(
         "route_intent",

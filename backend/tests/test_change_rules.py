@@ -4,7 +4,7 @@ unstated. No model and no database. The revise step's R1-R9 checks left with it 
 and the quote match against a dish's title or ingredients left with Task 10b (code checks
 only that a locked dish's quote is in the message)."""
 
-from minemydinner.agent.revision import (
+from minemydinner.agent.change_rules import (
     DishFacts,
     max_general_changes,
     revision_spec,
@@ -173,7 +173,7 @@ PLAN_REQUEST = {
 
 
 def test_unstated_fields_come_from_the_plan_request():
-    from minemydinner.agent.revision import carry_unstated
+    from minemydinner.agent.change_rules import carry_unstated
 
     filled = carry_unstated({"dishes": None, "counts_stated_now": False}, PLAN_REQUEST)
     for name in (
@@ -189,7 +189,7 @@ def test_unstated_fields_come_from_the_plan_request():
 
 
 def test_stated_fields_are_kept():
-    from minemydinner.agent.revision import carry_unstated
+    from minemydinner.agent.change_rules import carry_unstated
 
     parsed = {
         "headcount": 1,
@@ -209,7 +209,7 @@ def test_stated_fields_are_kept():
 
 
 def test_who_eats_carries_only_when_the_parse_mentions_nobody():
-    from minemydinner.agent.revision import carry_unstated
+    from minemydinner.agent.change_rules import carry_unstated
 
     for said in (
         {"others_mentioned": True},
@@ -222,13 +222,13 @@ def test_who_eats_carries_only_when_the_parse_mentions_nobody():
 
 
 def test_counts_do_not_carry_into_a_message_that_states_a_count():
-    from minemydinner.agent.revision import carry_unstated
+    from minemydinner.agent.change_rules import carry_unstated
 
     filled = carry_unstated({"counts_stated_now": True}, PLAN_REQUEST)
     assert all(filled.get(name) is None for name in ("dishes", "meat_dishes", "meat_bound"))
 
 
 def test_no_plan_request_changes_nothing():
-    from minemydinner.agent.revision import carry_unstated
+    from minemydinner.agent.change_rules import carry_unstated
 
     assert carry_unstated({"dishes": 2}, None) == {"dishes": 2}

@@ -663,7 +663,7 @@ def test_nothing_fits_revision_streams_its_card(client, tmp_path, session, recip
 
 def test_unclear_revision_asks_which_dish_without_a_card(client, tmp_path, session, recipe):
     # Plan 3b-2 spec 5.6: a reference that matches no dish keeps the plan and asks which.
-    from minemydinner.agent.revise_step import READING_PREFIX_ZH, WHICH_DISH_ZH
+    from minemydinner.agent.change_text import READING_PREFIX_ZH, WHICH_DISH_ZH
 
     env, _ = revise_env(tmp_path, session, recipe)
     env.model.structured["FollowUpReading"] = [

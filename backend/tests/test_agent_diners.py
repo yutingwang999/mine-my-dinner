@@ -82,20 +82,21 @@ def test_card_needed_for_new_self_rule_alone():
     assert card_needed(ParsedRequest(headcount=1), [], [peanut()], None, set())
 
 
-def settled(diner_ids, headcount, guest_names=None, meal_rules=None, stated=None) -> dict:
+SAME = object()
+
+
+def settled(diner_ids, headcount, guest_names=None, meal_rules=None, stated=SAME) -> dict:
     """A settled set as stored; `stated` is the headcount the parse gave when it was
-    confirmed. Sets saved before that field existed have no `stated_headcount` key."""
-    data = {
+    confirmed (by default the card's total; None: the parse gave none)."""
+    return {
         "diner_ids": diner_ids,
         "meal_rules": meal_rules or [],
         "guest_names": guest_names or {},
         "others": 0,
         "others_answer": None,
         "headcount": headcount,
+        "stated_headcount": headcount if stated is SAME else stated,
     }
-    if stated is not None:
-        data["stated_headcount"] = stated
-    return data
 
 
 def test_card_not_needed_when_settled_covers():
@@ -145,12 +146,12 @@ def test_card_compares_with_the_headcount_stated_when_the_set_was_confirmed():
     assert card_needed(ParsedRequest(headcount=1), [], [], wang_only, {7}, self_id=1)
 
 
-def test_card_compares_an_old_set_with_its_confirmed_headcount():
-    old = settled([1, 7], 3)  # saved before stated_headcount existed
-    assert not card_needed(ParsedRequest(headcount=3), [], [], old, {7}, self_id=1)
-    assert card_needed(ParsedRequest(headcount=2), [], [], old, {7}, self_id=1)
-    assert card_needed(ParsedRequest(headcount=2), [], [], {**old, "stated_headcount": None},
-                       {7}, self_id=1)
+def test_card_asks_for_a_stated_headcount_when_the_set_has_none():
+    # `stated_headcount` None means the parse gave none when the set was confirmed: any stated
+    # headcount differs from it, whatever the card's own total was.
+    unstated = settled([1, 7], 3, stated=None)
+    assert card_needed(ParsedRequest(headcount=3), [], [], unstated, {7}, self_id=1)
+    assert card_needed(ParsedRequest(headcount=2), [], [], unstated, {7}, self_id=1)
 
 
 # ---- what the card shows ----
@@ -500,14 +501,6 @@ def test_build_card_solo_diet_words_on_the_self_row(session, seeded):
     assert row["diner_id"] == me.id and row["diet_words"] == ["吃素"]
     assert row["proposed"] == []
 
-
-
-def test_settled_diners_from_an_old_state_has_no_stated_headcount():
-    from minemydinner.agent.diners import SettledDiners
-
-    old = SettledDiners.from_state(settled([1, 7], 2))
-    assert old.stated_headcount is None and old.headcount == 2
-    assert old.to_state()["stated_headcount"] is None
 
 
 # ---- "nobody else eats" after a shared set (decided by the user, 2026-11-19) ----

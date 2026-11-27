@@ -20,7 +20,7 @@ from minemydinner.agent.card_text import NEXT_ACTION_ORDER, next_actions
 from minemydinner.agent.follow_up import FollowUpReading, ReadAdd, ReadConditions, ReadCounts
 from minemydinner.agent.frame import Frame, fold
 from minemydinner.agent.picker import ChoiceAnswer, Picks, SlotPick, choice_slots
-from minemydinner.agent.revise_step import (
+from minemydinner.agent.change_text import (
     over_limit_entries,
     wish_unmet_actions,
     wish_unmet_entries,
@@ -481,8 +481,8 @@ def unfinished_reading(
     removals whose dish is still in the result (a named replacement not placed, a slot
     nothing filled), the named adds not placed, the typed adds no dish filled, and the wish's
     targets still to change: a target nothing replaced, and when the wish was not met the
-    dish that took a target's place (an old card's wish choice counts as targets). A removal
-    code refused (a locked dish without a quote) is not re-run."""
+    dish that took a target's place. A removal code refused (a locked dish without a
+    quote) is not re-run."""
     refused = {item.get("id") for item in frame.ignored if "id" in item}
     left = set(result_ids)
     remove = [

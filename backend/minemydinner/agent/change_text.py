@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from minemydinner.agent.card_text import NEXT_ACTION_ORDER, is_zh, unmet_for_user
 from minemydinner.agent.edits import latest_model_index, locked_ids
-from minemydinner.agent.revision import DishFacts
+from minemydinner.agent.change_rules import DishFacts
 from minemydinner.models import Recipe, RecipeIngredient
 from minemydinner.planning.validate import Finding, H2Override, PlanSpec
 

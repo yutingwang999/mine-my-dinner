@@ -708,16 +708,6 @@ def test_locked_ids_include_override_dishes(env):
     assert locked_ids(plan) == {env.veg.id, env.egg.id}
 
 
-def test_old_card_without_locked_reads_empty(env):
-    values = model_state(env, [env.veg.id, env.egg.id])
-    plan = values["current_plan"]
-    assert "locked" not in plan
-    assert locked_ids(plan) == set()
-    assert locked_ids({"edit": {"overrides": [{"recipe_id": 7}]}}) == {7}
-    _, _, after = run(env, values, Remove(recipe_id=env.egg.id))
-    assert after["current_plan"]["locked"] == []
-
-
 def test_restore_keeps_a_revised_versions_locks_and_overrides(env):
     values, override = _revised_state(env)
     _, _, after = run(env, values, Remove(recipe_id=env.veg.id))

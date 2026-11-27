@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from minemydinner.agent.change_rules import DishFacts, max_general_changes
 from minemydinner.agent.follow_up import FollowUpReading
-from minemydinner.agent.revision import DishFacts, max_general_changes
 from minemydinner.models import Recipe
 from minemydinner.planning.composition import (
     CATEGORY_OF_DISH_TYPE,
@@ -483,22 +483,19 @@ def build_frame(
     message: str,
     *,
     uncovered_must: list[str] | None = None,
-    wish_choice: bool = False,
 ) -> Frame:
     """The frame of a change (spec 5.4). `reading` is None on a button turn: the frame then
     comes from the specs alone. `spec_before` is the plan's spec (its `must_use` tells which
     must-use names are new); `spec_after` the new request's spec. `breaking` maps a plan dish
     to why it breaks the new request (`breaking_from`). `uncovered_must`, when given, is the
     must-use names no dish covers by validation's own rule; otherwise code matches the new
-    must-use names against the dishes' ingredient names. `wish_choice`: only for a kept card
-    saved before cards kept their unfinished parts, whose wish names no dish: the picker may
-    replace up to half of the unlocked dishes for it, inside a choice code bounds.
+    must-use names against the dishes' ingredient names.
 
     Order: named removals (a locked dish only with a quote from this message), dishes that
     break the request (replace slots; a locked dish only for a rule or avoidance), the wish's
     targets (at most half of the unlocked dishes), named and typed adds, the counts (only the
-    fields the message states, or all of them on a button), an old card's wish choice, an
-    uncovered must-use ingredient, and last whether any dish is left."""
+    fields the message states, or all of them on a button), an uncovered must-use
+    ingredient, and last whether any dish is left."""
     builder = _Builder(plan_ids, locked, facts)
     in_plan = set(builder.plan_ids)
     # A locked dish goes for a rule or an avoidance only (today's rule); stock, cookware or
@@ -600,17 +597,6 @@ def build_frame(
         stated = {k for k, v in reading.counts.model_dump().items() if v is not None}
         if stated:
             _meet_counts(builder, spec_after, stated)
-
-    # An old kept card's wish that names no dish: the picker may replace up to half of the
-    # unlocked dishes.
-    if wish_choice and reading is not None and reading.wish.strip():
-        unlocked = len([i for i in builder.plan_ids if i not in locked])
-        pool = builder.candidates(CATEGORY_OF_DISH_TYPE)
-        up_to = min(max_general_changes(unlocked), len(pool))
-        if up_to:
-            builder.choices.append(
-                Choice(dish_type=None, candidates=pool, up_to=up_to, mode="replace")
-            )
 
     # A must-use ingredient no dish uses: one replace, unless an added dish takes its place.
     if uncovered_must is None:

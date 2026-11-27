@@ -11,7 +11,7 @@ from minemydinner.agent.frame import (
     build_frame,
     lookup_named,
 )
-from minemydinner.agent.revision import DishFacts, max_general_changes
+from minemydinner.agent.change_rules import DishFacts, max_general_changes
 from minemydinner.planning.context import MEAL_KEY
 from minemydinner.planning.validate import Finding, PlanSpec, ValidationResult
 from tests.planningfakes import L, ctx_for, make_recipe, rule, self_diner
@@ -338,14 +338,10 @@ def test_a_wish_without_targets_changes_nothing():
     assert frame.slots == [] and frame.choices == [] and frame.keep == PLAN
 
 
-def test_a_general_wish_choice_is_kept_only_for_an_old_kept_card():
-    # A kept card saved before cards kept their unfinished parts: the picker may replace up
-    # to half of the unlocked dishes for its wish, inside a limit code set.
-    frame = _frame(_change(wish="辣一些"), locked={1}, wish_choice=True)
-    assert frame.choices == [
-        Choice(dish_type=None, candidates=[2, 3, 4, 5], up_to=2, mode="replace")
-    ]
-    assert frame.keep == PLAN and frame.slots == []
+def test_build_frame_has_no_wish_choice():
+    import inspect
+
+    assert "wish_choice" not in inspect.signature(build_frame).parameters
 
 
 def test_a_stated_lower_count_gives_a_drop_choice_of_exactly_the_difference():

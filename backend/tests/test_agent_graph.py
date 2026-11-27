@@ -737,7 +737,7 @@ def test_counts_text_uses_singular_and_omits_unasked_zeros():
         "detail": {
             "required": {"dishes": 1, "soups": 1, "staples": 0, "desserts": 0, "snacks": 0},
             "present": {"dishes": 2, "soups": 0, "staples": 0, "desserts": 0, "snacks": 0},
-            "minimum": False,
+            "ranges": {"meat_dishes": [0, 1], "vegetable_dishes": [0, 1]},
         },
     }
     assert unmet_for_user(h4, {}, "en") == "The plan has 2 dishes, 0 soups; 1 dish, 1 soup were asked for"
@@ -1017,11 +1017,26 @@ def test_search_tool_filters_and_ranks_with_the_named_ingredients(tmp_path, sess
 
 
 def _h4(required: dict, present: dict, minimum: bool = False) -> dict:
-    """An H4 finding as saved before ranges existed: named sides in `required`."""
+    """An H4 finding for the named sides in `required`; their ranges are worked out as the
+    validator does (`minimum`: both named sides are "at least")."""
+    from minemydinner.planning.composition import ranges_for
+
+    bound = "at_least" if minimum else "exact"
+    ranges = ranges_for(
+        required.get("dishes", 0),
+        required.get("meat_dishes"),
+        bound,
+        required.get("vegetable_dishes"),
+        bound,
+    )
     return {
         "code": "H4",
         "recipe_id": None,
-        "detail": {"required": required, "present": present, "minimum": minimum},
+        "detail": {
+            "required": required,
+            "present": present,
+            "ranges": {side: list(r) for side, r in ranges.items()},
+        },
     }
 
 
@@ -1067,7 +1082,7 @@ def test_exact_vegetable_only_split_implies_the_meat_side():
     )
 
 
-def test_old_minimum_finding_states_the_tightened_ranges():
+def test_minimum_finding_states_the_tightened_ranges():
     from minemydinner.agent.card_text import unmet_for_user
     from minemydinner.agent.graph import _violation_for_model
 
@@ -1167,10 +1182,6 @@ def test_request_summary_split_line():
     assert split(dishes=8, meat_dishes=2) == "2 meat dishes, 6 vegetable dishes"
     assert split(dishes=4, vegetable_dishes=1) == "3 meat dishes, 1 vegetable dish"
     assert split(dishes=8, meat_dishes=2, meat_bound="at_least") == (
-        "at least 2 meat dishes, at most 6 vegetable dishes"
-    )
-    # A spec saved before bounds existed.
-    assert split(dishes=8, meat_dishes=2, split_is_minimum=True) == (
         "at least 2 meat dishes, at most 6 vegetable dishes"
     )
     assert split(dishes=4, meat_dishes=1, vegetable_dishes=3) == "1 meat dish, 3 vegetable dishes"
@@ -1473,10 +1484,10 @@ def test_graph_card_after_style_and_question_gates(tmp_path, session, seeded, ve
     assert out["current_plan"] is not None
 
 
-def test_graph_old_thread_without_labels_plans(tmp_path, session, seeded, veg):
+def test_graph_thread_without_labels_plans(tmp_path, session, seeded, veg):
     me = self_diner(session)
     env = labelled_env(tmp_path, session)
-    # A thread saved before plan 2b: no diner_labels, no settled_diners.
+    # A thread with no label table and no settled set yet.
     env.graph.update_state(
         env.config,
         {
@@ -1893,20 +1904,6 @@ def test_graph_edited_total_compares_with_the_stated_headcount(tmp_path, session
     )
     assert "__interrupt__" not in out
     assert out["constraints"]["headcount"] == 3
-
-
-def test_graph_old_set_compares_with_its_confirmed_headcount(tmp_path, session, seeded, veg):
-    env, me, wang, first = settle_me_and_wang(tmp_path, session, veg)
-    old = {k: v for k, v in first["settled_diners"].items() if k != "stated_headcount"}
-    env.graph.update_state(env.config, {"settled_diners": old}, as_node="present_plan")
-    out = plan(
-        env, "换个辣的", parse={"headcount": 2, "dishes": 1, "query": "辣"},
-        replies=[final_proposal([veg.id])], locale="zh",
-    )
-    assert "__interrupt__" not in out
-    assert out["constraints"]["diner_ids"] == [me.id, wang.id]
-    out = plan(env, "三个人吃", parse={"headcount": 3, "dishes": 1}, locale="zh")
-    assert out["__interrupt__"][0].value["kind"] == "diners"
 
 
 def test_graph_solo_card_with_an_added_guest_keeps_the_guest(tmp_path, session, seeded, veg):
@@ -2394,7 +2391,6 @@ def test_revise_goes_to_the_change_path(revise_env):
     assert out["messages"][-1].content.startswith("把清炒小白菜换成了干煸豆角。")
     # The follow-up made no route call: the route ran once, for the first meal.
     assert len(model_calls_by_prompt(env, "route")) == 1
-    assert out["previous_request"] == first["request"]
     # The plan was built from the first request; the passed revision is built from this one.
     assert first["plan_request"] == first["request"]
     assert out["plan_request"] == out["request"] and out["request"]["query"] == "辣一些的"
@@ -2568,57 +2564,6 @@ def test_a_follow_up_after_an_early_stop_is_routed(graph_env, session):
     assert "__interrupt__" not in out and out["intent"] == "plan"
     assert reader_calls(graph_env) == []
     assert len(model_calls_by_prompt(graph_env, "route")) == 3
-
-
-def test_an_old_revise_turn_paused_on_a_question_is_read_after_the_answer(revise_env):
-    """A thread saved before plan 3b-2 in a revise turn, paused on the contradiction question:
-    after the answer the parse runs as before, then the reader reads the turn (no revise
-    step)."""
-    env = revise_env
-    first = first_meal(env)
-    env.graph.update_state(
-        env.config,
-        {
-            "messages": [HumanMessage("两个菜，三个荤菜")],
-            "intent": "revise",
-            "reading": None,
-            "previous_request": first["request"],
-            "asked_question": False,
-            "button": None,
-            "model_calls": [],
-        },
-        as_node="route_intent",
-    )
-    env.model.structured["ParsedRequest"] = [{"dishes": 2, "meat_dishes": 3}]
-    out = env.graph.invoke(None, env.config)
-    (question,) = out["__interrupt__"]
-    assert question.value["kind"] == "question"
-    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
-    env.model.structured["ParsedRequest"] = [{"query": "辣"}]
-    env.model.structured["FollowUpReading"] = [
-        {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
-    ]
-    env.model.replies = [pick(slots=[(0, beans)])]
-    out = env.graph.invoke(Command(resume="白菜换成辣的"), env.config)
-    assert "__interrupt__" not in out
-    assert beans in ids_of_plan(out["current_plan"]) and len(reader_calls(env)) == 1
-    # The turn keeps the request before its parse, not the parse it already made.
-    assert out["previous_request"] == first["request"]
-
-
-def test_an_old_thread_state_is_read_and_revised(revise_env):
-    """A thread saved before plan 3b-2 (a revision dict without the later fields, a card
-    without its turn's words, no reading) is read and revised without error."""
-    env = revise_env
-    first_meal(env)
-    env.graph.update_state(
-        env.config, {"revision": {"from_version": 0, "message": "旧的", "recipe_ids": []}}
-    )
-    cabbage, beans = dish_ids(env, "清炒小白菜", "干煸豆角")
-    swap = {"kind": "change", "remove": [{"id": cabbage, "mode": "replace", "quote": "白菜"}]}
-    out = read(env, "白菜换掉", swap, replies=[pick(slots=[(0, beans)])])
-    assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    assert len(reader_calls(env)) == 1 and len(picker_calls(env)) == 1
 
 
 def test_the_reader_sees_the_plan_the_diners_and_this_meals_avoidance(
@@ -2930,7 +2875,7 @@ def test_fewer_dishes_after_a_failed_add_shows_the_button_apart(revise_env):
 
 
 def test_over_time_limit_sentence_in_both_languages():
-    from minemydinner.agent.revise_step import over_limit_note
+    from minemydinner.agent.change_text import over_limit_note
 
     dish = [{"id": 1, "title": "Braised ribs", "time_min": 60}]
     assert over_limit_note(dish, 30, "en") == (
@@ -3026,7 +2971,7 @@ def test_button_after_the_empty_plan_question_uses_the_failed_turns_wish(revise_
     """Final review I-1, on the change path: an empty-plan question (no card) between the
     failed change and the button. The button still re-runs the failed turn's unfinished wish,
     with that turn's words kept on its card."""
-    from minemydinner.agent.revise_step import EMPTY_PLAN_QUESTION_ZH
+    from minemydinner.agent.change_text import EMPTY_PLAN_QUESTION_ZH
 
     env = revise_env
     dishes = _failed_seafood_wish(env)
@@ -3042,32 +2987,6 @@ def test_button_after_the_empty_plan_question_uses_the_failed_turns_wish(revise_
     assert empty["messages"][-1].id not in empty["reply_plans"]
     assert empty["change"]["words"] == message
     _press_shopping_on_kept_plan(env, *dishes)
-
-
-@pytest.mark.parametrize("between", [False, True])
-def test_button_on_a_kept_card_saved_before_its_words_were_kept(revise_env, between):
-    """A kept card saved before cards kept their unfinished parts and words: the button
-    re-runs the card's wish as a general wish, with the user's messages before the card's
-    reply as its words."""
-    env = revise_env
-    dishes = _failed_seafood_wish(env)
-    values = env.graph.get_state(env.config).values
-    reply_plans = {
-        key: {k: v for k, v in card.items() if k not in ("wish_words", "unfinished")}
-        for key, card in values["reply_plans"].items()
-    }
-    env.graph.update_state(env.config, {"reply_plans": reply_plans}, as_node="present_plan")
-    if between:
-        say(env, "你好", "other")
-    cabbage, beans, cucumber = dishes
-    env.model.replies = [pick(choices=[(0, [cabbage])], slots=[(0, cucumber)], wish_met=True)]
-    out = press(env, "switch_to_shopping")
-    assert out["intent"] == "revise"
-    [frame] = change_events(env, "frame")
-    assert [c["mode"] for c in frame["frame"]["choices"]] == ["replace"]
-    ids = ids_of_plan(out["current_plan"])
-    assert beans in ids and cucumber in ids and cabbage not in ids
-    assert "the user's earlier message: 想吃点海鲜" in picker_input(env)
 
 
 def test_kept_card_keeps_its_turns_words_for_the_server_only(revise_env):
@@ -3203,26 +3122,24 @@ def test_button_on_a_new_plan_card_plans_from_scratch(revise_env):
     assert out["current_plan"]["passed"]
 
 
-def test_button_on_an_old_card_parses(revise_env):
+def test_button_turn_without_a_card_request_is_unclear(revise_env):
+    """A button pressed when no reply has a card to change answers "unclear": no model call
+    and nothing planned."""
+    from minemydinner.agent.graph import UNCLEAR_REPLY_ZH
+
     env = revise_env
-    stopped = say(env, "今晚吃什么", "plan", parse={"dishes": 2, "mode": "fridge_only"})
-    # A thread saved before cards kept their request.
-    old = {
-        reply_id: {k: v for k, v in card.items() if k != "request"}
-        for reply_id, card in stopped["reply_plans"].items()
-    }
-    env.graph.update_state(env.config, {"reply_plans": old}, as_node="present_plan")
+    say(env, "今晚吃什么", "plan", parse={"dishes": 2, "mode": "fridge_only"})
+    env.graph.update_state(env.config, {"reply_plans": {}}, as_node="present_plan")
     since = len(env.model.sent)
-    out = say(
-        env, "允许购物", "revise",
-        parse={"dishes": 2, "soups": 1, "mode": "shopping"},
-        replies=[final_proposal(dish_ids(env, *MEAL))],
-    )
-    assert "__interrupt__" not in out and out["current_plan"]["passed"]
-    # 3b-1 behaviour: no route call, but the parse relaxes the request.
-    assert route_and_parse_calls(env, since) == ["parse"]
-    assert out["request"]["soups"] == 1
-    assert "button" not in latest_record(env).request
+    runs_before = len(planner_runs(env))
+    out = say(env, "允许购物", "revise")
+    assert out["messages"][-1].content == UNCLEAR_REPLY_ZH
+    assert len(env.model.sent) == since
+    assert len(planner_runs(env)) == runs_before
+
+
+def test_after_parse_never_routes_to_read_paused_turn(revise_env):
+    assert "read_paused_turn" not in revise_env.graph.get_graph().nodes
 
 
 def _hand_add(env: ReviseEnv, recipe_id: int) -> None:
@@ -3812,7 +3729,7 @@ def test_a_new_one_meal_avoidance_replaces_a_locked_dish_and_says_so(revise_env)
 
 
 def test_drop_the_soup_and_add_a_dish_not_in_the_library(revise_env):
-    from minemydinner.agent.revise_step import CHANGE_PARTIAL_ZH
+    from minemydinner.agent.change_text import CHANGE_PARTIAL_ZH
 
     env = revise_env
     first_meal(env)
@@ -3854,7 +3771,7 @@ def test_an_unfilled_replace_keeps_the_dish(revise_env):
 
 
 def test_a_change_that_leaves_no_dish_asks_the_empty_plan_question(revise_env):
-    from minemydinner.agent.revise_step import EMPTY_PLAN_QUESTION_ZH
+    from minemydinner.agent.change_text import EMPTY_PLAN_QUESTION_ZH
 
     env = revise_env
     first = first_meal(env)
@@ -3866,7 +3783,7 @@ def test_a_change_that_leaves_no_dish_asks_the_empty_plan_question(revise_env):
 
 
 def test_an_ambiguous_reading_says_how_it_was_read(revise_env):
-    from minemydinner.agent.revise_step import READING_PREFIX_ZH
+    from minemydinner.agent.change_text import READING_PREFIX_ZH
 
     env = revise_env
     first_meal(env)
@@ -3886,7 +3803,7 @@ def test_an_ambiguous_reading_says_how_it_was_read(revise_env):
 
 
 def test_an_ambiguous_reference_that_matches_no_dish_asks_which(revise_env):
-    from minemydinner.agent.revise_step import READING_PREFIX_ZH, WHICH_DISH_ZH
+    from minemydinner.agent.change_text import READING_PREFIX_ZH, WHICH_DISH_ZH
 
     env = revise_env
     first = first_meal(env)
@@ -3898,7 +3815,7 @@ def test_an_ambiguous_reference_that_matches_no_dish_asks_which(revise_env):
 
 
 def test_an_unmet_wish_is_said(revise_env):
-    from minemydinner.agent.revise_step import WISH_UNMET
+    from minemydinner.agent.change_text import WISH_UNMET
 
     # Task 11 fix 1 (user decision): a slot made only for the wish is never filled with a
     # dish that does not meet it. The picker's dish is not placed, the target stays, and the
@@ -4187,8 +4104,7 @@ def test_an_earlier_wish_is_never_reported_unmet_on_a_named_change(revise_env):
 
 
 def test_a_new_kept_card_with_nothing_unfinished_never_re_runs_an_old_wish(revise_env):
-    """Fix round 1: only a kept card saved before cards kept their unfinished parts falls
-    back to its request's wish; a new one with nothing unfinished re-runs nothing."""
+    """A kept card with nothing unfinished re-runs nothing, whatever wish its request holds."""
     env = revise_env
     first = first_meal(env, parse={"dishes": 2, "soups": 1, "mode": "shopping", "query": "辣的"})
     out = read(env, "嗯，就这样吧", {"kind": "change"})
@@ -4417,7 +4333,7 @@ def test_a_meat_dish_breaking_a_no_meat_avoidance_may_take_a_vegetable_dish(revi
 
 
 def test_a_wish_that_touches_no_dish_changes_nothing_and_says_so(revise_env):
-    from minemydinner.agent.revise_step import WISH_MATCHED_NOTHING_ZH
+    from minemydinner.agent.change_text import WISH_MATCHED_NOTHING_ZH
 
     env = revise_env
     first = first_meal(env)
@@ -4550,7 +4466,7 @@ def test_a_named_slot_emptied_by_codes_fallback_is_never_said_not_in_the_library
 
 
 def test_a_wish_whose_targets_are_all_locked_says_they_stay(revise_env):
-    from minemydinner.agent.revise_step import WISH_MATCHED_NOTHING_ZH, WISH_TARGETS_LOCKED_ZH
+    from minemydinner.agent.change_text import WISH_MATCHED_NOTHING_ZH, WISH_TARGETS_LOCKED_ZH
 
     env = revise_env
     first_meal(env)
@@ -4578,7 +4494,7 @@ def _four_unlocked(env: ReviseEnv) -> list[int]:
 def test_capped_wish_targets_are_said(revise_env):
     """Plan 3b-2 change fixes, fix 6: wish targets over the cap (half of the unlocked dishes)
     stay, and the reply says so with one fixed sentence."""
-    from minemydinner.agent.revise_step import wish_targets_capped
+    from minemydinner.agent.change_text import wish_targets_capped
 
     env = revise_env
     targets = _four_unlocked(env)
@@ -4600,7 +4516,7 @@ def test_capped_wish_targets_are_said(revise_env):
 def test_capped_and_locked_and_unmet_wish_sentences_together(revise_env):
     """Fix 6 with M4: one locked target and four unlocked ones, the wish not met: the capped
     sentence once, no "every target locked" sentence, and the unmet-wish sentence."""
-    from minemydinner.agent.revise_step import (
+    from minemydinner.agent.change_text import (
         WISH_TARGETS_LOCKED_ZH,
         change_wish_unmet,
         wish_targets_capped,
@@ -5039,48 +4955,6 @@ def test_the_outcome_record_names_no_dish_the_final_check_removed(revise_env, mo
     )
 
 
-def test_an_older_paused_thread_keeps_the_parse_event_and_stays_within_seven_calls(revise_env):
-    """Final review M1: the reader's events are added to the parse event an older paused
-    thread already holds, and the picker's budget counts that call."""
-    env = revise_env
-    first = first_meal(env)
-    env.graph.update_state(
-        env.config,
-        {
-            "messages": [HumanMessage("两个菜，三个荤菜")],
-            "intent": "revise",
-            "reading": None,
-            "previous_request": first["request"],
-            "asked_question": False,
-            "button": None,
-            # The route call a real older thread holds before its first parse.
-            "model_calls": [{"kind": "model_call", "step": "route"}],
-        },
-        as_node="route_intent",
-    )
-    env.model.structured["ParsedRequest"] = [{"dishes": 2, "meat_dishes": 3}]
-    out = env.graph.invoke(None, env.config)
-    assert out["__interrupt__"][0].value["kind"] == "question"
-    cabbage, _ = dish_ids(env, "清炒小白菜", "干煸豆角")
-    env.model.structured["ParsedRequest"] = [{"query": "辣"}]
-    env.model.structured["FollowUpReading"] = [
-        {
-            "kind": "change",
-            "wish": "辣一些的",
-            "wish_targets": [cabbage],
-        }
-    ]
-    env.model.replies = [AIMessage(content="")] * 12
-    env.graph.invoke(Command(resume="白菜换成辣的"), env.config)
-    steps = [e["step"] for e in latest_record(env).events if e.get("kind") == "model_call"]
-    assert "parse" in steps and "read_follow_up" in steps
-    assert len(steps) <= 7
-    # The thread carries route + parse + parse (earlier_calls = 3), so the picker's budget is
-    # 6 - 3 = 3: one call, and no re-ask or second attempt, because a whole attempt (3 calls)
-    # no longer fits. Without the subtraction the empty replies would be asked again.
-    assert len(picker_calls(env)) == 1
-
-
 @pytest.mark.parametrize(
     "locale, text, said, not_said",
     [
@@ -5432,7 +5306,7 @@ def test_a_reader_reask_takes_one_call_from_the_pickers_budget(revise_env):
 def test_not_done_sentences_in_both_languages():
     """Task 11 fix 3: an item left unfilled because the picker gave no usable answer says it
     could not be done this time, never that nothing fits."""
-    from minemydinner.agent.revise_step import unfinished_sentence
+    from minemydinner.agent.change_text import unfinished_sentence
 
     def say(locale, **item):
         base = {"kind": "unfilled", "recipe_id": None, "dish_type": "", "title": None,

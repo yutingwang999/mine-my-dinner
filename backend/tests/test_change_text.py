@@ -16,7 +16,7 @@ from minemydinner.agent.plan_card import meal_constraints
 from minemydinner.agent.planner import PICK_TOOLS_VERSION
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.request import set_request_style
-from minemydinner.agent.revise_step import EMPTY_PLAN_QUESTION_EN, EMPTY_PLAN_QUESTION_ZH
+from minemydinner.agent.change_text import EMPTY_PLAN_QUESTION_EN, EMPTY_PLAN_QUESTION_ZH
 from minemydinner.models import AppPreference, PlanningRun
 from minemydinner.planning.context import load_planning_context
 from tests.agentfakes import ScriptedChatModel, final_proposal, make_llm_client, tool_call
@@ -107,7 +107,7 @@ def last_record(env: Env) -> PlanningRun:
 
 
 def test_from_version_names_the_version_the_plan_is():
-    from minemydinner.agent.revise_step import from_version
+    from minemydinner.agent.change_text import from_version
 
     model, manual = {"recipes": []}, {"recipes": [], "edited": True, "model_version": 0}
     assert from_version(model, [model]) == 0
@@ -120,7 +120,7 @@ def test_from_version_names_the_version_the_plan_is():
 
 def routed_revise(env: Env, text: str, reading: dict, replies: list) -> dict:
     """A follow-up turn through the real graph entry (the reader, scripted as a change, plan
-    3b-2), so the turn keeps the thread's request as `previous_request` as it does in the app."""
+    3b-2), as it runs in the app."""
     env.model.replies = list(replies)
     env.model.structured["FollowUpReading"] = [{"kind": "change", **reading}]
     return env.graph.invoke({"messages": [HumanMessage(text)], "locale": "zh"}, env.config)
@@ -216,7 +216,7 @@ def test_overrides_carry_into_a_change(env, session):
 
 
 def test_locked_changed_text_in_both_languages():
-    from minemydinner.agent.revise_step import empty_plan_question, locked_changed_text
+    from minemydinner.agent.change_text import empty_plan_question, locked_changed_text
 
     changes = [("红烧肉", "清炒小白菜", True), ("番茄炒蛋", None, False)]
     assert locked_changed_text(changes, "zh") == (
