@@ -130,9 +130,8 @@ scenarios:
     expect_titles_none: [番茄炒蛋]
     expect_titles_include: [青椒肉丝, 清炒菠菜]
     expect_counts: {dishes: 5}
-    deferred_to: 3b-2 plan two (diner changes)
     expect_locale_reply: zh
-    expect: After the diner change is confirmed, the egg dish goes (小李 is allergic to egg) and the plan has the original count plus 2. Until 3b-2 a diner change plans from scratch.
+    expect: After the diner card (小李 joins), the egg dish is replaced (小李 is allergic to egg), the other two dishes stay, and the message's own add of 2 sets the total, 5 dishes (the headcount difference is not applied, design 5.3).
 
   - name: remove_what_does_not_suit_after_a_kept_egg_dish
     request: 两个人吃晚饭，做四个菜，缺的可以去买。

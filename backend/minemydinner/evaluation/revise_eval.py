@@ -40,6 +40,8 @@ from minemydinner.agent.labels import LabelTable, labels_scope, load_label_conte
 from minemydinner.agent.plan_card import build_dishes_card, card_base, meal_constraints
 from minemydinner.agent.request import ParsedRequest
 from minemydinner.agent.change_text import (
+    LOCKED_COUNT_KEPT_EN,
+    LOCKED_COUNT_KEPT_ZH,
     WISH_TARGETS_CAPPED_EN,
     WISH_TARGETS_CAPPED_ZH,
     WISH_UNMET,
@@ -63,6 +65,7 @@ FOLLOW_UP_KEYS = (
     "expect_removed_any",
     "expect_follow_up_diner_card",
     "button_before",
+    "expect_stated_total",
 )
 # expect_* keys an expect_any_of entry may not hold: the list itself, and the diner checks,
 # which are judged once over the whole scenario.
@@ -140,6 +143,9 @@ def check_revise_keys(scenario: Any, any_of_keys: Collection[str]) -> None:
     limit = scenario.expect_max_changed
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
         raise bad("expect_max_changed must be a whole number of dishes, 0 or more")
+    total = scenario.expect_stated_total
+    if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
+        raise bad("expect_stated_total must be a whole number of people, 0 or more")
     if scenario.deferred_to is not None and (
         not isinstance(scenario.deferred_to, str) or not scenario.deferred_to.strip()
     ):
@@ -366,6 +372,24 @@ class TurnFacts:
     ended_with: str | None = None
     # The judged turn's own message (the follow-up), for quotes.
     words: str = ""
+    # ---- plan 3b-2 (two): diner changes ----
+    # The judged turn's last reply text (the count-not-met sentence is looked for in it).
+    reply: str = ""
+    # The judged turn's `diner_change` event (a people turn), else None.
+    diner_change: dict | None = None
+    # The confirmed set (`settled_diners`) before the follow-up message and at the end.
+    settled_before: dict | None = None
+    settled_after: dict | None = None
+    # The follow-up card was answered as shown (the runner's default answer), or skipped.
+    card_accepted: bool = False
+    card_skipped: bool = False
+    # Titles of the final plan that break a rule of the final confirmed set (H2, with the
+    # plan's carried overrides). Read only on a turn with a follow-up card whose result is
+    # shown as a plan (a revision, or a new plan that passed).
+    final_rule_breaks: tuple[str, ...] = ()
+    # The `stated_total` of the last diner card on the follow-up turn: the notice that the
+    # message's total is below the people ticked (None: no notice, or no card).
+    card_stated_total: int | None = None
 
     def gone(self) -> list[str]:
         """Titles of the plan before the follow-up that are not in the plan after it."""
@@ -515,6 +539,14 @@ def _3b1b_failures(scenario: Any, facts: TurnFacts) -> list[str]:
     card = scenario.expect_follow_up_diner_card
     if card is not None and facts.follow_up_card != card:
         failures.append(f"diner card on the follow-up={facts.follow_up_card}, expected {card}")
+    total = scenario.expect_stated_total
+    if total is not None:
+        if not facts.follow_up_card:
+            failures.append(f"no diner card on the follow-up to show the stated total {total}")
+        elif facts.card_stated_total != total:
+            failures.append(
+                f"follow-up card stated total {facts.card_stated_total}, expected {total}"
+            )
     request = facts.request or {}
     lost = [name for name in scenario.expect_request_kept if not request.get(name)]
     if lost:
@@ -768,7 +800,7 @@ def _count_failures(facts: TurnFacts) -> list[str]:
     }
     if not stated or facts.counts_after is None or facts.change is None:
         return []
-    if facts.ended_with in NEEDED_ASKS:
+    if facts.ended_with in NEEDED_ASKS or _locked_count_said(facts):
         return []
     unfinished = facts.change.get("unfinished") or []
     if any(_touches(item, stated, facts.types_before) for item in unfinished):
@@ -817,16 +849,162 @@ def _touches(item: dict, stated: dict, types: dict[int, str]) -> bool:
     return category in stated or (category in SPLIT_CATEGORIES and "dishes" in stated)
 
 
-def _rule_failures(facts: TurnFacts) -> list[str]:
-    """No dish that breaks a diner rule or this meal's avoidance stays (spec 5.5: with no
-    replacement it is removed), unless the change would leave no dish and asked."""
+def _kept_rule_breaks(facts: TurnFacts) -> list[str]:
     kept = [
         (facts.before or {}).get(i, str(i))
         for i, reason in facts.breaking.items()
         if reason in RULE_BREAKS and i in (facts.after or {}) and facts.ended_with != "empty_plan"
     ]
     kept += [t for t in facts.rule_breaks_shown if t not in kept]
+    return kept
+
+
+def _rule_failures(facts: TurnFacts) -> list[str]:
+    """No dish that breaks a diner rule or this meal's avoidance stays (spec 5.5: with no
+    replacement it is removed), unless the change would leave no dish and asked."""
+    kept = _kept_rule_breaks(facts)
     return [f"dishes that break a diner rule or this meal's avoidance: {kept}"] if kept else []
+
+
+# ---- plan 3b-2 (two) spec 6: the diner-change checks, on a turn with a follow-up card ----
+
+
+def _locked_count_said(facts: TurnFacts) -> bool:
+    """The reply says the dishes a lower headcount would drop are all locked, so the plan
+    keeps more dishes than the count (`locked_count_kept`)."""
+    return any(text in facts.reply for text in (LOCKED_COUNT_KEPT_ZH, LOCKED_COUNT_KEPT_EN))
+
+
+def _final_rule_failures(facts: TurnFacts) -> list[str]:
+    """No dish in the result breaks a rule of the confirmed set (H2 on the final plan, with
+    its carried overrides, so a dish the user kept against a rule stays), unless the change
+    would leave no dish and asked. A dish the older rule check names is said there only."""
+    if not facts.follow_up_card or facts.ended_with == "empty_plan":
+        return []
+    said = set(_kept_rule_breaks(facts))
+    found = [t for t in facts.final_rule_breaks if t not in said]
+    return [f"dishes in the result that break a rule of the confirmed set: {found}"] if found else []
+
+
+def _rule_keys(rules: Iterable[dict]) -> set[tuple]:
+    return {
+        (r.get("diner_key"), r.get("rule_type"), r.get("allergen"), r.get("ingredient_id"),
+         r.get("text"))
+        for r in rules
+    }
+
+
+def _set_fields(settled: dict | None) -> tuple | None:
+    """A confirmed set as compared: who, their meal-only rules, the unmatched people and the
+    headcount."""
+    if settled is None:
+        return None
+    return (
+        sorted(settled.get("diner_ids") or []),
+        _rule_keys(settled.get("meal_rules") or []),
+        dict(settled.get("guest_names") or {}),
+        int(settled.get("others") or 0),
+        settled.get("others_answer"),
+        settled.get("headcount"),
+    )
+
+
+def _set_lost_failures(facts: TurnFacts) -> list[str]:
+    """A follow-up card confirmed as shown loses nobody and no meal-only rule of the set
+    before it (spec 5.2's invariant): every diner, every guest (by key), and every meal-only
+    rule of `settled_before` is still in `settled_after`, and the unmatched people are not
+    fewer nor answered otherwise, unless a stated total explains it (the card's notice, or
+    the total the message stated, `stated_headcount`). A skipped card on a people turn leaves
+    the set as it was."""
+    before = facts.settled_before
+    if not facts.follow_up_card or before is None:
+        return []
+    if facts.card_skipped:
+        # Only a people turn keeps the set on a skip; on another turn the graph clears it
+        # (the first-turn rule).
+        if facts.diner_change is not None and _set_fields(facts.settled_after) != _set_fields(
+            before
+        ):
+            return ["the follow-up card was skipped, but the confirmed set changed"]
+        return []
+    if not facts.card_accepted:
+        return []
+    after = facts.settled_after or {}
+    lost = []
+    stated = facts.card_stated_total is not None or after.get("stated_headcount") is not None
+    others_before = int(before.get("others") or 0)
+    if others_before and not stated and (
+        int(after.get("others") or 0) < others_before
+        or after.get("others_answer") != before.get("others_answer")
+    ):
+        lost.append(
+            f"others {others_before} ({before.get('others_answer')}) -> "
+            f"{int(after.get('others') or 0)} ({after.get('others_answer')})"
+        )
+    diners = [i for i in before.get("diner_ids") or [] if i not in (after.get("diner_ids") or [])]
+    if diners:
+        lost.append(f"diners {diners}")
+    kept_guests = after.get("guest_names") or {}
+    guests = [key for key in before.get("guest_names") or {} if key not in kept_guests]
+    if guests:
+        lost.append(f"guests {guests}")
+    rules = _rule_keys(before.get("meal_rules") or []) - _rule_keys(after.get("meal_rules") or [])
+    if rules:
+        lost.append(f"meal-only rules {sorted(rules, key=str)}")
+    if not lost:
+        return []
+    return ["the follow-up card was confirmed as shown, but the set lost " + "; ".join(lost)]
+
+
+def locked_left(facts: TurnFacts) -> list[str]:
+    """Locked dishes that left a revision without a rule (`RULE_BREAKS`) or the reading's
+    quote, whatever the scenario expects."""
+    if facts.turn != "revision" or facts.before is None or facts.after is None:
+        return []
+    justified = rule_broken(facts) | quoted_ids(facts)
+    return [
+        facts.before[i]
+        for i in sorted(facts.locked_before)
+        if i not in facts.after and i not in justified
+    ]
+
+
+def _locked_people_failures(scenario: Any, facts: TurnFacts) -> list[str]:
+    """On a turn with a follow-up card a locked dish leaves only for a rule or a reading
+    removal with a quote (spec 5.4); the scenario's expected removals excuse nothing. A dish
+    the older locked check names is said there only."""
+    if not facts.follow_up_card:
+        return []
+    said = set(locked_removed(scenario, facts))
+    found = [t for t in locked_left(facts) if t not in said]
+    return [f"locked dishes removed on a people turn without a rule or a quote: {found}"] if found else []
+
+
+def _count_range_failures(facts: TurnFacts) -> list[str]:
+    """The result meets the frame's bound counts (`count_ranges`: the counts the new headcount
+    moved, and the stated ones), or the reply says why not: a part that could not be done
+    bears on the count, the locked-count sentence, or the turn asked instead. A count the
+    reading states is judged by `_count_failures` only."""
+    if not facts.follow_up_card or facts.counts_after is None or facts.change is None:
+        return []
+    if facts.ended_with in NEEDED_ASKS or _locked_count_said(facts):
+        return []
+    stated = {
+        k for k, v in ((facts.reading or {}).get("counts") or {}).items() if v is not None
+    }
+    ranges = {
+        k: v for k, v in ((facts.frame or {}).get("count_ranges") or {}).items() if k not in stated
+    }
+    unfinished = facts.change.get("unfinished") or []
+    wrong = {}
+    for name, (low, high) in ranges.items():
+        got = facts.counts_after.get(name, 0)
+        if low <= got <= high:
+            continue
+        if any(_touches(item, {name: low}, facts.types_before) for item in unfinished):
+            continue
+        wrong[name] = (got, [low, high])
+    return [f"bound counts not met (got, range): {wrong}"] if wrong else []
 
 
 def library_dish(name: str, library_titles: Collection[str]) -> str | None:
@@ -882,14 +1060,24 @@ def must_failures(
     - no "not in the library" for a library dish (one the scenario hides is not one);
     - no "0 dishes";
     - an unmet wish is said;
-    - no internal words shown (marks, ids, "Diner N")."""
+    - no internal words shown (marks, ids, "Diner N").
+
+    On a turn with a follow-up diner card (plan 3b-2 (two) spec 6), also:
+    - no dish in the result breaks a rule of the confirmed set (`_final_rule_failures`);
+    - a card confirmed as shown loses nobody and no meal-only rule (`_set_lost_failures`);
+    - a locked dish leaves only for a rule or a quote (`_locked_people_failures`);
+    - the bound counts are met, or the reply says why not (`_count_range_failures`)."""
     failures = []
     locked = locked_removed(scenario, facts)
     if locked:
         failures.append(f"locked dishes removed without their quote, rule or avoidance: {locked}")
+    failures += _locked_people_failures(scenario, facts)
     failures += _allowed_failures(scenario, facts)
     failures += _count_failures(facts)
+    failures += _count_range_failures(facts)
     failures += _rule_failures(facts)
+    failures += _final_rule_failures(facts)
+    failures += _set_lost_failures(facts)
     # A dish the scenario hides (library_exclude) is not in the library for this run.
     hidden = set(getattr(scenario, "library_exclude", None) or ())
     missing = said_not_in_library(facts, [t for t in library_titles if t not in hidden])

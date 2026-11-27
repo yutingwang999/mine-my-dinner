@@ -40,7 +40,7 @@ from minemydinner.agent.graph import (
     GraphDeps,
     build_graph,
 )
-from minemydinner.agent.diners import DinerAnswer, GuestAnswer, RuleChoice
+from minemydinner.agent.diners import DinerAnswer, GuestAnswer, RuleChoice, settled_from_plan
 from minemydinner.agent.labels import (
     Friend,
     find_friends,
@@ -50,6 +50,7 @@ from minemydinner.agent.labels import (
 )
 from minemydinner.agent.records import PlanningRecorder
 from minemydinner.agent.plan_card import client_card, meal_constraints
+from minemydinner.agent.change_text import carried_overrides
 from minemydinner.agent.request import (
     ACTION_MESSAGES,
     REQUEST_STYLES,
@@ -112,7 +113,7 @@ from minemydinner.planning.shortlist import (
     build_shortlist_result,
     main_groups,
 )
-from minemydinner.planning.validate import PlanSpec
+from minemydinner.planning.validate import PlanSpec, validate_plan
 from minemydinner.seed import seed_all
 from minemydinner.settings import Settings, get_settings
 
@@ -236,6 +237,10 @@ class RunOutcome:
     picker_calls: int = 0
     picker_attempts: int = 0
     frame_ignored: int = 0
+    # ---- plan 3b-2 (two) ----
+    # The judged turn is a people turn: its run recorded a `diner_change` event (a change in
+    # who eats on the plan). Its calls also count in the calls per people turn.
+    people_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -357,6 +362,14 @@ class Scenario:
     button_before: str | None = None
     # The file's role, from its top-level `role:` key (never set per scenario).
     role: str | None = None
+    # ---- plan 3b-2 (two): diner changes (the keys are defined in the header of
+    # scenarios_diner_changes.yaml) ----
+    # How the runner answers a diner card shown on the follow-up turns (the follow-up message
+    # and a button after it), in diners_answer's format; None: diners_answer answers it.
+    follow_up_diners_answer: str | dict[str, Any] | None = None
+    # The last diner card of the follow-up turn shows this stated total: the message's total
+    # is below the people ticked, and nobody was unticked by code (spec 5.2).
+    expect_stated_total: int | None = None
 
 
 def _ratio(part: float, whole: int) -> float:
@@ -384,6 +397,8 @@ def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
     revise_calls = [r.turn_model_calls for r in revisions] + [
         r.earlier_revise_calls for r in rated if r.earlier_revise_calls is not None
     ]
+    # Plan 3b-2 (two) spec 6: the people turns among them, apart (target at most 3.5 avg).
+    people_calls = [r.turn_model_calls for r in revisions if r.people_turn]
     by_role: dict[str, list[RunOutcome]] = {}
     for r in rated:
         by_role.setdefault(r.role or "unset", []).append(r)
@@ -412,6 +427,9 @@ def summarize(all_runs: list[RunOutcome]) -> dict[str, Any]:
         "avg_changed": _ratio(sum(r.changed for r in revisions), len(revisions)),
         "avg_turn_model_calls": _ratio(sum(revise_calls), len(revise_calls)),
         "max_turn_model_calls": max(revise_calls, default=0),
+        "people_turns": len(people_calls),
+        "avg_people_turn_model_calls": _ratio(sum(people_calls), len(people_calls)),
+        "max_people_turn_model_calls": max(people_calls, default=0),
         # Over follow-ups (the brief's route accuracy) and over first messages, apart.
         "route_as_expected": f"{sum(bool(r.route_as_expected) for r in routed)}/{len(routed)}",
         "route_first_as_expected": (
@@ -1029,7 +1047,13 @@ def check_titles(scenarios: Sequence[Scenario], library_titles: Collection[str])
             raise ValueError(f"Scenario {scenario.name}: not library titles: {problems}")
 
 
-DINERS_ANSWER_KEYS = {"selected", "guests", "others", "others_answer"}
+DINERS_ANSWER_KEYS = {
+    "selected", "guests", "others", "others_answer", "unselect", "remove_guests", "headcount",
+}
+
+
+def _names(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(name, str) and name for name in value)
 
 
 def _check_diner_keys(scenario: Scenario) -> None:
@@ -1040,14 +1064,28 @@ def _check_diner_keys(scenario: Scenario) -> None:
 
     if scenario.request_style not in REQUEST_STYLES:
         raise bad(f"request_style must be one of {list(REQUEST_STYLES)}")
-    answer = scenario.diners_answer
-    if isinstance(answer, str) and answer != "accept":
-        raise bad('diners_answer must be "accept" or a mapping')
-    if isinstance(answer, dict):
+    for key in ("diners_answer", "follow_up_diners_answer"):
+        answer = getattr(scenario, key)
+        if isinstance(answer, str) and answer not in ("accept", "skip"):
+            raise bad(f'{key} must be "accept", "skip" or a mapping')
+        if answer is not None and not isinstance(answer, (str, dict)):
+            raise bad(f'{key} must be "accept", "skip" or a mapping')
+        if not isinstance(answer, dict):
+            continue
         if set(answer) - DINERS_ANSWER_KEYS:
-            raise bad(f"diners_answer keys must be among {sorted(DINERS_ANSWER_KEYS)}")
+            raise bad(f"{key} keys must be among {sorted(DINERS_ANSWER_KEYS)}")
         if answer.get("others_answer") not in (None, "none", "unsure"):
-            raise bad("diners_answer.others_answer must be none or unsure")
+            raise bad(f"{key}.others_answer must be none or unsure")
+        for names in ("selected", "unselect", "remove_guests"):
+            if names in answer and not _names(answer[names]):
+                raise bad(f"{key}.{names} must be a list of names")
+        headcount = answer.get("headcount")
+        if headcount is not None and (
+            isinstance(headcount, bool) or not isinstance(headcount, int) or headcount < 0
+        ):
+            raise bad(f"{key}.headcount must be a whole number, 0 or more")
+    if scenario.follow_up_diners_answer is not None and not scenario.follow_up:
+        raise bad("follow_up_diners_answer answers a card on the follow-up, so it needs follow_up")
     if isinstance(scenario.expect_card, dict) and set(scenario.expect_card) - CARD_KEYS:
         raise bad(f"expect_card keys must be among {sorted(CARD_KEYS)}")
     if scenario.between_turns and not scenario.follow_up:
@@ -1229,14 +1267,25 @@ def diner_answer(
     card: dict[str, Any],
     how: str | dict[str, Any] | None,
     ingredient_id: Callable[[str], int],
-) -> DinerAnswer:
-    """The runner's answer to a diner card. The default ("accept", or no `diners_answer`)
-    keeps the card's preselection, ticks every proposed rule of the selected rows and of the
-    guests for this meal only, and answers "none" for the unmatched people. A mapping
-    replaces single parts: `selected` (names, "me"; each selected row's proposed rules are
-    ticked), `guests` ([{name, rules, save}]), `others`, and `others_answer`.
+) -> DinerAnswer | None:
+    """The runner's answer to a diner card; None for "skip" (the card skipped, as the chat
+    does when the user closes it).
 
-    Raises ValueError for a selected name that is not on the card."""
+    The default ("accept", or no answer) confirms the card as shown: the card's preselection,
+    every proposed rule of the selected rows and of the guests ticked for this meal only
+    (save off), each guest with its `key` (a follow-up card's settled guests keep theirs),
+    and the card's others. Unmatched people get the follow-up card's `others_answer`, else
+    "none".
+
+    A mapping replaces single parts: `selected` (names, "me"; each selected row's proposed
+    rules are ticked), `unselect` (names, "me": ticked rows to untick), `guests` ([{name,
+    rules, save}], new guests in place of the card's), `remove_guests` (names of the card's
+    guests to take off), `others`, `others_answer`, and `headcount` (the total set on the
+    card, sent as `DinerAnswer.headcount`; the others then follow it).
+
+    Raises ValueError for a name that is not on the card (or, for `unselect`, not ticked)."""
+    if how == "skip":
+        return None
     how = {} if how in (None, "accept") else dict(how)
     rows = card.get("rows") or []
     if "selected" in how:
@@ -1247,6 +1296,13 @@ def diner_answer(
         chosen = [by_key[_fold(name)] for name in how["selected"]]
     else:
         chosen = [row for row in rows if row.get("selected")]
+    if "unselect" in how:
+        ticked = {_row_key(row) for row in chosen}
+        missing = [name for name in how["unselect"] if _fold(name) not in ticked]
+        if missing:
+            raise ValueError(f"diners_answer unticks people not ticked on the card: {missing}")
+        dropped = {_fold(name) for name in how["unselect"]}
+        chosen = [row for row in chosen if _row_key(row) not in dropped]
     stated = {
         row["diner_id"]: [_proposed_choice(rule) for rule in row["proposed"]]
         for row in chosen
@@ -1262,21 +1318,66 @@ def diner_answer(
             for guest in how["guests"]
         ]
     else:
+        shown = list(card.get("guests") or [])
+        if "remove_guests" in how:
+            names = {_fold(guest.get("name") or "") for guest in shown}
+            missing = [name for name in how["remove_guests"] if _fold(name) not in names]
+            if missing:
+                raise ValueError(f"diners_answer removes guests not on the card: {missing}")
+            removed = {_fold(name) for name in how["remove_guests"]}
+            shown = [g for g in shown if _fold(g.get("name") or "") not in removed]
         guests = [
             GuestAnswer(
+                key=guest.get("key"),
                 name=guest.get("name"),
                 rules=[_proposed_choice(rule) for rule in guest.get("proposed") or []],
             )
-            for guest in card.get("guests") or []
+            for guest in shown
         ]
     others = int(how.get("others", card.get("others") or 0))
+    # A follow-up card shows the confirmed set's answer for the unmatched people.
+    shown_answer = card.get("others_answer") or "none"
     return DinerAnswer(
         selected=[row["diner_id"] for row in chosen],
         stated=stated,
         guests=guests,
         others=others,
-        others_answer=how.get("others_answer", "none") if others else None,
+        # With a total, the others follow it (DinerAnswer), so they may appear here.
+        others_answer=(
+            how.get("others_answer", shown_answer) if others or "headcount" in how else None
+        ),
+        headcount=how.get("headcount"),
     )
+
+
+def final_rule_breaks(session: Session, state: dict[str, Any]) -> tuple[str, ...]:
+    """The titles of the thread's current plan that break a rule of its confirmed set: H2
+    when the plan is validated against the state's constraints (the confirmed set's diners,
+    meal-only rules and this meal's avoidance), with the plan's carried overrides (a dish the
+    user kept against a rule stays). Empty without a plan or constraints."""
+    plan = state.get("current_plan")
+    if not plan or not plan.get("recipes") or not plan.get("spec") or not state.get("constraints"):
+        return ()
+    ctx = load_planning_context(session, meal_constraints(state))
+    ids = [r["id"] for r in plan["recipes"]]
+    spec = PlanSpec.model_validate(plan["spec"])
+    found = validate_plan(session, ctx, spec, ids, carried_overrides(plan, ids))
+    titles = {r["id"]: r["title"] for r in plan["recipes"]}
+    return tuple(
+        dict.fromkeys(
+            titles[f.recipe_id]
+            for f in found.violations
+            if f.code == "H2" and f.recipe_id in titles
+        )
+    )
+
+
+def _answer_for(scenario: Scenario, follow_up: bool) -> str | dict[str, Any] | None:
+    """How a diner card is answered: on a follow-up turn by `follow_up_diners_answer` when
+    the scenario gives one, else by `diners_answer`."""
+    if follow_up and scenario.follow_up_diners_answer is not None:
+        return scenario.follow_up_diners_answer
+    return scenario.diners_answer
 
 
 # More questions than this in one turn means the conversation is going in circles.
@@ -1294,9 +1395,11 @@ def _drive(
     answers: list[str],
     cards: list[dict[str, Any]],
     questions: list[Any] | None = None,
+    follow_up: bool = False,
 ) -> str:
     """Send one user message and answer what the graph asks, the way the chat API resumes:
-    the diner card from `diners_answer` (every card shown is added to `cards`) and other
+    the diner card from `diners_answer` (on a follow-up turn, `follow_up_diners_answer` when
+    given; every card shown is added to `cards`; "skip" resumes with None) and other
     questions with the next of `answers` (consumed; every question asked, answered or not, is
     added to `questions`). Returns "" when the turn ended, or a note when it stopped at a
     question the scenario does not answer."""
@@ -1311,9 +1414,11 @@ def _drive(
             cards.append(value)
             with factory() as session:
                 answer = diner_answer(
-                    value, scenario.diners_answer, lambda name: _one(session, Ingredient, name).id
+                    value,
+                    _answer_for(scenario, follow_up),
+                    lambda name: _one(session, Ingredient, name).id,
                 )
-            resume: Any = answer.model_dump(mode="json")
+            resume: Any = None if answer is None else answer.model_dump(mode="json")
         else:
             if kind == "question" and questions is not None:
                 questions.append(value)
@@ -1526,6 +1631,8 @@ def run_scenario(
     # Plan 3b-1b: whether a diner card appeared on the follow-up message's turn, and the
     # next actions of the card a button_after scenario presses its button on.
     follow_up_card = False
+    settled_before: dict[str, Any] | None = None
+    card_stated_total: int | None = None
     offered: tuple[str, ...] = ()
     pressed = False
     # The (run, call) marks before the follow-up message, kept when a button follows it, so
@@ -1573,11 +1680,30 @@ def run_scenario(
             apply_edits(graph, factory, config, scenario.edits_between_turns, scenario.locale)
             mark_turn()
             cards_before = len(cards)
+            # Plan 3b-2 (two): the confirmed set before the follow-up message, for the check
+            # that a follow-up card confirmed as shown loses nobody.
+            values_before = graph.get_state(config).values
+            settled_before = values_before.get("settled_diners")
+            old_constraints = values_before.get("constraints")
             note = _drive(
                 graph, factory, config, scenario, scenario.follow_up, answers, cards,
-                questions if last_follow_up else None,
+                questions if last_follow_up else None, follow_up=True,
             )
             follow_up_card = len(cards) > cards_before
+            if follow_up_card:
+                card_stated_total = cards[-1].get("stated_total")
+                if (
+                    settled_before is None
+                    and old_constraints
+                    and "others_answer" in cards[-1]
+                    and _answer_for(scenario, True) in (None, "accept")
+                ):
+                    # No confirmed set (a plan that showed no card): an accepted follow-up
+                    # card starts from the set the old plan stands for, as the graph builds
+                    # it. A skip keeps the real set (None stays None).
+                    with factory() as session:
+                        self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+                    settled_before = settled_from_plan(self_id, old_constraints)
             asked = note == QUESTION_STOP
             if note:
                 note = note.replace("at a question", "at a question after the follow-up")
@@ -1595,7 +1721,8 @@ def run_scenario(
                 pressed = True
                 message = ACTION_MESSAGES[scenario.locale][scenario.button_after]
                 note = _drive(
-                    graph, factory, config, scenario, message, answers, cards, questions
+                    graph, factory, config, scenario, message, answers, cards, questions,
+                    follow_up=bool(scenario.follow_up),
                 )
                 asked = note == QUESTION_STOP
                 if note:
@@ -1697,6 +1824,25 @@ def run_scenario(
         # The judged turn's own message: the follow-up (on a button turn, the offering
         # turn's words), else the first message.
         words=scenario.follow_up or scenario.request,
+    )
+    # Plan 3b-2 (two): a people turn's diner change, and the confirmed set before and after.
+    diner_change = next(
+        (e for events in turn_events for e in events if e.get("kind") == "diner_change"), None
+    )
+    breaks: tuple[str, ...] = ()
+    if follow_up_card and (turn == "revision" or (run is not None and run.final_passed)):
+        # A new plan shown as not passed shows its findings by design (`_rule_breaks_shown`).
+        with factory() as session:
+            breaks = final_rule_breaks(session, state)
+    shared.update(
+        reply=reply,
+        diner_change=diner_change,
+        settled_before=settled_before,
+        settled_after=state.get("settled_diners"),
+        card_accepted=_answer_for(scenario, True) in (None, "accept"),
+        card_skipped=_answer_for(scenario, True) == "skip",
+        final_rule_breaks=breaks,
+        card_stated_total=card_stated_total,
     )
     if follow_up_sent:
         versions_now = len(state.get("plan_versions") or [])
@@ -1802,6 +1948,7 @@ def run_scenario(
         must_failures=must,
         change_allowed=change_allowed(scenario),
         unnecessary_question=unnecessary_question(scenario, facts),
+        people_turn=turn == "revision" and diner_change is not None,
         **counts,
     )
 
@@ -1975,6 +2122,12 @@ def print_summary(outcomes: list[RunOutcome]) -> None:
             f"  model calls per turn:    {s['avg_turn_model_calls']:.1f} avg, "
             f"{s['max_turn_model_calls']} max  (target at most 2.5 avg, 7 max)"
         )
+        if s["people_turns"]:
+            print(
+                f"  calls per people turn:   {s['avg_people_turn_model_calls']:.1f} avg, "
+                f"{s['max_people_turn_model_calls']} max over {s['people_turns']} turns  "
+                "(target at most 3.5 avg, 7 max)"
+            )
     if s["route_as_expected"] != "0/0":
         print(f"  route as expected (follow-ups):      {s['route_as_expected']}")
     if s["route_first_as_expected"] != "0/0":
@@ -2231,7 +2384,14 @@ METRICS_BASIS = (
     "check only, and the allowed-changes findings share one line); "
     "must_violation_scenarios counts scenarios. Only the judged turn is must-checked: "
     "with button_after, the follow-up before the button is not (its shown texts are, as "
-    "every shown text of the thread is)."
+    "every shown text of the thread is). Plan 3b-2 (two): a people turn is a revision whose "
+    "run recorded a `diner_change` event (a change in who eats on the plan); "
+    "people_turns, avg_people_turn_model_calls and max_people_turn_model_calls are over "
+    "the rated people turns (their calls also count in the calls per revise turn). On a "
+    "turn with a follow-up diner card the must checks also cover the confirmed set: no "
+    "dish of the result breaks its rules (H2 with carried overrides), a card confirmed as "
+    "shown loses no diner, guest or meal-only rule, a locked dish leaves only for a rule "
+    "or a quote, and the frame's bound counts are met or the reply says why not."
 )
 
 
@@ -2319,6 +2479,9 @@ def group_metrics(
             "max_turn_model_calls": s["max_turn_model_calls"],
             "route_as_expected": s["route_as_expected"],
             "route_first_as_expected": s["route_first_as_expected"],
+            "people_turns": s["people_turns"],
+            "avg_people_turn_model_calls": s["avg_people_turn_model_calls"],
+            "max_people_turn_model_calls": s["max_people_turn_model_calls"],
         },
         "two_layers": {
             "must_violations": s["must_violations"],

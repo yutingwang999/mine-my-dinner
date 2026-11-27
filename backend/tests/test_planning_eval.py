@@ -77,6 +77,9 @@ def test_summarize_rates_and_averages():
         "avg_changed": 0.0,
         "avg_turn_model_calls": 0.0,
         "max_turn_model_calls": 0,
+        "people_turns": 0,
+        "avg_people_turn_model_calls": 0.0,
+        "max_people_turn_model_calls": 0,
         "route_as_expected": "0/0",
         "route_first_as_expected": "0/0",
         "as_expected_by_role": {"unset": "2/2"},
@@ -2390,6 +2393,7 @@ def test_the_run_folder_records_the_picker_answer_schema(tmp_path):
     assert set(revisions) == {
         "turns", "pass_rate", "locked_removed", "avg_changed", "avg_turn_model_calls",
         "max_turn_model_calls", "route_as_expected", "route_first_as_expected",
+        "people_turns", "avg_people_turn_model_calls", "max_people_turn_model_calls",
     }
 
 
@@ -3337,10 +3341,14 @@ def _stub_drive(monkeypatch, factory, graph, turns):
     recorder = PlanningRecorder(factory)
     steps = list(turns)
 
-    def drive(graph_, factory_, config, scenario, text, answers, cards, questions=None):
+    def drive(graph_, factory_, config, scenario, text, answers, cards, questions=None,
+              follow_up=False):
         sent.append(text)
         graph.values["messages"].append(HumanMessage(text))
-        return steps.pop(0)(config["configurable"]["thread_id"], recorder)
+        step = steps.pop(0)
+        if getattr(step, "takes_cards", False):
+            return step(config["configurable"]["thread_id"], recorder, cards)
+        return step(config["configurable"]["thread_id"], recorder)
 
     monkeypatch.setattr(planning_module, "_drive", drive)
     return sent
@@ -3608,3 +3616,520 @@ def test_the_loader_reads_expect_some_next_action(tmp_path):
     assert s.expect_some_next_action is False
     with pytest.raises(ValueError):
         _load_one(tmp_path, expect_some_next_action="yes")
+
+
+
+# ---- plan 3b-2 (two) Task 9: follow-up diner cards and the diner-change checks ----
+
+from contextlib import nullcontext  # noqa: E402
+
+from langgraph.types import Command  # noqa: E402
+
+from minemydinner.agent.change_text import LOCKED_COUNT_KEPT_ZH  # noqa: E402
+from minemydinner.evaluation.planning import diner_answer, final_rule_breaks  # noqa: E402
+from minemydinner.planning.validate import PlanSpec  # noqa: E402
+from tests.planningfakes import L  # noqa: E402
+
+
+def _proposed(rule_type, allergen=None, ingredient_id=None, text=None):
+    return {"rule_type": rule_type, "allergen": allergen, "ingredient_id": ingredient_id,
+            "ingredient_name": None, "text": text, "by_wording": False}
+
+
+def _row(diner_id, name, selected, proposed=()):
+    return {"diner_id": diner_id, "name": name, "is_self": name is None, "selected": selected,
+            "rules": [], "proposed": list(proposed), "diet_words": []}
+
+
+# A follow-up card (agent/diners.py build_follow_up_card): the user and 小王 confirmed (小王
+# with a meal-only rule), 老李 not eating, a settled guest with a key, a new guest without
+# one, and one person not matched.
+FOLLOW_UP_CARD = {
+    "kind": "diners",
+    "headcount": 5,
+    "rows": [
+        _row(1, None, True),
+        _row(2, "小王", True, [_proposed("dietary restriction", ingredient_id=7)]),
+        _row(3, "老李", False),
+    ],
+    "guests": [
+        {"key": "guest:1", "name": "阿杰", "proposed": [_proposed("allergy", "peanut")],
+         "diet_words": []},
+        {"key": None, "name": "小美", "proposed": [], "diet_words": []},
+    ],
+    "others": 1,
+    "others_answer": "unsure",
+    "stated_total": None,
+    "nudge": False,
+}
+
+
+def _no_lookup(name):
+    raise AssertionError(f"no ingredient lookup expected ({name})")
+
+
+def test_default_follow_up_answer_sends_guest_keys():
+    """Accepting a follow-up card untouched: the ticked rows, each row's proposed rules with
+    save off, each guest with its key, name and proposed rules, and the card's others."""
+    for how in (None, "accept"):
+        answer = diner_answer(FOLLOW_UP_CARD, how, _no_lookup)
+        assert answer.selected == [1, 2]
+        [rule] = answer.stated[2]
+        assert (rule.rule_type, rule.ingredient_id, rule.save) == ("dietary restriction", 7, False)
+        assert [(g.key, g.name) for g in answer.guests] == [("guest:1", "阿杰"), (None, "小美")]
+        assert [r.allergen for r in answer.guests[0].rules] == ["peanut"]
+        assert not any(g.save for g in answer.guests)
+        assert (answer.others, answer.others_answer, answer.headcount) == (1, "unsure", None)
+    # A first-turn card keeps today's default: unmatched people are "none", no guest key.
+    first = {k: v for k, v in FOLLOW_UP_CARD.items() if k not in ("others_answer", "stated_total")}
+    first["guests"] = [{"name": "小美", "proposed": [], "diet_words": []}]
+    answer = diner_answer(first, None, _no_lookup)
+    assert answer.others_answer == "none" and answer.guests[0].key is None
+
+
+def test_follow_up_diners_answer_unselect():
+    answer = diner_answer(FOLLOW_UP_CARD, {"unselect": ["小王"]}, _no_lookup)
+    assert answer.selected == [1] and answer.stated == {}
+    # The rest stays as shown.
+    assert [g.key for g in answer.guests] == ["guest:1", None] and answer.others == 1
+    assert diner_answer(FOLLOW_UP_CARD, {"unselect": ["me"]}, _no_lookup).selected == [2]
+    with pytest.raises(ValueError, match="not ticked"):
+        diner_answer(FOLLOW_UP_CARD, {"unselect": ["老李"]}, _no_lookup)
+
+
+def test_follow_up_diners_answer_remove_guests():
+    answer = diner_answer(FOLLOW_UP_CARD, {"remove_guests": ["阿杰"]}, _no_lookup)
+    assert [(g.key, g.name) for g in answer.guests] == [(None, "小美")]
+    assert answer.selected == [1, 2] and answer.others == 1
+    with pytest.raises(ValueError, match="not on the card"):
+        diner_answer(FOLLOW_UP_CARD, {"remove_guests": ["阿明"]}, _no_lookup)
+
+
+def test_follow_up_diners_answer_headcount():
+    """The total set on the card is sent as DinerAnswer.headcount; the others follow it."""
+    answer = diner_answer(FOLLOW_UP_CARD, {"headcount": 7}, _no_lookup)
+    assert answer.headcount == 7 and answer.others == 3 and not answer.headcount_too_low
+    low = diner_answer(FOLLOW_UP_CARD, {"headcount": 3}, _no_lookup)
+    assert low.headcount == 3 and low.others == 0 and low.headcount_too_low
+
+
+class CardGraph:
+    """One card interrupt, then nothing: records what `_drive` resumes with."""
+
+    def __init__(self, card):
+        self.pending = [SimpleNamespace(id="i1", value=card)]
+        self.resumed: list = []
+
+    def invoke(self, value, config):
+        if isinstance(value, Command):
+            self.resumed.append(value.resume)
+            self.pending = []
+
+    def get_state(self, config):
+        return SimpleNamespace(interrupts=self.pending, values={})
+
+
+def test_follow_up_diners_answer_skip():
+    """'skip' resumes with None (the card skipped); the follow-up's answer is used on the
+    follow-up turn only."""
+    assert diner_answer(FOLLOW_UP_CARD, "skip", _no_lookup) is None
+    scenario = _scenario(follow_up="x", follow_up_diners_answer="skip")
+
+    def drive(follow_up):
+        graph, cards = CardGraph(FOLLOW_UP_CARD), []
+        note = planning_module._drive(
+            graph, lambda: nullcontext(None), {}, scenario, "x", [], cards, follow_up=follow_up
+        )
+        assert note == "" and cards == [FOLLOW_UP_CARD]
+        return graph.resumed
+
+    assert drive(True) == [{"i1": None}]
+    [resumed] = drive(False)
+    assert resumed["i1"]["selected"] == [1, 2]
+    # Without a follow-up answer the follow-up card gets the scenario's diners_answer.
+    plain = _scenario(follow_up="x", diners_answer={"unselect": ["小王"]})
+    graph = CardGraph(FOLLOW_UP_CARD)
+    planning_module._drive(graph, lambda: nullcontext(None), {}, plain, "x", [], [],
+                           follow_up=True)
+    assert graph.resumed[0]["i1"]["selected"] == [1]
+
+
+def test_the_loader_reads_the_follow_up_diners_answer(tmp_path):
+    answer = {"unselect": ["小王"], "remove_guests": ["阿杰"], "headcount": 3}
+    [s] = _load_one(tmp_path, follow_up="x", follow_up_diners_answer=answer)
+    assert s.follow_up_diners_answer == answer
+    [s] = _load_one(tmp_path, follow_up="x", follow_up_diners_answer="skip")
+    assert s.follow_up_diners_answer == "skip"
+    [s] = _load_one(tmp_path, diners_answer="skip")
+    assert s.diners_answer == "skip"
+    bad = [
+        {"follow_up": "x", "follow_up_diners_answer": {"untick": ["小王"]}},
+        {"follow_up": "x", "follow_up_diners_answer": "maybe"},
+        {"follow_up": "x", "follow_up_diners_answer": {"headcount": "3"}},
+        {"follow_up": "x", "follow_up_diners_answer": {"headcount": True}},
+        {"follow_up": "x", "follow_up_diners_answer": {"headcount": -1}},
+        {"follow_up": "x", "follow_up_diners_answer": {"unselect": "小王"}},
+        {"follow_up": "x", "follow_up_diners_answer": {"remove_guests": [1]}},
+        # A follow-up card's answer needs a follow-up.
+        {"follow_up_diners_answer": "accept"},
+    ]
+    for changes in bad:
+        with pytest.raises(ValueError):
+            _load_one(tmp_path, **changes)
+
+
+# ---- the four checks (spec 6), each failing and passing ----
+
+SET_BEFORE = {
+    "diner_ids": [1, 2],
+    "meal_rules": [{"diner_key": "guest:1", "rule_type": "allergy", "allergen": "peanut",
+                    "ingredient_id": None, "text": None}],
+    "guest_names": {"guest:1": "阿杰"},
+    "others": 0,
+    "others_answer": None,
+    "headcount": 3,
+    "stated_headcount": None,
+}
+
+
+def _set_after(**changes):
+    return {**SET_BEFORE, **changes}
+
+
+def test_check_no_dish_in_the_result_breaks_a_rule_of_the_confirmed_set():
+    [failure] = _must(follow_up_card=True, final_rule_breaks=("清炒小白菜",))
+    assert "confirmed set" in failure and "清炒小白菜" in failure
+    # Passing: no break; the change asked instead (the plan stays); no follow-up card.
+    assert _must(follow_up_card=True, final_rule_breaks=()) == []
+    assert _must(follow_up_card=True, final_rule_breaks=("清炒小白菜",),
+                 ended_with="empty_plan") == []
+    assert _must(follow_up_card=False, final_rule_breaks=("清炒小白菜",)) == []
+    # A dish the older rule check already names is said once.
+    [failure] = _must(follow_up_card=True, final_rule_breaks=("清炒小白菜",),
+                      rule_breaks_shown=("清炒小白菜",))
+    assert "清炒小白菜" in failure
+
+
+def test_final_rule_breaks_reads_the_plan_with_its_carried_overrides(session):
+    """H2 on the final plan against the confirmed set's rules; a dish the user kept against
+    the rule (an override) is not a break."""
+    seed_all(session)
+    session.flush()
+    shrimp = make_recipe(session, "油焖大虾", "meat dish", [L("虾", "main")])
+    greens = make_recipe(session, "清炒小白菜", "vegetable dish", [L("小白菜", "main")])
+    session.flush()
+    shrimp_id = shrimp.ingredients[0].ingredient_id
+    rule = {"diner_key": "guest:1", "rule_type": "dietary restriction", "allergen": None,
+            "ingredient_id": shrimp_id, "text": None}
+    plan = {
+        "recipes": [{"id": shrimp.id, "title": "油焖大虾", "dish_type": "meat dish"},
+                    {"id": greens.id, "title": "清炒小白菜", "dish_type": "vegetable dish"}],
+        "spec": PlanSpec(mode="shopping", dishes=2, soups=0).model_dump(),
+    }
+    state = {
+        "current_plan": plan,
+        "constraints": {"diner_ids": [], "guest_rules": [rule], "unconfirmed_diners": 0},
+    }
+    assert final_rule_breaks(session, state) == ("油焖大虾",)
+    override = {"recipe_id": shrimp.id, "diner_key": "guest:1", "ingredient_id": shrimp_id}
+    kept = {**state, "current_plan": {**plan, "edit": {"overrides": [override]}}}
+    assert final_rule_breaks(session, kept) == ()
+    assert final_rule_breaks(session, {"current_plan": None, "constraints": None}) == ()
+
+
+def test_check_an_accepted_follow_up_card_loses_nobody():
+    base = {"follow_up_card": True, "card_accepted": True, "settled_before": SET_BEFORE}
+    lost = [
+        _set_after(diner_ids=[1]),
+        _set_after(guest_names={}, meal_rules=[], headcount=2),
+        _set_after(meal_rules=[]),
+        None,
+    ]
+    for after in lost:
+        [failure] = _must(**base, settled_after=after)
+        assert "lost" in failure, after
+    kept = [
+        dict(SET_BEFORE),
+        # More people: a new guest and a friend.
+        _set_after(diner_ids=[1, 2, 5], guest_names={"guest:1": "阿杰", "guest:2": None},
+                   headcount=5),
+    ]
+    for after in kept:
+        assert _must(**base, settled_after=after) == [], after
+    # Not judged: the card was answered otherwise, no follow-up card, no set before.
+    gone = _set_after(diner_ids=[1])
+    assert _must(**{**base, "card_accepted": False}, settled_after=gone) == []
+    assert _must(**{**base, "follow_up_card": False}, settled_after=gone) == []
+    assert _must(**{**base, "settled_before": None}, settled_after=gone) == []
+
+
+def test_check_a_locked_dish_leaves_a_people_turn_only_for_a_rule_or_a_quote():
+    expected = _scenario(follow_up="x", expect_removed=["红烧茄子"])
+    people = {"follow_up_card": True, "locked_before": frozenset({2})}
+    # The scenario's own removal does not excuse a locked dish on a turn with a follow-up card.
+    [failure] = _must(scenario=expected, **people)
+    assert "locked" in failure and "红烧茄子" in failure
+    # Without the scenario's removal the older check says it, once.
+    [failure] = _must(**people)
+    assert "locked" in failure
+    # Passing: a rule, or the reading's quote the frame acted on.
+    assert _must(scenario=expected, **people, breaking={2: "diner_rule"}) == []
+    assert _must(
+        after=(1, 3), scenario=expected, **people,
+        reading={"remove": [{"id": 2, "quote": "茄子", "mode": "drop"}]},
+        frame={"drops": [2]}, words="茄子不要了",
+    ) == []
+    # A turn with no follow-up card keeps the older rule.
+    assert _must(scenario=expected, locked_before=frozenset({2})) == []
+
+
+def test_check_the_result_meets_the_bound_counts_or_says_why_not():
+    people = {"follow_up_card": True, "change": {}}
+    short = {"frame": {"count_ranges": {"dishes": [4, 4], "soups": [1, 1]}},
+             "counts_after": {"dishes": 3, "soups": 1}}
+    [failure] = _must(**people, **short)
+    assert "count" in failure and "dishes" in failure
+    # Met, or the reply says why not: a part that bears on the count, the locked-count
+    # sentence, or the empty-plan question.
+    met = {"frame": {"count_ranges": {"dishes": [3, 3]}}, "counts_after": {"dishes": 3}}
+    assert _must(**people, **met) == []
+    assert _must(follow_up_card=True, **short,
+                 change={"unfinished": [{"kind": "unfilled", "for_count": True}]}) == []
+    assert _must(**people, **short, reply=f"现在是 4 个人吃。\n\n{LOCKED_COUNT_KEPT_ZH}") == []
+    assert _must(**people, **short, ended_with="empty_plan") == []
+    # A count the reading states is judged once, by the older count check.
+    [failure] = _must(**people, **short, reading={"counts": {"dishes": 4}})
+    assert "count" in failure
+    # The older check also takes the locked-count sentence.
+    assert _must(change={}, reading={"counts": {"dishes": 2}}, counts_after={"dishes": 3},
+                 reply=LOCKED_COUNT_KEPT_ZH) == []
+    # Not judged without a follow-up card.
+    assert _must(change={}, **short) == []
+
+
+def test_summarize_reports_calls_per_people_turn():
+    def run(name, calls, **changes):
+        return RunOutcome(name, True, True, 0, Decimal("0"), 0, calls, turn="revision",
+                          turn_model_calls=calls, follow_up=True, **changes)
+
+    runs = [run("a", 2), run("b", 3, people_turn=True), run("c", 5, people_turn=True)]
+    s = summarize(runs)
+    assert s["people_turns"] == 2
+    assert s["avg_people_turn_model_calls"] == 4.0 and s["max_people_turn_model_calls"] == 5
+    # The change-turn figure still counts every revision.
+    assert s["max_turn_model_calls"] == 5
+    revisions = group_metrics(runs)["revisions"]
+    assert revisions["avg_people_turn_model_calls"] == 4.0
+    assert summarize([])["avg_people_turn_model_calls"] == 0.0
+
+
+def test_the_runner_marks_a_people_turn_and_judges_the_confirmed_set(monkeypatch, eval_db):
+    """Stubbed _drive: a follow-up that shows the follow-up card and records a diner_change
+    event is a people turn; accepted untouched, a guest lost from the set is a must
+    violation."""
+    graph = StubGraph()
+
+    def first(thread_id, recorder):
+        _first_turn(graph)(thread_id, recorder)
+        graph.values["settled_diners"] = dict(SET_BEFORE)
+        return ""
+
+    def people(thread_id, recorder, cards):
+        cards.append(FOLLOW_UP_CARD)
+        graph.values["settled_diners"] = _set_after(guest_names={}, meal_rules=[])
+        events = [
+            _reader_event("people"),
+            {"kind": "diner_change", "old_headcount": 3, "new_headcount": 3, "present": {},
+             "moved": {}, "must_change": 0, "remade": False, "skipped": False},
+            FRAME_EVENT,
+        ]
+        return _change_turn(graph, FIRST, events, reply="现在是 3 个人吃。")(thread_id, recorder)
+
+    people.takes_cards = True
+    _stub_drive(monkeypatch, eval_db, graph, [first, people])
+    scenario = _scenario("people", inventory={}, cookware=[], follow_up="阿杰今天也在")
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert outcome.people_turn and outcome.turn == "revision"
+    assert any("lost" in f for f in outcome.must_failures), outcome.must_failures
+
+
+def test_the_diner_changes_development_set_fits_its_library(session):
+    """Every scenario of scenarios_diner_changes.yaml loads against its library, its stock,
+    cookware, rules and friends exist in the dictionary, and every named title is a library
+    dish."""
+    from minemydinner.evaluation.planning import read_library, reset_scenario_state
+
+    path = EVAL_DIR / "scenarios_diner_changes.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert document["role"] == "development"
+    library = read_library(EVAL_DIR / "library_revise.yaml")
+    titles = {dish["title"] for dish in library}
+    scenarios = load_scenarios(path, library_titles=titles)
+    assert len({s.name for s in scenarios}) == len(scenarios) >= 18
+    seed_all(session)
+    session.flush()
+    load_library(session, library)
+    for scenario in scenarios:
+        assert scenario.follow_up and scenario.max_model_calls is not None, scenario.name
+        assert scenario.expect_any_of, scenario.name
+        reset_scenario_state(session, scenario)
+        named = [
+            *scenario.expect_titles_none, *scenario.expect_titles_include,
+            *scenario.expect_titles_exact, *scenario.expect_titles_any,
+        ]
+        for entry in scenario.expect_any_of:
+            for key in ("expect_titles_none", "expect_titles_include", "expect_titles_any"):
+                named += entry.get(key) or []
+        assert set(named) <= titles, scenario.name
+
+
+def test_expect_stated_total_judges_the_follow_up_card_notice(tmp_path):
+    """A stated total below the people ticked shows as the follow-up card's stated_total
+    (the notice); nobody is unticked by code."""
+    shown = _facts(follow_up_card=True, card_stated_total=1)
+    assert _judge(shown, expect_stated_total=1) == []
+    [failure] = _judge(_facts(follow_up_card=True), expect_stated_total=1)
+    assert "stated total" in failure
+    [failure] = _judge(_facts(), expect_stated_total=1)
+    assert "no diner card" in failure
+    # Loaded only as a whole number with a follow-up; usable inside expect_any_of.
+    [s] = _load_one(tmp_path, follow_up="x", expect_stated_total=2)
+    assert s.expect_stated_total == 2 and "expect_stated_total" in ANY_OF_KEYS
+    for changes in ({"follow_up": "x", "expect_stated_total": "2"},
+                    {"follow_up": "x", "expect_stated_total": True},
+                    {"expect_stated_total": 2}):
+        with pytest.raises(ValueError):
+            _load_one(tmp_path, **changes)
+
+
+# ---- Task 9 fix round 1 ----
+
+SET_WITH_OTHERS = {**SET_BEFORE, "others": 2, "others_answer": "unsure", "headcount": 5}
+
+
+def test_check_an_accepted_card_loses_no_unmatched_person():
+    """Unmatched people count too: fewer others, or another answer for them, is a loss
+    unless the card showed a stated total or the message stated one."""
+    base = {"follow_up_card": True, "card_accepted": True, "settled_before": SET_WITH_OTHERS}
+    for after in (
+        {**SET_WITH_OTHERS, "others": 1, "headcount": 4},
+        {**SET_WITH_OTHERS, "others_answer": "none"},
+    ):
+        [failure] = _must(**base, settled_after=after)
+        assert "lost" in failure and "others" in failure, after
+    fewer = {**SET_WITH_OTHERS, "others": 1, "headcount": 4}
+    # The card explained it, or the message stated the total.
+    assert _must(**base, settled_after=fewer, card_stated_total=4) == []
+    assert _must(**base, settled_after={**fewer, "stated_headcount": 4}) == []
+    # More others is no loss.
+    assert _must(**base, settled_after={**SET_WITH_OTHERS, "others": 3, "headcount": 6}) == []
+
+
+def test_check_a_skipped_follow_up_card_leaves_the_set_unchanged():
+    base = {"follow_up_card": True, "card_skipped": True, "settled_before": SET_WITH_OTHERS,
+            "diner_change": DINER_CHANGE}
+    assert _must(**base, settled_after=dict(SET_WITH_OTHERS)) == []
+    for after in (
+        {**SET_WITH_OTHERS, "diner_ids": [1, 2, 5]},
+        {**SET_WITH_OTHERS, "others": 3, "headcount": 6},
+        None,
+    ):
+        [failure] = _must(**base, settled_after=after)
+        assert "skipped" in failure, after
+
+
+def test_the_runner_compares_a_solo_plan_with_the_set_its_plan_stands_for(monkeypatch, eval_db):
+    """No confirmed set before the follow-up (a solo plan with no card): an accepted
+    follow-up card is compared with the set the old plan stands for (settled_from_plan)."""
+    from minemydinner.models import Diner
+
+    graph = StubGraph()
+    with eval_db() as session:
+        seed_all(session)
+        self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+        session.commit()
+
+    def first(thread_id, recorder):
+        _first_turn(graph)(thread_id, recorder)
+        graph.values["constraints"] = {
+            "diner_ids": [self_id], "guest_rules": [], "unconfirmed_diners": 0, "headcount": 1,
+        }
+        return ""
+
+    def people(thread_id, recorder, cards):
+        cards.append(FOLLOW_UP_CARD)
+        # The user is lost from the set the card confirmed.
+        graph.values["settled_diners"] = {
+            "diner_ids": [], "meal_rules": [], "guest_names": {"guest:1": None}, "others": 0,
+            "others_answer": None, "headcount": 1, "stated_headcount": None,
+        }
+        events = [_reader_event("people"), FRAME_EVENT]
+        return _change_turn(graph, FIRST, events)(thread_id, recorder)
+
+    people.takes_cards = True
+    _stub_drive(monkeypatch, eval_db, graph, [first, people])
+    scenario = _scenario("solo", inventory={}, cookware=[], follow_up="室友也来")
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert any("lost" in f and str(self_id) in f for f in outcome.must_failures), (
+        outcome.must_failures
+    )
+
+
+# ---- Task 9 fix round 2 ----
+
+DINER_CHANGE = {"kind": "diner_change", "old_headcount": 1, "new_headcount": 1, "present": {},
+                "moved": {}, "must_change": 0, "remade": False, "skipped": True}
+
+
+def test_a_skip_on_a_turn_that_is_not_a_people_turn_is_not_judged():
+    """Outside a people turn the graph clears the set on a skipped card (the first-turn
+    rule), so the skipped-card check applies only on a people turn (a diner_change event)."""
+    base = {"follow_up_card": True, "card_skipped": True, "settled_before": SET_WITH_OTHERS}
+    assert _must(**base, settled_after=None) == []
+    [failure] = _must(**base, settled_after=None, diner_change=DINER_CHANGE)
+    assert "skipped" in failure
+
+
+def test_a_skip_with_no_confirmed_set_before_compares_with_none(monkeypatch, eval_db):
+    """A solo plan with no card, then a skipped follow-up card on a people turn: the set
+    stays None, and that is no change (the plan's own set is a baseline for an accepted card
+    only)."""
+    from minemydinner.models import Diner
+
+    graph = StubGraph()
+    with eval_db() as session:
+        seed_all(session)
+        self_id = session.scalar(select(Diner.id).where(Diner.is_self))
+        session.commit()
+
+    def first(thread_id, recorder):
+        _first_turn(graph)(thread_id, recorder)
+        graph.values["constraints"] = {
+            "diner_ids": [self_id], "guest_rules": [], "unconfirmed_diners": 0, "headcount": 1,
+        }
+        return ""
+
+    def people(thread_id, recorder, cards):
+        cards.append(FOLLOW_UP_CARD)
+        events = [_reader_event("people"), DINER_CHANGE, FRAME_EVENT]
+        return _change_turn(graph, FIRST, events)(thread_id, recorder)
+
+    people.takes_cards = True
+    _stub_drive(monkeypatch, eval_db, graph, [first, people])
+    scenario = _scenario("solo_skip", inventory={}, cookware=[], follow_up="室友也来",
+                         follow_up_diners_answer="skip")
+    try:
+        outcome = run_scenario(graph, eval_db, PlanningRecorder(eval_db), scenario,
+                               library_titles=LIBRARY_TITLES)
+    finally:
+        planning_module.clear_app_tables(eval_db)
+    assert outcome.people_turn
+    assert not any("skipped" in f for f in outcome.must_failures), outcome.must_failures

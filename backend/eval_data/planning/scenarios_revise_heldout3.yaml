@@ -203,8 +203,7 @@ scenarios:
     expect_titles_none: [油焖大虾]
     expect_counts: {dishes: 3, staples: 1}
     expect_locale_reply: zh
-    expect: A third person allergic to shrimp joins; the diner card shows, then the shrimp dish is replaced.
-    deferred_to: 3b-2 plan two (diner changes)
+    expect: A third person allergic to shrimp joins; the diner card shows, then the shrimp dish is replaced, the other dishes stay, and the headcount difference (2 → 3) adds a soup (design 5.3).
 
   # ---- not about the plan, unclear references, plan again ----
   - name: hello_who_are_you
