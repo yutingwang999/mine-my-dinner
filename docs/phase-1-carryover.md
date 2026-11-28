@@ -19,7 +19,7 @@ Every item starts with its status. The statuses were checked against the code an
 
 A new item gets a status when it is added. When an item is done, change its status, add a status line, and move it under its section's "Closed items".
 
-Counts per section (2026-11-28; the earlier sections were counted 2026-11-24):
+Counts per section (2026-11-29; the earlier sections were counted 2026-11-24):
 
 | Section | Open | Note | Watch | Closed |
 |---|---|---|---|---|
@@ -38,8 +38,8 @@ Counts per section (2026-11-28; the earlier sections were counted 2026-11-24):
 | Deferred from Phase 1 plan 3b-1b | 11 | 0 | 0 | 15 |
 | Deferred from Phase 1 plan 3b-2 (one) | 15 | 0 | 0 | 12 |
 | Deferred from Phase 1 plan 3b-2 change fixes | 8 | 1 | 0 | 3 |
-| Deferred from Phase 1 plan 3b-2 (two) | 9 | 4 | 2 | 0 |
-| **Total** | **160** | **23** | **2** | **78** |
+| Deferred from Phase 1 plan 3b-2 (two) | 13 | 4 | 2 | 0 |
+| **Total** | **164** | **23** | **2** | **78** |
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -713,3 +713,7 @@ Findings judged safe to defer during plan 3b-2 (two)'s task reviews and developm
 - `Watch` **A people reading with an empty `meal_avoid` on a plan that has one (Task 8 review) (→ plan 3b-2 (two) evaluation rounds).** Code applies the reading's `meal_avoid` as the meal's whole list (design 5.4: code does not interpret), so a people reading that omits the plan's one-meal avoidance withdraws it. A graph test pins that a people reading that repeats it keeps it; whether the reader repeats it is watched in round 14.
 - `Open` **The `relax_split` button with no dish change keeps the split (development fix 1) (→ code health, any step).** The typed any-mix on a kept plan now makes a new version without the split, but the button on a plan that needs no dish change still keeps the split. This is rare, and the button and the typed any-mix otherwise share `any_mix_request`.
 - `Watch` **Reader variance on `meal_avoid_covers_hand_added` (development runs 1 and 2) (→ plan 3b-2 (two) evaluation rounds).** In development run 1 the reader dropped the avoided dishes instead of replacing them; the `follow_up_v5` text for that case is the same as `follow_up_v4`'s, and the scenario passed in run 2. It is watched as reader variance, not fixed by a patch.
+- `Open` **The revise regression sets are below round 13 with `follow_up_v7` (round 15) (→ the next reader version).** Averaged over 3 runs, heldout is 15/17 and heldout3 is 13.7/15 (round 13: 17/17 and 14/15); heldout2 is met (19.3/20). Scenarios that recur: `swap_for_a_daikon_dish` (picker variance), `no_porridge`, `too_many_tomatoes_but_the_plan_has_potatoes`, `looks_not_great`, `eaten_too_often_ambiguous`, plus `drop_the_corn_dish_keep_the_rest` (heldout, two runs) and `no_cucumber_dish_asks` (heldout3, three runs).
+- `Open` **The user-approved dish-pointer versus food rule table (round 15) (→ input for the next reader version).** As `follow_up_v8` and `follow_up_v9` encoded it: a dish pointer plus not wanted is `drop`; a pointer plus another is `replace`; a food left out is `meal_avoid`; a pointer to an absent dish asks which; a person's rule is people. It includes the dish-type rule ("汤不要了" means drop) and food groups are not dish types. `follow_up_v7` only partly follows it. Use it as the input for the next reader version, together with the 8,000-character reader budget (user decision 2026-11-29).
+- `Open` **Run round 13's configuration 3 times before judging the next reader version against round 13 (round 15) (→ before the next reader evaluation).** Round 13's thresholds come from a single run, so its variance is unknown. This needs a branch or worktree at the round-13 commit, done by the user.
+- `Open` **The neutral re-ask idea from v9 is not shipped (round 15) (→ re-open with the next reader version).** In v9, `reader_problem` steered the model toward remove or add, which is code steering the understanding. It was not shipped because `follow_up_v7`'s text was restored; the idea comes back with the next reader version.

@@ -760,3 +760,36 @@ Development set at `cc67559` (`route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6
 - **Cost:** the round's twelve runs cost $0.216 cache-aware and $1.210 uncached. The two development runs before the round added about $0.15 cache-aware.
 - **Results of record:** round 13 stays the results of record; this round did not meet the thresholds.
 - **Next:** `follow_up_v6` (principles for avoidances, "too many X" wishes and food-group add names), then the development set and the three revise regression sets again.
+
+### Round 15 — plan 3b-2 (two), reader iteration v6 to v9 (2026-11-28/29) — partly met; follow_up_v7 adopted
+
+- **Why:** round 14 (`follow_up_v5`) was not met. The reader prompt was iterated four times (`follow_up_v6` to `follow_up_v9`), each version run on the development sets and three times on each revise regression set. After round 14 the user approved judging the revise regression sets by the average of 3 runs against round 13 (heldout3 >= 14/15, heldout >= 17/17, heldout2 >= 19/20, on the scenarios round 13 scored), with must-never-be-wrong 0 in every run. The two newly scored held-out scenarios (`friend_joins_and_two_more_dishes`, `one_more_person_allergic_to_shrimp`) are reported apart.
+- **What each version changed:**
+  - `follow_up_v6`: principles for avoidances, amount wishes and food-group adds.
+  - `follow_up_v7`: `drop` only for fewer dishes; a person's rule is people; the user's words are never rewritten; the reader's schema descriptions match.
+  - `follow_up_v8`: the user-approved rule table: a dish pointer plus not wanted is `drop`; a pointer plus another is `replace`; a food left out is `meal_avoid`; a pointer to an absent dish asks which; a person's rule is people.
+  - `follow_up_v9`: the reader budget raised to 8,000 characters (user decision 2026-11-29); the "code replaces and keeps the counts" cue restored; dish types and food groups; a neutral three-way re-ask.
+- **Results.** Averages over runs; the held-out averages leave out the two newly scored scenarios, so they compare with round 13. Per-run values are in the order of the runs. Test database, deepseek-flash, with embeddings.
+
+  | Version | Development (`scenarios_revise.yaml`) | Diner changes | heldout (17 old-scored) | heldout2 (20) | heldout3 (15 old-scored) | Must-never-be-wrong per run | Cost (cache-aware) |
+  |---|---|---|---|---|---|---|---|
+  | `follow_up_v6` (9 runs) | 42/42 | 18/18 | 14, 15, 17 = 15.3 | 18, 19, 18 = 18.3 | 15 (one run) | 0 in 8 runs; 1 in one heldout run | $0.228 |
+  | `follow_up_v7` (11 runs) | 41/42 | 16/18 | 15, 15, 15 = 15.0 | 19, 20, 19 = 19.3 | 14, 14, 13 = 13.7 | **0 in every run** | $0.265 |
+  | `follow_up_v8` (11 runs) | 42/42 | 16/18 | 14, 13, 13 = 13.3 | 18, 20, 18 = 18.7 | 13, 14, 14 = 13.7 | 1 in one heldout3 run | $0.253 |
+  | `follow_up_v9` (11 runs) | 42/42 | 18/18 | 14, 14, 12 = 13.3 | 20, 16, 17 = 17.7 | 13, 12, 14 = 13.0 | 1 in one heldout2 run | $0.258 |
+
+  Round 13 (one run): heldout3 >= 14/15, heldout >= 17/17, heldout2 >= 19/20.
+- **Newly scored scenarios, apart:** as expected in every run of v6, v7 and v8. In v9, `friend_joins_and_two_more_dishes` was as expected in all three runs and `one_more_person_allergic_to_shrimp` missed once (run 3).
+- **Must-never-be-wrong runs:**
+  - v6 (heldout, run 2): `too_many_tomatoes_but_the_plan_has_potatoes` removed two potato dishes and added two.
+  - v8 (heldout3, run 1): `rice_instead_of_noodles_english` said a library dish was not in the library.
+  - v9 (heldout2, run 3): `add_seafood_all_allergic` added a meat dish.
+- **Failure patterns (scenario names only):**
+  - Some scenarios fail across all versions: `swap_for_a_daikon_dish` (picker variance), `no_porridge`, `too_many_tomatoes_but_the_plan_has_potatoes`, `looks_not_great`, `eaten_too_often_ambiguous`.
+  - Each prompt change fixed some readings and shifted others; for example v8 and v9 fixed development and diner-changes scenarios that v7 missed (`reference_matches_no_dish`, `stated_total_below_the_ticked_people`, `fresh_start_with_a_join`) but missed more on heldout and heldout3, and `one_spicy_after_all` failed in v8 and v9 only.
+  - Round 13's baseline was a single run, so its own variance is unknown. A threshold taken from one run may sit above what that configuration scores on average.
+- **Decision (user's option C, 2026-11-29):** after v9 also missed, the plan ships `follow_up_v7` exactly as evaluated: the only version with must-never-be-wrong 0 in every run, and heldout2 met. `follow_up_v8` and `follow_up_v9` are kept frozen as records.
+- **Verdict:** development sets met (v7: 41/42 and 16/18, 57/60); the new held-out set met (round 14); heldout2 met (19.3/20); heldout (15.0/17) and heldout3 (13.7/15) not met; must-never-be-wrong 0 with v7. Partly met.
+- **Cost:** the 42 runs of this round cost $1.004 cache-aware (v6 $0.228, v7 $0.265, v8 $0.253, v9 $0.258).
+- **Results of record:** round 13 stays the results of record for the revise regression sets; `follow_up_v7` is the shipped reader.
+- **Next:** see the four open items in `docs/phase-1-carryover.md`, section "Deferred from Phase 1 plan 3b-2 (two)": the recurring misses, the dish-pointer rule table, a 3-run baseline of round 13's configuration, and the neutral re-ask.
