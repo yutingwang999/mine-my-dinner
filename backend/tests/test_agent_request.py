@@ -41,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v5+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v6+pick_v6"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -235,7 +235,7 @@ def test_follow_up_v2_states_the_task_11_principles():
 
 def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
     # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); plan 3b-2
-    # (two) Task 8: the reader in use is follow_up_v5. This test keeps the v4 numbers.
+    # (two): the reader in use is follow_up_v6. This test keeps the v4 numbers.
     reader = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
     picker = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
     assert len(reader) == 5499
@@ -708,7 +708,7 @@ def test_pick_v6_size():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v5+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v6+pick_v6"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
@@ -1088,22 +1088,16 @@ def test_fixed_messages_match_the_frontend_files(locale):
 # ---- plan 3b-2 (two) Task 8: follow_up_v5 (spec 5.7) ----
 
 
-def test_follow_up_v5_is_in_use():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v5"
-    assert load_prompt("follow_up") == (PROMPT_DIR / "follow_up_v5.md").read_text(
-        encoding="utf-8"
+def test_follow_up_v5_is_frozen():
+    import hashlib
+
+    # Used by the plan 3b-2 (two) development runs and round 14, so it must never change;
+    # the reader's next change is follow_up_v6.
+    reader = (PROMPT_DIR / "follow_up_v5.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "b743f267e514a580a2e2867ca028830627594353327bb1bade0896c8b69c73df"
     )
-
-
-def test_follow_up_v5_is_within_budget():
-    v5 = (PROMPT_DIR / "follow_up_v5.md").read_text(encoding="utf-8")
-    # Spec 3: under half of route_v6 plus revise_v4 (about 6,900 characters).
-    assert len(v5) < 6900
-    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
-    route_v6 = (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
-    assert len(v5) < (len(route_v6) + len(revise_v4)) / 2
-    # The reader and the picker in use stay shorter than the two prompts they replace.
-    assert len(v5) + len(load_prompt("pick")) < len(route_v6) + len(revise_v4)
+    assert len(reader.decode("utf-8")) == 6025
 
 
 def test_follow_up_v5_states_the_diner_change_principles():
@@ -1124,4 +1118,59 @@ def test_follow_up_v5_states_the_diner_change_principles():
     assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v5
     # Invented examples only, at most five lines.
     examples = v5.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 5
+
+
+# ---- plan 3b-2 (two): follow_up_v6, after round 14 ----
+
+
+def _follow_up_v5_and_v6() -> tuple[str, str]:
+    v5 = (PROMPT_DIR / "follow_up_v5.md").read_text(encoding="utf-8")
+    v6 = (PROMPT_DIR / "follow_up_v6.md").read_text(encoding="utf-8")
+    return v5, v6
+
+
+def test_follow_up_v6_is_in_use():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v6"
+    assert load_prompt("follow_up") == _follow_up_v5_and_v6()[1]
+
+
+def test_follow_up_v6_is_within_budget():
+    _, v6 = _follow_up_v5_and_v6()
+    assert len(v6) == 6407
+    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    route_v6 = (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
+    # Spec 3: under half of route_v6 plus revise_v4 (12817 characters).
+    assert len(v6) < (len(route_v6) + len(revise_v4)) / 2
+    # The reader and the picker in use stay shorter than the two prompts they replace.
+    assert len(v6) + len(load_prompt("pick")) < len(route_v6) + len(revise_v4)
+
+
+def test_follow_up_v6_sharpens_three_lines_of_follow_up_v5():
+    """Round 14: a one-meal avoidance of a food removes no dish (code replaces the dishes
+    that break it), words about an amount are a wish with targets (under code's cap), and an
+    add named by a food keeps the words. v6 sharpens v5's own lines and one example."""
+    v5, v6 = _follow_up_v5_and_v6()
+    old, new = v5.splitlines(), v6.splitlines()
+    assert len(old) == len(new)
+    changed = [(a, b) for a, b in zip(old, new, strict=True) if a != b]
+    assert [a[:30] for a, _ in changed] == [
+        "You get the current plan (one ",
+        "- For each dish in remove, cop",
+        "- A dish the user names, as a ",
+        "- wish is in the user's words.",
+        '- "这顿不想吃排骨了": change; remove e',
+    ]
+    # 1. Only words that point at a dish itself put it in remove.
+    assert "only when the message points at that dish itself" in v6
+    assert "words that only leave a food out of this meal point at no dish" in v6
+    # 2. An amount is a wish with wish_targets, never plain removals.
+    assert "Too much of something is a wish too" not in v6
+    assert "are a wish with wish_targets, never left out and never plain removals" in v6
+    # 3. An add named by a food keeps the words.
+    assert "only names a food or a kind of food" in v6
+    assert "an add keeps those words as its name, or as the wish with for_wish" in v6
+    # Kept: internal words never reach the user; at most five example lines.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v6
+    examples = v6.split("Examples, on a plan of", 1)[1].splitlines()[1:]
     assert len([line for line in examples if line.startswith("- ")]) <= 5
