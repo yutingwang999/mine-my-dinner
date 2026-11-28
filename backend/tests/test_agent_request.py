@@ -41,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v6+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v7+pick_v6"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -235,7 +235,7 @@ def test_follow_up_v2_states_the_task_11_principles():
 
 def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
     # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); plan 3b-2
-    # (two): the reader in use is follow_up_v6. This test keeps the v4 numbers.
+    # (two): the reader in use is follow_up_v7. This test keeps the v4 numbers.
     reader = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
     picker = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
     assert len(reader) == 5499
@@ -708,7 +708,7 @@ def test_pick_v6_size():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v6+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v7+pick_v6"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
@@ -1130,9 +1130,16 @@ def _follow_up_v5_and_v6() -> tuple[str, str]:
     return v5, v6
 
 
-def test_follow_up_v6_is_in_use():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v6"
-    assert load_prompt("follow_up") == _follow_up_v5_and_v6()[1]
+def test_follow_up_v6_is_frozen():
+    import hashlib
+
+    # Used by three evaluation runs after round 14, so it must never change; the reader's
+    # next change is follow_up_v7.
+    reader = (PROMPT_DIR / "follow_up_v6.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "5d6ce96cca5e5d7ed6862be91bb389a062489c748e91d198d0e176766bf12770"
+    )
+    assert len(reader.decode("utf-8")) == 6407
 
 
 def test_follow_up_v6_is_within_budget():
@@ -1174,3 +1181,80 @@ def test_follow_up_v6_sharpens_three_lines_of_follow_up_v5():
     assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v6
     examples = v6.split("Examples, on a plan of", 1)[1].splitlines()[1:]
     assert len([line for line in examples if line.startswith("- ")]) <= 5
+
+
+# ---- plan 3b-2 (two): follow_up_v7, after three runs of follow_up_v6 ----
+
+
+def _follow_up_v6_and_v7() -> tuple[str, str]:
+    v6 = (PROMPT_DIR / "follow_up_v6.md").read_text(encoding="utf-8")
+    v7 = (PROMPT_DIR / "follow_up_v7.md").read_text(encoding="utf-8")
+    return v6, v7
+
+
+def test_follow_up_v7_is_in_use():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v7"
+    assert load_prompt("follow_up") == _follow_up_v6_and_v7()[1]
+
+
+def test_follow_up_v7_is_within_budget():
+    _, v7 = _follow_up_v6_and_v7()
+    assert len(v7) == 6398
+    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    route_v6 = (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
+    # Spec 3: under half of route_v6 plus revise_v4 (12817 characters).
+    assert len(v7) < (len(route_v6) + len(revise_v4)) / 2
+    # The reader and the picker in use stay shorter than the two prompts they replace.
+    assert len(v7) + len(load_prompt("pick")) < len(route_v6) + len(revise_v4)
+
+
+def test_follow_up_v7_states_three_principles_once():
+    """Three runs of v6: a one-meal avoidance still removed its dish with drop, an allergy
+    of someone eating was read as meal_avoid, and the reader rewrote the user's words
+    (translated a wish, swapped a food the plan lacks, stated a count). v7 sharpens v6's own
+    lines and adds one line that keeps the user's words."""
+    v6, v7 = _follow_up_v6_and_v7()
+    # 1. drop is only for fewer dishes; a one-meal avoidance removes nothing.
+    assert "Use drop when the words only say not to have it" not in v7
+    assert "point at no dish" not in v7
+    assert "Use drop only when the words ask for fewer dishes" in v7
+    assert "goes to meal_avoid only (kind change); remove stays empty" in v7
+    # The avoidance rule is stated once, at the plan description.
+    assert v7.count("replaces dishes that break a rule") == 1
+    assert "is replaced by code" not in v7
+    # 2. A rule about a particular person is people, whatever its duration.
+    assert "a rule about what a particular person eats (an allergy" in v7
+    assert "for no one in particular" in v7
+    assert "beyond this meal" not in v7
+    # 3. The user's words are kept, never translated or corrected; counts only when stated.
+    assert "never translated or corrected" in v7
+    assert "never as something it has" in v7
+    assert "never a total it does not state" in v7
+    # Only words that change a dish or food the plan lacks are ambiguous for that reason;
+    # an avoidance, a rule or a wish for something the plan lacks never is.
+    assert "Words that change a dish or food the plan lacks" in v7
+    assert "This never makes an avoidance, a rule or a wish for something the plan lacks" in v7
+    assert "Words about something the plan does not have" not in v7
+    assert "(its own line below)" in v7 and "- A wish for something the plan lacks" in v7
+    assert "quote the words of the latest message that point at it, copied exactly" in v7
+    # Kept: internal words never reach the user; the examples are v6's, at most five lines.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v7
+    assert v7.split("Examples, on a plan of", 1)[1] == v6.split("Examples, on a plan of", 1)[1]
+    examples = v7.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 5
+
+
+def test_follow_up_reading_schema_matches_follow_up_v7():
+    """The schema descriptions reach the reader with the prompt (`with_structured_output`),
+    so they must not contradict it: drop is only for fewer dishes, a rule about a particular
+    person is people, and the wish keeps the user's words and language."""
+    from minemydinner.agent.follow_up import FollowUpReading, ReadRemoval
+
+    mode = ReadRemoval.model_fields["mode"].description
+    assert "only say not to have it" not in mode
+    assert "ask for fewer dishes, with no other dish wanted in its place" in mode
+    assert "character for character" in ReadRemoval.model_fields["quote"].description
+    fields = FollowUpReading.model_fields
+    assert "a rule about what a particular person eats" in fields["kind"].description
+    assert "never translated or corrected" in fields["wish"].description
+    assert "for no one in particular" in fields["meal_avoid"].description

@@ -24,8 +24,8 @@ class ReadRemoval(BaseModel):
     id: int = Field(description="The id of the dish in the current plan.")
     mode: Literal["drop", "replace"] = Field(
         description=(
-            "\"drop\": the words only say not to have it, the plan gets smaller. \"replace\": "
-            "the words want another dish in its place."
+            "\"drop\": the words ask for fewer dishes, with no other dish wanted in its place; "
+            "the plan gets smaller. \"replace\": otherwise."
         )
     )
     quote: str = Field(
@@ -122,7 +122,8 @@ class FollowUpReading(BaseModel):
     kind: Literal["change", "new_meal", "people", "other"] = Field(
         description=(
             "\"change\": it changes the current plan. \"new_meal\": it asks for a different, "
-            "new meal. \"people\": it changes who eats. \"other\": anything else."
+            "new meal. \"people\": it changes who eats, or states a rule about what a "
+            "particular person eats. \"other\": anything else."
         )
     )
     ambiguous: bool = Field(
@@ -147,8 +148,8 @@ class FollowUpReading(BaseModel):
     wish: str = Field(
         default="",
         description=(
-            "A taste or style wish the new dishes should meet, in the user's words. Empty "
-            "when the message states none."
+            "A taste or style wish the new dishes should meet, in the user's words and "
+            "language, never translated or corrected. Empty when the message states none."
         ),
     )
     wish_targets: list[int] = Field(
@@ -162,8 +163,8 @@ class FollowUpReading(BaseModel):
     meal_avoid: list[str] = Field(
         default_factory=list,
         description=(
-            "The WHOLE list of things to leave out of this meal after this message, so a "
-            "withdrawn wish is simply missing from it."
+            "The WHOLE list of things to leave out of this meal, for no one in particular, after "
+            "this message, so a withdrawn wish is simply missing from it."
         ),
     )
     counts: ReadCounts = Field(
