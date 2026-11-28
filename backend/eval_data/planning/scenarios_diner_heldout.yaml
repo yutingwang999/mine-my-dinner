@@ -1,0 +1,358 @@
+# Plan 3b-2 (two) held-out set: a change in who eats on an existing plan, and the reader
+# items of follow_up_v5 (design 2026-11-26-phase-1-plan-3b2-diner-changes-design.md,
+# section 6). Run with library_diner_heldout.yaml.
+#
+# Held-out: the user wrote the follow-up sentences (and the situations); Claude wrote the
+# set-up (first request, first plan, friends) and the expectations. Implementers and
+# reviewers never open this file, and its sentences go into no prompt, doc or test.
+#
+# Keys as in scenarios_revise.yaml and scenarios_diner_changes.yaml (their headers define
+# them). Counts after the card (design 5.3): the default composition is 1 dish for 1 person,
+# 2 dishes for 2, 2 dishes and a soup for 3-4, 3 dishes and a soup for 5 or more; the
+# plan's dishes and soups move by the difference, unless the message adds a dish or states
+# a count. More than half of the plan to change makes it again (design 5.4).
+#
+# "炒饭" in the situations is 蛋炒饭 (the library's fried rice has egg).
+role: held-out
+scenarios:
+  - name: friend_with_allergies_joins_a_solo_plan
+    request: 今晚三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小李, rules: [{type: allergy, allergen: egg}, {type: dietary restriction, ingredient: 牛肉}]}
+    first_plan: [红烧茄子, 洋葱炒鸡蛋, 松仁玉米, 蛋炒饭]
+    follow_up: 小李也来
+    # A solo plan (no card): the follow-up card starts from the user alone. 1 -> 2 people:
+    # one dish more. 小李's egg allergy breaks the onion-egg dish and the egg fried rice (2
+    # of 4, not more than half): both are replaced, the other two stay.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_rules_applied: [{who: 小李, allergen: egg}]
+    expect_titles_none: [洋葱炒鸡蛋, 蛋炒饭]
+    expect_titles_include: [红烧茄子, 松仁玉米]
+    expect_any_of:
+      - {expect_counts: {dishes: 4, staples: 1}}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: 小李's known egg and beef rules apply; the egg dishes are replaced, one dish is added for two people, and the other dishes stay.
+  - name: friend_with_allergies_joins_a_hand_edited_plan
+    request: 今晚三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小李, rules: [{type: allergy, allergen: egg}, {type: dietary restriction, ingredient: 牛肉}]}
+    first_plan: [红烧茄子, 洋葱炒鸡蛋, 松仁玉米, 蛋炒饭]
+    edits_between_turns: [{add: 牛肉炒洋葱}]
+    follow_up: 小李也来
+    # The hand-added beef dish (locked) breaks 小李's beef rule and goes despite the lock; the
+    # two egg dishes go too: 3 of 5 must change, more than half, so the plan is made again.
+    # 1 -> 2 people: one dish more.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_rules_applied: [{who: 小李, allergen: egg}, {who: 小李, ingredient: 牛肉}]
+    expect_titles_none: [洋葱炒鸡蛋, 蛋炒饭, 牛肉炒洋葱]
+    expect_any_of:
+      - {expect_counts: {dishes: 5, staples: 1}}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: The hand-added beef dish and the egg dishes break 小李's rules; most of the plan changes, so it is made again without egg or beef, one dish larger.
+  - name: one_more_person_no_rule
+    request: 今晚两个人，三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [油焖大虾, 青椒肉丝, 清炒小白菜, 白米饭]
+    follow_up: 再加个人
+    # An unnamed person with no rule: 2 -> 3 people adds a soup; nothing breaks.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [油焖大虾, 青椒肉丝, 清炒小白菜, 白米饭]
+    expect_any_of:
+      - {expect_counts: {dishes: 3, soups: 1, staples: 1}, expect_max_changed: 0}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: One more person with no rule joins; every dish stays and a soup is added for three.
+  - name: the_only_guest_cancels
+    request: 今天小王来吃饭，三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends: [{name: 小王, rules: []}]
+    first_plan: [青椒肉丝, 红烧茄子, 清炒小白菜, 白米饭]
+    follow_up: 小王不来了
+    # The user unticks 小王 on the card. 2 -> 1 person: one dish fewer.
+    follow_up_diners_answer: {unselect: [小王]}
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [白米饭]
+    expect_any_of:
+      - {expect_counts: {dishes: 2, staples: 1}, expect_max_changed: 1}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: 小王 is unticked on the card; with one person a dish is dropped and the rice stays.
+  - name: both_friends_cancel_only_me
+    request: 今天小李小王都来，设计一顿饭，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小李, rules: [{type: allergy, allergen: egg}, {type: dietary restriction, ingredient: 牛肉}]}
+      - {name: 小王, rules: []}
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 紫菜豆腐汤]
+    follow_up: 算了，他们不来了，我自己吃
+    # The message says one person while three are ticked: the card shows the notice and the
+    # user unticks both. 3 -> 1: a dish and the soup go (2 of 3), so the plan is made again
+    # for one.
+    follow_up_diners_answer: {unselect: [小李, 小王]}
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_stated_total: 1
+    expect_rules_not_applied: [{who: 小李, allergen: egg}]
+    expect_any_of:
+      - {expect_counts: {dishes: 1, soups: 0}}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: Both friends cancel; the card notes that one person was said, the user unticks both, and the plan becomes one dish for one.
+  - name: two_more_unnamed_people_make_six
+    request: 设计4个人的一顿饭，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 紫菜豆腐汤]
+    follow_up: 再加两个人，我们6个人吃
+    # Two more people, no names: the card starts from the confirmed four and shows the
+    # stated six. 4 -> 6 people: 2 dishes and a soup become 3 and a soup, so one dish more;
+    # the first dishes stay.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花, 紫菜豆腐汤]
+    expect_any_of:
+      - {expect_counts: {dishes: 3, soups: 1}, expect_max_changed: 0}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: Two more unnamed people make six; the card shows six, one dish is added and the first dishes stay.
+  - name: friend_joins_and_one_dish_goes
+    request: 今晚三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小李, rules: [{type: allergy, allergen: egg}, {type: dietary restriction, ingredient: 牛肉}]}
+    first_plan: [油焖大虾, 牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    follow_up: 小李也来，牛肉那道不要了
+    # The beef dish goes by the message (and by 小李's rule); the egg dishes break 小李's
+    # allergy: 3 of 4 must change, so the plan is made again. A removal does not turn the
+    # count difference off (1 -> 2: one dish more); a reading that drops the beef dish may
+    # leave one dish fewer.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_rules_applied: [{who: 小李, allergen: egg}]
+    expect_titles_none: [牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    expect_any_of:
+      - {expect_counts: {dishes: 4, staples: 1}}
+      - {expect_counts: {dishes: 3, staples: 1}}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: 小李 joins and the beef dish goes; the egg dishes break 小李's allergy, so the plan is made again without egg or beef.
+  - name: friend_joins_and_a_soup
+    request: 今天小张来，三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小张, rules: []}
+      - {name: 小王, rules: []}
+    first_plan: [油焖大虾, 牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    follow_up: 小王也来，再加个汤
+    # The message adds its own soup, so the count difference is not applied (design 5.3):
+    # exactly one soup, nothing else changes.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [油焖大虾, 牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    expect_any_of:
+      - {expect_counts: {dishes: 3, soups: 1, staples: 1}, expect_max_changed: 0}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: 小王 joins and a soup is asked for; one soup is added and every dish stays.
+  - name: new_guest_with_three_rules
+    request: 今天和两个朋友吃饭，三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [油焖大虾, 牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    follow_up: andy也来，他吃不了虾和牛肉还有鸡蛋
+    # A guest with three rules breaks every item: the plan is made again without shrimp,
+    # beef or egg. 3 -> 4 people: the defaults are equal, so the counts stay.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_none: [油焖大虾, 牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    expect_any_of:
+      - {expect_counts: {dishes: 3, staples: 1}}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: andy joins with shrimp, beef and egg rules; the plan is made again with none of them, three dishes and a staple.
+  - name: known_allergy_of_someone_eating
+    request: 今天小森来，还有个朋友，四个菜一个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends: [{name: 小森, rules: []}]
+    first_plan: [油焖大虾, 青椒肉丝, 清炒小白菜, 红烧茄子, 紫菜豆腐汤]
+    follow_up: 刚知道小森吃虾过敏
+    # A rule about someone already eating is people: the card proposes the allergy on 小森's
+    # row (ticked for this meal); the shrimp dish is replaced, the headcount stays.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_rules_applied: [{who: 小森, allergen: crustaceans}]
+    expect_titles_none: [油焖大虾]
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 红烧茄子, 紫菜豆腐汤]
+    expect_any_of:
+      - {expect_counts: {dishes: 4, soups: 1}, expect_max_changed: 1}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: 小森's shrimp allergy applies; the shrimp dish is replaced and the rest stays.
+  - name: one_more_friend_and_start_over
+    request: 今天和两个朋友吃饭，三个菜一个主食，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [油焖大虾, 牛肉炒洋葱, 番茄炒蛋, 蛋炒饭]
+    follow_up: 还有一个朋友来，重新整一桌
+    # A fresh start wins (design 5.7 (2)): a new meal for four, after the card.
+    expect_follow_up_diner_card: true
+    expect_any_of:
+      - {expect_route: plan, expect_count_range: {dishes: [2, 3], soups: [0, 1], staples: [0, 1]}}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: One more friend and a fresh start; the card shows and a new meal is planned for four.
+  - name: friend_joins_a_solo_dinner
+    request: 一人食的晚餐，设计一顿，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends: [{name: 小王, rules: []}]
+    first_plan: [青椒肉丝]
+    follow_up: 小王也来
+    # 1 -> 2 people: one dish more; the first dish stays.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [青椒肉丝]
+    expect_any_of:
+      - {expect_counts: {dishes: 2, soups: 0}, expect_max_changed: 0}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: 小王 joins a solo dinner; one dish is added and the first stays.
+  - name: add_a_staple_to_a_solo_dinner
+    request: 一人食的晚餐，设计一顿2个菜吧，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 清炒小白菜]
+    follow_up: 再加个主食
+    # A typed add of a staple; no one joins, so no card.
+    expect_route: revise
+    expect_follow_up_diner_card: false
+    expect_titles_include: [青椒肉丝, 清炒小白菜]
+    expect_any_of:
+      - {expect_counts: {dishes: 2, staples: 1}, expect_max_changed: 0}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: A staple is added; both dishes stay and no diner card shows.
+  - name: split_no_longer_fixed
+    request: 小张小王来吃饭，设计2个荤一个素1个主食1个汤，可以买菜。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小张, rules: []}
+      - {name: 小王, rules: []}
+    first_plan: [青椒肉丝, 红烧排骨, 清炒小白菜, 白米饭, 紫菜豆腐汤]
+    follow_up: 荤素菜数不固定吧
+    # The meat and vegetable split is lifted (design 5.7 (4)); the total of three stays.
+    expect_route: revise
+    expect_follow_up_diner_card: false
+    expect_spec: {dishes: 3, meat_dishes: null, vegetable_dishes: null}
+    expect_any_of:
+      - {expect_max_changed: 0, expect_counts: {dishes: 3, soups: 1, staples: 1}}
+      - {expect_max_changed: 1, expect_counts: {dishes: 3, soups: 1, staples: 1}}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: The split is lifted and the plan keeps three dishes, a staple and a soup.
+  - name: celery_no_longer_used
+    request: 小张小王来吃饭，冰箱里的芹菜快坏了，把它用了，可以买菜。
+    locale: zh
+    inventory: {芹菜: 1}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小张, rules: []}
+      - {name: 小王, rules: []}
+    first_plan: [芹菜炒肉, 清炒小白菜, 紫菜豆腐汤]
+    follow_up: 算了，芹菜不吃了
+    # Celery is taken back as a must-use ingredient (design 5.7 (5)) and left out of this
+    # meal, so the celery dish is replaced.
+    expect_route: revise
+    expect_follow_up_diner_card: false
+    expect_spec: {must_use: []}
+    expect_titles_none: [芹菜炒肉]
+    expect_titles_include: [清炒小白菜, 紫菜豆腐汤]
+    expect_any_of:
+      - {expect_counts: {dishes: 2, soups: 1}, expect_max_changed: 1}
+    expect_no_question: true
+    max_model_calls: 12
+    expect: Celery is no longer required and not wanted tonight; the celery dish is replaced and the rest stays.
+  - name: one_person_miscounted
+    request: 小张小王来吃饭，我可以去买。
+    locale: zh
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    friends:
+      - {name: 小张, rules: []}
+      - {name: 小王, rules: []}
+    first_plan: [青椒肉丝, 清炒小白菜, 紫菜豆腐汤]
+    follow_up: 我少算了一个人
+    # One more person, not named: 3 -> 4, equal defaults, so the plan stays.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [青椒肉丝, 清炒小白菜, 紫菜豆腐汤]
+    expect_any_of:
+      - {expect_counts: {dishes: 2, soups: 1}, expect_max_changed: 0}
+    expect_no_question: true
+    max_model_calls: 14
+    expect: The user counted one person too few; the card shows four and the plan stays as it is.
+  - name: english_add_another_person
+    request: Two friends come today, make a lunch. I can shop.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤]
+    follow_up: add another person
+    # 3 -> 4 people: equal defaults, the plan stays.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [青椒肉丝, 蒜蓉西兰花, 番茄蛋花汤]
+    expect_any_of:
+      - {expect_counts: {dishes: 2, soups: 1}, expect_max_changed: 0}
+    expect_no_question: true
+    expect_locale_reply: en
+    max_model_calls: 14
+    expect: One more person joins a lunch for three; the card shows and the plan stays.
+  - name: english_guest_joins_and_one_more_dish
+    request: We two have dinner today. I can shop.
+    locale: en
+    inventory: {}
+    cookware: [炒锅, 平底锅, 汤锅, 砂锅, 蒸锅, 高压锅]
+    first_plan: [青椒肉丝, 清炒小白菜]
+    follow_up: May will join us, too. Add one more dish
+    # The message adds its own dish, so the difference (a soup for three) is not applied.
+    expect_route: revise
+    expect_follow_up_diner_card: true
+    expect_titles_include: [青椒肉丝, 清炒小白菜]
+    expect_any_of:
+      - {expect_counts: {dishes: 3, soups: 0}, expect_max_changed: 0}
+    expect_no_question: true
+    expect_locale_reply: en
+    max_model_calls: 14
+    expect: May joins and one more dish is asked for; one dish is added and no soup.
