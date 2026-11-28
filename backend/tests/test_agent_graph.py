@@ -5591,18 +5591,10 @@ def test_reading_changes_nothing_is_structural():
         changed = FollowUpReading.model_validate({**NOTHING_READING, **extra})
         assert not reading_changes_nothing(changed, []), extra
     assert reader_problem(reading) == (
-        'Your reading says "我理解为把其中一道菜换成水产类的菜。", but it changes no dish. Check '
-        "which this wish is: a wish for something the plan lacks adds a dish or replaces one "
-        "for it (for_wish); a wish about dishes of the plan lists them in wish_targets; only "
-        "less of a food no dish has, or a complaint about one, changes no dish, so answer the "
-        "same reading again. Answer with the whole reading."
+        'Your reading says "我理解为把其中一道菜换成水产类的菜。", but it changes no dish: say '
+        "which dish goes (remove) or what is added (add) for the wish. Answer again with the "
+        "whole reading."
     )
-    # Neutral, three ways (follow_up_v9): it never tells the reader to remove or add, and
-    # names the lacking-wish, the targets and the no-dish readings.
-    problem = reader_problem(reading)
-    assert "say which dish goes" not in problem
-    for way in ("something the plan lacks", "wish_targets", "answer the same reading again"):
-        assert way in problem
     plain = FollowUpReading.model_validate({**NOTHING_READING, "reading": ""})
     assert reader_problem(plain).startswith('Your reading has the wish "水产的", but')
 

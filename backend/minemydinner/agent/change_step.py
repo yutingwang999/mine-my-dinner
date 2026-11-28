@@ -227,10 +227,8 @@ def reading_changes_nothing(reading: FollowUpReading, meal_avoid: Collection[str
     """A `change` reading with a wish that changes nothing at all: no removal, no add, no wish
     target, no stated count, no change of conditions, and this meal's avoidance the same as
     `meal_avoid` (the plan's). A structural check, not a reading of the words (Task 11 fix 3):
-    the reader is then asked once more to check its reading, not told to correct it, since a
-    wish with empty targets can be a correct reading (less of a food no dish has,
-    follow_up_v9). A reading with no wish is never one (the ambiguous reading that leads to
-    the which-dish question, Task 7 ruling 12)."""
+    the reader is then asked once more. A reading with no wish is never one (the ambiguous
+    reading that leads to the which-dish question, Task 7 ruling 12)."""
     return (
         reading.kind == "change"
         and bool(reading.wish.strip())
@@ -244,22 +242,15 @@ def reading_changes_nothing(reading: FollowUpReading, meal_avoid: Collection[str
 
 
 def reader_problem(reading: FollowUpReading) -> str:
-    """The problem a reading that changes nothing is asked again with, in plain words. It is
-    neutral (follow_up_v9): it names the three readings a wish can have and pushes toward none,
-    since a wish that touches no dish of the plan (less of a food no dish has, or a complaint
-    about one) rightly changes nothing, while a wish for something the plan lacks adds or
-    replaces a dish (follow_up_v9's own line)."""
+    """The problem a reading that changes nothing is asked again with, in plain words."""
     said = (
         f'Your reading says "{reading.reading.strip()}"'
         if reading.reading.strip()
         else f'Your reading has the wish "{reading.wish.strip()}"'
     )
     return (
-        f"{said}, but it changes no dish. Check which this wish is: a wish for something the "
-        "plan lacks adds a dish or replaces one for it (for_wish); a wish about dishes of the "
-        "plan lists them in wish_targets; only less of a food no dish has, or a complaint "
-        "about one, changes no dish, so answer the same reading again. Answer with the whole "
-        "reading."
+        f"{said}, but it changes no dish: say which dish goes (remove) or what is added (add) "
+        "for the wish. Answer again with the whole reading."
     )
 
 
