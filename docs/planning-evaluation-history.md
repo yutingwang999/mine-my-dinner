@@ -800,7 +800,13 @@ Development set at `cc67559` (`route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6
   | heldout2 | 3 | 2.30, 2.40, 2.45 / 4 | 3.0 / 3 (1 turn a run) | 0/19 in each run |
 
   Separated as round 14's thresholds are (change turns only = the set's revision-turn calls less its people-turn calls, over the turns that are not people turns): change turns 1.25-2.42 (development 2.29, diner changes 1.25, heldout3 2.15, 2.08, 1.92, heldout 2.12, 2.38, 2.31, heldout2 2.26, 2.36, 2.42), at most 2.5 (**met**); people turns 3.0 on average in every run but one heldout run, whose single people turn used 4 calls (3.04 over all 24 people turns of the 11 runs; at most 3.5 **met** over the runs, not in that one run); the longest turn 5 calls, none over 7 (**met**). The unnecessary-question rate is 0 in every run.
-- **Verdict:** development sets met (v7: 41/42 and 16/18, 57/60); the new held-out set (`scenarios_diner_heldout.yaml`) was measured only with `follow_up_v5` (round 14, 17/18) and is not yet measured with the shipped `follow_up_v7`; heldout2 met (19.3/20); heldout (15.0/17) and heldout3 (13.7/15) not met; must-never-be-wrong 0 with v7. Partly met.
+- **Verdict:** development sets met (v7: 41/42 and 16/18, 57/60); the new held-out set (`scenarios_diner_heldout.yaml`): **14/18 with the shipped `follow_up_v7`, not met (needs ≥ 80%)**. Run `20261128T155710Z` at `c7e7afa`, with must-never-be-wrong 0, no unnecessary questions, and people turns averaging 2.9 calls. Round 14 measured 17/18 with `follow_up_v5`. The four misses:
+  - `both_friends_cancel_only_me`: the parse gave no stated headcount, so the card showed no stated-total notice. This is parse variance.
+  - `one_person_miscounted`: the first turn planned nothing (no route). This is variance on the unchanged first-turn path.
+  - `english_add_another_person`: the card total did not rise and the plan was kept. The parse found no added person.
+  - `friend_joins_and_one_dish_goes`: v7 read "the beef one" as replace, added a dish and stated counts the message did not state; the remade plan ended with 2 dishes. These are the reader items the rule-table carryover addresses.
+
+  This single run cost $0.027 cache-aware; heldout2 met (19.3/20); heldout (15.0/17) and heldout3 (13.7/15) not met; must-never-be-wrong 0 with v7. Partly met.
 - **Cost:** the 42 runs of this round cost $1.004 cache-aware (v6 $0.228, v7 $0.265, v8 $0.253, v9 $0.258).
 - **Results of record:** round 13 stays the results of record for the revise regression sets; `follow_up_v7` is the shipped reader.
 - **Next:** see the four open items in `docs/phase-1-carryover.md`, section "Deferred from Phase 1 plan 3b-2 (two)": the recurring misses, the dish-pointer rule table, a 3-run baseline of round 13's configuration, and the neutral re-ask.
