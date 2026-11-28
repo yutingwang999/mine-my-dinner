@@ -41,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v7+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v8+pick_v6"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -235,7 +235,7 @@ def test_follow_up_v2_states_the_task_11_principles():
 
 def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
     # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); plan 3b-2
-    # (two): the reader in use is follow_up_v7. This test keeps the v4 numbers.
+    # (two): the reader in use is follow_up_v8. This test keeps the v4 numbers.
     reader = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
     picker = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
     assert len(reader) == 5499
@@ -708,7 +708,7 @@ def test_pick_v6_size():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v7+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v8+pick_v6"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
@@ -1192,9 +1192,16 @@ def _follow_up_v6_and_v7() -> tuple[str, str]:
     return v6, v7
 
 
-def test_follow_up_v7_is_in_use():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v7"
-    assert load_prompt("follow_up") == _follow_up_v6_and_v7()[1]
+def test_follow_up_v7_is_frozen():
+    import hashlib
+
+    # Used by three evaluation runs, so it must never change; the reader's next change is
+    # follow_up_v8.
+    reader = (PROMPT_DIR / "follow_up_v7.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "e6b92868a56683fcd2443ea178fbf48bd472b01c477a9bc9ad626ba20fcd9bb2"
+    )
+    assert len(reader.decode("utf-8")) == 6398
 
 
 def test_follow_up_v7_is_within_budget():
@@ -1244,17 +1251,95 @@ def test_follow_up_v7_states_three_principles_once():
     assert len([line for line in examples if line.startswith("- ")]) <= 5
 
 
-def test_follow_up_reading_schema_matches_follow_up_v7():
+# ---- plan 3b-2 (two): follow_up_v8, the approved rule for pointing at a dish ----
+
+
+def _follow_up_v7_and_v8() -> tuple[str, str]:
+    v7 = (PROMPT_DIR / "follow_up_v7.md").read_text(encoding="utf-8")
+    v8 = (PROMPT_DIR / "follow_up_v8.md").read_text(encoding="utf-8")
+    return v7, v8
+
+
+def test_follow_up_v8_is_in_use():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v8"
+    assert load_prompt("follow_up") == _follow_up_v7_and_v8()[1]
+
+
+def test_follow_up_v8_is_within_budget():
+    _, v8 = _follow_up_v7_and_v8()
+    assert len(v8) == 6406
+    revise_v4 = (PROMPT_DIR / "revise_v4.md").read_text(encoding="utf-8")
+    route_v6 = (PROMPT_DIR / "route_v6.md").read_text(encoding="utf-8")
+    # Spec 3: under half of route_v6 plus revise_v4 (12817 characters).
+    assert len(v8) < (len(route_v6) + len(revise_v4)) / 2
+    # The reader and the picker in use stay shorter than the two prompts they replace.
+    assert len(v8) + len(load_prompt("pick")) < len(route_v6) + len(revise_v4)
+
+
+def test_follow_up_v8_states_the_approved_rule_once():
+    """The rule approved on 2026-11-28: words that point at a dish of the plan remove it
+    (drop when they only say not to have it, replace when they want another); a food named as
+    not wanted is meal_avoid only; words that point at a dish the plan lacks are ambiguous with
+    nothing else, meal_avoid kept as it is; a particular person's rule is people."""
+    v7, v8 = _follow_up_v7_and_v8()
+    # 1. drop is for a dish pointed at and not wanted; v7's "fewer dishes" wording is gone.
+    assert "Use drop only when the words ask for fewer dishes" not in v8
+    assert "Use drop when the words only say not to have that dish" in v8
+    assert "replace when they want another dish in its place or do not say" in v8
+    # 2. Pointing at a dish versus naming a food, stated once; a complaint stays a wish.
+    assert v8.count("Pointing at a dish is not naming a food.") == 1
+    assert 'a food with a change verb ("X 换成", "把 X 换掉") points at the dish that has it' in v8
+    # A bare "X 不要了" names a food (an avoidance), so it is not a pointer.
+    assert '"X 不要了"' not in v8
+    assert "a complaint about it is a wish with wish_targets" in v8
+    assert "meal_avoid only, remove empty" in v8
+    assert v8.count("keeps the counts") == 1
+    # 3. A dish the plan lacks is ambiguous with nothing else, but meal_avoid is still the
+    # whole list (review C1: an empty list would drop the meal's avoidance and the question).
+    assert "Words that point at a dish the plan lacks" in v8
+    assert "fill nothing else (no remove, add or wish); meal_avoid stays as it is." in v8
+    assert "no remove, add, wish or meal_avoid" not in v8
+    assert '"带虾的那道撤了": ambiguous true, meal_avoid ["香菜"], nothing else;' in v8
+    assert "This never makes an avoidance" not in v8
+    # The subject of the empty-targets sentence is explicit (review M2).
+    assert "wish_targets is empty when the wish only guides" in v8
+    # 4. Kept from v7: a person's rule is people, the user's words, stated counts, amounts.
+    assert "a rule about what a particular person eats (an allergy" in v8
+    assert "never translated or corrected" in v8
+    assert "never a total it does not state" in v8
+    assert "are a wish with wish_targets, never left out and never plain removals" in v8
+    # A wish for something the plan lacks is stated once, in its own line.
+    assert v8.count("A wish for something the plan lacks") == 1
+    # Kept: internal words never reach the user; at most five example lines.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v8
+    examples = v8.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 5
+    assert len(v7.splitlines()) == len(v8.splitlines())
+
+
+def test_follow_up_reading_schema_matches_follow_up_v8():
     """The schema descriptions reach the reader with the prompt (`with_structured_output`),
-    so they must not contradict it: drop is only for fewer dishes, a rule about a particular
-    person is people, and the wish keeps the user's words and language."""
+    so they must not contradict it: drop is for a dish pointed at and not wanted, a food named
+    as not wanted is meal_avoid, a dish the plan lacks is ambiguous with nothing else, a rule
+    about a particular person is people, and the wish keeps the user's words and language."""
     from minemydinner.agent.follow_up import FollowUpReading, ReadRemoval
 
     mode = ReadRemoval.model_fields["mode"].description
-    assert "only say not to have it" not in mode
-    assert "ask for fewer dishes, with no other dish wanted in its place" in mode
+    assert "ask for fewer dishes" not in mode
+    assert "point at the dish and only say not to have it; the plan gets smaller" in mode
+    assert '"replace": they want another dish in its place, or do not say.' in mode
     assert "character for character" in ReadRemoval.model_fields["quote"].description
     fields = FollowUpReading.model_fields
-    assert "a rule about what a particular person eats" in fields["kind"].description
+    kind = fields["kind"].description
+    assert "a rule about what a particular person eats (an allergy, or a food someone" in kind
     assert "never translated or corrected" in fields["wish"].description
-    assert "for no one in particular" in fields["meal_avoid"].description
+    meal_avoid = fields["meal_avoid"].description
+    assert "for no one in particular" in meal_avoid
+    assert "never words that point at a dish" in meal_avoid
+    ambiguous = fields["ambiguous"].description
+    # Only a dish the plan does not have fills nothing else (review I1); meal_avoid is kept
+    # (review C1).
+    assert "then fill nothing else" not in ambiguous
+    assert "for a dish the plan does not have, fill nothing else" in ambiguous
+    assert "(meal_avoid stays as it is)" in ambiguous
+    assert "that the plan has no such dish" in fields["reading"].description

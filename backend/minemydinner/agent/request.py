@@ -22,7 +22,7 @@ PROMPT_VERSIONS = {
     "route": "route_v6",
     "parse": "parse_v8",
     "planner": "planner_v5",
-    "follow_up": "follow_up_v7",
+    "follow_up": "follow_up_v8",
     "pick": "pick_v6",
 }
 PROMPT_VERSION = "+".join(PROMPT_VERSIONS.values())

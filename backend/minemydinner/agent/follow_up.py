@@ -24,8 +24,8 @@ class ReadRemoval(BaseModel):
     id: int = Field(description="The id of the dish in the current plan.")
     mode: Literal["drop", "replace"] = Field(
         description=(
-            "\"drop\": the words ask for fewer dishes, with no other dish wanted in its place; "
-            "the plan gets smaller. \"replace\": otherwise."
+            "\"drop\": the words point at the dish and only say not to have it; the plan gets "
+            "smaller. \"replace\": they want another dish in its place, or do not say."
         )
     )
     quote: str = Field(
@@ -123,18 +123,23 @@ class FollowUpReading(BaseModel):
         description=(
             "\"change\": it changes the current plan. \"new_meal\": it asks for a different, "
             "new meal. \"people\": it changes who eats, or states a rule about what a "
-            "particular person eats. \"other\": anything else."
+            "particular person eats (an allergy, or a food someone at this meal does not eat). "
+            "\"other\": anything else."
         )
     )
     ambiguous: bool = Field(
         default=False,
-        description="True when the message can be read in more than one way.",
+        description=(
+            "True when the message can be read in more than one way, or when its words point at "
+            "a dish the plan does not have; for a dish the plan does not have, fill nothing else "
+            "(meal_avoid stays as it is)."
+        ),
     )
     reading: str = Field(
         default="",
         description=(
-            "One short sentence in the reply locale saying how you understood the message; it "
-            "is shown to the user only when ambiguous is true."
+            "One short sentence in the reply locale saying how you understood the message, or "
+            "that the plan has no such dish; it is shown to the user only when ambiguous is true."
         ),
     )
     remove: list[ReadRemoval] = Field(
@@ -163,8 +168,9 @@ class FollowUpReading(BaseModel):
     meal_avoid: list[str] = Field(
         default_factory=list,
         description=(
-            "The WHOLE list of things to leave out of this meal, for no one in particular, after "
-            "this message, so a withdrawn wish is simply missing from it."
+            "The WHOLE list of foods to leave out of this meal, for no one in particular, after "
+            "this message, so a withdrawn wish is simply missing from it. A food named as not "
+            "wanted goes here, never words that point at a dish."
         ),
     )
     counts: ReadCounts = Field(
