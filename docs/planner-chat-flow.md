@@ -6,14 +6,14 @@ This document follows one user message through the planning conversation: which 
 
 ## How to read this document
 
-The document describes the code **as of the Phase 1 plan 3b-2 change fixes**, including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v4`, `pick_v6` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
+The document describes the code **as of Phase 1 plan 3b-2 (two)** (diner changes), including its final review fixes. Prompt versions: `route_v6`, `parse_v8`, `planner_v5`, `follow_up_v7`, `pick_v6` (`PROMPT_VERSIONS` in `backend/minemydinner/agent/request.py`).
 
 Three labels separate what the code does now from what it did before:
 
 | Label | Meaning |
 |---|---|
 | (no label) | **Current.** The code does this today, for every new conversation. |
-| **[Compatibility]** | Current code that exists only for a thread, card or record saved by an earlier version. A new conversation never takes this path. |
+| **[Compatibility]** | Current code that exists only for a thread, card or record saved by an earlier version. A new conversation never takes this path. Plan 3b-2 (two) removed every such branch (its design 5.9), so nothing in this document carries this label now. |
 | **[Earlier]** | No longer in the code. Kept only to explain where a current rule came from. All of these are collected in Section 5. |
 
 A plan name in brackets, such as "(since 3b-1b)", says when a current rule arrived. It does not mean the rule is old.
@@ -31,7 +31,7 @@ In the diagrams, boxes are LangGraph nodes (code names in brackets), diamonds ar
 ```mermaid
 flowchart TD
     S([The user sends a message]) --> RF{"_reads_follow_up:<br/>the current plan has dishes,<br/>and the message is not the fixed<br/>plan-again or button text?"}
-    RF -->|"yes"| RD["Reader read_follow_up<br/>(model call 1: follow_up_v4,<br/>answers FollowUpReading;<br/>read again when a wish changes nothing)"]
+    RF -->|"yes"| RD["Reader read_follow_up<br/>(model call 1: follow_up_v7,<br/>answers FollowUpReading;<br/>read again when a wish changes nothing)"]
     RF -->|"no"| R["Route route_intent"]
 
     RD -->|"kind = change"| BC["Change branch build_change<br/>(Section 3)"]
@@ -123,7 +123,7 @@ flowchart TD
 - Follow-up: the reader gives this meal's **whole** `meal_avoid` list after the message, so "香菜其实放点也行" takes 香菜 off the list and the avoidance is withdrawn.
 - It is this meal's own rule (diner key `meal`, `with_meal_avoid`) and goes into no profile; words like "肉" and "海鲜" cover the dictionary's whole category.
 - Taste words ("这顿不要辣的", "豆腐有点多") are a wish (`wish` / `query`), not an avoidance; a lasting rule ("我先生以后都不吃羊肉") is read as `people`.
-- Code replaces a dish that breaks the avoidance, so the reader lists it as `drop` only when the message says not to replace it (`follow_up_v4`).
+- Code replaces a dish that breaks the avoidance, so the reader leaves `remove` empty for the dishes it touches (`follow_up_v7`; `drop` is only for words that ask for fewer dishes).
 
 The plan card keeps `meal_avoid` for later turns.
 
@@ -213,7 +213,7 @@ flowchart TD
 One user message, in up to six parts:
 - `Current plan:` one line per dish, `id title (type; main ingredients)`, then the marks `LOCKED` / `LOCKED KEPT CONFLICT` / `OPEN CONFLICT`, and `BREAKS THIS MEAL'S WISH` for a dish that breaks this meal's current avoidance;
 - only when the user changed the plan by hand after it was proposed: one line, `The user changed this plan by hand after it was proposed: added ...; removed ....` (by title, in order; hand edits add no message, so the reader is told);
-- `Diners:` the confirmed diners' anonymous rules (Diner 1 is the user), or `- no diner rules`;
+- `Diners:` who eats, from the confirmed set by label only (since `follow_up_v5`: `Diner 1 (the user)`, each other diner, each guest "for this meal only", the people not named, then `Headcount: N`), then the diners' anonymous rules;
 - `Current conditions:` headcount, the counts the user stated, mode, time limit, must use, prefer using, leave out of this meal, taste wish;
 - `Conversation:` the whole thread, one `User:` / `Assistant:` line per message;
 - `Reply locale:`.
@@ -229,11 +229,11 @@ When it is asked again, the same messages get one more user message with the pro
 | `kind` | `change` (change this plan) / `new_meal` (a different meal) / `people` (a change in who eats, or a lasting rule about someone) / `other` (not about this meal's plan) |
 | `ambiguous` / `reading` | Whether the message is ambiguous; one sentence on how it was read, shown only when ambiguous |
 | `remove` | Dishes to remove: each an id, a `mode` (`drop`: just not wanted, the plan gets smaller; `replace`: another dish in its place), the `quote` of the user's words that point at it, and for a replace the dish the user named, `with_name`; `for_wish` when it is replaced only to meet the wish |
-| `add` | Dishes to add: a dish type (null: any type) and a count, or a dish the user named, `name`; `for_wish` when it is added only to meet the wish |
+| `add` | Dishes to add: a dish type (one of the six types, or null: any type) and a count, or a dish the user named, `name`; `for_wish` when it is added only to meet the wish |
 | `wish` / `wish_targets` | The taste wish in the user's words; `wish_targets` lists only the plan's dishes the wish is about, most touched first, and is empty when the wish only guides a dish the message removes or adds; a wish for something the plan lacks ("想吃点水产") becomes an add or a replace, never a wish alone |
 | `meal_avoid` | This meal's **whole** list of things to leave out after the message |
 | `counts` | Only the counts the message states, absolute for the whole plan ("少一个菜" is written as the number it gives on the plan shown) |
-| `conditions` | The stated mode, time limit (or its clearing), must use, prefer use |
+| `conditions` | The stated mode, time limit (or its clearing), must use, prefer use; `any_mix` (meat and vegetable dishes in any mix) and `no_longer_must_use` (must-use names taken back) |
 
 The reading never holds new dishes (the picker's job) or the final counts (code's job). Each request is applied once: a dish in `remove` is never also in `wish_targets`.
 
@@ -319,7 +319,7 @@ Known gap (in `docs/phase-1-carryover.md`): when only this final check removes a
 - The reading states counts (`request_after` sets `counts_stated_now` true, "stated this turn"): the stated counts replace the whole count group of the old request, and bind even when they equal the earlier request.
 - No stated count: the message changes no count; the plan's counts move with the change list: a drop shrinks it, a replace keeps it, an add grows it.
 - A change that leaves no dish ("全都不要了"): nothing changes, and the reply asks whether to plan a new meal.
-- Mode, time and named ingredients change only when the reading states them; an unmentioned one is never cleared (clearing the time limit takes an explicit `clear_time_limit`). The one-meal avoidance is the reading's whole list, so it can be withdrawn.
+- Mode, time and named ingredients change only when the reading states them; an unmentioned one is never cleared (taking one back is explicit: `clear_time_limit` for the time limit, `no_longer_must_use` for a must-use ingredient, `any_mix` for the meat and vegetable split). The one-meal avoidance is the reading's whole list, so it can be withdrawn.
 
 ### A people turn: adjust, or make it again (since 3b-2 (two))
 
@@ -383,6 +383,4 @@ In 3b-1 and 3b-1b a follow-up went through three models: the route (`route_v3` �
 | What the model answers | The whole change list (`RevisionProposal`) | A dish or 0 per slot and the bounded choices (`PickerAnswer`) |
 | Calls per change turn | Route 1 + parse 1 + the revise step per attempt, up to 3 attempts | At most 7 in all, usually 2 |
 
-**[Compatibility]** leftovers of that flow still in the code:
-- an old thread's history may hold an answered choice card; the chat page still shows it as one history line ("You chose: Change this plan", or "Skipped"), and the backend gives it no question text;
-- the modules once named `agent/revise_step.py` and `agent/revision.py` are now `agent/change_text.py` (the change reply's sentences) and `agent/change_rules.py` (the spec, carry-over and limit rules).
+No **[Compatibility]** leftover of that flow is in the code: plan 3b-2 (two) removed them with every other branch kept for older threads (its design 5.9), including the chat page's history line for an answered choice card. The modules once named `agent/revise_step.py` and `agent/revision.py` are now `agent/change_text.py` (the change reply's sentences) and `agent/change_rules.py` (the spec, carry-over and limit rules).
