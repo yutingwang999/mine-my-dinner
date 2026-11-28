@@ -237,6 +237,7 @@ scenarios:
     # unticks nobody, and the runner confirms the card as shown, so the set stays three and
     # the plan keeps its dishes.
     expect_route: revise
+    expect_plan: false
     expect_follow_up_diner_card: true
     expect_stated_total: 2
     expect_any_of:

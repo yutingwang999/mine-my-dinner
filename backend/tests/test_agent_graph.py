@@ -4420,8 +4420,37 @@ def test_a_reading_with_any_mix_clears_the_split_and_keeps_the_total(revise_env)
     assert request["meat_dishes"] is None and request["vegetable_dishes"] is None
     assert request["meat_bound"] is None and request["vegetable_bound"] is None
     assert request["dishes"] == 2 and request["counts_stated_now"] is True
-    assert out["current_plan"] == first["current_plan"]
+    # No dish changes, yet the lifted split is a change of conditions: a new version.
+    plan = out["current_plan"]
+    assert ids_of_plan(plan) == ids_of_plan(first["current_plan"])
+    assert plan["revision"] == {"from_version": 0}
+    assert plan["spec"]["meat_dishes"] is None and plan["spec"]["vegetable_dishes"] is None
     assert picker_calls(env) == []
+
+
+def test_any_mix_message_alone_lifts_the_split_on_a_new_version(revise_env):
+    """A typed "any mix" that changes no dish still lifts the split: the same dishes make a
+    new version whose spec has no split and keeps the total."""
+    env = revise_env
+    titles = ("土豆炖牛肉", "清炒小白菜", "干煸豆角")
+    parse = {
+        "dishes": 3, "meat_dishes": 1, "vegetable_dishes": 2, "mode": "shopping",
+        "meat_bound": "exact", "vegetable_bound": "exact", "counts_stated_now": True,
+    }
+    first = first_meal(env, titles, parse=parse)
+    spec = first["current_plan"]["spec"]
+    assert spec["meat_dishes"] == 1 and spec["vegetable_dishes"] == 2
+    out = read(env, "荤的素的怎么配都可以", {"kind": "change", "conditions": {"any_mix": True}})
+    assert "__interrupt__" not in out
+    plan = out["current_plan"]
+    assert len(out["plan_versions"]) == 2 and plan["revision"] == {"from_version": 0}
+    assert plan["spec"]["meat_dishes"] is None and plan["spec"]["vegetable_dishes"] is None
+    assert plan["spec"]["dishes"] == 3
+    assert ids_of_plan(plan) == ids_of_plan(first["current_plan"])
+    request = out["plan_request"]
+    assert request["meat_dishes"] is None and request["vegetable_dishes"] is None
+    assert picker_calls(env) == []
+    assert "按新的要求更新" in out["messages"][-1].content
 
 
 def test_any_mix_message_on_a_short_plan_adds_a_dish(revise_env):

@@ -2443,7 +2443,17 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                     n for n in plan_request.get("must_use") or [] if fold(n) not in unused
                 ],
             }
-        new_conditions = conditions_changed(live, compared, meal_avoid)
+        split_keys = ("meat_dishes", "vegetable_dishes", "meat_bound", "vegetable_bound")
+        lifted_split = (
+            used.conditions.any_mix
+            and all(plan_request.get(k) is None for k in split_keys)
+            and any((live.get("spec") or {}).get(k) is not None for k in split_keys)
+        )
+        if lifted_split:
+            # A typed "any mix" lifts the split even when no dish changes: it is a change of
+            # conditions, so the same dishes make a new version whose spec has no split.
+            compared = {**compared, **{k: None for k in split_keys}}
+        new_conditions = lifted_split or conditions_changed(live, compared, meal_avoid)
         diner_change = change.get("diner_change")
         if diner_change is not None and state.get("diners_changed"):
             # Plan 3b-2 (two): a new confirmed set is a change of conditions, so the same
