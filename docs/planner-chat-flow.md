@@ -81,7 +81,7 @@ flowchart TD
 | The reading's path | `after_reading`: `change` → `build_change`; `new_meal`, `people` → the parse; `other` → the fixed reply | `READING_INTENTS`: change and people are recorded as intent revise, new_meal as plan |
 | No route (plan again) | `_reuses_parse`: the last message is exactly the fixed plan-again text and `state.request` is set | Plan again reuses the newest parse and saves two model calls |
 | No route (next-action button) | `_is_action_message`: the last message is exactly one of the five buttons' fixed texts (`ACTION_MESSAGES`, both languages; a test keeps them equal to the frontend's) and `state.request` is set | Code knows what a button changes |
-| No parse for a button either (since 3b-1b) | `_button_card`: the newest reply's card keeps the `request` it was built from. Code changes one field (`apply_action` in `agent/actions.py`: allow shopping → shopping; fewer dishes → the total down by one, never below one; no time limit → the limit cleared; any mix → the sides cleared, the total kept; named ingredients optional → `must_use` and `all_use` moved into `prefer_use`). A card with `plan_kept` (the plan stayed) or `unfinished` (the change was done only in part) goes to the change branch; any other card plans from scratch. A button pressed with no card to change gets the fixed unclear reply, with no model call | The button keeps that turn's other conditions. On a card whose plan was kept or changed in part, it keeps the hand edits and re-runs only the parts not done. The record carries `request["button"]` |
+| No parse for a button either (since 3b-1b) | `_button_card`: the newest reply's card keeps the `request` it was built from. Code changes one field (`apply_action` in `agent/actions.py`: allow shopping → shopping; fewer dishes → the total down by one, never below one; no time limit → the limit cleared; any mix → the sides cleared, the total kept (`relax_split`; a typed `any_mix` starts from the same request, `any_mix_request` in `agent/change_step.py`); named ingredients optional → `must_use` and `all_use` moved into `prefer_use`). A card with `plan_kept` (the plan stayed) or `unfinished` (the change was done only in part) goes to the change branch; any other card plans from scratch. A button pressed with no card to change gets the fixed unclear reply, with no model call | The button keeps that turn's other conditions. On a card whose plan was kept or changed in part, it keeps the hand edits and re-runs only the parts not done. The record carries `request["button"]` |
 | unsure becomes plan | The route answers `unsure` | A message on a plan with dishes never reaches the route, so when the route runs there is no dish to change. (**[Earlier]** an unsure answer showed a revise-or-plan choice card, Section 5) |
 | revise becomes plan | `current_plan` is empty | There is no plan to change. A no-plan or early-stop reply counts as "a plan with no dishes": a route answer revise parses the message as a follow-up and plans from scratch |
 | Contradiction question | `request_problem`: the meat and vegetable ranges do not fit the total, or the total is over the limit | Asked in every style, at most once per new message. On the change branch, contradicting stated counts get the did-not-understand reply (no question) |
@@ -100,6 +100,23 @@ flowchart TD
 | No settled diner set yet | The user states a diet word about themselves ("吃素"); or the headcount is 2 or more, someone else is mentioned, the parse finds a guest, a saved friend is recognised, or someone else's rule is stated |
 | A settled set exists | A friend in the set was deleted; a friend or guest outside the set appears; a rule the set lacks is stated; the set has others but this parse says the user eats alone; the parsed headcount differs from the confirmed one |
 | A follow-up on a plan with dishes | The reader reads `people` (a change in who eats, or a lasting rule about someone): the card shows in its follow-up shape, then the current plan is adjusted on the change branch (Section 3, "A people turn"). A skipped card keeps the confirmed set; the reading's other changes still run |
+
+### The follow-up diner card (since 3b-2 (two))
+
+`build_follow_up_card` (`agent/diners.py`); the frontend is `DinerCard.tsx`.
+- **Start**: the confirmed set. Every diner of the set who still exists is selected, plus the friends the message names. The set's meal-only rules are proposed for this meal (ticked, "save" off). The set's guests come first and keep their keys; confirming (`apply_answer(settled=)`) keeps their keys and labels, and never trusts a key the set did not issue.
+- **No confirmed set**: it starts from the plan's own facts (`settled_from_plan`): the user, the plan's headcount minus one as unmatched people (`unsure` when the plan had unconfirmed diners, otherwise `none`), no meal-only rules, no guests.
+- **The total**:
+  - when the message states a headcount (`parsed_headcount`), that number, never below the people preselected. When the stated number is below, the card shows a notice (`stated_total`) and code unticks nobody;
+  - otherwise the set's headcount plus the people the message adds (new guests and newly matched friends).
+- **Unnamed people in the message**:
+  - one with a stated rule (allergy, avoid item or diet word) is always listed as a new guest, so the rule is never lost;
+  - one with no rule is covered by the set's unnamed people first (unnamed guests and unmatched people), and is a new guest only beyond them.
+- **Frontend, follow-up card only** (the card carries `others_answer`, even when null):
+  - unticking a person or removing a guest lowers the total by one; ticking back or adding one guest raises it by one;
+  - "fill in" on the unmatched people turns them into named guests and keeps the total.
+  - The first-turn card is unchanged: its total only rises to fit the people ticked and added.
+- **Invariant**: confirming the card untouched gives back the set plus exactly what the message added.
 
 **One-meal avoidance**: words about this meal only ("今天不想吃土豆") are nobody's lasting rule and show no card.
 - First turn: the parse puts it in `meal_avoid` (`parse_v8`).
@@ -320,6 +337,7 @@ After the diner card of a `people` reading, `build_change` runs on the current p
 - **Locked dishes** = dishes added by hand (`locked`) + dishes with a confirmed keep. A dish with a red unconfirmed conflict is not locked, and is replaced (removed when nothing replaces it).
 - A locked dish is never a candidate of a choice; it leaves only when the user's words point at it, or when it breaks a rule or this meal's avoidance.
 - A change makes a new **model version** (`edited: False`) carrying the locked dishes and confirmed conflicts that stay. A change of conditions with the same dishes is a new version too (for example, only the mode changed).
+  - A typed any-mix reading (`any_mix`) that lifts the plan's meat/vegetable split is such a change even when no dish changes: the new version keeps the same dishes and has the split cleared in its spec and `plan_request` (`present_change`, `lifted_split`).
 - "Restore the model's plan" restores the newest model version, a change's version included, with its locks and confirmations.
 - When the plan stays: `current_plan` and the version list do not change; `request` keeps this turn's request, so a later plan again uses the newest request. The reply's card carries this turn's request and `plan_kept`, so a next-action button on it changes the current plan again.
 
