@@ -41,7 +41,7 @@ def test_prompt_versions_name_existing_files():
     # Plan 3b-2 Task 8: no step loads a revise prompt, so revise_v4 left the label.
     assert list(PROMPT_VERSIONS) == ["route", "parse", "planner", "follow_up", "pick"]
     assert PROMPT_VERSION == "+".join(PROMPT_VERSIONS.values())
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v8+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v9+pick_v6"
     for kind, version in PROMPT_VERSIONS.items():
         assert version.startswith(f"{kind}_v")
         assert (PROMPT_DIR / f"{version}.md").exists()
@@ -235,7 +235,7 @@ def test_follow_up_v2_states_the_task_11_principles():
 
 def test_follow_up_v4_and_pick_v4_load_and_stay_within_the_size_budget():
     # Plan 3b-2 change fixes Task 2: the picker in use is pick_v5 (checked below); plan 3b-2
-    # (two): the reader in use is follow_up_v8. This test keeps the v4 numbers.
+    # (two): the reader in use is follow_up_v9. This test keeps the v4 numbers.
     reader = (PROMPT_DIR / "follow_up_v4.md").read_text(encoding="utf-8")
     picker = (PROMPT_DIR / "pick_v4.md").read_text(encoding="utf-8")
     assert len(reader) == 5499
@@ -708,7 +708,7 @@ def test_pick_v6_size():
 
 
 def test_prompt_versions_label():
-    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v8+pick_v6"
+    assert PROMPT_VERSION == "route_v6+parse_v8+planner_v5+follow_up_v9+pick_v6"
     assert PROMPT_VERSIONS["parse"] == "parse_v8"
     assert load_prompt("parse") == (PROMPT_DIR / "parse_v8.md").read_text(encoding="utf-8")
 
@@ -1260,9 +1260,16 @@ def _follow_up_v7_and_v8() -> tuple[str, str]:
     return v7, v8
 
 
-def test_follow_up_v8_is_in_use():
-    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v8"
-    assert load_prompt("follow_up") == _follow_up_v7_and_v8()[1]
+def test_follow_up_v8_is_frozen():
+    import hashlib
+
+    # Used by three evaluation runs, so it must never change; the reader's next change is
+    # follow_up_v9.
+    reader = (PROMPT_DIR / "follow_up_v8.md").read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(reader).hexdigest() == (
+        "a1dbeaaaa05eca06c6d9165b33677d2cf4f1c274faa8a45ecd29a70cd1dd62fe"
+    )
+    assert len(reader.decode("utf-8")) == 6406
 
 
 def test_follow_up_v8_is_within_budget():
@@ -1317,16 +1324,98 @@ def test_follow_up_v8_states_the_approved_rule_once():
     assert len(v7.splitlines()) == len(v8.splitlines())
 
 
-def test_follow_up_reading_schema_matches_follow_up_v8():
+# ---- plan 3b-2 (two): follow_up_v9, the reader budget raised to 8,000 characters ----
+
+
+def _follow_up_v8_and_v9() -> tuple[str, str]:
+    v8 = (PROMPT_DIR / "follow_up_v8.md").read_text(encoding="utf-8")
+    v9 = (PROMPT_DIR / "follow_up_v9.md").read_text(encoding="utf-8")
+    return v8, v9
+
+
+def test_follow_up_v9_is_in_use():
+    assert PROMPT_VERSIONS["follow_up"] == "follow_up_v9"
+    assert load_prompt("follow_up") == _follow_up_v8_and_v9()[1]
+
+
+def test_follow_up_v9_is_within_budget():
+    _, v9 = _follow_up_v8_and_v9()
+    assert len(v9) == 7953
+    # The user's decisions of 2026-11-29: the reader's budget is 8,000 characters (it was half
+    # of route_v6 plus revise_v4, 6408.5), and the reader-plus-picker bound no longer applies.
+    assert len(v9) < 8000
+
+
+def test_follow_up_v9_keeps_the_approved_rule_and_restores_the_trimmed_cues():
+    """Three runs of v8: a food left out of the meal also added dishes in its place, and an
+    amount wish about a food no dish has was read as a pointer at an absent dish. v9 keeps the
+    approved rule of v8, states what code does once, limits the absent-dish rule to pointers
+    and restores the cues v7 and v8 trimmed."""
+    v8, v9 = _follow_up_v8_and_v9()
+    # The approved rule, as v8 has it.
+    for line in (
+        "Use drop when the words only say not to have that dish, so the plan gets smaller",
+        "replace when they want another dish in its place or do not say",
+        'a food with a change verb ("X 换成", "把 X 换掉") points at the dish that has it',
+        "a complaint about it is a wish with wish_targets",
+        "fill nothing else (no remove, add or wish); meal_avoid stays as it is.",
+        "a rule about what a particular person eats (an allergy",
+        "are a wish with wish_targets, never left out and never plain removals",
+        '"带虾的那道撤了": ambiguous true, meal_avoid ["香菜"], nothing else;',
+    ):
+        assert line in v8 and line in v9, line
+    assert v9.count("Pointing at a dish is not naming a food.") == 1
+    # 1. Code replaces the dishes and keeps the counts, stated once; no add in their place.
+    assert v9.count("keeps the counts.") == 1
+    assert "never add dishes in place of the ones code replaces" in v9
+    assert "add only when the message asks for more dishes" in v9
+    assert "Leaving a food out, or wanting less of it, is not such a wish." in v9
+    # 2. The absent-dish rule is only for pointers; an amount on a food no dish has is a wish.
+    assert "This is only for words that point at a dish." in v9
+    assert "A wish, an amount, an avoidance or a rule about a food the plan lacks" in v9
+    assert "When no dish has the food they name, they are still that wish" in v9
+    assert '"虾有点多": change, ambiguous false; wish "虾有点多", wish_targets empty' in v9
+    # 3. Restored cues.
+    assert '("zh" is Chinese, "en" is English)' in v9
+    assert "copied character for character" in v9
+    assert "When the user changed the plan by hand after it was proposed" in v9
+    assert "remove empty (code replaces the soup)" in v9
+    # 4. A bare "X 不要了" is an avoidance, with an example.
+    assert 'a bare "X 不要了"' in v9
+    assert '"菠菜不要了": change;' in v9 and 'meal_avoid ["香菜", "菠菜"]' in v9
+    # 5. A dish type with "not wanted" points at the plan's dishes of that type: drop (user
+    # ruling 2026-11-29), stated once; the bare "X 不要了" avoidance is for foods only.
+    assert v9.count("a dish type (") == 1
+    assert "at the plan's dishes of that type" in v9
+    assert 'a bare "X 不要了" with X a food (not a title or a dish type)' in v9
+    assert '"汤不要了": remove 13, drop, quote "汤", nothing added.' in v9
+    # A food group is a food, never a dish type (final review): only dish types named as such
+    # point, so "meat" never matches a plan line's "meat dish".
+    assert 'A food group ("肉", "meat", "海鲜", "seafood", "蔬菜") is a food, not a dish type' in v9
+    assert "only the plan's dish types named as such" in v9
+    # Each principle once.
+    assert v9.count("A wish for something the plan lacks") == 1
+    assert v9.count("Words that point at a dish the plan lacks") == 1
+    # Kept: internal words never reach the user; at most seven example lines.
+    assert 'Never use ids, the marks (LOCKED and the others) or "Diner N" in it' in v9
+    examples = v9.split("Examples, on a plan of", 1)[1].splitlines()[1:]
+    assert len([line for line in examples if line.startswith("- ")]) <= 7
+
+
+def test_follow_up_reading_schema_matches_follow_up_v9():
     """The schema descriptions reach the reader with the prompt (`with_structured_output`),
     so they must not contradict it: drop is for a dish pointed at and not wanted, a food named
-    as not wanted is meal_avoid, a dish the plan lacks is ambiguous with nothing else, a rule
-    about a particular person is people, and the wish keeps the user's words and language."""
+    as not wanted is meal_avoid with no remove or add, only a pointer at a dish the plan lacks
+    is ambiguous with nothing else, an add is never in place of a dish code replaces, a wish
+    about a food no dish has keeps empty targets, a rule about a particular person is people,
+    and the wish keeps the user's words and language."""
     from minemydinner.agent.follow_up import FollowUpReading, ReadRemoval
 
     mode = ReadRemoval.model_fields["mode"].description
     assert "ask for fewer dishes" not in mode
-    assert "point at the dish and only say not to have it; the plan gets smaller" in mode
+    assert "only say not to have it; the plan gets smaller" in mode
+    # A dish type points at the plan's dishes of that type (user ruling 2026-11-29).
+    assert "or by its dish type)" in mode
     assert '"replace": they want another dish in its place, or do not say.' in mode
     assert "character for character" in ReadRemoval.model_fields["quote"].description
     fields = FollowUpReading.model_fields
@@ -1342,4 +1431,14 @@ def test_follow_up_reading_schema_matches_follow_up_v8():
     assert "then fill nothing else" not in ambiguous
     assert "for a dish the plan does not have, fill nothing else" in ambiguous
     assert "(meal_avoid stays as it is)" in ambiguous
+    # Only a pointer fills nothing else; a wish, an amount, an avoidance or a rule never does.
+    assert "Only such a pointer" in ambiguous
+    # The pointer list matches the prompt's (review M3; a dish type, user ruling 2026-11-29).
+    assert '"the X one", a food with a change verb, or a dish type)' in ambiguous
+    assert "a wish, an amount, an avoidance or a rule" in ambiguous
     assert "that the plan has no such dish" in fields["reading"].description
+    add = fields["add"].description
+    assert "only when the message asks for more dishes" in add
+    assert "never in place of dishes code replaces" in add
+    assert "so it needs no remove and no add" in meal_avoid
+    assert "code then says nothing matched" in fields["wish_targets"].description

@@ -899,11 +899,11 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         # A new turn starts the buffer fresh; the run records it when it starts.
         events = [_model_call_event(deps.client, "read_follow_up", messages, result)]
         if reading_changes_nothing(reading, meal_avoid):
-            # Task 11 fix 3: a change reading with a wish that changes nothing contradicts
-            # itself (a structural check, not a reading of the words). It is asked again
-            # once, from fresh messages and the problem; the picker's turn budget gives up
-            # the call (`build_change`). A second answer that still changes nothing is used
-            # as it is.
+            # Task 11 fix 3: a change reading with a wish that changes nothing may have
+            # missed a change (a structural check, not a reading of the words), but it can
+            # also be correct (follow_up_v9: less of a food no dish has). It is asked once
+            # to check itself, from fresh messages and the neutral problem; the picker's turn
+            # budget gives up the call (`build_change`). The second answer is used as it is.
             problem = reader_problem(reading)
             events.append(
                 {

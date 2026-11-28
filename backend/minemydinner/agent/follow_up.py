@@ -24,7 +24,8 @@ class ReadRemoval(BaseModel):
     id: int = Field(description="The id of the dish in the current plan.")
     mode: Literal["drop", "replace"] = Field(
         description=(
-            "\"drop\": the words point at the dish and only say not to have it; the plan gets "
+            "\"drop\": the words point at the dish (by its title, as that one, by a food with a "
+            "change verb, or by its dish type) and only say not to have it; the plan gets "
             "smaller. \"replace\": they want another dish in its place, or do not say."
         )
     )
@@ -131,8 +132,10 @@ class FollowUpReading(BaseModel):
         default=False,
         description=(
             "True when the message can be read in more than one way, or when its words point at "
-            "a dish the plan does not have; for a dish the plan does not have, fill nothing else "
-            "(meal_avoid stays as it is)."
+            "a dish the plan does not have (a title, \"that one\", \"the X one\", a food with a "
+            "change verb, or a dish type); for a dish the plan does not have, fill nothing "
+            "else (meal_avoid stays as it is). Only such a pointer: a wish, an amount, an "
+            "avoidance or a rule about a food the plan lacks is never ambiguous for that reason."
         ),
     )
     reading: str = Field(
@@ -148,7 +151,11 @@ class FollowUpReading(BaseModel):
     )
     add: list[ReadAdd] = Field(
         default_factory=list,
-        description="Dishes the message adds, each as a dish type and count or a named dish.",
+        description=(
+            "Dishes the message adds, each as a dish type and count or a named dish: only when "
+            "the message asks for more dishes or names one, or to meet a wish for something the "
+            "plan lacks; never in place of dishes code replaces for a rule or an avoidance."
+        ),
     )
     wish: str = Field(
         default="",
@@ -162,7 +169,7 @@ class FollowUpReading(BaseModel):
         description=(
             "When the wish is about dishes of the plan rather than a dish this message already "
             "removes or adds: the ids of the dishes it touches, most touched first. Empty when "
-            "it touches none."
+            "it touches none, as for less of a food no dish has: code then says nothing matched."
         ),
     )
     meal_avoid: list[str] = Field(
@@ -170,7 +177,8 @@ class FollowUpReading(BaseModel):
         description=(
             "The WHOLE list of foods to leave out of this meal, for no one in particular, after "
             "this message, so a withdrawn wish is simply missing from it. A food named as not "
-            "wanted goes here, never words that point at a dish."
+            "wanted goes here, never words that point at a dish; code replaces the dishes that "
+            "have it, so it needs no remove and no add."
         ),
     )
     counts: ReadCounts = Field(

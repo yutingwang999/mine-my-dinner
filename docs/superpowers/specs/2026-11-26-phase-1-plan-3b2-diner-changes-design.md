@@ -40,6 +40,7 @@ The user wants a change in who eats to **adjust the current plan** (user decisio
 
 - Prompt versions any run used are never edited: the reader's change is `follow_up_v5`; `follow_up_v4`, `pick_v6`, `parse_v8`, `route_v6`, `planner_v5` stay as they are. `pick_v6` and `parse_v8` are not changed by this plan.
 - The reader prompt stays within the 3b-2 design 5.8a budget: under half of `route_v6` + `revise_v4` (about 6,900 characters); `follow_up_v4` is 5,788. `docs/prompt-versions.md` records its length.
+  - Amendment 2026-11-29 (user decision): from `follow_up_v9` the reader's budget is 8,000 characters, since the half budget made `follow_up_v7` and `follow_up_v8` trim useful cues; `follow_up_v9` is 7,953; the reader-plus-picker bound (under `route_v6` + `revise_v4`, 12,817) no longer applies (user decision 2026-11-29).
 - Saved nicknames never reach a model; "Diner N" is never shown to the user; the card reaches the client through `client_card` without server-only fields.
 - A change turn makes at most 7 model calls, the parse on a people turn included.
 - Held-out scenario files are the user's: no expectation in them changes without the user's approval; no held-out sentence appears in a prompt, a test, a doc or a development scenario.
