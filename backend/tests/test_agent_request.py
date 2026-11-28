@@ -1195,8 +1195,9 @@ def _follow_up_v6_and_v7() -> tuple[str, str]:
 def test_follow_up_v7_is_frozen():
     import hashlib
 
-    # Used by three evaluation runs, so it must never change; the reader's next change is
-    # follow_up_v8.
+    # Used by eleven evaluation runs (round 15) and shipped by plan 3b-2 (two) (user decision
+    # 2026-11-29, option C), so it must never change. follow_up_v8 and follow_up_v9 came
+    # after it and are frozen records; the reader's next change is follow_up_v10.
     reader = (PROMPT_DIR / "follow_up_v7.md").read_bytes().replace(b"\r\n", b"\n")
     assert hashlib.sha256(reader).hexdigest() == (
         "e6b92868a56683fcd2443ea178fbf48bd472b01c477a9bc9ad626ba20fcd9bb2"

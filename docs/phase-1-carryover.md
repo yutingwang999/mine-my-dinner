@@ -38,8 +38,8 @@ Counts per section (2026-11-29; the earlier sections were counted 2026-11-24):
 | Deferred from Phase 1 plan 3b-1b | 11 | 0 | 0 | 15 |
 | Deferred from Phase 1 plan 3b-2 (one) | 15 | 0 | 0 | 12 |
 | Deferred from Phase 1 plan 3b-2 change fixes | 8 | 1 | 0 | 3 |
-| Deferred from Phase 1 plan 3b-2 (two) | 13 | 4 | 2 | 0 |
-| **Total** | **164** | **23** | **2** | **78** |
+| Deferred from Phase 1 plan 3b-2 (two) | 13 | 4 | 4 | 1 |
+| **Total** | **164** | **23** | **4** | **79** |
 
 ## Work Phase 0 explicitly handed to Phase 1 tasks
 
@@ -707,7 +707,6 @@ Findings judged safe to defer during plan 3b-2 (two)'s task reviews and developm
 - `Note` **Unnamed guests restated on a follow-up card (Task 3 and Task 3b reviews) (→ no change; the user unticks).** An unnamed parse guest counts as new only past the set's unnamed room, which keeps the card consistent with `card_needed` and avoids counting a restated person twice. That rule had absorbed an unnamed guest stated with a rule (a restated friend who avoids something) and lost the rule, so Task 3b (user-approved, 2026-11-28) lists an unnamed parse guest with stated rules, or only a diet word, as a new guest and never absorbs it. The accepted trade-off: a restated unnamed guest with a rule may be listed twice or raise the total by one; the user unticks it.
 - `Open` **`locked_count_kept` always blames locked dishes (Task 5 and Task 6 reviews) (→ code health, any step).** The reply sentence says the moved count did not drop because the dishes are locked, but `remove_count` takes replace slots first, so the case where it is wrong is narrow. The wording could name the real reason.
 - `Note` **A contradictory people turn takes the meal avoidance from the plan (Task 6 review) (→ no change).** On the unclear exit, the one-meal avoidance comes from the plan, not from the reading. This is correct: nothing else changes on a contradictory turn, and the new constraints and `plan_request` headcount are saved so the set and the constraints never split.
-- `Open` **`parsed_headcount` is stale on a button or plan-again card (Task 6 review) (→ code health, any step).** `parsed_headcount` is set by every parse and kept across turns, so a turn that reuses the last parse ("plan again") or a button turn carries the last message's number. It is correct for plan again, and a button turn never reads it; a short comment or a reset would remove the doubt.
 - `Note` **The `diners_changed` state field was added beyond the plan (Task 6 review) (→ no change).** A people turn whose confirmed card changed the set makes a new version even when no dish changes, so the plan card's diners line shows the new set (`diners_changed`, reset by every new message). The field was not in the plan's brief; the design's 5.5 reply sentences do not mention it.
 - `Open` **Record the reader's schema identity in the evaluation summary (Task 8 review) (→ T1.10).** The reader's schema changed in `follow_up_v5` (an enum `dish_type`, `any_mix`, `no_longer_must_use`). A `READER_TOOLS_VERSION` recorded in the evaluation summary would tell runs of different schemas apart, as `PICK_TOOLS_VERSION` does for the picker.
 - `Watch` **A people reading with an empty `meal_avoid` on a plan that has one (Task 8 review) (→ plan 3b-2 (two) evaluation rounds).** Code applies the reading's `meal_avoid` as the meal's whole list (design 5.4: code does not interpret), so a people reading that omits the plan's one-meal avoidance withdraws it. A graph test pins that a people reading that repeats it keeps it; whether the reader repeats it is watched in round 14.
@@ -717,3 +716,18 @@ Findings judged safe to defer during plan 3b-2 (two)'s task reviews and developm
 - `Open` **The user-approved dish-pointer versus food rule table (round 15) (→ input for the next reader version).** As `follow_up_v8` and `follow_up_v9` encoded it: a dish pointer plus not wanted is `drop`; a pointer plus another is `replace`; a food left out is `meal_avoid`; a pointer to an absent dish asks which; a person's rule is people. It includes the dish-type rule ("汤不要了" means drop) and food groups are not dish types. `follow_up_v7` only partly follows it. Use it as the input for the next reader version, together with the 8,000-character reader budget (user decision 2026-11-29).
 - `Open` **Run round 13's configuration 3 times before judging the next reader version against round 13 (round 15) (→ before the next reader evaluation).** Round 13's thresholds come from a single run, so its variance is unknown. This needs a branch or worktree at the round-13 commit, done by the user.
 - `Open` **The neutral re-ask idea from v9 is not shipped (round 15) (→ re-open with the next reader version).** In v9, `reader_problem` steered the model toward remove or add, which is code steering the understanding. It was not shipped because `follow_up_v7`'s text was restored; the idea comes back with the next reader version.
+- `Watch` **With the shipped `follow_up_v7`, a meal-avoid withdrawal may be read as ambiguous (whole-branch review) (→ the next reader version and its evaluation rounds).** Taking an avoidance back ("香菜其实放点也行") names a food the plan lacks, since the avoidance kept it out. `follow_up_v7`'s keep-the-words line sets `ambiguous` for words that change a food the plan lacks and exempts only an avoidance, a rule or a wish for something the plan lacks, not a withdrawal, although its example reads the withdrawal as a plain `meal_avoid` change. A withdrawal read as ambiguous adds a reading sentence to the reply. Watched in the next reader evaluation.
+- `Watch` **With the shipped `follow_up_v7`, "不要鸡块了"-like words may be read as a dish drop or as a food for `meal_avoid` (whole-branch review) (→ the next reader version; the fix is the rule-table item above).** `follow_up_v7` has no rule for a dish title said as not wanted, so the reader may drop the dish (the plan shrinks) or put the food in `meal_avoid` (code replaces the dish). The user-approved dish-pointer rule table, an `Open` item above, is the fix.
+- `Open` **A card shown on a plan-again or button turn stores `stated_headcount` None, so the next plan-again asks the card again (final-review fix wave) (→ next plan).**
+  - Why it happens: `_fresh_turn` now resets `parsed_headcount`, so a turn with no parse passes `stated=None` to `apply_answer`. That turn is one that shows the diner card because a settled friend was deleted.
+  - Then: the next plan-again reuses a request with a headcount, and `card_needed` compares it with `None`.
+  - Effect: an extra card question in a rare case. It never gives a wrong plan.
+  - Fix: on a turn with no parse, keep the earlier set's `stated_headcount` in `select_diners`.
+
+<details>
+<summary>Closed items (1)</summary>
+
+- `Done` **`parsed_headcount` is stale on a button or plan-again card (Task 6 review) (→ code health, any step).** `parsed_headcount` was set by every parse and kept across turns, so a turn with no parse (a button, or "plan again") carried an older message's number. A button turn that shows the card (a settled friend deleted since) did read it: the follow-up card's total started from that number.
+  - Status (2026-11-29): whole-branch review fix: `_fresh_turn` resets it to None on every new message, so a turn with no parse starts the card from the set's headcount (`test_graph_button_card_does_not_use_an_earlier_stated_headcount`).
+
+</details>

@@ -40,6 +40,12 @@ def test_moved_counts_floors():
     assert moved_counts(5, 2, _present(dishes=2, soups=1)) == {"dishes": 1, "soups": 0}
 
 
+def test_moved_counts_never_adds_a_dish_when_people_leave():
+    """A plan with no meat or vegetable dish keeps none when people leave: the floor is the
+    plan's own count when that is below one."""
+    assert moved_counts(5, 2, _present(soups=1, staples=1)) == {"dishes": 0, "soups": 0}
+
+
 def test_message_sets_counts():
     assert message_sets_counts(FollowUpReading(kind="people", add=[ReadAdd(dish_type="soup")]))
     assert message_sets_counts(FollowUpReading(kind="people", counts=ReadCounts(soups=1)))

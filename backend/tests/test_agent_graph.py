@@ -1873,6 +1873,34 @@ def test_graph_plan_again_asks_when_a_settled_friend_was_deleted(tmp_path, sessi
     assert [row["diner_id"] for row in card.value["rows"]] == [me.id]
 
 
+def test_graph_button_card_does_not_use_an_earlier_stated_headcount(
+    tmp_path, session, seeded, veg
+):
+    """A button turn has no parse: when a deleted settled friend shows the card, its total
+    starts from the set's headcount, never a number an earlier message stated
+    (`parsed_headcount` is reset by every new message)."""
+    from minemydinner.agent.request import ACTION_MESSAGES
+
+    me = self_diner(session)
+    wang = add_friend(session, "小王")
+    env = labelled_env(tmp_path, session)
+    (card,) = plan(env, "我们五个人吃", parse={"headcount": 5, "dishes": 1}, locale="zh")[
+        "__interrupt__"
+    ]
+    env.model.replies = [final_proposal([veg.id])]
+    out = resume(env, {card.id: {"selected": [me.id, wang.id], "headcount": 3}})
+    assert out["settled_diners"]["headcount"] == 3
+    assert env.graph.get_state(env.config).values["parsed_headcount"] == 5
+    session.delete(wang)
+    session.flush()
+    out = plan(env, ACTION_MESSAGES["zh"]["switch_to_shopping"], locale="zh")
+    (card,) = out["__interrupt__"]
+    assert card.value["kind"] == "diners"
+    assert card.value["headcount"] != 5
+    assert card.value.get("stated_total") is None
+    assert env.graph.get_state(env.config).values["parsed_headcount"] is None
+
+
 def test_graph_plan_again_skips_the_card_otherwise(tmp_path, session, seeded, veg):
     env, me, wang, first = settle_me_and_wang(tmp_path, session, veg)
     out = plan(env, REPLAN_MESSAGE["zh"], replies=[final_proposal([veg.id])], locale="zh")
@@ -5792,8 +5820,69 @@ def test_people_turn_cannot_drop_locked_dishes(revise_env):
     change = out["change"]["diner_change"]
     assert change["moved"] == {"dishes": 1, "soups": 0}
     assert change["must_change"] == 3 and change["remade"] is False
-    assert locked_count_kept("zh") in out["messages"][-1].content
+    reply = out["messages"][-1].content
+    assert locked_count_kept("zh") in reply
+    # The who-eats sentence states the result: no dish left, so it says no drop.
+    assert reply.split("\n\n")[0] == "现在是 1 个人吃。"
+    assert "少了" not in reply
     assert out["constraints"]["headcount"] == 1
+
+
+def test_people_turn_untyped_add_that_finds_no_dish_is_not_said_as_added(revise_env):
+    """The new headcount adds an untyped dish, but the picker finds none: the who-eats
+    sentence states the result, so it does not say a dish was added."""
+    env = revise_env
+    me = self_diner(env.session)
+    [cabbage] = dish_ids(env, "清炒小白菜")
+    say(
+        env, "今晚吃什么", "plan", parse={"dishes": 1, "mode": "shopping"},
+        replies=[final_proposal([cabbage])],
+    )
+    _, out = people_turn(
+        env,
+        "Alex 也来",
+        {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 2},
+        parse={"guests": [{"name": "Alex"}]},
+        replies=[pick(slots=[(0, None)])],
+    )
+    assert "__interrupt__" not in out
+    assert out["change"]["diner_change"]["moved"] == {"dishes": 2}
+    assert ids_of_plan(out["current_plan"]) == [cabbage]
+    reply = out["messages"][-1].content
+    assert reply.split("\n\n")[0] == "现在是 2 个人吃。"
+    assert "加了" not in reply
+
+
+def test_people_turn_invalid_spec_after_card_keeps_set_and_constraints_in_sync(
+    revise_env, monkeypatch
+):
+    """The second unclear exit (a revision spec that does not validate) after the card keeps
+    the confirmed set, the constraints and the plan's request headcount in step, as the
+    contradictory-counts exit does."""
+    from minemydinner.agent import graph as graph_module
+    from minemydinner.agent.graph import UNCLEAR_REPLY_ZH
+    from minemydinner.planning.validate import PlanSpec
+
+    def invalid(*args, **kwargs):
+        return PlanSpec.model_validate({"dishes": "many"})
+
+    monkeypatch.setattr(graph_module, "revision_spec", invalid)
+    env = revise_env
+    me = self_diner(env.session)
+    first = meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1, "meal_avoid": ["香菜"]})
+    answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 4}
+    _, out = people_turn(
+        env, "Alex 也来", answer, reading={"kind": "people", "meal_avoid": ["香菜"]},
+        parse={"guests": [{"name": "Alex"}]},
+    )
+    assert "__interrupt__" not in out
+    assert out["messages"][-1].content == UNCLEAR_REPLY_ZH
+    assert out["current_plan"] == first["current_plan"]
+    assert out["settled_diners"]["headcount"] == 4
+    assert out["constraints"]["headcount"] == 4
+    assert out["constraints"]["unconfirmed_diners"] == 2
+    assert out["constraints"]["meal_avoid"] == ["香菜"]
+    assert out["plan_request"]["headcount"] == 4
 
 
 def test_people_turn_remakes_when_most_dishes_must_change(revise_env):
@@ -6009,8 +6098,10 @@ def test_people_turn_replaced_sentence_names_no_person(revise_env):
     )
     reply = out["messages"][-1].content
     assert "Diner" not in reply and "小李" not in reply
-    # Spec 5.6: a dish replaced for a new person's rule names the reason as a diner rule.
-    assert rule_reason("diner_rule", [], "zh") in reply
+    # Spec 5.6: a dish replaced for a new person's rule names the reason as a diner rule,
+    # after the replacement.
+    assert "把土豆炖牛肉换成了青椒炒肉，因为土豆炖牛肉不适合一起吃饭的人。" in reply
+    assert rule_reason("diner_rule", [], "zh") == "它不适合一起吃饭的人"
 
 
 def test_remade_reply_says_why(revise_env):
@@ -6033,7 +6124,32 @@ def test_remade_reply_says_why(revise_env):
         env, "小李也来", {"selected": [me.id, li.id], "headcount": 4}, replies=[picks]
     )
     assert out["change"]["diner_change"]["remade"] is True
-    assert remade_sentence("zh") in out["messages"][-1].content
+    # The hand-added dish stayed in the result, so the sentence says so.
+    assert remade_sentence("zh", kept_locked=True) in out["messages"][-1].content
+
+
+def test_remade_reply_without_a_locked_dish_does_not_say_one_was_kept(revise_env):
+    from minemydinner.agent.change_text import remade_sentence
+
+    env = revise_env
+    me = self_diner(env.session)
+    titles = ("土豆炖牛肉", "青椒炒肉", "紫菜蛋花汤")
+    meal_for(env, 3, titles, {"dishes": 2, "soups": 1})
+    chicken = make_recipe(env.session, "红烧鸡块", "meat dish", [L("鸡肉", "main")])
+    lamb = make_recipe(env.session, "葱爆羊肉", "meat dish", [L("羊肉", "main")])
+    melon = make_recipe(env.session, "冬瓜汤", "soup", [L("冬瓜", "main")])
+    li = add_friend(env.session, "小李")
+    for name in ("牛肉", "猪肉", "紫菜"):
+        rule(env.session, li.id, "dietary restriction", ingredient=name)
+    picks = pick(slots=[(0, chicken.id), (1, lamb.id), (2, melon.id)])
+    _, out = people_turn(
+        env, "小李也来", {"selected": [me.id, li.id], "headcount": 4}, replies=[picks]
+    )
+    assert out["change"]["diner_change"]["remade"] is True
+    assert not out["current_plan"].get("locked")
+    reply = out["messages"][-1].content
+    assert remade_sentence("zh", kept_locked=False) in reply
+    assert remade_sentence("zh", kept_locked=True) not in reply
 
 
 def test_not_remade_reply_does_not_say_remade(revise_env):
@@ -6044,7 +6160,8 @@ def test_not_remade_reply_does_not_say_remade(revise_env):
     meal_for(env, 3, MEAL, {"dishes": 2, "soups": 1})
     answer = {"selected": [me.id], "guests": [{"name": "Alex", "rules": []}], "headcount": 4}
     _, out = people_turn(env, "Alex 也来", answer, parse={"guests": [{"name": "Alex"}]})
-    assert remade_sentence("zh") not in out["messages"][-1].content
+    for kept in (True, False):
+        assert remade_sentence("zh", kept_locked=kept) not in out["messages"][-1].content
 
 
 def test_skipped_follow_up_card_says_diners_unchanged(revise_env):

@@ -323,12 +323,17 @@ def test_who_eats_sentence_names_what_moved_in_en():
 def test_remade_sentence_in_both_languages():
     from minemydinner.agent.change_text import remade_sentence
 
-    assert remade_sentence("zh") == (
+    assert remade_sentence("zh", kept_locked=True) == (
         "新加入的人让大部分菜都要换，所以重新配了一桌，你手动加的菜都保留了。"
     )
-    assert remade_sentence("en") == (
+    assert remade_sentence("en", kept_locked=True) == (
         "Most dishes had to change for the new diners, so I made the plan again, keeping the "
         "dishes you added yourself."
+    )
+    # No locked dish stayed in the result: nothing is said to be kept.
+    assert remade_sentence("zh", kept_locked=False) == "新加入的人让大部分菜都要换，所以重新配了一桌。"
+    assert remade_sentence("en", kept_locked=False) == (
+        "Most dishes had to change for the new diners, so I made the plan again."
     )
 
 
@@ -354,7 +359,13 @@ def test_change_sentences_name_a_diner_rule_reason():
     en = rule_reason("diner_rule", [], "en")
     assert (
         change_sentences([("牛肉", "猪肉")], [], [], "zh", reasons={"牛肉": zh})
-        == f"因为{zh}，把牛肉换成了猪肉。"
+        == "把牛肉换成了猪肉，因为牛肉不适合一起吃饭的人。"
+    )
+    assert (
+        change_sentences(
+            [("牛肉", "猪肉"), ("鱼", "豆腐")], [], [], "zh", reasons={"牛肉": zh}
+        )
+        == "把牛肉换成了猪肉，因为牛肉不适合一起吃饭的人，把鱼换成了豆腐。"
     )
     assert (
         change_sentences([("beef", "pork")], [], [], "en", reasons={"beef": en})

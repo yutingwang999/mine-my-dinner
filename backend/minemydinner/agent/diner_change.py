@@ -15,12 +15,14 @@ from minemydinner.planning.composition import CATEGORY_OF_DISH_TYPE
 def moved_counts(old_headcount: int, new_headcount: int, present: dict[str, int]) -> dict[str, int]:
     """The counts the new headcount moves: the plan's dish (or soup) count shifts by the change
     in the default composition, so a stated count stays stated. `present` is the plan's
-    `count_categories`. A count whose default does not change is not in the result."""
+    `count_categories`. A count whose default does not change is not in the result. The dishes
+    never go below one, or below the plan's own count when that is zero, so a plan with no
+    meat or vegetable dish never gains one when people leave."""
     d0, s0 = default_composition(old_headcount)
     d1, s1 = default_composition(new_headcount)
     moved: dict[str, int] = {}
     if d1 != d0:
-        moved["dishes"] = max(1, present["dishes"] + d1 - d0)
+        moved["dishes"] = max(min(1, present["dishes"]), present["dishes"] + d1 - d0)
     if s1 != s0:
         moved["soups"] = max(0, present["soups"] + s1 - s0)
     return moved

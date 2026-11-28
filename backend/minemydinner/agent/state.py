@@ -88,8 +88,9 @@ class ChatState(TypedDict):
     settled_diners: dict | None
     # The parse's own headcount, before `carry_unstated` fills it from the plan's request: the
     # number the message states, which the follow-up card's total starts from. Set by every
-    # parse and kept across turns (a new message does not reset it): a turn that reuses the
-    # last parse ("plan again") reuses its headcount too, which is correct.
+    # parse and reset to None by every new message, so a turn with no parse (a button, or
+    # "plan again" reusing the last parse) states no number and the card's total starts from
+    # the confirmed set's headcount.
     parsed_headcount: int | None
     # This turn's diner card was skipped on a people turn (the confirmed set stays). Reset by
     # every new message.

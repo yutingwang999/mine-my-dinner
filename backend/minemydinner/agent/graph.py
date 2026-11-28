@@ -27,6 +27,7 @@ from minemydinner.agent.card_text import (
 from minemydinner.agent.change_rules import carry_unstated, revision_spec
 from minemydinner.agent.change_step import (
     UNFINISHED,
+    any_mix_request,
     button_reading,
     change_actions,
     change_unmet,
@@ -37,7 +38,6 @@ from minemydinner.agent.change_step import (
     reader_problem,
     reading_changes_nothing,
     result_spec,
-    any_mix_request,
     relax_split_spec,
     slot_results,
     unfinished_items,
@@ -519,6 +519,8 @@ def _fresh_turn(state: ChatState) -> dict:
         "reading": None,
         "diners_skipped": False,
         "diners_changed": False,
+        # A turn with no parse (a button, "plan again") states no number.
+        "parsed_headcount": None,
     }
 
 
@@ -1091,8 +1093,9 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         with dishes, the card takes its follow-up shape and starts from that set; a people
         turn on a thread with no confirmed set starts from the plan's own facts
         (`settled_from_plan`). Its total starts from the headcount the parse states
-        (`parsed_headcount`), never the one carried from the plan. A skipped card on a people
-        turn keeps the set as it was (`diners_skipped`)."""
+        (`parsed_headcount`), never the one carried from the plan; a turn with no parse (a
+        button, "plan again") states none, so it starts from the set's. A skipped card on a
+        people turn keeps the set as it was (`diners_skipped`)."""
         parsed = ParsedRequest.model_validate(state["request"])
         ctx = current_labels.get()
         texts = _current_request(state["messages"])
@@ -1695,19 +1698,24 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             unfinished = _button_card(state).get(UNFINISHED)
             words = (unfinished or {}).get("words") or "\n".join(_offering_words(state))
         parsed = ParsedRequest.model_validate(request)
-        if request_problem(parsed):
-            # Stated counts that contradict each other: nothing changes (no question, spec
-            # 5.6); the reply asks for the counts again.
+
+        def unclear_exit() -> Command:
+            """Nothing changes and the reply says the message was not understood. On a people
+            turn the card already confirmed the set: the constraints and the plan's request
+            follow it, so they never split from `settled_diners`."""
             stop: dict[str, Any] = {"model_calls": []}
             if people is not None:
-                # The card already confirmed the set: the constraints and the plan's request
-                # follow it, so they never split from `settled_diners`.
                 with deps.session_factory() as session:
                     stop["constraints"] = with_meal_avoid(
                         session, people_set, list(plan["meal_avoid"])
                     )
                 stop["plan_request"] = {**base, "headcount": people["new_headcount"]}
             return Command(update=stop, goto="unclear")
+
+        if request_problem(parsed):
+            # Stated counts that contradict each other: nothing changes (no question, spec
+            # 5.6); the reply asks for the counts again.
+            return unclear_exit()
         # A reading's counts are this message's own (request_after clears the count group),
         # so a side it states counts even when it equals the plan's request ("还是要两个荤菜"
         # after a turn that could not add one); the other fields still compare with it.
@@ -1717,7 +1725,7 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
         try:
             spec = revision_spec(plan, previous, request)
         except ValidationError:
-            return Command(update={"model_calls": []}, goto="unclear")
+            return unclear_exit()
         if button is not None:
             spec = spec.model_copy(update=spec_changes(request, button))
             # A kept turn's card request may hold a newer avoidance than the plan; an empty
@@ -2461,20 +2469,12 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
             new_conditions = True
         who_text = who_eats_text = locked_text = ""
         if diner_change is not None:
-            skipped_text = diners_unchanged_sentence(locale) if diner_change["skipped"] else ""
-            remade_text = remade_sentence(locale) if diner_change["remade"] else ""
-            who_text = who_eats_sentence(
-                diner_change["old_headcount"],
-                diner_change["new_headcount"],
-                diner_change["moved"],
-                diner_change["present"],
-                locale,
-            )
-            who_eats_text = who_text
-            who_text = "\n\n".join(p for p in (who_text, remade_text, skipped_text) if p)
-            if diner_change["moved"] and result_ids:
-                # A count the new headcount lowers that the result still exceeds: the dishes
-                # it would drop are all locked (spec 5.4, a drop never takes a locked dish).
+            moved = diner_change["moved"]
+            # The result's counts for the counts the headcount moved: the who-eats sentence
+            # states what the result did, not what the moved counts asked for (locked dishes
+            # kept, an add that found no dish).
+            reached: dict[str, int] = {}
+            if moved and result_ids:
                 with deps.session_factory() as session:
                     types = dict(
                         session.execute(
@@ -2482,8 +2482,27 @@ def build_graph(deps: GraphDeps, checkpointer) -> CompiledStateGraph:
                         ).all()
                     )
                 have = count_categories(types[i] for i in result_ids if i in types)
-                if any(have[k] > v for k, v in diner_change["moved"].items()):
+                reached = {k: have[k] for k in moved}
+                if any(have[k] > v for k, v in moved.items()):
+                    # A count the new headcount lowers that the result still exceeds: the
+                    # dishes it would drop are all locked (spec 5.4, a drop never takes a
+                    # locked dish).
                     locked_text = locked_count_kept(locale)
+            skipped_text = diners_unchanged_sentence(locale) if diner_change["skipped"] else ""
+            remade_text = ""
+            if diner_change["remade"]:
+                # "Your hand-added dishes were kept" only when a locked dish stayed.
+                stayed = (locked_ids(live) - open_conflict_ids(live)) & set(result_ids)
+                remade_text = remade_sentence(locale, kept_locked=bool(stayed))
+            who_text = who_eats_sentence(
+                diner_change["old_headcount"],
+                diner_change["new_headcount"],
+                reached,
+                diner_change["present"],
+                locale,
+            )
+            who_eats_text = who_text
+            who_text = "\n\n".join(p for p in (who_text, remade_text, skipped_text) if p)
         frame_empty = not (
             frame.drops or frame.slots or frame.choices or frame.placed or frame.missing
         )

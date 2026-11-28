@@ -73,12 +73,15 @@ CONDITIONS_ONLY_EN = "No dish needed to change; the plan now follows the new con
 WHO_EATS_ZH = "现在是 {n} 个人吃。"
 WHO_EATS_EN = "Now {n} people are eating."
 WHO_EATS_ONE_EN = "Now 1 person is eating."
-# A people turn whose new diners make most dishes change: the plan is made again.
-REMADE_ZH = "新加入的人让大部分菜都要换，所以重新配了一桌，你手动加的菜都保留了。"
-REMADE_EN = (
+# A people turn whose new diners make most dishes change: the plan is made again. The
+# "kept" form only when a locked dish stayed in the result.
+REMADE_KEPT_ZH = "新加入的人让大部分菜都要换，所以重新配了一桌，你手动加的菜都保留了。"
+REMADE_KEPT_EN = (
     "Most dishes had to change for the new diners, so I made the plan again, keeping the "
     "dishes you added yourself."
 )
+REMADE_ZH = "新加入的人让大部分菜都要换，所以重新配了一桌。"
+REMADE_EN = "Most dishes had to change for the new diners, so I made the plan again."
 # A people turn whose follow-up diner card was skipped.
 DINERS_UNCHANGED_ZH = "吃饭的人没有变。"
 DINERS_UNCHANGED_EN = "Who is eating has not changed."
@@ -382,7 +385,7 @@ def change_sentences(
         if zh:
             parts.append(
                 "，".join(
-                    f"因为{reasons[old]}，把{old}换成了{new}"
+                    f"把{old}换成了{new}，因为{_about(reasons[old], old)}"
                     if reasons.get(old)
                     else f"把{old}换成了{new}"
                     for old, new in pairs
@@ -402,6 +405,12 @@ def change_sentences(
     if added:
         parts.append(f"加了{join.join(added)}。" if zh else f"Added {join.join(added)}.")
     return "".join(parts) if zh else " ".join(parts)
+
+
+def _about(reason: str, title: str) -> str:
+    """A zh reason after the replacement names the dish it is about: "它不适合…" said after
+    "把X换成了Y" would read as about Y, so its leading "它" becomes X."""
+    return title + reason[1:] if reason.startswith("它") else reason
 
 
 def rule_reason(reason: str, meal_avoid: Collection[str], locale: str) -> str:
@@ -624,14 +633,16 @@ def _moved_en(counts: dict[str, int]) -> str:
 
 
 def who_eats_sentence(
-    old: int, new: int, moved: dict[str, int], present: dict[str, int], locale: str
+    old: int, new: int, result: dict[str, int], present: dict[str, int], locale: str
 ) -> str:
-    """The who-eats sentence of a people turn: how many people eat now, and what moved with
-    them (`moved` holds the new counts, `present` the old ones). Empty when the headcount is
-    the same and no count moved."""
-    if old == new and not moved:
+    """The who-eats sentence of a people turn: how many people eat now, and the counts that
+    actually changed with them. `result` holds the result's counts for the counts the new
+    headcount moved (empty when it moved none), `present` the counts before; a moved count
+    the result did not reach (locked dishes kept, an add that found no dish) is said only as
+    far as it changed. Empty when the headcount is the same and no count moved."""
+    if old == new and not result:
         return ""
-    added, dropped = _moves(moved, present)
+    added, dropped = _moves(result, present)
     if is_zh(locale):
         head = WHO_EATS_ZH.format(n=new).removesuffix("。")
         parts = []
@@ -649,7 +660,11 @@ def who_eats_sentence(
     return f"{head}, so I {' and '.join(parts)}." if parts else f"{head}."
 
 
-def remade_sentence(locale: str) -> str:
+def remade_sentence(locale: str, kept_locked: bool) -> str:
+    """The made-again sentence; it says the hand-added dishes were kept only when a locked
+    dish actually stayed in the result (`kept_locked`)."""
+    if kept_locked:
+        return REMADE_KEPT_ZH if is_zh(locale) else REMADE_KEPT_EN
     return REMADE_ZH if is_zh(locale) else REMADE_EN
 
 
