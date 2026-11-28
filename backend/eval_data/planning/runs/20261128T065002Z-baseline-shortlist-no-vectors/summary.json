@@ -1,0 +1,801 @@
+{
+  "run_id": "20261128T065002Z-baseline-shortlist-no-vectors",
+  "started_at": "2026-11-28T06:50:02.456898+00:00",
+  "finished_at": "2026-11-28T06:50:26.965940+00:00",
+  "conditions": {
+    "git_commit": "22473d7f1640dc46026161ccbc61a4c09e3466e0",
+    "planning_model": "deepseek-flash",
+    "scenarios_file": {
+      "path": "backend/eval_data/planning/scenarios_baseline.yaml",
+      "sha256": "a058ea56f4fd7e391b7fe8a6ad577c559406051616da39bfc64b2af74a21ef83"
+    },
+    "library_file": {
+      "path": "backend/eval_data/planning/library.yaml",
+      "sha256": "cb7803c0bf89387fcb4e91fd608fade3ef2bbd978a70aef6d4c4b2178740d96d"
+    },
+    "prompt_version": "route_v6+parse_v8+planner_v5+follow_up_v5+pick_v6",
+    "prompt_versions": {
+      "route": "route_v6",
+      "parse": "parse_v8",
+      "planner": "planner_v5",
+      "follow_up": "follow_up_v5",
+      "pick": "pick_v6"
+    },
+    "prompt_files": {
+      "route_v6.md": "b4ff44c7306303e3bde6a64ff9ff15c538d4e6561bf76f3d135da18f78b0051d",
+      "parse_v8.md": "6848f63ce0eaaed608675bb535c66de0526d97ca28874c5e0ea454b3540476b1",
+      "planner_v5.md": "cec04573e0496e66a30f862de7617c467ac3c644449f76d654726da7c111f218",
+      "follow_up_v5.md": "3c660bbefd844dc828b43bf96250ffbd73ced2bd481f1678f8f46e5d08f72995",
+      "pick_v6.md": "1ab7cc3395241b180c62b757d61f7ecde0e2f0ddd5005b55fc8f18ee2ef84b11"
+    },
+    "prompt_lengths": {
+      "route_v6": 2402,
+      "parse_v8": 13312,
+      "planner_v5": 4015,
+      "follow_up_v5": 6025,
+      "pick_v6": 5210
+    },
+    "tools_version": "879ee251b6eb",
+    "pick_tools_version": "8af3a84018f5",
+    "flags": {
+      "no_shortlist": false,
+      "with_embeddings": false
+    },
+    "constants": {
+      "MODEL_CALL_LIMIT": 6,
+      "TOOL_CALL_LIMIT": 10,
+      "PLANNER_INPUT_TOKEN_BUDGET": 32000,
+      "SHORTLIST_MIN_PER_CATEGORY": 5,
+      "SHORTLIST_MARGIN": 3,
+      "SHORTLIST_SAME_MAIN": 2
+    },
+    "models": {
+      "planning_eval": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "input_usd_per_mtok": "0.3",
+            "cached_input_usd_per_mtok": "0.006",
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "1.2"
+          },
+          {
+            "provider": "openai",
+            "model": "gpt-6-luna",
+            "input_usd_per_mtok": "0.1",
+            "cached_input_usd_per_mtok": "0.01",
+            "cache_write_usd_per_mtok": "0.125",
+            "output_usd_per_mtok": "0.5"
+          }
+        ]
+      },
+      "embeddings": {
+        "essential": false,
+        "candidates": [
+          {
+            "provider": "google_genai",
+            "model": "gemini-embedding-001",
+            "input_usd_per_mtok": "0.15",
+            "cached_input_usd_per_mtok": null,
+            "cache_write_usd_per_mtok": null,
+            "output_usd_per_mtok": "0"
+          }
+        ]
+      },
+      "prices_updated": "2026-11-14"
+    }
+  },
+  "timing": {
+    "total_seconds": 24.5
+  },
+  "metrics": {
+    "basis": "model_time_ms: sum of the scenario's model-call latencies; wall_ms: scenario start to finish (database and tool time included); per_call: individual planning_eval model calls. Groups: all and expect_plan/expect_stop (by the scenario's expect_plan); check-only scenarios are in no group. Aggregates compare only within the same scenario set; compare same-named scenarios across different sets. Outcomes (first and final pass rate, retries) are over new plans only; revisions (the judged turn ran the revise step) have their own pass rate, locked dishes removed (target 0), dishes changed and model calls per revise turn (turn_model_calls: that turn's calls only; with a button after a follow-up revision, that revision's calls, earlier_revise_calls, count as a revise turn too). Route accuracy is reported for follow-ups (route_as_expected) and first messages apart. Deferred scenarios (deferred_to) are left out of every rate and as_expected, and counted in `deferred`; their cost, calls, tokens and latency count. as_expected_by_role: the same as_expected per scenario-file role (development, regression, held-out), so a regression set never counts toward the held-out rate. replies (over every scenario, deferred included): zero_dishes_shown (a reply or unmet text says the plan has 0 dishes; target 0), wish_unmet_not_said (expect_wish_unmet true but no code-written sign; target 0), buttons (as expected after a next-action button, deferred left out), fallbacks (attempts whose dishes code picked because the planner gave no answer) and fallback_scenarios. Plan 3b-2: a revision is a turn of the change path (reader, frame, picker; its run records `revision`), and its pass rate is the share that made a new version. two_layers: must_violations (what must never be wrong, over every scenario, deferred included; target 0) and must_violation_scenarios; unnecessary_questions over change_allowed_follow_ups (rated follow-ups whose keys accept a change; a follow-up that ended with a question other than the empty-plan and the which-dish question), with unnecessary_question_rate (target at most 0.2). change_path: reader_calls, picker_calls (each picker model call), picker_attempts and frame_ignored over every run of every scenario; an \"other\" reply's reader call, which no run records, is counted from the turn. must_violations counts must lines (one fault gives one line where cheap: a locked dish removed is said by the locked check only, and the allowed-changes findings share one line); must_violation_scenarios counts scenarios. Only the judged turn is must-checked: with button_after, the follow-up before the button is not (its shown texts are, as every shown text of the thread is). Plan 3b-2 (two): a people turn is a revision whose run recorded a `diner_change` event (a change in who eats on the plan); people_turns, avg_people_turn_model_calls and max_people_turn_model_calls are over the rated people turns (their calls also count in the calls per revise turn). On a turn with a follow-up diner card the must checks also cover the confirmed set: no dish of the result breaks its rules (H2 with carried overrides), a card confirmed as shown loses no diner, guest or meal-only rule, a locked dish leaves only for a rule or a quote, and the frame's bound counts are met or the reply says why not.",
+    "checks": "0/0",
+    "roles": [
+      "regression"
+    ],
+    "groups": {
+      "all": {
+        "scenarios": 7,
+        "outcomes": {
+          "first_pass_rate": 0.8571428571428571,
+          "final_pass_rate": 0.8571428571428571,
+          "as_expected": "7/7",
+          "avg_retries": 0.0,
+          "deferred": "0/0",
+          "as_expected_by_role": {
+            "regression": "7/7"
+          }
+        },
+        "calls": {
+          "model_calls": 20,
+          "avg_model_calls": 2.857142857142857,
+          "max_model_calls": 3,
+          "embedding_calls": {
+            "library": 0,
+            "scenarios": 0,
+            "total": 0
+          }
+        },
+        "tokens": {
+          "input": 71531,
+          "cached": 66560,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 10219,
+            "cached": 9509,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9305056548908864,
+          "max_call_input": 6707
+        },
+        "cost": {
+          "cache_aware_usd": "0.004037",
+          "uncached_usd": "0.0236049",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000577",
+            "uncached_usd": "0.003372"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 3395,
+            "p50": 3010,
+            "p95": 4889,
+            "max": 4889
+          },
+          "model_time_ms": {
+            "avg": 3100,
+            "p50": 2669,
+            "p95": 4580
+          },
+          "per_call_ms": {
+            "avg": 1085,
+            "p50": 960,
+            "p95": 1492
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0",
+          "people_turns": 0,
+          "avg_people_turn_model_calls": 0.0,
+          "max_people_turn_model_calls": 0
+        },
+        "two_layers": {
+          "must_violations": 0,
+          "must_violation_scenarios": 0,
+          "unnecessary_questions": 0,
+          "change_allowed_follow_ups": 0,
+          "unnecessary_question_rate": 0.0
+        },
+        "change_path": {
+          "reader_calls": 0,
+          "picker_calls": 0,
+          "picker_attempts": 0,
+          "frame_ignored": 0
+        },
+        "replies": {
+          "zero_dishes_shown": 0,
+          "wish_unmet_not_said": 0,
+          "buttons": "0/0",
+          "fallbacks": 0,
+          "fallback_scenarios": 0
+        },
+        "notes": {
+          "checked": 6,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 1,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.16666666666666666
+        }
+      },
+      "expect_plan": {
+        "scenarios": 6,
+        "outcomes": {
+          "first_pass_rate": 1.0,
+          "final_pass_rate": 1.0,
+          "as_expected": "6/6",
+          "avg_retries": 0.0,
+          "deferred": "0/0",
+          "as_expected_by_role": {
+            "regression": "6/6"
+          }
+        },
+        "calls": {
+          "model_calls": 18,
+          "avg_model_calls": 3.0,
+          "max_model_calls": 3,
+          "embedding_calls": {
+            "scenarios": 0
+          }
+        },
+        "tokens": {
+          "input": 63921,
+          "cached": 59264,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 10654,
+            "cached": 9877,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9271444439229675,
+          "max_call_input": 6707
+        },
+        "cost": {
+          "cache_aware_usd": "0.003713",
+          "uncached_usd": "0.0211359",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000619",
+            "uncached_usd": "0.003523"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 3617,
+            "p50": 3010,
+            "p95": 4889,
+            "max": 4889
+          },
+          "model_time_ms": {
+            "avg": 3309,
+            "p50": 2669,
+            "p95": 4580
+          },
+          "per_call_ms": {
+            "avg": 1103,
+            "p50": 960,
+            "p95": 2366
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0",
+          "people_turns": 0,
+          "avg_people_turn_model_calls": 0.0,
+          "max_people_turn_model_calls": 0
+        },
+        "two_layers": {
+          "must_violations": 0,
+          "must_violation_scenarios": 0,
+          "unnecessary_questions": 0,
+          "change_allowed_follow_ups": 0,
+          "unnecessary_question_rate": 0.0
+        },
+        "change_path": {
+          "reader_calls": 0,
+          "picker_calls": 0,
+          "picker_attempts": 0,
+          "frame_ignored": 0
+        },
+        "replies": {
+          "zero_dishes_shown": 0,
+          "wish_unmet_not_said": 0,
+          "buttons": "0/0",
+          "fallbacks": 0,
+          "fallback_scenarios": 0
+        },
+        "notes": {
+          "checked": 6,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 1,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.16666666666666666
+        }
+      },
+      "expect_stop": {
+        "scenarios": 1,
+        "outcomes": {
+          "first_pass_rate": 0.0,
+          "final_pass_rate": 0.0,
+          "as_expected": "1/1",
+          "avg_retries": 0.0,
+          "deferred": "0/0",
+          "as_expected_by_role": {
+            "regression": "1/1"
+          }
+        },
+        "calls": {
+          "model_calls": 2,
+          "avg_model_calls": 2.0,
+          "max_model_calls": 2,
+          "embedding_calls": {
+            "scenarios": 0
+          }
+        },
+        "tokens": {
+          "input": 7610,
+          "cached": 7296,
+          "written": 0,
+          "avg_per_scenario": {
+            "input": 7610,
+            "cached": 7296,
+            "written": 0
+          },
+          "cache_hit_rate": 0.9587385019710907,
+          "max_call_input": 6699
+        },
+        "cost": {
+          "cache_aware_usd": "0.000324",
+          "uncached_usd": "0.0024690",
+          "avg_per_scenario": {
+            "cache_aware_usd": "0.000324",
+            "uncached_usd": "0.002469"
+          }
+        },
+        "latency": {
+          "wall_ms": {
+            "avg": 2061,
+            "p50": 2061,
+            "p95": 2061,
+            "max": 2061
+          },
+          "model_time_ms": {
+            "avg": 1848,
+            "p50": 1848,
+            "p95": 1848
+          },
+          "per_call_ms": {
+            "avg": 924,
+            "p50": 823,
+            "p95": 1025
+          }
+        },
+        "revisions": {
+          "turns": 0,
+          "pass_rate": 0.0,
+          "locked_removed": 0,
+          "avg_changed": 0.0,
+          "avg_turn_model_calls": 0.0,
+          "max_turn_model_calls": 0,
+          "route_as_expected": "0/0",
+          "route_first_as_expected": "0/0",
+          "people_turns": 0,
+          "avg_people_turn_model_calls": 0.0,
+          "max_people_turn_model_calls": 0
+        },
+        "two_layers": {
+          "must_violations": 0,
+          "must_violation_scenarios": 0,
+          "unnecessary_questions": 0,
+          "change_allowed_follow_ups": 0,
+          "unnecessary_question_rate": 0.0
+        },
+        "change_path": {
+          "reader_calls": 0,
+          "picker_calls": 0,
+          "picker_attempts": 0,
+          "frame_ignored": 0
+        },
+        "replies": {
+          "zero_dishes_shown": 0,
+          "wish_unmet_not_said": 0,
+          "buttons": "0/0",
+          "fallbacks": 0,
+          "fallback_scenarios": 0
+        },
+        "notes": {
+          "checked": 0,
+          "flags": {
+            "outside_dish": 0,
+            "counts_dishes": 0,
+            "multi_sentence": 0,
+            "wrong_locale": 0
+          },
+          "flagged_rate": 0.0
+        }
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000469",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 10514,
+      "cached_input_tokens": 9856,
+      "max_call_input_tokens": 6698,
+      "uncached_cost": "0.0033654",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "e69ab6a9-c107-48c5-9287-2ebecac1138c",
+      "planning_run_id": 84344,
+      "titles": [
+        "番茄炒蛋"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4889,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": false,
+      "cards_shown": 0,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "fridge_only_one_person",
+      "model_time_ms": 4580
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000612",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 10679,
+      "cached_input_tokens": 9856,
+      "max_call_input_tokens": 6701,
+      "uncached_cost": "0.0035097",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "6f15ee2d-3151-4498-b2af-3224488b0e00",
+      "planning_run_id": 84345,
+      "titles": [
+        "青椒肉丝",
+        "番茄炒蛋",
+        "紫菜豆腐汤"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3010,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "two_people_with_a_soup",
+      "model_time_ms": 2669
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000670",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 10561,
+      "cached_input_tokens": 9856,
+      "max_call_input_tokens": 6695,
+      "uncached_cost": "0.0035679",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "45a91eff-f3e3-4d30-ab98-aef67a3b24b7",
+      "planning_run_id": 84346,
+      "titles": [
+        "红烧茄子",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 4304,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": false,
+      "cards_shown": 0,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "egg_allergy_and_unknown_ingredient",
+      "model_time_ms": 4034
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000562",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 10572,
+      "cached_input_tokens": 9856,
+      "max_call_input_tokens": 6702,
+      "uncached_cost": "0.0034596",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "1cac2599-729d-49be-a310-aa2a6aab44dd",
+      "planning_run_id": 84347,
+      "titles": [
+        "麻婆豆腐",
+        "蒜蓉西兰花"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 2940,
+      "note_flags": [
+        "counts_dishes"
+      ],
+      "note_checked": true,
+      "card_shown": false,
+      "cards_shown": 0,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "time_limit_estimated_and_stated",
+      "model_time_ms": 2661
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000666",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 11014,
+      "cached_input_tokens": 9856,
+      "max_call_input_tokens": 6701,
+      "uncached_cost": "0.0035634",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "f4fb6550-aa72-4fd2-a319-6369dd0fedc0",
+      "planning_run_id": 84348,
+      "titles": [
+        "宫保鸡丁",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 2854,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "shopping_allowed_nearly_empty_fridge",
+      "model_time_ms": 2540
+    },
+    {
+      "first_passed": true,
+      "final_passed": true,
+      "retries": 0,
+      "cost": "0.000734",
+      "model_calls": 3,
+      "note": "",
+      "expected_plan": true,
+      "input_tokens": 10581,
+      "cached_input_tokens": 9984,
+      "max_call_input_tokens": 6707,
+      "uncached_cost": "0.0036699",
+      "reasons": [],
+      "next_actions": [],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "fa84809c-6cfb-4928-bac6-d9c57248aef8",
+      "planning_run_id": 84349,
+      "titles": [
+        "青椒肉丝",
+        "清炒小白菜"
+      ],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 3707,
+      "note_flags": [],
+      "note_checked": true,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 3,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "english_request",
+      "model_time_ms": 3371
+    },
+    {
+      "first_passed": false,
+      "final_passed": false,
+      "retries": 0,
+      "cost": "0.000324",
+      "model_calls": 2,
+      "note": "",
+      "expected_plan": false,
+      "input_tokens": 7610,
+      "cached_input_tokens": 7296,
+      "max_call_input_tokens": 6699,
+      "uncached_cost": "0.0024690",
+      "reasons": [
+        "no_cookware"
+      ],
+      "next_actions": [
+        "fewer_dishes",
+        "register_cookware"
+      ],
+      "as_expected": true,
+      "failures": [],
+      "check_only": false,
+      "thread_id": "d1081989-9e0a-4b05-9ce7-27872e762e96",
+      "planning_run_id": 84350,
+      "titles": [],
+      "cache_write_input_tokens": 0,
+      "embedding_calls": 0,
+      "wall_ms": 2061,
+      "note_flags": [],
+      "note_checked": false,
+      "card_shown": true,
+      "cards_shown": 1,
+      "turn": "plan",
+      "route_intent": "plan",
+      "route_as_expected": null,
+      "locked_removed": 0,
+      "changed": 0,
+      "deferred_to": null,
+      "turn_model_calls": 2,
+      "follow_up": false,
+      "role": "regression",
+      "button": null,
+      "zero_dishes_shown": false,
+      "wish_unmet_missed": false,
+      "fallbacks": 0,
+      "earlier_revise_calls": null,
+      "must_failures": [],
+      "change_allowed": false,
+      "unnecessary_question": false,
+      "reader_calls": 0,
+      "picker_calls": 0,
+      "picker_attempts": 0,
+      "frame_ignored": 0,
+      "people_turn": false,
+      "name": "shopping_allowed_key_cookware_missing",
+      "model_time_ms": 1848
+    }
+  ]
+}

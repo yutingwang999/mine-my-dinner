@@ -270,6 +270,9 @@ scenarios:
       - {name: 小张, rules: []}
       - {name: 小王, rules: []}
     first_plan: [青椒肉丝, 红烧排骨, 清炒小白菜, 白米饭, 紫菜豆腐汤]
+    # The first request may be asked about (the parse may read its counts as unclear); either
+    # is fine (user, 2026-11-28): the runner answers that first-turn question with this.
+    answers: [三个菜，两个荤菜一个素菜，另外一个主食一个汤]
     follow_up: 荤素菜数不固定吧
     # The meat and vegetable split is lifted (design 5.7 (4)); the total of three stays.
     expect_route: revise

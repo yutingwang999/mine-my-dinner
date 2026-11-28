@@ -19,6 +19,7 @@ Every scenario file under `backend/eval_data/planning/`, with its role. Each fil
 | `scenarios_revise_heldout2.yaml` | `library_revise2.yaml` | 20 | User (sentences), Claude (set-up) | Plan 3b-1b: drops, replacements, one-meal wishes, a lasting rule, add-only, buttons, unmeetable wishes, new plans | Regression | Written for plan 3b-1b (2026-11-21); held-out in round 10 (2026-11-22); a regression set since plan 3b-2. Plan 3b-2 Task 1 (user-approved, 2026-11-22): the first turn's diner card is expected in the English no-rice scenario (only the follow-up's card is checked), `expect_plan: false` on the all-allergic seafood scenario, and the named-dish swap is no longer deferred. Plan 3b-2 Task 12 (user-approved, 2026-11-24): two scenarios accept a second outcome (see round 11) |
 | `scenarios_diner_changes.yaml` | `library_revise.yaml` | 18 | Claude | Plan 3b-2 (two): a change in who eats on an existing plan (a join that breaks a locked or unlocked dish, a guest with no rule, a join after a solo plan, a plan made again, a total raised on the card, "再叫几个朋友", a person leaving, "就我自己吃", a stated total below the people ticked, a skipped card, a join with a removal or an add, a lasting rule, a fresh start with a join) and the `follow_up_v5` reader items (a soup add, lifting a split, taking back a must-use ingredient) | Development | Development in plan 3b-2 (two) |
 | `scenarios_revise_heldout3.yaml` | `library_revise3.yaml` | 16 (`one_more_person_allergic_to_shrimp` scored from plan 3b-2 (two), no longer deferred) | User (sentences), Claude (set-up) | Plan 3b-2: replacements and removals, a dish not in the library, adding when nothing fits, wishes, an unmeetable wish, typed next steps after a failed plan, a person joining, a message not about the plan, a reference that matches no dish, plan again | Regression | Written for plan 3b-2 (2026-11-23); held-out in round 11; a regression set from round 12 (the change-fixes plan) |
+| `scenarios_diner_heldout.yaml` | `library_diner_heldout.yaml` | 18 | User (sentences), Claude (set-up) | Plan 3b-2 (two): diner changes | Held-out | Written for plan 3b-2 (two) (2026-11-27); held-out in round 14 |
 
 `library_revise2.yaml` is `library_revise.yaml` unchanged plus eight dishes the plan 3b-1b sentences need; `library_revise.yaml` stays frozen so the regression set compares across rounds. `library_revise3.yaml` is `library_revise2.yaml` unchanged plus five dishes the plan 3b-2 sentences need.
 
@@ -709,3 +710,53 @@ Development set at `cc67559` (`route_v6+parse_v8+planner_v5+follow_up_v4+pick_v6
 - **Picker answers cut by DeepSeek:** none (0 of 97 picker calls).
 - **Cost:** the round's ten runs cost $0.165 cache-aware and $0.949 uncached. The plan's development runs (four) added $0.150 cache-aware.
 - **Results of record:** this round replaces round 12 as the results of record.
+
+### Round 14 — plan 3b-2 (two) (2026-11-28) — not met
+
+- **Changed since round 13:**
+  - plan 3b-2 (two): the follow-up diner card, people turns adjust the plan, `follow_up_v5`, the compatibility branches removed;
+  - `pick_v6`, `parse_v8`, `route_v6` and `planner_v5` unchanged.
+- **Scenario sets:**
+  - the ten of round 13;
+  - the new development set `scenarios_diner_changes.yaml` (18) and the new held-out set `scenarios_diner_heldout.yaml` (18, the user's sentences, `library_diner_heldout.yaml`);
+  - two held-out scenarios no longer deferred: `friend_joins_and_two_more_dishes` (heldout) and `one_more_person_allergic_to_shrimp` (heldout3).
+- **Runs** at `22473d7` (`route_v6+parse_v8+planner_v5+follow_up_v5+pick_v6`), test database, deepseek-flash. The revise and diner sets ran with embeddings and the older sets without. "Calls per change turn" counts every turn of the set, people turns included; the thresholds below separate them.
+
+  | Set | Run | Scenarios | As expected | Must-never-be-wrong | Unnecessary questions | Calls per change turn (avg / max) | Calls per people turn (avg / max) | Locked removed | Follow-up route | Buttons | Wish not said | Cost (cache-aware) | Cost (uncached) | Largest call | Avg latency |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | development (`scenarios_revise.yaml`) | 20261128T063231Z | 42 | 39/42 | 1 | 0/30 | 2.2 / 7 | 3.5 / 4 (2 turns) | 0 | 31/31 | 6/6 | 0 | $0.0439 | $0.2574 | 6777 | 5.9 s |
+  | development (`scenarios_diner_changes.yaml`) | 20261128T063740Z | 18 | **18/18** | 0 | 0/18 | 2.6 / 3 | 2.9 / 3 (14 turns) | 0 | 17/17 | — | 0 | $0.0201 | $0.1362 | 6792 | 6.4 s |
+  | held-out (`scenarios_diner_heldout.yaml`) | 20261128T064006Z | 18 | 17/18 | 0 | 0/18 | 2.9 / 4 | 2.9 / 4 (14 turns) | 0 | 16/17 | — | 0 | $0.0264 | $0.1437 | 6799 | 6.6 s |
+  | regression (`scenarios_revise_heldout3.yaml`) | 20261128T064244Z | 16 | **16/16** | 0 | 0/12 | 2.2 / 4 | 3.0 / 3 (1 turn) | 0 | 11/11 | — | 0 | $0.0203 | $0.0997 | 6780 | 6.1 s |
+  | regression (`scenarios_revise_heldout.yaml`) | 20261128T064458Z | 18 | 16/18 | 1 | 0/17 | 2.2 / 4 | 3.0 / 3 (1 turn) | 0 | 16/16 | — | 0 | $0.0233 | $0.1175 | 6854 | 6.2 s |
+  | regression (`scenarios_revise_heldout2.yaml`) | 20261128T064720Z | 20 | 17/20 | 1 | 0/19 | 2.2 / 4 | 3.0 / 3 (1 turn) | 0 | 16/16 | 2/2 | 1 | $0.0262 | $0.1363 | 6772 | 6.4 s |
+  | baseline | 20261128T065002Z | 7 | 7/7 | 0 | — | — | — | — | — | — | 0 | $0.0040 | $0.0236 | 6707 | 3.4 s |
+  | plan 2a | 20261128T065030Z | 19 (18 scored) | 18/18 | 0 | — | — | — | — | — | — | 0 | $0.0105 | $0.0598 | 6704 | 3.1 s |
+  | counts | 20261128T065129Z | 10 | 10/10 | 0 | 0/2 | — | — | — | — | — | 0 | $0.0057 | $0.0337 | 6705 | 3.0 s |
+  | diners | 20261128T065203Z | 17 | 17/17 | 0 | 0/1 | — | — | — | — | — | 0 | $0.0127 | $0.0703 | 6724 | 3.8 s |
+  | held-out diners (`scenarios_heldout.yaml`) | 20261128T065311Z | 14 | 14/14 | 0 | — | — | — | — | — | — | 0 | $0.0097 | $0.0545 | 6739 | 3.7 s |
+  | held-out one diner (`scenarios_heldout_core.yaml`) | 20261128T065407Z | 22 | 20/22 | 0 | 0/1 | — | — | — | — | — | 0 | $0.0131 | $0.0775 | 6722 | 3.1 s |
+
+- **Against the thresholds (design 6):** not met.
+
+  | Criterion | Required | Result | Verdict |
+  |---|---|---|---|
+  | Must never be wrong | 0 over every run | 3: `too_many_eggs` (development), `too_many_egg_dishes_shopping_now` (heldout), `add_seafood_all_allergic` (heldout2) | **Not met** |
+  | Development sets | ≥ 90% | 39/42 and 18/18, 57/60 together (95%) | **Met** |
+  | New held-out set | ≥ 80% | 17/18 (94%) | **Met** |
+  | Revise regression sets | no fewer than round 13 (heldout3 ≥ 14/15, heldout ≥ 17/17, heldout2 ≥ 19/20), compared on the scenarios scored in round 13 | heldout3 15/15 (**Met**); heldout 15/17 (**not met**); heldout2 17/20 (**not met**). Newly scored, apart: `one_more_person_allergic_to_shrimp` (heldout3) and `friend_joins_and_two_more_dishes` (heldout) both as expected | **Not met** |
+  | Calls per turn | change turns average ≤ 2.5, people turns average ≤ 3.5, none over 7 | change turns 1.75-2.5 (development 1.95, diner changes 1.75, new held-out 2.5, heldout3 2.13, heldout 2.18, heldout2 2.05); people turns 2.9-3.5 (development 3.5 over two turns); the longest turn 7 calls (development) | **Met** |
+  | Unnecessary questions | ≤ 20% | 0 in every set | **Met** |
+  | Older new-plan and diners sets | no regression | baseline 7/7, plan 2a 18/18, counts 10/10, diners 17/17 (16/17 in round 13), held-out diners 14/14 (13/14), held-out one diner 20/22 (21/22): one scenario fewer, on a first-turn path this plan did not change | **Not met by one scenario** (variance) |
+  | Reader prompt size | within the 5.8a budget | `follow_up_v5` is 6,025 characters against about 6,900; the largest call is 6,854 tokens of 32,000 | **Met** |
+
+- **Not as expected:**
+  - `too_many_eggs` (development) and `too_many_egg_dishes_shopping_now` (heldout): the reader put the egg dishes in `remove` as replace instead of `wish_targets`, which bypasses the half cap; 3 dishes changed, a must violation.
+  - `meal_avoid_covers_hand_added`, `meal_avoid_shrimp_en` (development), `no_porridge`, `no_rice_today_english` (heldout2): the reader marked avoided dishes `drop` instead of leaving them to code's replacement, so the plan shrank.
+  - `add_seafood_all_allergic` (heldout2): the add's name ("海鲜") was lost and it became an untyped add, so a meat dish was added, a must violation. The unmet-wish sentence was missing too (wish not said: 1).
+  - `swap_for_a_daikon_dish` (heldout): the same reading as round 13; picker variance.
+  - `split_no_longer_fixed` (new held-out): the first turn stopped at a count question; the user accepts that as variance, and the scenario now answers it.
+  - `core_one_dessert`, `core_en_dinner_with_fish` (heldout_core): the first-turn path is unchanged; variance.
+- **Cost:** the round's twelve runs cost $0.216 cache-aware and $1.210 uncached. The two development runs before the round added about $0.15 cache-aware.
+- **Results of record:** round 13 stays the results of record; this round did not meet the thresholds.
+- **Next:** `follow_up_v6` (principles for avoidances, "too many X" wishes and food-group add names), then the development set and the three revise regression sets again.
